@@ -18,6 +18,7 @@ pub mod pq_simd;
 pub mod diskann_beam;
 pub mod diskann;
 pub mod binary;
+pub mod annoy;
 
 pub use index::FaissIndex;
 pub use mem_index::MemIndex;
