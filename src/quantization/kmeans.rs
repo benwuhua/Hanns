@@ -3,6 +3,8 @@
 //! 支持 k-means++ 初始化和迭代收敛
 
 use rand::prelude::*;
+#[cfg(feature = "parallel")]
+use crate::simd::l2_distance;
 
 pub struct KMeans {
     k: usize,
@@ -161,7 +163,22 @@ impl KMeans {
         best
     }
     
-    /// 并行训练 K-means（使用 rayon）
+    /// 批量查找最近 centroid（使用 SIMD）
+    #[cfg(feature = "parallel")]
+    pub fn find_nearest_batch(&self, vectors: &[f32]) -> Vec<usize> {
+        use rayon::prelude::*;
+        
+        let n = vectors.len() / self.dim;
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let vec = &vectors[i * self.dim..];
+                self.find_nearest(vec)
+            })
+            .collect()
+    }
+    
+    /// 并行训练 K-means（使用 rayon + SIMD）
     #[cfg(feature = "parallel")]
     pub fn train_parallel(&mut self, vectors: &[f32], num_threads: usize) -> usize {
         use rayon::prelude::*;

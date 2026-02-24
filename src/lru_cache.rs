@@ -135,6 +135,49 @@ impl<V> SimpleLruCache<V> {
     }
 }
 
+/// 缓存预热策略
+/// 
+/// 用于在搜索前将热点数据加载到内存缓存，减少冷启动延迟
+pub struct CachePrewarm {
+    /// 预热数据大小阈值 (bytes)
+    pub warm_threshold_bytes: usize,
+    /// 预热数据条数阈值
+    pub warm_threshold_count: usize,
+}
+
+impl Default for CachePrewarm {
+    fn default() -> Self {
+        Self {
+            warm_threshold_bytes: 64 * 1024 * 1024,  // 64MB
+            warm_threshold_count: 1000,
+        }
+    }
+}
+
+impl CachePrewarm {
+    /// 判断是否需要预热
+    pub fn needs_warm(&self, data_size_bytes: usize, count: usize) -> bool {
+        data_size_bytes >= self.warm_threshold_bytes || count >= self.warm_threshold_count
+    }
+    
+    /// 预热回调 - 实际预热由调用方实现
+    pub fn warmup<F>(&self, data: &[f32], dim: usize, mut warm_fn: F)
+    where
+        F: FnMut(&[f32], usize),
+    {
+        let count = data.len() / dim;
+        if self.needs_warm(data.len() * std::mem::size_of::<f32>(), count) {
+            // 将数据切分成多个批次进行预热
+            let batch_size = (count / 4).max(1);
+            for i in (0..count).step_by(batch_size) {
+                let end = (i + batch_size).min(count);
+                let batch = &data[i * dim..end * dim];
+                warm_fn(batch, end - i);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +232,31 @@ mod tests {
         
         assert_eq!(cache.get(k1), Some(&10));
         assert_eq!(cache.get(k2), Some(&20));
+    }
+    
+    #[test]
+    fn test_cache_prewarm_defaults() {
+        let warm = CachePrewarm::default();
+        assert!(!warm.needs_warm(1000, 10));  // Small data
+        assert!(warm.needs_warm(100 * 1024 * 1024, 100));  // Large data
+    }
+    
+    #[test]
+    fn test_cache_prewarm_warmup() {
+        // Use custom threshold to test warmup
+        let mut warm = CachePrewarm::default();
+        warm.warm_threshold_bytes = 1000;  // Low threshold for test
+        
+        let data: Vec<f32> = (0..4000).map(|i| i as f32).collect();  // 100 vectors * 128 dim
+        
+        let mut call_count = 0;
+        warm.warmup(&data, 128, |_batch, count| {
+            call_count += 1;
+            // 验证批次大小合理
+            assert!(count > 0);
+        });
+        
+        // 应该触发预热回调
+        assert!(call_count > 0);
     }
 }
