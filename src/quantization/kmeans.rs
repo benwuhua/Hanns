@@ -177,7 +177,6 @@ impl KMeans {
         for _iter in 0..self.max_iter {
             // 并行分配阶段
             assignments.par_iter_mut()
-                .with_len(n)
                 .enumerate()
                 .for_each(|(i, assign)| {
                     let mut min_dist = f32::MAX;

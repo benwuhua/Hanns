@@ -194,7 +194,28 @@ fn l2_neon(a: &[f32], b: &[f32]) -> f32 {
     result.sqrt()
 }
 
-/// Batch L2 距离
+/// Batch L2 距离（并行 + SIMD 优化）
+#[cfg(feature = "parallel")]
+pub fn l2_batch(a: &[f32], b: &[f32], dim: usize) -> Vec<f32> {
+    use rayon::prelude::*;
+    
+    let na = a.len() / dim;
+    let nb = b.len() / dim;
+    let mut result = vec![0.0f32; na * nb];
+    
+    result.par_iter_mut().enumerate().for_each(|(idx, r)| {
+        let i = idx / nb;
+        let j = idx % nb;
+        *r = l2_distance(
+            &a[i * dim..(i + 1) * dim],
+            &b[j * dim..(j + 1) * dim],
+        );
+    });
+    result
+}
+
+/// Batch L2 距离（串行版本）
+#[cfg(not(feature = "parallel"))]
 pub fn l2_batch(a: &[f32], b: &[f32], dim: usize) -> Vec<f32> {
     let na = a.len() / dim;
     let nb = b.len() / dim;
@@ -206,6 +227,22 @@ pub fn l2_batch(a: &[f32], b: &[f32], dim: usize) -> Vec<f32> {
                 &a[i * dim..(i + 1) * dim],
                 &b[j * dim..(j + 1) * dim],
             ));
+        }
+    }
+    result
+}
+
+/// 高效批量 L2: 一个查询向量 vs 多个库向量
+pub fn l2_batch_query_vs_database(query: &[f32], database: &[f32], dim: usize) -> Vec<f32> {
+    let nq = query.len() / dim;
+    let nb = database.len() / dim;
+    let mut result = Vec::with_capacity(nq * nb);
+    
+    for i in 0..nq {
+        let q = &query[i * dim..(i + 1) * dim];
+        for j in 0..nb {
+            let v = &database[j * dim..(j + 1) * dim];
+            result.push(l2_distance(q, v));
         }
     }
     result
@@ -245,7 +282,28 @@ pub fn inner_product(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
-/// Batch 内积
+/// Batch 内积（并行 + SIMD 优化）
+#[cfg(feature = "parallel")]
+pub fn ip_batch(a: &[f32], b: &[f32], dim: usize) -> Vec<f32> {
+    use rayon::prelude::*;
+    
+    let na = a.len() / dim;
+    let nb = b.len() / dim;
+    let mut result = vec![0.0f32; na * nb];
+    
+    result.par_iter_mut().enumerate().for_each(|(idx, r)| {
+        let i = idx / nb;
+        let j = idx % nb;
+        *r = inner_product(
+            &a[i * dim..(i + 1) * dim],
+            &b[j * dim..(j + 1) * dim],
+        );
+    });
+    result
+}
+
+/// Batch 内积（串行版本）
+#[cfg(not(feature = "parallel"))]
 pub fn ip_batch(a: &[f32], b: &[f32], dim: usize) -> Vec<f32> {
     let na = a.len() / dim;
     let nb = b.len() / dim;
@@ -257,6 +315,22 @@ pub fn ip_batch(a: &[f32], b: &[f32], dim: usize) -> Vec<f32> {
                 &a[i * dim..(i + 1) * dim],
                 &b[j * dim..(j + 1) * dim],
             ));
+        }
+    }
+    result
+}
+
+/// 高效批量内积: 一个查询向量 vs 多个库向量
+pub fn ip_batch_query_vs_database(query: &[f32], database: &[f32], dim: usize) -> Vec<f32> {
+    let nq = query.len() / dim;
+    let nb = database.len() / dim;
+    let mut result = Vec::with_capacity(nq * nb);
+    
+    for i in 0..nq {
+        let q = &query[i * dim..(i + 1) * dim];
+        for j in 0..nb {
+            let v = &database[j * dim..(j + 1) * dim];
+            result.push(inner_product(q, v));
         }
     }
     result
