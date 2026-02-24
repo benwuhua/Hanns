@@ -55,6 +55,12 @@ pub trait Index: Send + Sync {
     /// 搜索
     fn search(&self, query: &Dataset, top_k: usize) -> Result<SearchResult, IndexError>;
     
+    /// 范围搜索 (Range search)
+    fn range_search(&self, query: &Dataset, radius: f32) -> Result<SearchResult, IndexError> {
+        // 默认实现：使用 K=所有向量，然后过滤
+        Err(IndexError::Unsupported("range_search not implemented".into()))
+    }
+    
     /// 保存到文件
     fn save(&self, path: &str) -> Result<(), IndexError>;
     

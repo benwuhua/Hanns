@@ -116,6 +116,7 @@ fn main() {
                     nprobe: 1,
                     filter: None,
                     params: None,
+            radius: None,
                 };
                 
                 let result = index.search(&query_vec, &req).expect("Search failed");

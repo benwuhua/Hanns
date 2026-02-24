@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 /// Search request parameters
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct SearchRequest {
     /// Number of nearest neighbors to return
     pub top_k: usize,
@@ -13,6 +13,8 @@ pub struct SearchRequest {
     pub filter: Option<Arc<dyn Predicate>>,
     /// Search params (JSON string)
     pub params: Option<String>,
+    /// Radius for range search (if set, performs range search)
+    pub radius: Option<f32>,
 }
 
 /// Search result

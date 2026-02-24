@@ -412,6 +412,7 @@ mod tests {
             nprobe: 10,
             filter: None,
             params: None,
+            radius: None,
         };
         
         let result = index.search(&query, &req).unwrap();
