@@ -41,6 +41,7 @@ fn benchmark_flat_index() {
         nprobe: 1,
         filter: None,
         params: None,
+        radius: None,
     };
     
     let start = Instant::now();
@@ -89,6 +90,7 @@ fn benchmark_hnsw_index() {
         nprobe: 50,
         filter: None,
         params: None,
+        radius: None,
     };
     
     let start = Instant::now();
@@ -137,6 +139,7 @@ fn benchmark_ivfpq_index() {
         nprobe: 10,
         filter: None,
         params: None,
+        radius: None,
     };
     
     let start = Instant::now();
@@ -176,6 +179,7 @@ fn benchmark_diskann_index() {
         nprobe: 50,
         filter: None,
         params: None,
+        radius: None,
     };
     
     let start = Instant::now();
