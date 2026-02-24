@@ -1,8 +1,12 @@
 //! DiskANN 完整实现
 //! Vamana 图算法
+//!
+//! 参考: https://arxiv.org/abs/2207.00596
+//! DiskANN: Fast Accurate Billion-point Nearest Neighbor Search on a Single Node
 
 use std::collections::{BinaryHeap, HashSet};
 use std::cmp::Ordering;
+use crate::simd;
 
 /// 搜索项
 #[derive(Clone, Debug)]
@@ -183,12 +187,7 @@ impl DiskAnnIndex {
     
     #[inline]
     fn l2_distance(&self, a: &[f32], b: &[f32]) -> f32 {
-        let mut sum = 0.0f32;
-        for i in 0..self.dim {
-            let diff = a[i] - b[i];
-            sum += diff * diff;
-        }
-        sum
+        simd::l2_distance(a, b)
     }
     
     pub fn len(&self) -> usize { self.num_vectors }

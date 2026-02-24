@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use crate::api::{IndexConfig, IndexType, MetricType, Result, SearchRequest, SearchResult};
 use crate::executor::l2_distance;
+use crate::simd;
 
 /// DiskANN-style graph index (Vamana) - Optimized
 pub struct DiskAnnIndex {
@@ -124,12 +125,9 @@ impl DiskAnnIndex {
         let start = b_idx * self.dim;
         let b = &self.vectors[start..start + self.dim];
         
-        let mut sum = 0.0f32;
-        for i in 0..self.dim {
-            let diff = a[i] - b[i];
-            sum += diff * diff;
-        }
-        sum
+        // Use SIMD for distance, then square
+        let dist = simd::l2_distance(a, b);
+        dist * dist
     }
 
     fn ensure_connectivity(&mut self) {
