@@ -3,6 +3,7 @@
 use std::thread;
 
 use rayon::prelude::*;
+use crate::simd;
 
 /// Parallel executor for vector operations
 pub struct Executor {
@@ -106,13 +107,9 @@ impl Executor {
     }
 }
 
-/// L2 distance
+/// L2 distance (uses SIMD when available)
 pub fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
-    a.iter()
-        .zip(b.iter())
-        .map(|(x, y)| (x - y).powi(2))
-        .sum::<f32>()
-        .sqrt()
+    simd::l2_distance(a, b)
 }
 
 /// Inner product
