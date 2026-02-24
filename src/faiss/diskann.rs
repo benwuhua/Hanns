@@ -1,6 +1,11 @@
 //! DiskANN-inspired index (Vamana algorithm) - Optimized
 //! 
 //! A graph-based index optimized for SSD storage.
+//! Features:
+//! - Vamana graph algorithm
+//! - L2 and IP (inner product) distance
+//! - Beam search with early termination
+//! - SSD-optimized for large datasets
 
 use std::collections::HashMap;
 
@@ -96,7 +101,7 @@ impl DiskAnnIndex {
                 let step = (n / (L * 4)).max(1);
                 for j in (0..n).step_by(step) {
                     if j != i {
-                        let dist = self.l2_sqr(query, j);
+                        let dist = self.compute_dist(query, j);
                         candidates.push((j, dist));
                     }
                 }
@@ -130,6 +135,29 @@ impl DiskAnnIndex {
         dist * dist
     }
 
+    #[inline]
+    fn ip_distance(&self, a: &[f32], b_idx: usize) -> f32 {
+        let start = b_idx * self.dim;
+        let b = &self.vectors[start..start + self.dim];
+        
+        // For IP, higher is better, so we return negative (for consistent sorting)
+        let mut sum = 0.0f32;
+        for i in 0..self.dim {
+            sum += a[i] * b[i];
+        }
+        -sum // Negative so that max becomes min in sorting
+    }
+
+    /// Compute distance based on metric type
+    #[inline]
+    fn compute_dist(&self, query: &[f32], idx: usize) -> f32 {
+        match self.config.metric_type {
+            MetricType::L2 => self.l2_sqr(query, idx),
+            MetricType::Ip => self.ip_distance(query, idx),
+            _ => self.l2_sqr(query, idx),
+        }
+    }
+
     fn ensure_connectivity(&mut self) {
         let n = self.ids.len();
         if n < 3 { return; }
@@ -138,7 +166,7 @@ impl DiskAnnIndex {
         for i in 0..n {
             if self.graph[i].is_empty() {
                 let next = (i + 1) % n;
-                let dist = self.l2_sqr(&self.vectors[i * self.dim..], next);
+                let dist = self.compute_dist(&self.vectors[i * self.dim..], next);
                 self.graph[i].push((self.ids[next], dist));
             }
         }
@@ -189,7 +217,12 @@ impl DiskAnnIndex {
             for i in 0..k {
                 if i < results.len() {
                     all_ids.push(results[i].0);
-                    all_dists.push(results[i].1.sqrt());
+                    // For L2: sqrt the squared distance; For IP: negate to get positive similarity
+                    let dist = match self.config.metric_type {
+                        MetricType::Ip => -results[i].1, // Convert back to positive similarity
+                        _ => results[i].1.sqrt(),
+                    };
+                    all_dists.push(dist);
                 } else {
                     all_ids.push(-1);
                     all_dists.push(f32::MAX);
@@ -200,7 +233,7 @@ impl DiskAnnIndex {
         Ok(SearchResult::new(all_ids, all_dists, 0.0))
     }
 
-    /// Greedy search
+    /// Greedy search with metric support
     fn greedy_search(&self, query: &[f32], L: usize) -> Vec<(i64, f32)> {
         let n = self.ids.len();
         if n == 0 { return vec![]; }
@@ -212,7 +245,7 @@ impl DiskAnnIndex {
         let step = if n > L * 10 { n / (L * 5) } else { 1 };
         
         for i in (0..n).step_by(step) {
-            let dist = self.l2_sqr(query, i);
+            let dist = self.compute_dist(query, i);
             candidates.push((dist, i));
         }
         
