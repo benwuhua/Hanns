@@ -124,6 +124,33 @@ pub extern "C" fn knowhere_bitset_count(bitset: &CBitset) -> usize {
     0
 }
 
+/// Index 类型枚举
+#[repr(i32)]
+pub enum CIndexType {
+    Hnsw = 0,
+    IvfFlat = 1,
+    IvfPq = 2,
+    DiskAnn = 3,
+}
+
+/// Index 配置
+#[repr(C)]
+pub struct CIndexConfig {
+    pub index_type: CIndexType,
+    pub dim: usize,
+    pub metric_type: i32, // 0=L2, 1=IP
+    pub ef_construction: usize,
+    pub ef_search: usize,
+    pub nlist: usize,
+    pub nprobe: usize,
+}
+
+/// 动态 Index 指针
+#[repr(C)]
+pub struct CIndex {
+    _priv: [u8; 0],
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

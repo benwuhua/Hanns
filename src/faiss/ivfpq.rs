@@ -340,15 +340,48 @@ impl IvfPqIndex {
             self.vectors.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
         }
         
-        // Load inverted lists (skip for now)
-        for _ in 0..nlist {
-            let mut count_bytes = [0u8; 4];
-            file.read_exact(&mut count_bytes)?;
-            let _count = u32::from_le_bytes(count_bytes);
+        // Load inverted lists (rebuild from vectors)
+        self.inverted_lists.clear();
+        for i in 0..nlist {
+            self.inverted_lists.insert(i, Vec::new());
+        }
+        
+        for (i, &id) in self.ids.iter().enumerate() {
+            let vector = &self.vectors[i * dim..(i + 1) * dim];
+            let cluster = self.find_nearest_centroid(vector);
+            let residual = self.compute_residual(vector, cluster);
+            self.inverted_lists.get_mut(&cluster).unwrap().push((id, residual));
         }
         
         self.trained = true;
+        self.next_id = self.ids.last().map(|&id| id + 1).unwrap_or(0);
         Ok(())
+    }
+    
+    /// 查找最近的 centroid
+    fn find_nearest_centroid(&self, vector: &[f32]) -> usize {
+        let mut min_dist = f32::MAX;
+        let mut best = 0;
+        for (i, centroid) in self.centroids.chunks(self.dim).enumerate() {
+            let dist = vector.iter()
+                .zip(centroid)
+                .map(|(a, b)| (a - b).powi(2))
+                .sum::<f32>();
+            if dist < min_dist {
+                min_dist = dist;
+                best = i;
+            }
+        }
+        best
+    }
+    
+    /// 计算残差
+    fn compute_residual(&self, vector: &[f32], cluster: usize) -> Vec<f32> {
+        let centroid = &self.centroids[cluster * self.dim..(cluster + 1) * self.dim];
+        vector.iter()
+            .zip(centroid)
+            .map(|(a, b)| a - b)
+            .collect()
     }
 }
 
