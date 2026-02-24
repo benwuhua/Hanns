@@ -1,0 +1,53 @@
+//! FFI - C API 绑定
+//! 
+//! 遵守内存安全
+
+use std::ffi::c_char;
+use std::fs;
+use std::slice;
+
+pub use crate::bitset::BitsetView;
+pub use crate::index::{Index, SearchResult};
+pub use crate::metrics::MetricType;
+
+#[repr(C)]
+pub struct CBitset {
+    inner: BitsetView,
+    _priv: (),
+}
+
+impl CBitset {
+    pub fn new(capacity: usize) -> Self {
+        Self { inner: BitsetView::new(capacity), _priv: () }
+    pub fn is_null(&self) -> bool { false }
+}
+
+#[no_mangle]
+pub extern "C" fn knowhere_bitset_create(capacity: usize) -> *mut CBitset {
+    Box::into_raw(Box::new(CBitset::new(capacity))
+}
+
+#[no_mangle]
+pub extern "C" fn knowhere_bitset_free(ptr: *mut CBitset) {
+    unsafe { Box::from_raw(ptr); }
+}
+
+#[no_mangle]
+pub extern "C" fn knowhere_bitset_get(_bitset: &CBitset, _index: usize) -> bool { false }
+
+#[no_mangle]
+pub extern "C" fn knowhere_bitset_count(_bitset: &CBitset) -> usize { 0 }
+
+#[no_mangle]
+pub extern "C" fn knowhere_bitset_set(_bitset: &mut CBitset, _index: usize, _value: bool) { }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_bitset_create() {
+        let ptr = knowhere_bitset_create(100);
+        unsafe { Box::from_raw(ptr); }
+    }
+}
