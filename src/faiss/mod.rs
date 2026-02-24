@@ -20,6 +20,7 @@ pub mod diskann;
 pub mod binary;
 pub mod annoy;
 pub mod hnsw_quantized;
+pub mod sparse;
 
 pub use index::FaissIndex;
 pub use mem_index::MemIndex;
