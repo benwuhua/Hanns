@@ -12,6 +12,7 @@ pub mod hnsw_parallel;
 pub mod hnsw_search;
 pub mod ivf;
 pub mod ivfpq;
+pub mod ivf_sq8;
 pub mod pq;
 pub mod pq_simd;
 pub mod diskann_beam;
