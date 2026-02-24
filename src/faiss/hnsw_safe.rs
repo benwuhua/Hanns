@@ -7,7 +7,7 @@ use crate::dataset::Dataset;
 use std::sync::Arc;
 
 /// HNSW 配置
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct HnswConfig {
     pub ef_construction: usize,  // 建图宽度
     pub ef_search: usize,     // 搜索宽度
@@ -32,6 +32,7 @@ impl HnswConfig {
 /// - 连续向量存储：Vec<f32> + offsets
 /// - 图邻接表：扁平化存储避免指针跳转
 /// - 64 字节对齐保证 Cache 命中率
+#[derive(Clone, Debug)]
 pub struct HnswIndex {
     config: HnswConfig,
     /// 连续向量存储 [N * dim]
@@ -46,7 +47,7 @@ pub struct HnswIndex {
 }
 
 /// 扁平化的邻居列表（避免 Vec<Vec<T>> 内存碎片）
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct NeighborList {
     pub neighbors: Vec<(usize, f32)>,  // (node_id, distance)
 }
