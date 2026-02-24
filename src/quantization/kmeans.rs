@@ -161,6 +161,75 @@ impl KMeans {
         best
     }
     
+    /// 并行训练 K-means（使用 rayon）
+    #[cfg(feature = "parallel")]
+    pub fn train_parallel(&mut self, vectors: &[f32], num_threads: usize) -> usize {
+        use rayon::prelude::*;
+        
+        let n = vectors.len() / self.dim;
+        if n == 0 || n < self.k { return 0; }
+        
+        // K-means++ 初始化
+        self.kmeans_plusplus_init(vectors, n);
+        
+        let mut assignments = vec![0usize; n];
+        
+        for _iter in 0..self.max_iter {
+            // 并行分配阶段
+            assignments.par_iter_mut()
+                .with_len(n)
+                .enumerate()
+                .for_each(|(i, assign)| {
+                    let mut min_dist = f32::MAX;
+                    let mut best_k = 0;
+                    let vec = &vectors[i * self.dim..];
+                    for c in 0..self.k {
+                        let dist = self.l2_distance(vec, &self.centroids[c * self.dim..]);
+                        if dist < min_dist {
+                            min_dist = dist;
+                            best_k = c;
+                        }
+                    }
+                    *assign = best_k;
+                });
+            
+            // 收集到每个 cluster
+            let mut new_centroids = vec![0.0f32; self.k * self.dim];
+            let mut counts = vec![0usize; self.k];
+            
+            for i in 0..n {
+                let c = assignments[i];
+                for j in 0..self.dim {
+                    new_centroids[c * self.dim + j] += vectors[i * self.dim + j];
+                }
+                counts[c] += 1;
+            }
+            
+            // 计算收敛
+            let mut max_shift = 0.0f32;
+            for c in 0..self.k {
+                if counts[c] > 0 {
+                    let shift = self.l2_distance(
+                        &self.centroids[c * self.dim..],
+                        &new_centroids[c * self.dim..]
+                    );
+                    max_shift = max_shift.max(shift);
+                    
+                    for j in 0..self.dim {
+                        self.centroids[c * self.dim + j] = 
+                            new_centroids[c * self.dim + j] / counts[c] as f32;
+                    }
+                }
+            }
+            
+            if max_shift < self.tolerance {
+                break;
+            }
+        }
+        
+        n
+    }
+    
     pub fn centroids(&self) -> &[f32] { &self.centroids }
     pub fn k(&self) -> usize { self.k }
     pub fn dim(&self) -> usize { self.dim }
