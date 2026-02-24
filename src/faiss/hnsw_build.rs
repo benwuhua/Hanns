@@ -1,4 +1,8 @@
 //! HNSW 图构建完整实现
+//!
+//! **已废弃**: 请使用 `hnsw.rs`
+
+#![deprecated(since = "0.1.0", note = "Use hnsw.rs instead")]
 
 use std::collections::{BinaryHeap, HashSet};
 

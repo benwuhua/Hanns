@@ -1,6 +1,10 @@
 //! HNSW 原生实现（高性能版本）
 //! 
 //! 遵守内存零冗余、无锁设计、Cache 对齐
+//!
+//! **已废弃**: 请使用 `hnsw.rs`
+
+#![deprecated(since = "0.1.0", note = "Use hnsw.rs instead")]
 
 use crate::index::{Index, IndexError, SearchResult};
 use crate::dataset::Dataset;

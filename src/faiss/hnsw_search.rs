@@ -1,4 +1,8 @@
 //! HNSW 搜索优化 - 优先队列版本
+//!
+//! **已废弃**: 请使用 `hnsw.rs`
+
+#![deprecated(since = "0.1.0", note = "Use hnsw.rs instead")]
 
 use std::collections::{BinaryHeap, HashSet};
 use std::cmp::Reverse;

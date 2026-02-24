@@ -55,8 +55,8 @@ pub struct RangePredicate {
 
 impl Predicate for RangePredicate {
     fn evaluate(&self, id: i64) -> bool {
-        // Placeholder - actual implementation depends on storage
-        true
+        let id_f = id as f64;
+        id_f >= self.min && id_f <= self.max
     }
 }
 
