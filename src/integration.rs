@@ -32,7 +32,7 @@ impl IvfPqIndex {
     
     /// 训练
     pub fn train(&mut self, data: &[f32]) {
-        self.pq.train(data);
+        self.pq.train(data, 20);
         self.ivf.train(data);
     }
     
