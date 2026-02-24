@@ -103,10 +103,12 @@ impl DiskAnnIndex {
             }
         }
         
-        self.prune_neighbors(id);
-        
+        // 先 push 节点，再 prune
         self.nodes.push(node);
         self.num_vectors += 1;
+        
+        // 现在可以安全 prune
+        self.prune_neighbors(id);
         
         id
     }
@@ -217,5 +219,34 @@ mod tests {
         let id = idx.add(&[0.0, 0.0, 0.0, 0.0]);
         assert_eq!(id, 0);
         assert_eq!(idx.len(), 1);
+    }
+    
+    #[test]
+    fn test_diskann_add_batch() {
+        let mut idx = DiskAnnIndex::new(4);
+        let vectors = vec![
+            0.0, 0.0, 0.0, 1.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0,
+        ];
+        let n = idx.add_batch(&vectors);
+        assert_eq!(n, 4);
+        assert_eq!(idx.len(), 4);
+    }
+    
+    #[test]
+    fn test_diskann_search() {
+        let mut idx = DiskAnnIndex::new(4);
+        idx.add(&[0.0, 0.0, 0.0, 1.0]);
+        idx.add(&[0.0, 0.0, 1.0, 0.0]);
+        idx.add(&[0.0, 1.0, 0.0, 0.0]);
+        idx.add(&[1.0, 0.0, 0.0, 0.0]);
+        
+        // Search for something close to [0,0,0,0]
+        let results = idx.search(&[0.1, 0.1, 0.1, 0.1], 2);
+        
+        assert!(!results.is_empty());
+        assert!(results.len() <= 2);
     }
 }
