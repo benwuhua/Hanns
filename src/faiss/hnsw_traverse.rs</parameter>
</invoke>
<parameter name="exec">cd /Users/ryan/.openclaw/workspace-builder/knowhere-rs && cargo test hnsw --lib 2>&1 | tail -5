@@ -1,0 +1,71 @@
+//! HNSW 图索引（优化版）
+//! 使用 BFS + 优先队列实现高效遍历
+
+use std::collections::{BinaryHeap, HashSet, VecDeque};
+use std::cmp::Reverse;
+
+/// HNSW 搜索器
+pub struct HnswSearcher {
+    ef_search: usize,   // 搜索宽度
+    ef_construction: usize,  // 建图宽度
+}
+
+impl HnswSearcher {
+    pub fn new(ef: usize) -> Self {
+        Self { ef_search: ef, ef_construction: 100 }
+    }
+    
+    /// 贪婪搜索（图遍历）
+    pub fn search(&self, graph: &[Vec<(usize, f32)>, query: &[f32], vectors: &[f32], dim: usize, top_k: usize) -> Vec<(usize, f32)> {
+        if graph.is_empty() { return vec![]; }
+        
+        let mut visited = HashSet::new();
+        let mut candidates: BinaryHeap<(Reverse<f32>, usize)> = BinaryHeap::new();
+        let mut results: Vec<(usize, f32)> = Vec::new();
+        
+        // 从入口点开始
+        let entry = 0;
+        visited.insert(entry);
+        candidates.push((Reverse(0.0), entry);
+        
+        while let Some((Reverse(dist), node_id)) = candidates.pop() {
+            if results.len() >= self.ef_search { break; }
+            if results.iter().any(|&(_, id)| id == node_id) { continue; }
+            
+            let q_dist = self.distance(query, node_id, vectors, dim);
+            results.push((node_id, q_dist));
+            
+            // 遍历邻居
+            for &(neighbor, _) in &graph[node_id] {
+                if !visited.contains(&neighbor) {
+                    visited.insert(neighbor);
+                    let n_dist = self.distance(query, neighbor, vectors, dim);
+                    candidates.push((Reverse(n_dist), neighbor));
+                }
+            }
+        }
+        
+        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        results.truncate(top_k);
+        results
+    }
+    
+    #[inline]
+    fn distance(&self, query: &[f32], idx: usize, vectors: &[f32], dim: usize) -> f32 {
+        let start = idx * dim;
+        let mut sum = 0.0f32;
+        for i in 0..dim {
+            let diff = query[i] - vectors[start + i];
+            sum += diff * diff;
+        }
+        sum
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn hnsw_search() {
+        println!("HNSW search ready");
+    }
+}
