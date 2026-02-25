@@ -534,4 +534,129 @@ mod tests {
         // Clean up
         std::fs::remove_file(path).ok();
     }
+
+    #[test]
+    fn test_get_vector_by_ids() {
+        let config = IndexConfig::new(IndexType::Flat, MetricType::L2, 4);
+        let mut index = MemIndex::new(&config).unwrap();
+        
+        // Add vectors with specific IDs
+        let vectors = vec![
+            1.0, 0.0, 0.0, 0.0,  // id=10
+            0.0, 1.0, 0.0, 0.0,  // id=20
+            0.0, 0.0, 1.0, 0.0,  // id=30
+            0.0, 0.0, 0.0, 1.0,  // id=40
+        ];
+        let ids = vec![10i64, 20, 30, 40];
+        index.add(&vectors, Some(&ids)).unwrap();
+        
+        // Get vectors by IDs
+        let result = index.get_vector_by_ids(&[20, 40, 10]).unwrap();
+        
+        // Should return vectors in order: id=20, id=40, id=10
+        assert_eq!(result.len(), 12); // 3 vectors * 4 dim
+        assert_eq!(&result[0..4], &[0.0, 1.0, 0.0, 0.0]); // id=20
+        assert_eq!(&result[4..8], &[0.0, 0.0, 0.0, 1.0]); // id=40
+        assert_eq!(&result[8..12], &[1.0, 0.0, 0.0, 0.0]); // id=10
+    }
+
+    #[test]
+    fn test_get_vector_by_ids_missing() {
+        let config = IndexConfig::new(IndexType::Flat, MetricType::L2, 4);
+        let mut index = MemIndex::new(&config).unwrap();
+        
+        let vectors = vec![1.0, 0.0, 0.0, 0.0];
+        let ids = vec![100i64];
+        index.add(&vectors, Some(&ids)).unwrap();
+        
+        // Request non-existent ID - should skip it
+        let result = index.get_vector_by_ids(&[999, 100]).unwrap();
+        
+        // Should return only the found vector
+        assert_eq!(result.len(), 4);
+        assert_eq!(&result, &[1.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_get_vector_by_ids_empty_index() {
+        let config = IndexConfig::new(IndexType::Flat, MetricType::L2, 4);
+        let index = MemIndex::new(&config).unwrap();
+        
+        let result = index.get_vector_by_ids(&[1, 2, 3]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_range_search_l2() {
+        let config = IndexConfig::new(IndexType::Flat, MetricType::L2, 4);
+        let mut index = MemIndex::new(&config).unwrap();
+        
+        // Vectors at distance 1.0 from origin on each axis
+        let vectors = vec![
+            1.0, 0.0, 0.0, 0.0,  // dist=1.0
+            0.0, 1.0, 0.0, 0.0,  // dist=1.0
+            0.0, 0.0, 1.0, 0.0,  // dist=1.0
+            2.0, 0.0, 0.0, 0.0,  // dist=2.0
+        ];
+        index.add(&vectors, None).unwrap();
+        
+        // Query at origin, radius=1.5
+        let query = vec![0.0, 0.0, 0.0, 0.0];
+        let (ids, distances) = index.range_search(&query, 1.5).unwrap();
+        
+        // Should find vectors with distance <= 1.5
+        assert_eq!(ids.len(), 3);
+        assert_eq!(distances.len(), 3);
+    }
+
+    #[test]
+    fn test_range_search_inner_product() {
+        let config = IndexConfig::new(IndexType::Flat, MetricType::Ip, 4);
+        let mut index = MemIndex::new(&config).unwrap();
+        
+        // Unit vectors
+        let vectors = vec![
+            1.0, 0.0, 0.0, 0.0,  // IP=1.0
+            0.0, 1.0, 0.0, 0.0,  // IP=0.0
+            1.0, 1.0, 0.0, 0.0,  // IP=1.0 (not normalized)
+        ];
+        index.add(&vectors, None).unwrap();
+        
+        // Query same as first vector
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+        // For IP, we use -IP internally, so radius=-0.5 means IP >= 0.5
+        let (ids, distances) = index.range_search(&query, -0.5).unwrap();
+        
+        // Should find vectors with -IP <= -0.5, i.e., IP >= 0.5
+        // IDs 0 and 2 have IP >= 0.5 with query
+        assert!(ids.len() >= 2);
+    }
+
+    #[test]
+    fn test_range_search_with_filter() {
+        use crate::api::{IdsPredicate, Predicate};
+        
+        let config = IndexConfig::new(IndexType::Flat, MetricType::L2, 4);
+        let mut index = MemIndex::new(&config).unwrap();
+        
+        let vectors = vec![
+            1.0, 0.0, 0.0, 0.0,  // id=0
+            2.0, 0.0, 0.0, 0.0,  // id=1
+            3.0, 0.0, 0.0, 0.0,  // id=2
+        ];
+        index.add(&vectors, None).unwrap();
+        
+        // Filter: only allow id=0 and id=2
+        let filter = IdsPredicate { ids: vec![0, 2] };
+        
+        // Query at origin, radius=3.5 (would find all without filter)
+        let query = vec![0.0, 0.0, 0.0, 0.0];
+        let (ids, _) = index.range_search_with_filter(&query, 3.5, &filter).unwrap();
+        
+        // Should only return id=0 and id=2
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&0));
+        assert!(ids.contains(&2));
+        assert!(!ids.contains(&1));
+    }
 }
