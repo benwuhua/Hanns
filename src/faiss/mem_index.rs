@@ -358,6 +358,102 @@ impl MemIndex {
         
         Ok(())
     }
+
+    /// Serialize to memory (BinarySet equivalent)
+    /// Returns a binary blob that can be deserialized later
+    pub fn serialize_to_memory(&self) -> Result<Vec<u8>> {
+        use std::io::Write;
+        
+        let mut buffer = Vec::new();
+        
+        // Write header
+        buffer.write_all(b"KWIX").unwrap(); // Magic
+        buffer.write_all(&1u32.to_le_bytes()).unwrap(); // Version
+        buffer.write_all(&(self.config.dim as u32).to_le_bytes()).unwrap();
+        buffer.write_all(&(self.vectors.len() as u64).to_le_bytes()).unwrap();
+        
+        // Write vectors
+        for v in &self.vectors {
+            let bytes: Vec<u8> = v.iter().flat_map(|f| f.to_le_bytes()).collect();
+            buffer.write_all(&bytes).unwrap();
+        }
+        
+        // Write IDs
+        for id in &self.ids {
+            buffer.write_all(&id.to_le_bytes()).unwrap();
+        }
+        
+        // Write trained flag
+        buffer.write_all(&[if self.trained { 1u8 } else { 0u8 }]).unwrap();
+        
+        Ok(buffer)
+    }
+
+    /// Deserialize from memory (BinarySet equivalent)
+    pub fn deserialize_from_memory(&mut self, data: &[u8]) -> Result<()> {
+        use std::io::Read;
+        
+        if data.len() < 21 {
+            return Err(crate::api::KnowhereError::Codec("data too short".to_string()));
+        }
+        
+        // Read header
+        let magic = &data[0..4];
+        if magic != b"KWIX" {
+            return Err(crate::api::KnowhereError::Codec("invalid magic".to_string()));
+        }
+        
+        let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        if version != 1 {
+            return Err(crate::api::KnowhereError::Codec("unsupported version".to_string()));
+        }
+        
+        let dim = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+        if dim != self.config.dim {
+            return Err(crate::api::KnowhereError::Codec("dimension mismatch".to_string()));
+        }
+        
+        let num = u64::from_le_bytes([data[12], data[13], data[14], data[15], data[16], data[17], data[18], data[19]]) as usize;
+        
+        // Read vectors
+        let mut offset = 20;
+        self.vectors.clear();
+        self.ids.clear();
+        
+        for _ in 0..num {
+            let vec_size = dim * 4;
+            if offset + vec_size > data.len() {
+                return Err(crate::api::KnowhereError::Codec("data truncated".to_string()));
+            }
+            
+            let mut vec = vec![0.0f32; dim];
+            for i in 0..dim {
+                let bytes = [data[offset], data[offset+1], data[offset+2], data[offset+3]];
+                vec[i] = f32::from_le_bytes(bytes);
+                offset += 4;
+            }
+            self.vectors.push(vec);
+        }
+        
+        // Read IDs
+        for _ in 0..num {
+            if offset + 8 > data.len() {
+                return Err(crate::api::KnowhereError::Codec("data truncated".to_string()));
+            }
+            let id = i64::from_le_bytes([data[offset], data[offset+1], data[offset+2], data[offset+3], data[offset+4], data[offset+5], data[offset+6], data[offset+7]]);
+            self.ids.push(id);
+            offset += 8;
+        }
+        
+        // Read trained flag
+        if offset < data.len() {
+            self.trained = data[offset] != 0;
+        } else {
+            self.trained = true;
+        }
+        
+        Ok(())
+    }
 }
 
 fn inner_product(a: &[f32], b: &[f32]) -> f32 {
@@ -662,5 +758,62 @@ mod tests {
         assert!(ids.contains(&0));
         assert!(ids.contains(&2));
         assert!(!ids.contains(&1));
+    }
+
+    #[test]
+    fn test_binaryset_serialize() {
+        let config = IndexConfig::new(IndexType::Flat, MetricType::L2, 4);
+        let mut index = MemIndex::new(&config).unwrap();
+        
+        let vectors = vec![
+            1.0, 0.0, 0.0, 0.0,  // id=0
+            0.0, 1.0, 0.0, 0.0,  // id=1
+            0.0, 0.0, 1.0, 0.0,  // id=2
+        ];
+        let ids = vec![10i64, 20, 30];
+        index.add(&vectors, Some(&ids)).unwrap();
+        
+        // Serialize to memory (BinarySet)
+        let data = index.serialize_to_memory().unwrap();
+        
+        // Deserialize from memory
+        let mut loaded = MemIndex::new(&config).unwrap();
+        loaded.deserialize_from_memory(&data).unwrap();
+        
+        // Verify
+        assert_eq!(loaded.ntotal(), 3);
+        
+        // Get vectors by IDs
+        let result = loaded.get_vector_by_ids(&[20, 10]).unwrap();
+        assert_eq!(result.len(), 8); // 2 vectors * 4 dim
+        assert_eq!(&result[0..4], &[0.0, 1.0, 0.0, 0.0]); // id=20
+        assert_eq!(&result[4..8], &[1.0, 0.0, 0.0, 0.0]); // id=10
+    }
+
+    #[test]
+    fn test_binaryset_empty_index() {
+        let config = IndexConfig::new(IndexType::Flat, MetricType::L2, 4);
+        let index = MemIndex::new(&config).unwrap();
+        
+        let data = index.serialize_to_memory().unwrap();
+        
+        let mut loaded = MemIndex::new(&config).unwrap();
+        loaded.deserialize_from_memory(&data).unwrap();
+        
+        assert_eq!(loaded.ntotal(), 0);
+    }
+
+    #[test]
+    fn test_binaryset_invalid_data() {
+        let config = IndexConfig::new(IndexType::Flat, MetricType::L2, 4);
+        let mut index = MemIndex::new(&config).unwrap();
+        
+        // Invalid magic
+        let result = index.deserialize_from_memory(b"INVALID");
+        assert!(result.is_err());
+        
+        // Truncated data
+        let result = index.deserialize_from_memory(b"KWIX");
+        assert!(result.is_err());
     }
 }

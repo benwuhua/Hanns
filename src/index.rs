@@ -60,6 +60,21 @@ pub trait Index: Send + Sync {
         // 默认实现：使用 K=所有向量，然后过滤
         Err(IndexError::Unsupported("range_search not implemented".into()))
     }
+
+    /// 按 ID 获取向量 (GetVectorByIds)
+    fn get_vector_by_ids(&self, ids: &[i64]) -> Result<Vec<f32>, IndexError> {
+        Err(IndexError::Unsupported("get_vector_by_ids not implemented".into()))
+    }
+
+    /// 序列化到内存 (BinarySet)
+    fn serialize_to_memory(&self) -> Result<Vec<u8>, IndexError> {
+        Err(IndexError::Unsupported("serialize_to_memory not implemented".into()))
+    }
+
+    /// 从内存反序列化 (BinarySet)
+    fn deserialize_from_memory(&mut self, data: &[u8]) -> Result<(), IndexError> {
+        Err(IndexError::Unsupported("deserialize_from_memory not implemented".into()))
+    }
     
     /// 保存到文件
     fn save(&self, path: &str) -> Result<(), IndexError>;
