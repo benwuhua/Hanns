@@ -36,6 +36,9 @@ pub mod ring;
 pub mod once_cell;
 pub mod ffi;
 
+#[cfg(feature = "jni-bindings")]
+pub mod jni;
+
 pub use api::{SearchRequest, SearchResult, KnowhereError, Result, IndexConfig, IndexType, MetricType};
 pub use executor::Executor;
 pub use bitset::BitsetView;

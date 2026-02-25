@@ -3,7 +3,7 @@
 ## 当前状态 (2026-02-25)
 
 ### 测试结果
-- **单元测试**: 167 passed, 0 failed, 1 ignored ✅
+- **单元测试**: 179 passed, 0 failed, 1 ignored ✅
 
 ### 本次开发内容
 
@@ -40,22 +40,11 @@
   - 7 个单元测试
 - **状态**: ✅ 完成
 
-### 功能覆盖
-
-| 模块 | 状态 | 说明 |
-|------|------|------|
-| HNSW | ✅ 完成 | 完整实现 + 测试 |
-| IVF | ✅ 完成 | 完整实现 + 测试 |
-| IVF-PQ | ✅ 完成 | 完整实现 + 测试 |
-| IVF-SQ8 | ✅ 完成 | 完整实现 + 测试 |
-| ANNOY | ✅ 完成 | 完整实现 + 测试 |
-| Binary | ✅ 完成 | 完整实现 + 测试 |
-| Sparse | ✅ 完成 | 完整实现 + 测试 |
-| DiskANN | ✅ 完成 | Vamana图算法 + save/load + 测试 |
-| SCANN | ✅ 新增 | 各向异性量化 + ADC + 两阶段搜索 |
-| AnnIterator | ✅ 新增 | 迭代器搜索接口 |
-
-### 下一步建议
-- [P1] 完善 SCANN 性能优化
-- [P1] JNI 绑定
-- [P2] Python 绑定
+#### 5. JNI 绑定 (P1) - 进行中
+- **文件**: `src/jni/mod.rs`, `Cargo.toml`
+- **新增**:
+  - 添加 jni crate 依赖
+  - 创建 JNI 模块骨架
+  - 实现索引注册表
+  - 实现基本 JNI 方法 (createIndex, freeIndex, add, search, etc.)
+- **状态**: 🔶 进行中 (API 适配待完善)
