@@ -1,10 +1,27 @@
 //! K-Means 量化器
 //! 
 //! 支持 k-means++ 初始化和迭代收敛
+//! 使用 SIMD 优化距离计算
 
 use rand::prelude::*;
 #[cfg(feature = "parallel")]
 use crate::simd::l2_distance;
+
+/// 计算两个向量的 L2 距离（自动选择 SIMD 实现）
+#[inline]
+fn compute_l2_distance(a: &[f32], b: &[f32]) -> f32 {
+    #[cfg(feature = "simd")]
+    {
+        return crate::simd::l2_distance(a, b);
+    }
+    #[cfg(not(feature = "simd"))]
+    {
+        a.iter().zip(b.iter())
+            .map(|(x, y)| (x - y).powi(2))
+            .sum::<f32>()
+            .sqrt()
+    }
+}
 
 pub struct KMeans {
     k: usize,
@@ -44,10 +61,10 @@ impl KMeans {
             
             for i in 0..n {
                 let mut min_dist = f32::MAX;
-                for cc in 0..c {
-                    let dist = self.l2_distance(
+                for c in 0..c {
+                    let dist = compute_l2_distance(
                         &vectors[i * self.dim..],
-                        &self.centroids[cc * self.dim..]
+                        &self.centroids[c * self.dim..]
                     );
                     min_dist = min_dist.min(dist);
                 }
@@ -73,14 +90,6 @@ impl KMeans {
         }
     }
     
-    #[inline]
-    fn l2_distance(&self, a: &[f32], b: &[f32]) -> f32 {
-        a.iter().zip(b.iter())
-            .map(|(x, y)| (x - y).powi(2))
-            .sum::<f32>()
-            .sqrt()
-    }
-    
     /// 训练 K-means
     pub fn train(&mut self, vectors: &[f32]) -> usize {
         let n = vectors.len() / self.dim;
@@ -100,7 +109,7 @@ impl KMeans {
                 let mut min_dist = f32::MAX;
                 let mut best_k = 0;
                 for c in 0..self.k {
-                    let dist = self.l2_distance(
+                    let dist = compute_l2_distance(
                         &vectors[i * self.dim..],
                         &self.centroids[c * self.dim..]
                     );
@@ -128,7 +137,7 @@ impl KMeans {
             let mut max_shift = 0.0f32;
             for c in 0..self.k {
                 if counts[c] > 0 {
-                    let shift = self.l2_distance(
+                    let shift = compute_l2_distance(
                         &self.centroids[c * self.dim..],
                         &new_centroids[c * self.dim..]
                     );
@@ -154,13 +163,18 @@ impl KMeans {
         let mut min_dist = f32::MAX;
         let mut best = 0;
         for c in 0..self.k {
-            let dist = self.l2_distance(vector, &self.centroids[c * self.dim..]);
+            let dist = compute_l2_distance(vector, &self.centroids[c * self.dim..]);
             if dist < min_dist {
                 min_dist = dist;
                 best = c;
             }
         }
         best
+    }
+    
+    /// 计算两个向量的 L2 距离（公开方法，用于测试）
+    pub fn l2_distance(&self, a: &[f32], b: &[f32]) -> f32 {
+        compute_l2_distance(a, b)
     }
     
     /// 批量查找最近 centroid（使用 SIMD）
@@ -200,7 +214,7 @@ impl KMeans {
                     let mut best_k = 0;
                     let vec = &vectors[i * self.dim..];
                     for c in 0..self.k {
-                        let dist = self.l2_distance(vec, &self.centroids[c * self.dim..]);
+                        let dist = compute_l2_distance(vec, &self.centroids[c * self.dim..]);
                         if dist < min_dist {
                             min_dist = dist;
                             best_k = c;
@@ -225,7 +239,7 @@ impl KMeans {
             let mut max_shift = 0.0f32;
             for c in 0..self.k {
                 if counts[c] > 0 {
-                    let shift = self.l2_distance(
+                    let shift = compute_l2_distance(
                         &self.centroids[c * self.dim..],
                         &new_centroids[c * self.dim..]
                     );

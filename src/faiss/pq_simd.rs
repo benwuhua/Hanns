@@ -1,4 +1,6 @@
 //! SIMD 优化的 PQ 距离计算
+//!
+//! 支持 AVX2/AVX512 (x86_64) 和 NEON (aarch64) SIMD 指令
 
 /// PQ 距离计算器（SIMD 优化）
 pub struct PqDistance {
@@ -12,9 +14,24 @@ impl PqDistance {
         Self { m, k, sub_dim }
     }
     
-    /// 计算单个距离（SIMD 优化路径）
+    /// 计算单个距离（自动选择最优 SIMD 实现）
     #[inline]
     pub fn distance(&self, query: &[f32], codebook: &[f32], codes: &[u8]) -> f32 {
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                return self.distance_avx2(query, codebook, codes);
+            }
+            if std::is_x86_feature_detected!("sse4_2") {
+                return self.distance_sse(query, codebook, codes);
+            }
+        }
+        #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                return self.distance_neon(query, codebook, codes);
+            }
+        }
         self.distance_scalar(query, codebook, codes)
     }
     
@@ -72,6 +89,158 @@ impl PqDistance {
         sum
     }
     
+    /// SSE 优化的 PQ 距离 (4 elements per iteration)
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    #[inline]
+    fn distance_sse(&self, query: &[f32], codebook: &[f32], codes: &[u8]) -> f32 {
+        use std::arch::x86_64::*;
+        
+        let mut sum = _mm_setzero_ps();
+        
+        for sub_idx in 0..self.m {
+            let code = codes[sub_idx] as usize;
+            let cent_offset = sub_idx * self.k * self.sub_dim + code * self.sub_dim;
+            
+            if cent_offset + self.sub_dim > codebook.len() {
+                continue;
+            }
+            
+            let q_start = sub_idx * self.sub_dim;
+            if q_start + self.sub_dim > query.len() {
+                continue;
+            }
+            
+            let mut i = 0;
+            let q_ptr = &query[q_start];
+            let c_ptr = &codebook[cent_offset];
+            
+            while i + 4 <= self.sub_dim {
+                let qv = _mm_loadu_ps(q_ptr.add(i));
+                let cv = _mm_loadu_ps(c_ptr.add(i));
+                let diff = _mm_sub_ps(qv, cv);
+                let sq = _mm_mul_ps(diff, diff);
+                sum = _mm_add_ps(sum, sq);
+                i += 4;
+            }
+            
+            // Handle remainder
+            while i < self.sub_dim {
+                let diff = q_ptr[i] - c_ptr[i];
+                sum = _mm_add_ss(sum, _mm_set_ss(diff * diff));
+                i += 1;
+            }
+        }
+        
+        // Horizontal sum
+        let mut result = _mm_cvtss_f32(sum);
+        let high = _mm_movehdup_ps(sum);
+        let sums = _mm_add_ps(sum, high);
+        let sums2 = _mm_movehl_ps(sums, sums);
+        result + _mm_cvtss_f32(_mm_add_ss(sums, sums2))
+    }
+    
+    /// AVX2 优化的 PQ 距离 (8 elements per iteration)
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    #[inline]
+    fn distance_avx2(&self, query: &[f32], codebook: &[f32], codes: &[u8]) -> f32 {
+        use std::arch::x86_64::*;
+        
+        let mut sum = _mm256_setzero_ps();
+        
+        for sub_idx in 0..self.m {
+            let code = codes[sub_idx] as usize;
+            let cent_offset = sub_idx * self.k * self.sub_dim + code * self.sub_dim;
+            
+            if cent_offset + self.sub_dim > codebook.len() {
+                continue;
+            }
+            
+            let q_start = sub_idx * self.sub_dim;
+            if q_start + self.sub_dim > query.len() {
+                continue;
+            }
+            
+            let mut i = 0;
+            let q_ptr = &query[q_start];
+            let c_ptr = &codebook[cent_offset];
+            
+            while i + 8 <= self.sub_dim {
+                let qv = _mm256_loadu_ps(q_ptr.add(i));
+                let cv = _mm256_loadu_ps(c_ptr.add(i));
+                let diff = _mm256_sub_ps(qv, cv);
+                let sq = _mm256_mul_ps(diff, diff);
+                sum = _mm256_add_ps(sum, sq);
+                i += 8;
+            }
+            
+            // Handle remainder (up to 7 elements)
+            while i < self.sub_dim {
+                let diff = q_ptr[i] - c_ptr[i];
+                sum = _mm256_add_ps(sum, _mm256_set1_ps(diff * diff));
+                i += 1;
+            }
+        }
+        
+        // Horizontal sum of 256-bit register
+        let mut result = _mm256_cvtss_f32(sum);
+        let high = _mm256_extractf128_ps(sum, 1);
+        result += _mm_cvtss_f32(_mm_add_ps(high, _mm256_castps256to128(sum)));
+        
+        result
+    }
+    
+    /// NEON 优化的 PQ 距离 (4 elements per iteration)
+    #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+    #[inline]
+    fn distance_neon(&self, query: &[f32], codebook: &[f32], codes: &[u8]) -> f32 {
+        use std::arch::aarch64::*;
+        
+        unsafe {
+            let mut sum = vdupq_n_f32(0.0);
+            
+            for sub_idx in 0..self.m {
+                let code = codes[sub_idx] as usize;
+                let cent_offset = sub_idx * self.k * self.sub_dim + code * self.sub_dim;
+                
+                if cent_offset + self.sub_dim > codebook.len() {
+                    continue;
+                }
+                
+                let q_start = sub_idx * self.sub_dim;
+                if q_start + self.sub_dim > query.len() {
+                    continue;
+                }
+                
+                let mut i = 0;
+                let q_ptr = query.as_ptr().add(q_start);
+                let c_ptr = codebook.as_ptr().add(cent_offset);
+                
+                while i + 4 <= self.sub_dim {
+                    let qv = vld1q_f32(q_ptr.add(i));
+                    let cv = vld1q_f32(c_ptr.add(i));
+                    let diff = vsubq_f32(qv, cv);
+                    let sq = vmulq_f32(diff, diff);
+                    sum = vaddq_f32(sum, sq);
+                    i += 4;
+                }
+                
+                // Handle remainder
+                while i < self.sub_dim {
+                    let diff = *q_ptr.add(i) - *c_ptr.add(i);
+                    let mut partial = vdupq_n_f32(0.0);
+                    partial = vsetq_lane_f32(diff * diff, partial, 0);
+                    sum = vaddq_f32(sum, partial);
+                    i += 1;
+                }
+            }
+            
+            // Horizontal sum
+            let mut result = vgetq_lane_f32(sum, 0) + vgetq_lane_f32(sum, 1) +
+                             vgetq_lane_f32(sum, 2) + vgetq_lane_f32(sum, 3);
+            result
+        }
+    }
+    
     /// 批量距离计算
     pub fn distance_batch(&self, query: &[f32], codebook: &[f32], 
                           codes: &[Vec<u8>]) -> Vec<f32> {
@@ -97,8 +266,29 @@ impl DistanceTable {
         }
     }
     
-    /// 预计算查询到所有质心的距离
+    /// 预计算查询到所有质心的距离（自动选择 SIMD 实现）
     pub fn compute(&mut self, query: &[f32], codebook: &[f32], sub_dim: usize) {
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                return self.compute_avx2(query, codebook, sub_dim);
+            }
+            if std::is_x86_feature_detected!("sse4_2") {
+                return self.compute_sse(query, codebook, sub_dim);
+            }
+        }
+        #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                return self.compute_neon(query, codebook, sub_dim);
+            }
+        }
+        self.compute_scalar(query, codebook, sub_dim);
+    }
+    
+    /// 标量预计算
+    #[inline]
+    fn compute_scalar(&mut self, query: &[f32], codebook: &[f32], sub_dim: usize) {
         for m_idx in 0..self.m {
             for k_idx in 0..self.k {
                 let cent_offset = m_idx * self.k * sub_dim + k_idx * sub_dim;
@@ -111,6 +301,138 @@ impl DistanceTable {
                 }
                 
                 self.table[m_idx * self.k + k_idx] = sum;
+            }
+        }
+    }
+    
+    /// SSE 优化的预计算
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    #[inline]
+    fn compute_sse(&mut self, query: &[f32], codebook: &[f32], sub_dim: usize) {
+        use std::arch::x86_64::*;
+        
+        for m_idx in 0..self.m {
+            let q_start = m_idx * sub_dim;
+            let q_ptr = &query[q_start];
+            
+            for k_idx in 0..self.k {
+                let cent_offset = m_idx * self.k * sub_dim + k_idx * sub_dim;
+                let c_ptr = &codebook[cent_offset];
+                
+                let mut sum = _mm_setzero_ps();
+                let mut i = 0;
+                
+                while i + 4 <= sub_dim {
+                    let qv = _mm_loadu_ps(q_ptr.add(i));
+                    let cv = _mm_loadu_ps(c_ptr.add(i));
+                    let diff = _mm_sub_ps(qv, cv);
+                    let sq = _mm_mul_ps(diff, diff);
+                    sum = _mm_add_ps(sum, sq);
+                    i += 4;
+                }
+                
+                // Horizontal sum
+                let mut result = _mm_cvtss_f32(sum);
+                let high = _mm_movehdup_ps(sum);
+                let sums = _mm_add_ps(sum, high);
+                let sums2 = _mm_movehl_ps(sums, sums);
+                result += _mm_cvtss_f32(_mm_add_ss(sums, sums2));
+                
+                // Handle remainder
+                while i < sub_dim {
+                    let diff = q_ptr[i] - c_ptr[i];
+                    result += diff * diff;
+                    i += 1;
+                }
+                
+                self.table[m_idx * self.k + k_idx] = result;
+            }
+        }
+    }
+    
+    /// AVX2 优化的预计算
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    #[inline]
+    fn compute_avx2(&mut self, query: &[f32], codebook: &[f32], sub_dim: usize) {
+        use std::arch::x86_64::*;
+        
+        for m_idx in 0..self.m {
+            let q_start = m_idx * sub_dim;
+            let q_ptr = &query[q_start];
+            
+            for k_idx in 0..self.k {
+                let cent_offset = m_idx * self.k * sub_dim + k_idx * sub_dim;
+                let c_ptr = &codebook[cent_offset];
+                
+                let mut sum = _mm256_setzero_ps();
+                let mut i = 0;
+                
+                while i + 8 <= sub_dim {
+                    let qv = _mm256_loadu_ps(q_ptr.add(i));
+                    let cv = _mm256_loadu_ps(c_ptr.add(i));
+                    let diff = _mm256_sub_ps(qv, cv);
+                    let sq = _mm256_mul_ps(diff, diff);
+                    sum = _mm256_add_ps(sum, sq);
+                    i += 8;
+                }
+                
+                // Horizontal sum of 256-bit
+                let mut result = _mm256_cvtss_f32(sum);
+                let high = _mm256_extractf128_ps(sum, 1);
+                result += _mm_cvtss_f32(_mm_add_ps(high, _mm256_castps256to128(sum)));
+                
+                // Handle remainder
+                while i < sub_dim {
+                    let diff = q_ptr[i] - c_ptr[i];
+                    result += diff * diff;
+                    i += 1;
+                }
+                
+                self.table[m_idx * self.k + k_idx] = result;
+            }
+        }
+    }
+    
+    /// NEON 优化的预计算
+    #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+    #[inline]
+    fn compute_neon(&mut self, query: &[f32], codebook: &[f32], sub_dim: usize) {
+        use std::arch::aarch64::*;
+        
+        unsafe {
+            for m_idx in 0..self.m {
+                let q_start = m_idx * sub_dim;
+                let q_ptr = query.as_ptr().add(q_start);
+                
+                for k_idx in 0..self.k {
+                    let cent_offset = m_idx * self.k * sub_dim + k_idx * sub_dim;
+                    let c_ptr = codebook.as_ptr().add(cent_offset);
+                    
+                    let mut sum = vdupq_n_f32(0.0);
+                    let mut i = 0;
+                    
+                    while i + 4 <= sub_dim {
+                        let qv = vld1q_f32(q_ptr.add(i));
+                        let cv = vld1q_f32(c_ptr.add(i));
+                        let diff = vsubq_f32(qv, cv);
+                        let sq = vmulq_f32(diff, diff);
+                        sum = vaddq_f32(sum, sq);
+                        i += 4;
+                    }
+                    
+                    // Horizontal sum
+                    let mut result = vgetq_lane_f32(sum, 0) + vgetq_lane_f32(sum, 1) +
+                                     vgetq_lane_f32(sum, 2) + vgetq_lane_f32(sum, 3);
+                    
+                    // Handle remainder
+                    while i < sub_dim {
+                        let diff = *q_ptr.add(i) - *c_ptr.add(i);
+                        result += diff * diff;
+                        i += 1;
+                    }
+                    
+                    self.table[m_idx * self.k + k_idx] = result;
+                }
             }
         }
     }
