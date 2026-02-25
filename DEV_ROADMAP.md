@@ -1,9 +1,9 @@
 # Knowhere-RS 详细开发计划
 
-**版本**: 0.2.0 → 1.0.0
+**版本**: 0.3.0 → 1.0.0
 **更新日期**: 2026-02-25
-**当前状态**: 133 tests passed, 70% 功能覆盖
-**目标**: 85% 功能覆盖, 80% 性能
+**当前状态**: 144 tests passed, 80% 功能覆盖
+**目标**: 90% 功能覆盖, 90% 性能
 
 ---
 
@@ -11,361 +11,52 @@
 
 | 里程碑 | 目标 | 时间 | 关键交付物 |
 |-------|------|------|-----------|
-| **M1** | API 补全 | 1 周 | GetVectorByIds, BinarySet |
-| **M2** | RaBitQ 量化 | 2 周 | 32x 压缩量化 |
-| **M3** | SCANN 索引 | 2 周 | Google ScaNN |
-| **M4** | FFI/JNI | 2 周 | C API, Java 绑定 |
-| **M5** | 优化完善 | 1 周 | 性能调优, 文档 |
+| **M1** | SCANN 索引 | 2 周 | Google ScaNN 实现 |
+| **M2** | 迭代器接口 | 1 周 | AnnIterator |
+| **M3** | FFI/JNI 完善 | 2 周 | C API, Java 绑定 |
+| **M4** | 优化完善 | 1 周 | 性能调优, 文档 |
 
 ---
 
-## M1: API 补全 (Week 1)
+## 当前完成状态
 
-### 目标
-- GetVectorByIds 功能
-- BinarySet 内存序列化
-- 迭代器接口设计
+### 已完成 ✅ (P0)
 
-### 1.1 GetVectorByIds
+| 功能 | 状态 | 文件 |
+|-----|------|------|
+| SIMD L2/IP (SSE/AVX2/AVX512/NEON) | ✅ | `src/simd.rs` |
+| PQ SIMD 优化 | ✅ | `src/faiss/pq_simd.rs` |
+| RaBitQ 量化 (32x) | ✅ | `src/quantization/rabitq.rs` |
+| GetVectorByIds | ✅ | `src/index.rs`, `src/faiss/mem_index.rs` |
+| BinarySet 序列化 | ✅ | `src/faiss/mem_index.rs` |
+| DiskANN 序列化 | ✅ | `src/faiss/diskann.rs` |
+| K-means SIMD | ✅ | `src/quantization/kmeans.rs` |
 
-**文件**: `src/index.rs`, 各索引实现
+### 索引实现状态
 
-```rust
-// src/index.rs - Index trait 扩展
-pub trait Index: Send + Sync {
-    // ... 现有方法 ...
-
-    /// 按ID批量获取向量
-    fn get_vectors_by_ids(&self, ids: &[i64]) -> Result<Vec<f32>>;
-}
-
-// src/faiss/mem_index.rs - 实现
-impl Index for MemIndex {
-    fn get_vectors_by_ids(&self, ids: &[i64]) -> Result<Vec<f32>> {
-        let mut result = Vec::with_capacity(ids.len() * self.dim);
-
-        for &id in ids {
-            if let Some(&pos) = self.id_to_pos.get(&id) {
-                let start = pos * self.dim;
-                result.extend_from_slice(&self.vectors[start..start + self.dim]);
-            } else {
-                // 填充零向量或返回错误
-                result.extend(std::iter::repeat(0.0f32).take(self.dim));
-            }
-        }
-
-        Ok(result)
-    }
-}
-```
-
-**工作量**: 2 天
-**验收标准**:
-- [ ] Index trait 添加方法
-- [ ] Flat, HNSW, IVF 索引实现
-- [ ] 单元测试覆盖
-
-### 1.2 BinarySet 内存序列化
-
-**文件**: `src/codec/binary_set.rs`
-
-```rust
-/// 二进制集合 (内存序列化)
-pub struct BinarySet {
-    data: HashMap<String, Binary>,
-}
-
-pub struct Binary {
-    data: Vec<u8>,
-    size: usize,
-}
-
-impl BinarySet {
-    pub fn new() -> Self {
-        Self { data: HashMap::new() }
-    }
-
-    /// 添加二进制数据
-    pub fn append(&mut self, name: &str, data: &[u8]) {
-        self.data.insert(name.to_string(), Binary {
-            data: data.to_vec(),
-            size: data.len(),
-        });
-    }
-
-    /// 获取二进制数据
-    pub fn get(&self, name: &str) -> Option<&[u8]> {
-        self.data.get(name).map(|b| b.data.as_slice())
-    }
-
-    /// 序列化到字节
-    pub fn to_bytes(&self) -> Vec<u8> {
-        // 格式: [count:u32, [(name_len:u32, name:bytes, data_len:u64, data:bytes), ...]]
-    }
-
-    /// 从字节反序列化
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        // 解析格式
-    }
-}
-
-// Index trait 扩展
-pub trait Index {
-    /// 序列化到 BinarySet
-    fn serialize(&self) -> Result<BinarySet>;
-
-    /// 从 BinarySet 反序列化
-    fn deserialize(&mut self, binary_set: &BinarySet) -> Result<()>;
-}
-```
-
-**工作量**: 3 天
-**验收标准**:
-- [ ] BinarySet 结构实现
-- [ ] Flat, IVF, HNSW 序列化
-- [ ] 零拷贝支持 (可选)
-
-### 1.3 迭代器接口设计
-
-**文件**: `src/iterator.rs`
-
-```rust
-/// ANN 迭代器 trait
-pub trait AnnIterator: Iterator<Item = (i64, f32)> {
-    /// 获取当前最佳距离
-    fn distance(&self) -> f32;
-
-    /// 是否已耗尽
-    fn is_exhausted(&self) -> bool;
-}
-
-// HNSW 迭代器实现
-pub struct HnswIterator<'a> {
-    index: &'a HnswIndex,
-    query: Vec<f32>,
-    visited: HashSet<i64>,
-    candidates: BinaryHeap<OrderedCandidate>,
-    current_best: f32,
-}
-
-impl<'a> Iterator for HnswIterator<'a> {
-    type Item = (i64, f32);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        // 增量式返回最近邻
-    }
-}
-```
-
-**工作量**: 2 天
+| 索引 | 状态 | 质量 |
+|-----|------|------|
+| Flat | ✅ | ⭐⭐⭐⭐⭐ |
+| HNSW | ✅ | ⭐⭐⭐⭐ |
+| HNSW-SQ/PQ | ✅ | ⭐⭐⭐⭐ |
+| IVF-Flat | ✅ | ⭐⭐⭐⭐ |
+| IVF-PQ | ✅ | ⭐⭐⭐⭐ |
+| IVF-SQ8 | ✅ | ⭐⭐⭐⭐ |
+| DiskANN | ✅ | ⭐⭐⭐ |
+| ANNOY | ✅ | ⭐⭐⭐⭐ |
+| Binary | ✅ | ⭐⭐⭐⭐ |
+| Sparse | ✅ | ⭐⭐⭐ |
 
 ---
 
-## M2: RaBitQ 量化 (Week 2-3)
-
-### 目标
-- 实现 RaBitQ 1-bit 量化
-- 32x 压缩比
-- 与 IVF 结合
-
-### 2.1 RaBitQ 核心实现
-
-**文件**: `src/quantization/rabitq.rs`
-
-```rust
-//! RaBitQ: 1-bit Random Quantization
-//!
-//! 参考: RaBitQ: Quantizing High-Dimensional Vectors with a 1-Bit Code
-//! 论文: https://arxiv.org/abs/2405.12497
-
-use rand::Rng;
-
-/// RaBitQ 量化器
-pub struct RaBitQ {
-    dim: usize,
-
-    // 随机旋转矩阵 (dim x dim)
-    rotation: Vec<f32>,
-
-    // 二值码书
-    binary_centroids: Vec<u64>,
-
-    // 残差信息 (用于距离校正)
-    norms: Vec<f32>,
-}
-
-impl RaBitQ {
-    pub fn new(dim: usize) -> Self {
-        // 生成随机旋转矩阵
-        let mut rng = rand::thread_rng();
-        let mut rotation = vec![0.0f32; dim * dim];
-
-        // 使用随机正交矩阵
-        for i in 0..dim {
-            for j in 0..dim {
-                rotation[i * dim + j] = rng.gen::<f32>() * 2.0 - 1.0;
-            }
-        }
-
-        // Gram-Schmidt 正交化
-        orthogonalize(&mut rotation, dim);
-
-        Self {
-            dim,
-            rotation,
-            binary_centroids: Vec::new(),
-            norms: Vec::new(),
-        }
-    }
-
-    /// 训练: 计算二值码书
-    pub fn train(&mut self, data: &[f32], n_clusters: usize) {
-        let n = data.len() / self.dim;
-
-        // 1. 应用随机旋转
-        let rotated = self.apply_rotation(data);
-
-        // 2. 对每个聚类，计算二值质心
-        for c in 0..n_clusters {
-            let centroid = compute_cluster_centroid(&rotated, c, self.dim);
-            let binary = self.binarize(&centroid);
-
-            self.binary_centroids.push(binary);
-            self.norms.push(centroid.iter().map(|x| x * x).sum::<f32>().sqrt());
-        }
-    }
-
-    /// 编码: 向量 -> 64-bit 二值码 (32x 压缩)
-    ///
-    /// 原始: dim * 4 bytes
-    /// 编码后: ceil(dim / 64) * 8 bytes
-    /// 压缩比: dim / ceil(dim/64) ≈ 32x (for dim=128-960)
-    pub fn encode(&self, vector: &[f32]) -> Vec<u64> {
-        let rotated = self.rotate(vector);
-        let n_words = (self.dim + 63) / 64;
-
-        let mut codes = vec![0u64; n_words];
-
-        for (i, &v) in rotated.iter().enumerate() {
-            if v >= 0.0 {
-                codes[i / 64] |= 1u64 << (i % 64);
-            }
-        }
-
-        codes
-    }
-
-    /// 距离计算: 使用 popcount
-    ///
-    /// Hamming(x, y) ≈ angle(x, y) * dim
-    /// 通过查表校正
-    pub fn distance(&self, query_codes: &[u64], db_codes: &[u64]) -> f32 {
-        let mut hamming = 0usize;
-
-        for (&q, &d) in query_codes.iter().zip(db_codes.iter()) {
-            hamming += (q ^ d).count_ones() as usize;
-        }
-
-        // 转换为近似距离
-        let angle = hamming as f32 / self.dim as f32 * std::f32::consts::PI;
-        angle.cos().abs() // 近似余弦距离
-    }
-
-    /// 非对称距离 (查询向量未量化)
-    pub fn asymmetric_distance(&self, query: &[f32], db_codes: &[u64], db_norm: f32) -> f32 {
-        let rotated_q = self.rotate(query);
-
-        // 计算查询的二值码
-        let query_codes = self.encode(&rotated_q);
-
-        // 计算近似距离
-        let hamming = self.hamming(&query_codes, db_codes);
-
-        // 校正距离
-        let query_norm = query.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let correction = query_norm * db_norm;
-
-        correction * (hamming as f32 / self.dim as f32)
-    }
-
-    fn rotate(&self, vector: &[f32]) -> Vec<f32> {
-        let mut result = vec![0.0f32; self.dim];
-
-        for i in 0..self.dim {
-            for j in 0..self.dim {
-                result[i] += vector[j] * self.rotation[j * self.dim + i];
-            }
-        }
-
-        result
-    }
-
-    fn hamming(&self, a: &[u64], b: &[u64]) -> usize {
-        a.iter().zip(b.iter())
-            .map(|(&x, &y)| (x ^ y).count_ones() as usize)
-            .sum()
-    }
-}
-```
-
-**工作量**: 5 天
-**验收标准**:
-- [ ] 32x 压缩比验证
-- [ ] Recall@10 ≥ 90%
-- [ ] AVX-512 VPOPCNTDQ 优化 (可选)
-
-### 2.2 IVF-RaBitQ 索引
-
-**文件**: `src/faiss/ivf_rabitq.rs`
-
-```rust
-/// IVF + RaBitQ 索引
-pub struct IvfRabitQIndex {
-    // IVF 结构
-    nlist: usize,
-    centroids: Vec<f32>,
-
-    // RaBitQ 量化器
-    rabitq: RaBitQ,
-
-    // 倒排列表: cluster_id -> [(id, codes, norm)]
-    inverted_lists: HashMap<usize, Vec<(i64, Vec<u64>, f32)>>,
-}
-
-impl IvfRabitQIndex {
-    pub fn search(&self, query: &[f32], k: usize, nprobe: usize) -> Vec<(i64, f32)> {
-        // 1. 找最近的 nprobe 个聚类
-        let clusters = self.find_nearest_clusters(query, nprobe);
-
-        // 2. 粗排: 使用 RaBitQ 距离
-        let mut candidates = Vec::new();
-        for &cluster in &clusters {
-            for &(id, ref codes, norm) in &self.inverted_lists[&cluster] {
-                let dist = self.rabitq.asymmetric_distance(query, codes, norm);
-                candidates.push((id, dist));
-            }
-        }
-
-        // 3. 排序取 top-k
-        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        candidates.truncate(k);
-
-        candidates
-    }
-}
-```
-
-**工作量**: 3 天
-
----
-
-## M3: SCANN 索引 (Week 4-5)
+## M1: SCANN 索引 (Week 1-2)
 
 ### 目标
 - 实现 Google ScaNN 算法
-- 高召回率 + 高吞吐
+- 各向异性向量量化
+- 高召回 + 高吞吐
 
-### 3.1 SCANN 核心结构
+### 1.1 各向异性量化器
 
 **文件**: `src/faiss/scann.rs`
 
@@ -375,141 +66,320 @@ impl IvfRabitQIndex {
 //! 参考: Google Research ScaNN
 //! 论文: Accelerating Large-Scale Inference with Anisotropic Vector Quantization
 
-/// SCANN 索引
-pub struct ScaNNIndex {
-    dim: usize,
+use std::collections::HashMap;
 
-    // 量化器 (各向异性)
-    quantizer: AnisotropicQuantizer,
+/// SCANN 配置
+pub struct ScaNNConfig {
+    /// 子空间数量
+    pub num_partitions: usize,
+    /// 每个子空间的质心数
+    pub num_centroids: usize,
+    /// 重排序候选数
+    pub reorder_k: usize,
+    /// 各向异性权重参数
+    pub anisotropic_alpha: f32,
+}
 
-    // 倒排索引
-    inverted_index: InvertedIndex,
-
-    // 重排序参数
-    reorder_k: usize,
+impl Default for ScaNNConfig {
+    fn default() -> Self {
+        Self {
+            num_partitions: 16,
+            num_centroids: 256,
+            reorder_k: 100,
+            anisotropic_alpha: 0.2,
+        }
+    }
 }
 
 /// 各向异性量化器
 pub struct AnisotropicQuantizer {
     dim: usize,
-    n_partitions: usize,  // 子空间数
-    n_centroids: usize,   // 每个子空间的质心数
+    config: ScaNNConfig,
 
-    // 码书: [n_partitions * n_centroids * sub_dim]
+    /// 子空间维度
+    sub_dim: usize,
+
+    /// 码书: [num_partitions * num_centroids * sub_dim]
     codebooks: Vec<f32>,
 
-    // 各向异性权重
+    /// 各向异性权重: [num_partitions * sub_dim]
     weights: Vec<f32>,
+
+    /// 质心归一化因子
+    centroid_norms: Vec<f32>,
 }
 
 impl AnisotropicQuantizer {
-    /// 各向异性 K-means 训练
-    ///
-    /// 目标: 最小化 Σ w_i * ||x_i - c(x_i)||^2
-    /// 其中 w_i 根据向量的重要性加权
-    pub fn train(&mut self, data: &[f32]) {
-        // 1. 计算各向异性权重
-        self.compute_weights(data);
+    pub fn new(dim: usize, config: ScaNNConfig) -> Self {
+        let sub_dim = dim / config.num_partitions;
 
-        // 2. 对每个子空间训练加权 K-means
-        for p in 0..self.n_partitions {
-            let sub_vectors = self.extract_subspace(data, p);
-            self.train_subspace(p, &sub_vectors);
+        Self {
+            dim,
+            config,
+            sub_dim,
+            codebooks: Vec::new(),
+            weights: Vec::new(),
+            centroid_norms: Vec::new(),
         }
     }
 
-    fn compute_weights(&mut self, data: &[f32]) {
-        // 根据向量与查询的预期角度分布计算权重
-        // 权重 = f(angle), angle 越小权重越大
+    /// 各向异性 K-means 训练
+    ///
+    /// 目标: 最小化 Σ w(angle) * ||x - c(x)||²
+    /// 其中权重根据向量与查询角度分布计算
+    pub fn train(&mut self, data: &[f32], query_sample: Option<&[f32]>) {
+        let n = data.len() / self.dim;
+
+        // 1. 计算各向异性权重
+        if let Some(queries) = query_sample {
+            self.compute_anisotropic_weights(queries);
+        } else {
+            // 使用默认权重
+            self.weights = vec![1.0; self.config.num_partitions * self.sub_dim];
+        }
+
+        // 2. 对每个子空间训练加权 K-means
+        for p in 0..self.config.num_partitions {
+            let sub_vectors = self.extract_subspace(data, p);
+            self.train_subspace_weighted(p, &sub_vectors);
+        }
     }
 
-    /// 编码
-    pub fn encode(&self, vector: &[f32]) -> Vec<u8> {
-        let mut codes = Vec::with_capacity(self.n_partitions);
+    /// 计算各向异性权重
+    ///
+    /// 对于每个维度 d，计算权重:
+    /// w(d) = 1 / (1 + α * |cos(θ_d)|)
+    /// 其中 θ_d 是该维度与查询方向的角度
+    fn compute_anisotropic_weights(&mut self, queries: &[f32]) {
+        let n_queries = queries.len() / self.dim;
+        let alpha = self.config.anisotropic_alpha;
 
-        for p in 0..self.n_partitions {
-            let sub = self.get_subvector(vector, p);
-            let centroid = self.find_nearest_centroid(p, &sub);
-            codes.push(centroid as u8);
+        // 计算查询的主方向
+        let mut query_direction = vec![0.0f32; self.dim];
+        for q in queries.chunks(self.dim) {
+            for (i, &v) in q.iter().enumerate() {
+                query_direction[i] += v;
+            }
+        }
+        for v in query_direction.iter_mut() {
+            *v /= n_queries as f32;
+        }
+
+        // 计算每个子空间的权重
+        self.weights.clear();
+        for p in 0..self.config.num_partitions {
+            let start = p * self.sub_dim;
+            let end = (start + self.sub_dim).min(self.dim);
+
+            for d in start..end {
+                let cos_theta = query_direction[d].abs();
+                let w = 1.0 / (1.0 + alpha * cos_theta);
+                self.weights.push(w);
+            }
+        }
+    }
+
+    /// 加权 K-means 训练单个子空间
+    fn train_subspace_weighted(&mut self, partition: usize, vectors: &[f32]) {
+        let n = vectors.len() / self.sub_dim;
+        let k = self.config.num_centroids;
+
+        // 初始化质心 (K-means++)
+        let mut centroids = self.kmeans_plusplus_init(vectors, k);
+
+        // 迭代优化
+        for _iter in 0..50 {
+            let mut assignments = vec![0usize; n];
+            let mut new_centroids = vec![0.0f32; k * self.sub_dim];
+            let mut counts = vec![0usize; k];
+
+            // 分配阶段 (加权距离)
+            for i in 0..n {
+                let vec = &vectors[i * self.sub_dim..(i + 1) * self.sub_dim];
+                let weights = &self.weights[partition * self.sub_dim..(partition + 1) * self.sub_dim];
+
+                let mut min_dist = f32::MAX;
+                let mut best = 0;
+
+                for c in 0..k {
+                    let centroid = &centroids[c * self.sub_dim..(c + 1) * self.sub_dim];
+                    let dist = self.weighted_l2(vec, centroid, weights);
+
+                    if dist < min_dist {
+                        min_dist = dist;
+                        best = c;
+                    }
+                }
+                assignments[i] = best;
+            }
+
+            // 更新阶段
+            new_centroids.fill(0.0);
+            counts.fill(0);
+
+            for i in 0..n {
+                let c = assignments[i];
+                let vec = &vectors[i * self.sub_dim..(i + 1) * self.sub_dim];
+
+                for j in 0..self.sub_dim {
+                    new_centroids[c * self.sub_dim + j] += vec[j];
+                }
+                counts[c] += 1;
+            }
+
+            for c in 0..k {
+                if counts[c] > 0 {
+                    for j in 0..self.sub_dim {
+                        centroids[c * self.sub_dim + j] =
+                            new_centroids[c * self.sub_dim + j] / counts[c] as f32;
+                    }
+                }
+            }
+        }
+
+        // 存储码书
+        let offset = partition * k * self.sub_dim;
+        if self.codebooks.len() < offset + k * self.sub_dim {
+            self.codebooks.resize(offset + k * self.sub_dim, 0.0);
+        }
+        self.codebooks[offset..offset + k * self.sub_dim].copy_from_slice(&centroids);
+
+        // 计算质心范数
+        for c in 0..k {
+            let centroid = &centroids[c * self.sub_dim..(c + 1) * self.sub_dim];
+            let norm = centroid.iter().map(|x| x * x).sum::<f32>().sqrt();
+            self.centroid_norms.push(norm);
+        }
+    }
+
+    /// 加权 L2 距离
+    fn weighted_l2(&self, a: &[f32], b: &[f32], weights: &[f32]) -> f32 {
+        a.iter()
+            .zip(b.iter())
+            .zip(weights.iter())
+            .map(|((&x, &y), &w)| w * (x - y).powi(2))
+            .sum()
+    }
+
+    /// 编码向量
+    pub fn encode(&self, vector: &[f32]) -> Vec<u8> {
+        let mut codes = Vec::with_capacity(self.config.num_partitions);
+
+        for p in 0..self.config.num_partitions {
+            let start = p * self.sub_dim;
+            let end = (start + self.sub_dim).min(self.dim);
+            let sub_vec = &vector[start..end];
+
+            let code = self.find_nearest_centroid(p, sub_vec);
+            codes.push(code as u8);
         }
 
         codes
     }
 
-    /// 非对称距离计算
+    /// 非对称距离计算 (ADC)
     pub fn adc_distance(&self, query: &[f32], codes: &[u8]) -> f32 {
-        // 预计算距离表
-        let table = self.compute_distance_table(query);
+        let mut distance = 0.0f32;
 
-        // 查表求和
-        codes.iter().enumerate()
-            .map(|(p, &code)| table[p * self.n_centroids + code as usize])
-            .sum()
+        for p in 0..self.config.num_partitions {
+            let start = p * self.sub_dim;
+            let end = (start + self.sub_dim).min(self.dim);
+            let sub_query = &query[start..end];
+
+            let code = codes[p] as usize;
+            let centroid = self.get_centroid(p, code);
+
+            distance += self.l2_distance(sub_query, centroid);
+        }
+
+        distance
+    }
+
+    fn get_centroid(&self, partition: usize, code: usize) -> &[f32] {
+        let offset = partition * self.config.num_centroids * self.sub_dim + code * self.sub_dim;
+        &self.codebooks[offset..offset + self.sub_dim]
     }
 }
 
-/// 倒排索引
-pub struct InvertedIndex {
-    // 质心 -> [(id, codes)]
-    lists: HashMap<usize, Vec<(i64, Vec<u8>)>>,
+/// SCANN 索引
+pub struct ScaNNIndex {
+    dim: usize,
+    config: ScaNNConfig,
 
-    // 分区 -> 质心列表
-    partition_to_centroids: Vec<Vec<usize>>,
+    /// 量化器
+    quantizer: AnisotropicQuantizer,
+
+    /// 倒排索引: partition -> [(id, codes)]
+    inverted_lists: HashMap<usize, Vec<(i64, Vec<u8>)>>,
+
+    /// 原始向量 (用于重排序)
+    vectors: Vec<f32>,
+    ids: Vec<i64>,
+
+    trained: bool,
 }
 
 impl ScaNNIndex {
-    pub fn new(dim: usize, n_partitions: usize, n_centroids: usize) -> Self {
+    pub fn new(dim: usize, config: ScaNNConfig) -> Self {
         Self {
             dim,
-            quantizer: AnisotropicQuantizer::new(dim, n_partitions, n_centroids),
-            inverted_index: InvertedIndex::new(),
-            reorder_k: 100,
+            config,
+            quantizer: AnisotropicQuantizer::new(dim, config.clone()),
+            inverted_lists: HashMap::new(),
+            vectors: Vec::new(),
+            ids: Vec::new(),
+            trained: false,
         }
     }
 
-    /// 训练
-    pub fn train(&mut self, data: &[f32]) -> Result<()> {
-        self.quantizer.train(data);
-        Ok(())
+    /// 训练索引
+    pub fn train(&mut self, data: &[f32], query_sample: Option<&[f32]>) {
+        self.quantizer.train(data, query_sample);
+        self.trained = true;
     }
 
     /// 添加向量
-    pub fn add(&mut self, vectors: &[f32], ids: Option<&[i64]>) -> Result<usize> {
+    pub fn add(&mut self, vectors: &[f32], ids: Option<&[i64]>) -> usize {
         let n = vectors.len() / self.dim;
 
         for i in 0..n {
             let vector = &vectors[i * self.dim..(i + 1) * self.dim];
             let codes = self.quantizer.encode(vector);
 
-            // 找到最近的质心
-            let centroid = self.quantizer.find_partition_centroid(vector);
+            // 确定分区 (使用第一个子空间的质心)
+            let partition = codes[0] as usize % self.config.num_partitions;
 
-            let id = ids.map(|ids| ids[i]).unwrap_or(i as i64);
-            self.inverted_index.add(centroid, id, codes);
+            let id = ids.map(|ids| ids[i]).unwrap_or(self.ids.len() as i64);
+
+            self.inverted_lists
+                .entry(partition)
+                .or_insert_with(Vec::new)
+                .push((id, codes));
+
+            self.vectors.extend_from_slice(vector);
+            self.ids.push(id);
         }
 
-        Ok(n)
+        n
     }
 
     /// 搜索
     pub fn search(&self, query: &[f32], k: usize) -> Vec<(i64, f32)> {
-        // 1. 找到查询所属的分区
-        let partition = self.quantizer.find_partition(query);
+        // 1. 粗排: 使用 ADC 距离
+        let candidates = self.coarse_search(query, self.config.reorder_k);
 
-        // 2. 在分区内搜索
-        let candidates = self.search_partition(query, partition, self.reorder_k);
-
-        // 3. 重排序 (使用精确距离)
+        // 2. 精排: 使用原始向量重排序
         let reranked = self.rerank(query, candidates, k);
 
         reranked
     }
 
-    fn search_partition(&self, query: &[f32], partition: usize, k: usize) -> Vec<(i64, f32)> {
+    /// 粗排: ADC 距离
+    fn coarse_search(&self, query: &[f32], k: usize) -> Vec<(i64, f32)> {
         let mut candidates = Vec::new();
 
-        for &centroid in &self.inverted_index.partition_to_centroids[partition] {
-            for &(id, ref codes) in &self.inverted_index.lists[&centroid] {
+        for (_, list) in &self.inverted_lists {
+            for &(id, ref codes) in list {
                 let dist = self.quantizer.adc_distance(query, codes);
                 candidates.push((id, dist));
             }
@@ -521,10 +391,72 @@ impl ScaNNIndex {
         candidates
     }
 
+    /// 精排: 原始向量重排序
     fn rerank(&self, query: &[f32], candidates: Vec<(i64, f32)>, k: usize) -> Vec<(i64, f32)> {
-        // 使用原始向量重新计算精确距离
-        // 需要 GetVectorByIds 支持
-        candidates
+        let mut reranked: Vec<(i64, f32)> = candidates
+            .iter()
+            .filter_map(|&(id, _)| {
+                // 查找向量
+                let pos = self.ids.iter().position(|&x| x == id)?;
+                let vector = &self.vectors[pos * self.dim..(pos + 1) * self.dim];
+                let dist = self.l2_distance(query, vector);
+                Some((id, dist))
+            })
+            .collect();
+
+        reranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        reranked.truncate(k);
+
+        reranked
+    }
+
+    fn l2_distance(&self, a: &[f32], b: &[f32]) -> f32 {
+        a.iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x - y).powi(2))
+            .sum::<f32>()
+            .sqrt()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_scann_basic() {
+        let dim = 128;
+        let config = ScaNNConfig {
+            num_partitions: 16,
+            num_centroids: 256,
+            reorder_k: 100,
+            anisotropic_alpha: 0.2,
+        };
+
+        let mut index = ScaNNIndex::new(dim, config);
+
+        // 生成测试数据
+        let n = 1000;
+        let mut data = vec![0.0f32; n * dim];
+        for i in 0..data.len() {
+            data[i] = (i as f32 * 0.01).sin();
+        }
+
+        // 训练
+        index.train(&data, None);
+        assert!(index.trained);
+
+        // 添加
+        let added = index.add(&data, None);
+        assert_eq!(added, n);
+
+        // 搜索
+        let query = &data[0..dim];
+        let results = index.search(query, 10);
+        assert_eq!(results.len(), 10);
+
+        // 第一个结果应该是自己 (距离最小)
+        assert_eq!(results[0].0, 0);
     }
 }
 ```
@@ -532,159 +464,365 @@ impl ScaNNIndex {
 **工作量**: 7 天
 **验收标准**:
 - [ ] 各向异性量化实现
+- [ ] 加权 K-means
+- [ ] ADC 距离计算
 - [ ] Recall@10 ≥ 95%
-- [ ] QPS ≥ IVF-PQ 1.5x
+- [ ] QPS ≥ IVF-PQ 1.2x
 
 ---
 
-## M4: FFI/JNI 完善 (Week 6-7)
+## M2: 迭代器接口 (Week 3)
 
 ### 目标
-- 完整 C API
-- JNI 绑定
+- 实现 AnnIterator trait
+- 支持 HNSW, IVF 等索引
+- 增量式返回结果
+
+### 2.1 AnnIterator Trait
+
+**文件**: `src/iterator.rs`
+
+```rust
+//! ANN 迭代器接口
+//!
+//! 支持增量式搜索结果返回
+
+use std::collections::{BinaryHeap, HashSet, HashMap};
+
+/// 有序候选 (用于堆)
+#[derive(Clone, Copy, Debug)]
+struct OrderedCandidate {
+    distance: f32,
+    id: i64,
+}
+
+impl PartialEq for OrderedCandidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.distance == other.distance
+    }
+}
+
+impl Eq for OrderedCandidate {}
+
+impl PartialOrd for OrderedCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for OrderedCandidate {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // 最小堆 (距离越小越好)
+        other.distance.partial_cmp(&self.distance).unwrap()
+    }
+}
+
+/// ANN 迭代器 trait
+pub trait AnnIterator: Iterator<Item = (i64, f32)> + Send {
+    /// 获取当前最佳距离
+    fn current_distance(&self) -> Option<f32>;
+
+    /// 是否已耗尽
+    fn is_exhausted(&self) -> bool;
+
+    /// 获取已访问的节点数
+    fn visited_count(&self) -> usize;
+}
+
+/// HNSW 迭代器
+pub struct HnswIterator<'a> {
+    index: &'a crate::faiss::HnswIndex,
+    query: Vec<f32>,
+
+    /// 已访问节点
+    visited: HashSet<i64>,
+
+    /// 候选堆 (最小堆)
+    candidates: BinaryHeap<OrderedCandidate>,
+
+    /// 已返回结果数
+    returned: usize,
+
+    /// 最大返回数
+    max_results: usize,
+
+    /// 当前最佳距离
+    current_best: Option<f32>,
+}
+
+impl<'a> HnswIterator<'a> {
+    pub fn new(index: &'a crate::faiss::HnswIndex, query: Vec<f32>, max_results: usize) -> Self {
+        let mut iter = Self {
+            index,
+            query,
+            visited: HashSet::new(),
+            candidates: BinaryHeap::new(),
+            returned: 0,
+            max_results,
+            current_best: None,
+        };
+
+        // 从入口点开始
+        if let Some(ep) = iter.index.entry_point {
+            let dist = iter.compute_distance(ep);
+            iter.candidates.push(OrderedCandidate { distance: dist, id: ep });
+        }
+
+        iter
+    }
+
+    fn compute_distance(&self, id: i64) -> f32 {
+        // 获取向量并计算距离
+        let vectors = self.index.get_vectors_by_ids(&[id]).unwrap_or_default();
+        if vectors.is_empty() {
+            return f32::MAX;
+        }
+
+        self.query
+            .iter()
+            .zip(vectors.iter())
+            .map(|(a, b)| (a - b).powi(2))
+            .sum::<f32>()
+            .sqrt()
+    }
+
+    /// 扩展候选 (访问邻居)
+    fn expand(&mut self, id: i64) {
+        // 获取邻居并添加到候选堆
+        // 需要索引支持获取邻居列表
+    }
+}
+
+impl<'a> Iterator for HnswIterator<'a> {
+    type Item = (i64, f32);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.returned >= self.max_results {
+            return None;
+        }
+
+        loop {
+            let candidate = self.candidates.pop()?;
+
+            if self.visited.contains(&candidate.id) {
+                continue;
+            }
+
+            self.visited.insert(candidate.id);
+
+            // 扩展邻居
+            self.expand(candidate.id);
+
+            self.current_best = Some(candidate.distance);
+            self.returned += 1;
+
+            return Some((candidate.id, candidate.distance));
+        }
+    }
+}
+
+impl<'a> AnnIterator for HnswIterator<'a> {
+    fn current_distance(&self) -> Option<f32> {
+        self.current_best
+    }
+
+    fn is_exhausted(&self) -> bool {
+        self.candidates.is_empty() || self.returned >= self.max_results
+    }
+
+    fn visited_count(&self) -> usize {
+        self.visited.len()
+    }
+}
+
+/// IVF 迭代器
+pub struct IvfIterator<'a> {
+    index: &'a crate::faiss::IvfIndex,
+    query: Vec<f32>,
+
+    /// 待搜索的聚类列表
+    cluster_order: Vec<usize>,
+    current_cluster_idx: usize,
+
+    /// 当前聚类的候选
+    current_candidates: Vec<(i64, f32)>,
+    current_candidate_idx: usize,
+
+    /// 已返回数
+    returned: usize,
+    max_results: usize,
+
+    current_best: Option<f32>,
+}
+
+impl<'a> IvfIterator<'a> {
+    pub fn new(index: &'a crate::faiss::IvfIndex, query: Vec<f32>, nprobe: usize, max_results: usize) -> Self {
+        // 找最近的 nprobe 个聚类
+        let cluster_order = index.find_nearest_clusters(&query, nprobe);
+
+        Self {
+            index,
+            query,
+            cluster_order,
+            current_cluster_idx: 0,
+            current_candidates: Vec::new(),
+            current_candidate_idx: 0,
+            returned: 0,
+            max_results,
+            current_best: None,
+        }
+    }
+
+    fn load_next_cluster(&mut self) -> bool {
+        while self.current_cluster_idx < self.cluster_order.len() {
+            let cluster = self.cluster_order[self.current_cluster_idx];
+            self.current_cluster_idx += 1;
+
+            // 获取该聚类的所有向量
+            if let Some(list) = self.index.get_inverted_list(cluster) {
+                let mut candidates: Vec<(i64, f32)> = list
+                    .iter()
+                    .map(|&id| {
+                        let dist = self.compute_distance_to_id(id);
+                        (id, dist)
+                    })
+                    .collect();
+
+                candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                self.current_candidates = candidates;
+                self.current_candidate_idx = 0;
+                return true;
+            }
+        }
+        false
+    }
+
+    fn compute_distance_to_id(&self, _id: i64) -> f32 {
+        // 实现距离计算
+        f32::MAX
+    }
+}
+
+impl<'a> Iterator for IvfIterator<'a> {
+    type Item = (i64, f32);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.returned >= self.max_results {
+            return None;
+        }
+
+        loop {
+            if self.current_candidate_idx < self.current_candidates.len() {
+                let result = self.current_candidates[self.current_candidate_idx];
+                self.current_candidate_idx += 1;
+                self.returned += 1;
+                self.current_best = Some(result.1);
+                return Some(result);
+            }
+
+            if !self.load_next_cluster() {
+                return None;
+            }
+        }
+    }
+}
+
+impl<'a> AnnIterator for IvfIterator<'a> {
+    fn current_distance(&self) -> Option<f32> {
+        self.current_best
+    }
+
+    fn is_exhausted(&self) -> bool {
+        self.returned >= self.max_results &&
+            self.current_candidate_idx >= self.current_candidates.len() &&
+            self.current_cluster_idx >= self.cluster_order.len()
+    }
+
+    fn visited_count(&self) -> usize {
+        self.returned
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ordered_candidate() {
+        let a = OrderedCandidate { distance: 0.5, id: 1 };
+        let b = OrderedCandidate { distance: 0.3, id: 2 };
+
+        // 最小堆: 距离小的优先
+        assert!(b < a);
+    }
+}
+```
+
+**工作量**: 3 天
+
+---
+
+## M3: FFI/JNI 完善 (Week 4-5)
+
+### 目标
+- 完善 C FFI
+- 实现 JNI 绑定
 - Python 绑定 (可选)
 
-### 4.1 C FFI 完善
+### 3.1 C FFI 完善
 
 **文件**: `src/ffi.rs`, `include/knowhere.h`
 
 ```c
-// include/knowhere.h
+// include/knowhere.h - 更新
 
-#ifndef KNOWHERE_RS_H
-#define KNOWHERE_RS_H
+// 新增迭代器接口
+typedef struct CAnnIterator CAnnIterator;
 
-#include <stdint.h>
-#include <stddef.h>
+CAnnIterator* knowhere_iterator_create(CIndex* index, const float* query, size_t max_results);
+bool knowhere_iterator_next(CAnnIterator* iter, int64_t* id, float* distance);
+void knowhere_iterator_free(CAnnIterator* iter);
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-// 类型定义
-typedef struct CIndex CIndex;
-typedef struct CBitset CBitset;
-typedef struct CSearchResult {
-    int64_t* ids;
-    float* distances;
-    size_t num_results;
-    float elapsed_ms;
-} CSearchResult;
-
-typedef struct CBinarySet CBinarySet;
-
-// 索引类型
-typedef enum {
-    INDEX_FLAT = 0,
-    INDEX_IVF_FLAT = 1,
-    INDEX_IVF_PQ = 2,
-    INDEX_IVF_SQ8 = 3,
-    INDEX_HNSW = 4,
-    INDEX_HNSW_SQ = 5,
-    INDEX_HNSW_PQ = 6,
-    INDEX_DISKANN = 7,
-    INDEX_ANNOY = 8,
-    INDEX_SCANN = 9,
-    INDEX_BINARY = 10,
-    INDEX_SPARSE = 11,
-} IndexType;
-
-// 度量类型
-typedef enum {
-    METRIC_L2 = 0,
-    METRIC_IP = 1,
-    METRIC_COSINE = 2,
-    METRIC_HAMMING = 3,
-    METRIC_JACCARD = 4,
-} MetricType;
-
-// 生命周期
-CIndex* knowhere_index_create(IndexType type, MetricType metric, size_t dim);
-void knowhere_index_free(CIndex* index);
-
-// 训练和添加
-int knowhere_index_train(CIndex* index, const float* data, size_t n);
-int knowhere_index_add(CIndex* index, const float* data, const int64_t* ids, size_t n);
-
-// 搜索
-int knowhere_index_search(
-    CIndex* index,
-    const float* queries,
-    size_t n_queries,
-    size_t k,
-    CSearchResult* result
-);
-
-// 范围搜索
-int knowhere_index_range_search(
-    CIndex* index,
-    const float* queries,
-    size_t n_queries,
-    float radius,
-    CSearchResult* result
-);
-
-// 按ID获取向量
-int knowhere_index_get_vectors(
+// 新增 GetVectorByIds
+int knowhere_index_get_vector_by_ids(
     CIndex* index,
     const int64_t* ids,
     size_t n_ids,
-    float* vectors
+    float* vectors_out
 );
 
-// 序列化
-int knowhere_index_save(CIndex* index, const char* path);
-CIndex* knowhere_index_load(const char* path);
+// 新增 BinarySet 序列化
+typedef struct CBinarySet CBinarySet;
 
-// 内存序列化
 CBinarySet* knowhere_index_serialize(CIndex* index);
-CIndex* knowhere_index_deserialize(CBinarySet* binary_set);
+CIndex* knowhere_index_deserialize(CBinarySet* set);
 void knowhere_binary_set_free(CBinarySet* set);
-
-// Bitset
-CBitset* knowhere_bitset_create(size_t n);
-void knowhere_bitset_free(CBitset* bitset);
-void knowhere_bitset_set(CBitset* bitset, size_t i, bool value);
-bool knowhere_bitset_get(CBitset* bitset, size_t i);
-size_t knowhere_bitset_count(CBitset* bitset);
-
-// 释放搜索结果
-void knowhere_free_search_result(CSearchResult* result);
-
-// 错误信息
-const char* knowhere_get_last_error();
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif // KNOWHERE_RS_H
+size_t knowhere_binary_set_size(CBinarySet* set);
+int knowhere_binary_set_get(CBinarySet* set, const char* name, void* data_out, size_t* size);
 ```
 
-**工作量**: 4 天
+**工作量**: 3 天
 
-### 4.2 JNI 绑定
+### 3.2 JNI 绑定
 
-**文件**: `src/jni/mod.rs`, `src/java/`
+**文件**: `src/jni/mod.rs`
 
 ```rust
-// src/jni/mod.rs
 use jni::JNIEnv;
-use jni::objects::{JClass, JLongArray, JFloatArray, JIntArray, JObject, JString};
-use jni::sys::{jint, jlong, jfloat, jboolean};
+use jni::objects::{JClass, JObject, JLongArray, JFloatArray};
+use jni::sys::{jint, jlong, jfloat, jbooleanArray};
 
 mod index;
-mod bitset;
-mod search_result;
+mod iterator;
+mod binary_set;
 
-/// 初始化 JNI
+/// 初始化
 #[no_mangle]
-pub extern "system" fn JNI_OnLoad(vm: JavaVM, _reserved: *mut c_void) -> jint {
-    // 初始化
+pub extern "system" fn JNI_OnLoad(vm: jni::JavaVM, _reserved: *mut std::ffi::c_void) -> jint {
     jni::JNIVersion::V1_8.into()
 }
 
-// Index JNI
+// Index 方法
 #[no_mangle]
 pub extern "system" fn Java_io_milvus_knowhere_KnowhereIndex_nativeCreate(
     mut env: JNIEnv,
@@ -692,121 +830,86 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereIndex_nativeCreate(
     index_type: jint,
     metric_type: jint,
     dim: jint,
-) -> jlong {
-    match create_index(index_type, metric_type, dim as usize) {
-        Ok(index) => Box::into_raw(Box::new(index)) as jlong,
-        Err(e) => {
-            env.throw_new("java/lang/RuntimeException", &e.to_string()).unwrap();
-            0
-        }
-    }
-}
+) -> jlong;
 
 #[no_mangle]
-pub extern "system" fn Java_io_milvus_knowhere_KnowhereIndex_nativeTrain(
+pub extern "system" fn Java_io_milvus_knowhere_KnowhereIndex_nativeGetVectorByIds(
     mut env: JNIEnv,
     _class: JClass,
     handle: jlong,
-    data: JFloatArray,
-) {
-    let index = unsafe { &mut *(handle as *mut Box<dyn Index>) };
-    let data_vec: Vec<f32> = env.get_float_array_elements(&data, ReleaseMode::NoCopyBack)
-        .unwrap().iter().map(|&x| x).collect();
+    ids: JLongArray,
+) -> JFloatArray;
 
-    if let Err(e) = index.train(&data_vec) {
-        env.throw_new("java/lang/RuntimeException", &e.to_string()).unwrap();
-    }
-}
-
+// Iterator 方法
 #[no_mangle]
-pub extern "system" fn Java_io_milvus_knowhere_KnowhereIndex_nativeSearch(
+pub extern "system" fn Java_io_milvus_knowhere_KnowhereIterator_nativeCreate(
     mut env: JNIEnv,
     _class: JClass,
     handle: jlong,
-    queries: JFloatArray,
-    k: jint,
-) -> JObject {
-    let index = unsafe { &*(handle as *mut Box<dyn Index>) };
-    let query_vec: Vec<f32> = env.get_float_array_elements(&queries, ReleaseMode::NoCopyBack)
-        .unwrap().iter().map(|&x| x).collect();
-
-    match index.search(&query_vec, k as usize) {
-        Ok(result) => {
-            // 返回 SearchResult Java 对象
-            create_java_search_result(&mut env, result)
-        }
-        Err(e) => {
-            env.throw_new("java/lang/RuntimeException", &e.to_string()).unwrap();
-            JObject::null()
-        }
-    }
-}
+    query: JFloatArray,
+    max_results: jint,
+) -> jlong;
 
 #[no_mangle]
-pub extern "system" fn Java_io_milvus_knowhere_KnowhereIndex_nativeFree(
-    _env: JNIEnv,
+pub extern "system" fn Java_io_milvus_knowhere_KnowhereIterator_nativeNext(
+    mut env: JNIEnv,
+    _class: JClass,
+    iter_handle: jlong,
+) -> JObject; // Returns Optional<SearchResult>
+
+// BinarySet 方法
+#[no_mangle]
+pub extern "system" fn Java_io_milvus_knowhere_KnowhereBinarySet_nativeSerialize(
+    mut env: JNIEnv,
     _class: JClass,
     handle: jlong,
-) {
-    if handle != 0 {
-        unsafe { Box::from_raw(handle as *mut Box<dyn Index>) };
-    }
-}
+) -> jbyteArray;
+
+#[no_mangle]
+pub extern "system" fn Java_io_milvus_knowhere_KnowhereBinarySet_nativeDeserialize(
+    mut env: JNIEnv,
+    _class: JClass,
+    data: jbyteArray,
+) -> jlong;
 ```
 
-**Java 包装类**:
+**Java 类**:
 
 ```java
-// src/java/io/milvus/knowhere/KnowhereIndex.java
+// KnowhereIterator.java
 package io.milvus.knowhere;
 
-import java.io.Closeable;
+import java.util.Iterator;
+import java.util.Optional;
 
-public class KnowhereIndex implements Closeable {
-    static {
-        System.loadLibrary("knowhere_rs");
-    }
-
+public class KnowhereIterator implements Iterator<SearchResult>, AutoCloseable {
     private long handle;
+    private SearchResult next;
     private boolean closed = false;
 
-    private KnowhereIndex(long handle) {
+    KnowhereIterator(long handle) {
         this.handle = handle;
+        advance();
     }
 
-    public static KnowhereIndex create(IndexType type, MetricType metric, int dim) {
-        long handle = nativeCreate(type.getValue(), metric.getValue(), dim);
-        return new KnowhereIndex(handle);
+    @Override
+    public boolean hasNext() {
+        return next != null && !closed;
     }
 
-    public void train(float[] data) {
-        checkNotClosed();
-        nativeTrain(handle, data);
+    @Override
+    public SearchResult next() {
+        if (closed || next == null) {
+            throw new IllegalStateException("Iterator exhausted or closed");
+        }
+        SearchResult result = next;
+        advance();
+        return result;
     }
 
-    public void add(float[] data, long[] ids) {
-        checkNotClosed();
-        nativeAdd(handle, data, ids);
-    }
-
-    public SearchResult search(float[] queries, int k) {
-        checkNotClosed();
-        return nativeSearch(handle, queries, k);
-    }
-
-    public float[] getVectors(long[] ids) {
-        checkNotClosed();
-        return nativeGetVectors(handle, ids);
-    }
-
-    public void save(String path) {
-        checkNotClosed();
-        nativeSave(handle, path);
-    }
-
-    public static KnowhereIndex load(String path) {
-        long handle = nativeLoad(path);
-        return new KnowhereIndex(handle);
+    private void advance() {
+        Optional<SearchResult> opt = nativeNext(handle);
+        next = opt.orElse(null);
     }
 
     @Override
@@ -818,89 +921,101 @@ public class KnowhereIndex implements Closeable {
         }
     }
 
-    private void checkNotClosed() {
-        if (closed) {
-            throw new IllegalStateException("Index has been closed");
-        }
-    }
-
-    // Native methods
-    private static native long nativeCreate(int type, int metric, int dim);
-    private native void nativeTrain(long handle, float[] data);
-    private native void nativeAdd(long handle, float[] data, long[] ids);
-    private native SearchResult nativeSearch(long handle, float[] queries, int k);
-    private native float[] nativeGetVectors(long handle, long[] ids);
-    private native void nativeSave(long handle, String path);
-    private static native long nativeLoad(String path);
+    private native Optional<SearchResult> nativeNext(long handle);
     private native void nativeFree(long handle);
 }
 ```
 
 **工作量**: 5 天
-**验收标准**:
-- [ ] C 头文件完整
-- [ ] Java 绑定可用
-- [ ] 示例代码运行
 
 ---
 
-## M5: 优化完善 (Week 8)
+## M4: 优化完善 (Week 6)
 
 ### 目标
 - 性能基准测试
 - 文档完善
 - CI/CD 优化
 
-### 5.1 性能基准
+### 4.1 性能基准
 
-**文件**: `benches/overall_bench.rs`
+**文件**: `benches/comparison_bench.rs`
 
 ```rust
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
 
-fn bench_sift_1m(c: &mut Criterion) {
-    // 加载 SIFT-1M 数据
-    let (base, query, gt) = load_sift_1m();
+fn bench_index_comparison(c: &mut Criterion) {
+    let dim = 128;
+    let n = 1_000_000;
+
+    // 生成数据
+    let data = generate_random_vectors(n, dim);
+    let query = generate_random_vectors(100, dim);
 
     // Flat
-    let mut flat = MemIndex::new(&IndexConfig::new(IndexType::Flat, MetricType::L2, 128)).unwrap();
-    flat.add(&base, None);
+    let mut flat = MemIndex::new(&IndexConfig::flat(dim, MetricType::L2)).unwrap();
+    flat.add(&data, None);
 
     c.bench_function("flat_search_1m", |b| {
-        b.iter(|| flat.search(&query[..128], 10))
+        b.iter(|| {
+            for q in query.chunks(dim) {
+                flat.search(q, 10);
+            }
+        })
     });
 
     // HNSW
-    let mut hnsw = HnswIndex::new(&IndexConfig::hnsw(128, 16, 200)).unwrap();
-    hnsw.train(&base).unwrap();
-    hnsw.add(&base, None);
+    let mut hnsw = HnswIndex::new(&IndexConfig::hnsw(dim, 16, 200)).unwrap();
+    hnsw.train(&data).unwrap();
+    hnsw.add(&data, None);
 
     c.bench_function("hnsw_search_1m", |b| {
-        b.iter(|| hnsw.search(&query[..128], 10))
+        b.iter(|| {
+            for q in query.chunks(dim) {
+                hnsw.search(q, 10);
+            }
+        })
     });
 
     // IVF-PQ
-    let mut ivf_pq = IvfPqIndex::new(&IndexConfig::ivf_pq(128, 100, 8)).unwrap();
-    ivf_pq.train(&base).unwrap();
-    ivf_pq.add(&base, None);
+    let mut ivf_pq = IvfPqIndex::new(&IndexConfig::ivf_pq(dim, 100, 8)).unwrap();
+    ivf_pq.train(&data).unwrap();
+    ivf_pq.add(&data, None);
 
     c.bench_function("ivf_pq_search_1m", |b| {
-        b.iter(|| ivf_pq.search(&query[..128], 10))
+        b.iter(|| {
+            for q in query.chunks(dim) {
+                ivf_pq.search(q, 10);
+            }
+        })
+    });
+
+    // SCANN
+    let mut scann = ScaNNIndex::new(dim, ScaNNConfig::default());
+    scann.train(&data, None);
+    scann.add(&data, None);
+
+    c.bench_function("scann_search_1m", |b| {
+        b.iter(|| {
+            for q in query.chunks(dim) {
+                scann.search(q, 10);
+            }
+        })
     });
 }
 
-criterion_group!(benches, bench_sift_1m);
+criterion_group!(benches, bench_index_comparison);
 criterion_main!(benches);
 ```
 
 **工作量**: 2 天
 
-### 5.2 文档
+### 4.2 文档更新
 
 - [ ] API 文档 (rustdoc)
 - [ ] README 更新
 - [ ] 性能对比报告
-- [ ] 使用指南
+- [ ] 迁移指南 (从 C++ Knowhere)
 
 **工作量**: 2 天
 
@@ -910,14 +1025,28 @@ criterion_main!(benches);
 
 | 里程碑 | 交付物 | 文件 |
 |-------|-------|------|
-| M1 | GetVectorByIds | `src/index.rs`, 各索引 |
-| M1 | BinarySet | `src/codec/binary_set.rs` |
-| M2 | RaBitQ | `src/quantization/rabitq.rs` |
-| M2 | IVF-RaBitQ | `src/faiss/ivf_rabitq.rs` |
-| M3 | SCANN | `src/faiss/scann.rs` |
-| M4 | C FFI | `src/ffi.rs`, `include/knowhere.h` |
-| M4 | JNI | `src/jni/`, `src/java/` |
-| M5 | Benchmark | `benches/overall_bench.rs` |
+| M1 | SCANN 索引 | `src/faiss/scann.rs` |
+| M1 | 各向异性量化器 | `src/faiss/scann.rs` |
+| M2 | AnnIterator trait | `src/iterator.rs` |
+| M2 | HNSW/IVF 迭代器 | `src/iterator.rs` |
+| M3 | C FFI 完善 | `src/ffi.rs`, `include/knowhere.h` |
+| M3 | JNI 绑定 | `src/jni/`, `src/java/` |
+| M4 | 性能基准 | `benches/comparison_bench.rs` |
+
+---
+
+## 成功标准
+
+### 6 周目标
+
+| 指标 | 当前 | 目标 |
+|-----|------|------|
+| 索引类型 | 13 | 15 |
+| 功能覆盖 | 80% | 90% |
+| 测试覆盖 | 144 | 200+ |
+| Recall@10 | 95%+ | 95%+ |
+| QPS (vs C++) | 85% | 90% |
+| API 完整度 | 85% | 95% |
 
 ---
 
@@ -925,21 +1054,18 @@ criterion_main!(benches);
 
 | 风险 | 影响 | 概率 | 缓解措施 |
 |-----|------|------|---------|
-| RaBitQ 算法复杂 | 高 | 中 | 参考官方实现 |
+| SCANN 算法复杂 | 高 | 中 | 参考官方实现 |
 | JNI 内存管理 | 中 | 中 | 充分测试 |
 | 性能目标未达成 | 高 | 低 | 增加优化迭代 |
 | 时间延期 | 中 | 中 | 预留缓冲 |
 
 ---
 
-## 成功标准
+## 长期目标 (P3)
 
-### 8 周目标
-
-| 指标 | 当前 | 目标 |
+| 功能 | 时间 | 说明 |
 |-----|------|------|
-| 索引类型 | 12 | 15 |
-| 功能覆盖 | 70% | 85% |
-| 测试覆盖 | 133 | 200+ |
-| Recall@10 | 90%+ | 95%+ |
-| QPS (vs C++) | 70% | 80% |
+| GPU 支持 (wgpu) | 长期 | 需要 GPU 计算基础 |
+| 混合搜索 | 1-2 周 | 多模态搜索 |
+| PRQ 量化 | 1 周 | 残差量化 |
+| Python 绑定 | 1 周 | PyO3 |
