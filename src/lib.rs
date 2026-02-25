@@ -7,6 +7,7 @@ pub mod bitset;
 pub mod dataset;
 pub mod metrics;
 pub mod simd;
+pub mod half;  // fp16/bf16 support
 pub mod index;
 pub mod faiss;
 pub mod storage;
@@ -39,6 +40,7 @@ pub use executor::Executor;
 pub use bitset::BitsetView;
 pub use dataset::{Dataset, DataType};
 pub use metrics::{Distance, get_distance_calculator, L2Distance, InnerProductDistance, CosineDistance, HammingDistance};
+pub use half::{Fp16, Bf16, f32_to_fp16, fp16_to_f32, f32_to_bf16, bf16_to_f32, fp16_l2, bf16_l2};
 pub use index::{Index, IndexError, SearchResult as IndexSearchResult};
 
 // Export all index types
