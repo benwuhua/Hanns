@@ -269,22 +269,66 @@ impl HnswIndex {
         let ef = self.ef_search.max(req.nprobe.max(1));
         let k = req.top_k;
         
-        let mut all_ids = Vec::with_capacity(n_queries * k);
-        let mut all_dists = Vec::with_capacity(n_queries * k);
+        let mut all_ids = vec![-1; n_queries * k];
+        let mut all_dists = vec![f32::MAX; n_queries * k];
         
-        for q_idx in 0..n_queries {
-            let q_start = q_idx * self.dim;
-            let query_vec = &query[q_start..q_start + self.dim];
+        #[cfg(feature = "parallel")]
+        {
+            use rayon::prelude::*;
             
-            let results = self.search_single(query_vec, ef, k);
+            // Generate query indices to paralyze over
+            let q_indices: Vec<usize> = (0..n_queries).collect();
             
-            for i in 0..k {
-                if i < results.len() {
-                    all_ids.push(results[i].0);
-                    all_dists.push(results[i].1.sqrt());
-                } else {
-                    all_ids.push(-1);
-                    all_dists.push(f32::MAX);
+            // Map each query to its results
+            let results: Vec<Vec<(i64, f32)>> = q_indices.par_iter().map(|&q_idx| {
+                let q_start = q_idx * self.dim;
+                let query_vec = &query[q_start..q_start + self.dim];
+                self.search_single(query_vec, ef, k)
+            }).collect();
+            
+            // Write results sequentially
+            for (q_idx, res) in results.into_iter().enumerate() {
+                let offset = q_idx * k;
+                for (i, item) in res.into_iter().enumerate().take(k) {
+                    all_ids[offset + i] = item.0;
+                    all_dists[offset + i] = item.1;
+                }
+            }
+        }
+        
+        #[cfg(not(feature = "parallel"))]
+        {
+            for q_idx in 0..n_queries {
+                let q_start = q_idx * self.dim;
+                let query_vec = &query[q_start..q_start + self.dim];
+                
+                let results = self.search_single(query_vec, ef, k);
+                
+                let offset = q_idx * k;
+                for (i, item) in results.into_iter().enumerate().take(k) {
+                    all_ids[offset + i] = item.0;
+                    all_dists[offset + i] = item.1;
+                }
+            }
+        }
+        
+        // Finalize distances (sqrt for L2, convert back for IP/Cosine)
+        for i in 0..all_dists.len() {
+            if all_ids[i] != -1 {
+                match self.metric_type {
+                    MetricType::L2 => {
+                        all_dists[i] = all_dists[i].sqrt();
+                    }
+                    MetricType::Ip => {
+                        // return original IP (negative was used for ordering)
+                        all_dists[i] = -all_dists[i];
+                    }
+                    MetricType::Cosine => {
+                         // already 1 - cosine
+                    }
+                    _ => {
+                        all_dists[i] = all_dists[i].sqrt(); // fallback
+                    }
                 }
             }
         }

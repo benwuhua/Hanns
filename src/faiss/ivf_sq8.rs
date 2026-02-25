@@ -147,48 +147,77 @@ impl IvfSq8Index {
         let k = req.top_k;
         let nprobe = req.nprobe.min(self.nlist);
         
-        let mut all_ids = Vec::new();
-        let mut all_dists = Vec::new();
+        let mut all_ids = vec![-1; n_queries * k];
+        let mut all_dists = vec![f32::MAX; n_queries * k];
         
-        for q_idx in 0..n_queries {
-            let q_start = q_idx * self.dim;
-            let query_vec = &query[q_start..q_start + self.dim];
+        #[cfg(feature = "parallel")]
+        {
+            use rayon::prelude::*;
             
-            // Find nearest clusters
-            let clusters = self.search_clusters(query_vec, nprobe);
+            let q_indices: Vec<usize> = (0..n_queries).collect();
             
-            // Search in each cluster
-            let mut candidates: Vec<(i64, f32)> = Vec::new();
-            
-            for &cluster_id in &clusters {
-                if let Some(list) = self.inverted_lists.get(&cluster_id) {
-                    for &(id, ref quantized) in list {
-                        // Decode quantized residual
-                        let residual = self.quantizer.decode(quantized);
-                        
-                        // Reconstruct vector: centroid + residual
-                        let reconstructed = self.reconstruct(query_vec, cluster_id, &residual);
-                        
-                        // Compute distance
-                        let dist = l2_distance(query_vec, &reconstructed);
-                        candidates.push((id, dist));
+            let results: Vec<Vec<(i64, f32)>> = q_indices.par_iter().map(|&q_idx| {
+                let q_start = q_idx * self.dim;
+                let query_vec = &query[q_start..q_start + self.dim];
+                
+                let clusters = self.search_clusters(query_vec, nprobe);
+                
+                let mut candidates: Vec<(i64, f32)> = Vec::new();
+                
+                for &cluster_id in &clusters {
+                    if let Some(list) = self.inverted_lists.get(&cluster_id) {
+                        for &(id, ref quantized) in list {
+                            let residual = self.quantizer.decode(quantized);
+                            let reconstructed = self.reconstruct(query_vec, cluster_id, &residual);
+                            let dist = l2_distance(query_vec, &reconstructed);
+                            candidates.push((id, dist));
+                        }
                     }
                 }
+                
+                candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                candidates.truncate(k);
+                candidates
+            }).collect();
+            
+            for (q_idx, res) in results.into_iter().enumerate() {
+                let offset = q_idx * k;
+                for (i, item) in res.into_iter().enumerate().take(k) {
+                    all_ids[offset + i] = item.0;
+                    all_dists[offset + i] = item.1;
+                }
             }
-            
-            // Sort and take top-k
-            candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-            candidates.truncate(k);
-            
-            for (id, dist) in candidates {
-                all_ids.push(id);
-                all_dists.push(dist);
-            }
-            
-            // Fill if not enough
-            while all_ids.len() < (q_idx + 1) * k {
-                all_ids.push(-1);
-                all_dists.push(f32::MAX);
+        }
+        
+        #[cfg(not(feature = "parallel"))]
+        {
+            for q_idx in 0..n_queries {
+                let q_start = q_idx * self.dim;
+                let query_vec = &query[q_start..q_start + self.dim];
+                
+                let clusters = self.search_clusters(query_vec, nprobe);
+                
+                let mut candidates: Vec<(i64, f32)> = Vec::new();
+                
+                for &cluster_id in &clusters {
+                    if let Some(list) = self.inverted_lists.get(&cluster_id) {
+                        for &(id, ref quantized) in list {
+                            let residual = self.quantizer.decode(quantized);
+                            let reconstructed = self.reconstruct(query_vec, cluster_id, &residual);
+                            let dist = l2_distance(query_vec, &reconstructed);
+                            candidates.push((id, dist));
+                        }
+                    }
+                }
+                
+                candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                candidates.truncate(k);
+                
+                let offset = q_idx * k;
+                for (i, item) in candidates.into_iter().enumerate().take(k) {
+                    all_ids[offset + i] = item.0;
+                    all_dists[offset + i] = item.1;
+                }
             }
         }
         
