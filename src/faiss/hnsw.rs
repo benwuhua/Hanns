@@ -534,4 +534,76 @@ mod tests {
         let result = index.search(&query, &req).unwrap();
         assert_eq!(result.ids.len(), 2);
     }
+
+    #[test]
+    fn test_hnsw_ip_metric() {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::Ip,
+            dim: 4,
+            params: crate::api::IndexParams::default(),
+        };
+        
+        let mut index = HnswIndex::new(&config).unwrap();
+        
+        // Normalized vectors - higher IP = closer
+        let vectors = vec![
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ];
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+        
+        // Query similar to [1,0,0,0]
+        let query = vec![1.0, 0.1, 0.0, 0.0];
+        let req = SearchRequest {
+            top_k: 2,
+            nprobe: 10,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        
+        let result = index.search(&query, &req).unwrap();
+        // Should find id 0 (most similar)
+        assert_eq!(result.ids[0], 0);
+    }
+
+    #[test]
+    fn test_hnsw_cosine_metric() {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::Cosine,
+            dim: 4,
+            params: crate::api::IndexParams::default(),
+        };
+        
+        let mut index = HnswIndex::new(&config).unwrap();
+        
+        // Non-normalized vectors
+        let vectors = vec![
+            2.0, 0.0, 0.0, 0.0,
+            0.0, 2.0, 0.0, 0.0,
+            0.0, 0.0, 2.0, 0.0,
+            0.0, 0.0, 0.0, 2.0,
+        ];
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+        
+        // Query similar to [2,0,0,0]
+        let query = vec![2.0, 0.2, 0.0, 0.0];
+        let req = SearchRequest {
+            top_k: 2,
+            nprobe: 10,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        
+        let result = index.search(&query, &req).unwrap();
+        // Should find id 0 (most similar in cosine)
+        assert_eq!(result.ids[0], 0);
+    }
 }
