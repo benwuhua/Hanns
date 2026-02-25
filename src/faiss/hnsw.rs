@@ -2,7 +2,9 @@
 //! 
 //! Optimized HNSW with progressive sampling and multi-layer support.
 
-use crate::api::{IndexConfig, IndexType, MetricType, Result, SearchRequest, SearchResult};
+use std::sync::Arc;
+
+use crate::api::{IndexConfig, IndexType, MetricType, Predicate, Result, SearchRequest, SearchResult};
 
 /// HNSW index with progressive sampling and configurable M parameter
 pub struct HnswIndex {
@@ -269,6 +271,9 @@ impl HnswIndex {
         let ef = self.ef_search.max(req.nprobe.max(1));
         let k = req.top_k;
         
+        // Get filter from request
+        let filter = req.filter.clone();
+        
         let mut all_ids = vec![-1; n_queries * k];
         let mut all_dists = vec![f32::MAX; n_queries * k];
         
@@ -283,7 +288,7 @@ impl HnswIndex {
             let results: Vec<Vec<(i64, f32)>> = q_indices.par_iter().map(|&q_idx| {
                 let q_start = q_idx * self.dim;
                 let query_vec = &query[q_start..q_start + self.dim];
-                self.search_single(query_vec, ef, k)
+                self.search_single(query_vec, ef, k, &filter)
             }).collect();
             
             // Write results sequentially
@@ -302,7 +307,7 @@ impl HnswIndex {
                 let q_start = q_idx * self.dim;
                 let query_vec = &query[q_start..q_start + self.dim];
                 
-                let results = self.search_single(query_vec, ef, k);
+                let results = self.search_single(query_vec, ef, k, &filter);
                 
                 let offset = q_idx * k;
                 for (i, item) in results.into_iter().enumerate().take(k) {
@@ -336,7 +341,7 @@ impl HnswIndex {
         Ok(SearchResult::new(all_ids, all_dists, 0.0))
     }
 
-    fn search_single(&self, query: &[f32], ef: usize, k: usize) -> Vec<(i64, f32)> {
+    fn search_single(&self, query: &[f32], ef: usize, k: usize, filter: &Option<Arc<dyn Predicate>>) -> Vec<(i64, f32)> {
         if self.ids.is_empty() {
             return vec![];
         }
@@ -349,10 +354,22 @@ impl HnswIndex {
         let mut results: Vec<(f32, usize)> = Vec::with_capacity(ef);
         let mut candidates: Vec<(f32, usize)> = Vec::with_capacity(ef * 2);
         
+        // Check if filter excludes all elements
+        let filter_fn = |id: i64| {
+            if let Some(f) = filter {
+                f.evaluate(id)
+            } else {
+                true
+            }
+        };
+        
+        // Find valid entry point
         if let Some(ep_id) = self.entry_point {
             if let Some(ep_idx) = self.ids.iter().position(|&id| id == ep_id) {
-                let dist = self.distance(query, ep_idx);
-                candidates.push((dist, ep_idx));
+                if filter_fn(ep_id) {
+                    let dist = self.distance(query, ep_idx);
+                    candidates.push((dist, ep_idx));
+                }
             }
         }
         
@@ -361,6 +378,13 @@ impl HnswIndex {
                 continue;
             }
             visited[cand_idx] = visited_mark;
+            
+            let node_id = self.ids[cand_idx];
+            
+            // Apply filter
+            if !filter_fn(node_id) {
+                continue;
+            }
             
             let node_dist = self.distance(query, cand_idx);
             results.push((node_dist, cand_idx));
@@ -649,5 +673,60 @@ mod tests {
         let result = index.search(&query, &req).unwrap();
         // Should find id 0 (most similar in cosine)
         assert_eq!(result.ids[0], 0);
+    }
+    
+    #[test]
+    fn test_hnsw_search_with_filter() {
+        use std::sync::Arc;
+        use crate::api::search::IdsPredicate;
+        
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 4,
+            params: crate::api::IndexParams::default(),
+        };
+        
+        let mut index = HnswIndex::new(&config).unwrap();
+        
+        // Add vectors with specific IDs
+        let vectors = vec![
+            0.0, 0.0, 0.0, 0.0,  // id 0
+            1.0, 0.0, 0.0, 0.0,  // id 1
+            2.0, 0.0, 0.0, 0.0,  // id 2
+            3.0, 0.0, 0.0, 0.0,  // id 3
+        ];
+        let ids = vec![0, 1, 2, 3];
+        
+        index.train(&vectors).unwrap();
+        index.add(&vectors, Some(&ids)).unwrap();
+        
+        // Search without filter - should return all
+        let query = vec![0.5, 0.0, 0.0, 0.0];
+        let req = SearchRequest {
+            top_k: 4,
+            nprobe: 10,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        
+        let result = index.search(&query, &req).unwrap();
+        assert_eq!(result.ids.len(), 4);
+        
+        // Search with filter - only allow IDs 0 and 2
+        let ids_predicate = IdsPredicate { ids: vec![0, 2] };
+        let req_filtered = SearchRequest {
+            top_k: 2,
+            nprobe: 10,
+            filter: Some(Arc::new(ids_predicate) as Arc<dyn Predicate>),
+            params: None,
+            radius: None,
+        };
+        
+        let result = index.search(&query, &req_filtered).unwrap();
+        // Should only return IDs 0 and 2
+        assert_eq!(result.ids.len(), 2);
+        assert!(result.ids.contains(&0) || result.ids.contains(&2));
     }
 }
