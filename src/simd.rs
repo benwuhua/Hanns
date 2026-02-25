@@ -276,10 +276,140 @@ impl Distance for InnerProductSimd {
     }
 }
 
-/// 内积
+/// 内积（自动选择最优实现）
 #[inline]
 pub fn inner_product(a: &[f32], b: &[f32]) -> f32 {
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    {
+        if std::is_x86_feature_detected!("avx512f") {
+            return ip_avx512(a, b);
+        }
+        if std::is_x86_feature_detected!("avx2") {
+            return ip_avx2(a, b);
+        }
+        if std::is_x86_feature_detected!("sse4_2") {
+            return ip_sse(a, b);
+        }
+    }
+    #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+    {
+        if std::is_aarch64_feature_detected!("neon") {
+            return ip_neon(a, b);
+        }
+    }
+    ip_scalar(a, b)
+}
+
+/// 内积（标量）
+#[inline]
+pub fn ip_scalar(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+}
+
+/// 内积（SSE）
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+fn ip_sse(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+    let mut sum = _mm_setzero_ps();
+    let chunks = a.len() / 4;
+    
+    for i in 0..chunks {
+        let va = _mm_loadu_ps(&a[i * 4]);
+        let vb = _mm_loadu_ps(&b[i * 4]);
+        let prod = _mm_mul_ps(va, vb);
+        sum = _mm_add_ps(sum, prod);
+    }
+    
+    // Horizontal add
+    let mut result = _mm_cvtss_f32(sum);
+    let high = _mm_movehdup_ps(sum);
+    let sums = _mm_add_ps(sum, high);
+    let sums2 = _mm_movehl_ps(sums, sums);
+    result += _mm_cvtss_f32(_mm_add_ss(sums, sums2));
+    
+    // Handle remainder
+    for i in (chunks * 4)..a.len() {
+        result += a[i] * b[i];
+    }
+    result
+}
+
+/// 内积（AVX2）
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+fn ip_avx2(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+    let mut sum = _mm256_setzero_ps();
+    let chunks = a.len() / 8;
+    
+    for i in 0..chunks {
+        let va = _mm256_loadu_ps(&a[i * 8]);
+        let vb = _mm256_loadu_ps(&b[i * 8]);
+        let prod = _mm256_mul_ps(va, vb);
+        sum = _mm256_add_ps(sum, prod);
+    }
+    
+    // Horizontal add of 256-bit
+    let mut result = _mm256_cvtss_f32(sum);
+    let high = _mm256_extractf128_ps(sum, 1);
+    result += _mm_cvtss_f32(_mm_add_ps(high, _mm256_castps256to128(sum)));
+    
+    // Handle remainder
+    for i in (chunks * 8)..a.len() {
+        result += a[i] * b[i];
+    }
+    result
+}
+
+/// 内积（NEON）
+#[cfg(all(feature = "simd", target_arch = "aarch64"))]
+#[inline]
+fn ip_neon(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::aarch64::*;
+    let mut sum = vdupq_n_f32(0.0);
+    let chunks = a.len() / 4;
+    
+    for i in 0..chunks {
+        let va = vld1q_f32(&a[i * 4]);
+        let vb = vld1q_f32(&b[i * 4]);
+        let prod = vmulq_f32(va, vb);
+        sum = vaddq_f32(sum, prod);
+    }
+    
+    let mut result = vgetq_lane_f32(sum, 0) + vgetq_lane_f32(sum, 1) +
+                     vgetq_lane_f32(sum, 2) + vgetq_lane_f32(sum, 3);
+    
+    // Handle remainder
+    for i in (chunks * 4)..a.len() {
+        result += a[i] * b[i];
+    }
+    result
+}
+
+/// 内积（AVX-512）
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+fn ip_avx512(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+    let mut sum = _mm512_setzero512();
+    let chunks = a.len() / 16;
+    
+    for i in 0..chunks {
+        let va = _mm512_loadu_ps(&a[i * 16]);
+        let vb = _mm512_loadu_ps(&b[i * 16]);
+        let prod = _mm512_mul_ps(va, vb);
+        sum = _mm512_add_ps(sum, prod);
+    }
+    
+    // Horizontal add of 512-bit
+    let mut result = _mm512_reduce_add_ps(sum);
+    
+    // Handle remainder
+    for i in (chunks * 16)..a.len() {
+        result += a[i] * b[i];
+    }
+    result
 }
 
 /// Batch 内积（并行 + SIMD 优化）
