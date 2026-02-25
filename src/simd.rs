@@ -86,6 +86,9 @@ impl Distance for L2DistanceSimd {
 pub fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
     #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     {
+        if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512bw") {
+            return l2_avx512(a, b);
+        }
         if std::is_x86_feature_detected!("avx2") {
             return l2_avx2(a, b);
         }
@@ -160,6 +163,34 @@ fn l2_avx2(a: &[f32], b: &[f32]) -> f32 {
     result += _mm_cvtss_f32(_mm_add_ps(high, _mm256_castps256to128(sum)));
     
     for i in (chunks * 8)..a.len() {
+        let diff = a[i] - b[i];
+        result += diff * diff;
+    }
+    result.sqrt()
+}
+
+/// L2 距离（AVX-512）
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+fn l2_avx512(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+    let mut sum = _mm512_setzero512();
+    let chunks = a.len() / 16;
+    let remainder = a.len() % 16;
+    
+    for i in 0..chunks {
+        let va = _mm512_loadu_ps(&a[i * 16]);
+        let vb = _mm512_loadu_ps(&b[i * 16]);
+        let diff = _mm512_sub_ps(va, vb);
+        let sq = _mm512_mul_ps(diff, diff);
+        sum = _mm512_add_ps(sum, sq);
+    }
+    
+    // Use AVX-512 reduction
+    let mut result = _mm512_reduce_add_ps(sum);
+    
+    // Handle remainder
+    for i in (chunks * 16)..a.len() {
         let diff = a[i] - b[i];
         result += diff * diff;
     }
@@ -469,6 +500,319 @@ pub fn ip_batch_query_vs_database(query: &[f32], database: &[f32], dim: usize) -
     result
 }
 
+// ============================================================
+// L1 (Manhattan) 距离计算 - SIMD 优化
+// ============================================================
+
+/// L1 距离（曼哈顿距离）- 自动选择最优实现
+#[inline]
+pub fn l1_distance(a: &[f32], b: &[f32]) -> f32 {
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    {
+        if std::is_x86_feature_detected!("avx512f") {
+            return l1_avx512(a, b);
+        }
+        if std::is_x86_feature_detected!("avx2") {
+            return l1_avx2(a, b);
+        }
+        if std::is_x86_feature_detected!("sse4_2") {
+            return l1_sse(a, b);
+        }
+    }
+    #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+    {
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            return l1_neon(a, b);
+        }
+    }
+    l1_scalar(a, b)
+}
+
+/// L1 距离（标量参考实现）
+#[inline]
+pub fn l1_scalar(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).sum()
+}
+
+/// L1 距离（SSE）- 4 元素并行
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+fn l1_sse(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+    let mut sum = _mm_setzero_ps();
+    let chunks = a.len() / 4;
+    let remainder = a.len() % 4;
+    
+    for i in 0..chunks {
+        let va = _mm_loadu_ps(&a[i * 4]);
+        let vb = _mm_loadu_ps(&b[i * 4]);
+        let diff = _mm_sub_ps(va, vb);
+        // _mm_abs_ps is not available in SSE, use max-min trick
+        let abs_diff = _mm_max_ps(diff, _mm_neg_ps(diff));
+        // _mm_neg_ps: negate using xor with sign bit
+        let neg_diff = _mm_xor_ps(diff, _mm_set1_ps(-0.0));
+        let abs_diff = _mm_max_ps(diff, neg_diff);
+        sum = _mm_add_ps(sum, abs_diff);
+    }
+    
+    // Horizontal add
+    let mut result = _mm_cvtss_f32(sum);
+    let high = _mm_movehl_ps(sum, sum);
+    result += _mm_cvtss_f32(high);
+    let mid = _mm_movehdup_ps(sum);
+    result += _mm_cvtss_f32(mid);
+    
+    // Handle remainder
+    for i in (chunks * 4)..a.len() {
+        result += (a[i] - b[i]).abs();
+    }
+    result
+}
+
+/// L1 距离（AVX2）- 8 元素并行
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+fn l1_avx2(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+    let mut sum = _mm256_setzero_ps();
+    let chunks = a.len() / 8;
+    let remainder = a.len() % 8;
+    
+    for i in 0..chunks {
+        let va = _mm256_loadu_ps(&a[i * 8]);
+        let vb = _mm256_loadu_ps(&b[i * 8]);
+        let diff = _mm256_sub_ps(va, vb);
+        // Absolute value: max with negation
+        let neg = _mm256_xor_ps(diff, _mm256_set1_ps(-0.0));
+        let abs_diff = _mm256_max_ps(diff, neg);
+        sum = _mm256_add_ps(sum, abs_diff);
+    }
+    
+    // Sum 256-bit register
+    let mut result = _mm256_cvtss_f32(sum);
+    let high = _mm256_extractf128_ps(sum, 1);
+    result += _mm_cvtss_f32(_mm_add_ps(high, _mm256_castps256to128(sum)));
+    
+    // Handle remainder
+    for i in (chunks * 8)..a.len() {
+        result += (a[i] - b[i]).abs();
+    }
+    result
+}
+
+/// L1 距离（AVX-512）- 16 元素并行
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+fn l1_avx512(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+    let mut sum = _mm512_setzero512();
+    let chunks = a.len() / 16;
+    let remainder = a.len() % 16;
+    
+    for i in 0..chunks {
+        let va = _mm512_loadu_ps(&a[i * 16]);
+        let vb = _mm512_loadu_ps(&b[i * 16]);
+        let diff = _mm512_sub_ps(va, vb);
+        // AVX-512 has _mm512_abs_ps
+        let abs_diff = _mm512_abs_ps(diff);
+        sum = _mm512_add_ps(sum, abs_diff);
+    }
+    
+    // AVX-512 reduction
+    let mut result = _mm512_reduce_add_ps(sum);
+    
+    // Handle remainder
+    for i in (chunks * 16)..a.len() {
+        result += (a[i] - b[i]).abs();
+    }
+    result
+}
+
+/// L1 距离（NEON）- 4 元素并行
+#[cfg(all(feature = "simd", target_arch = "aarch64"))]
+#[inline]
+fn l1_neon(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::aarch64::*;
+    unsafe {
+        let mut sum = vdupq_n_f32(0.0);
+        let chunks = a.len() / 4;
+        let remainder = a.len() % 4;
+        
+        for i in 0..chunks {
+            let va = vld1q_f32(&a[i * 4]);
+            let vb = vld1q_f32(&b[i * 4]);
+            let diff = vsubq_f32(va, vb);
+            let abs_diff = vabsq_f32(diff);
+            sum = vaddq_f32(sum, abs_diff);
+        }
+        
+        // Horizontal add
+        let mut result = vgetq_lane_f32(sum, 0) + vgetq_lane_f32(sum, 1) +
+                         vgetq_lane_f32(sum, 2) + vgetq_lane_f32(sum, 3);
+        
+        for i in (chunks * 4)..a.len() {
+            result += (a[i] - b[i]).abs();
+        }
+        result
+    }
+}
+
+// ============================================================
+// Linf (Chebyshev) 距离计算 - SIMD 优化
+// ============================================================
+
+/// Linf 距离（切比雪夫距离）- 自动选择最优实现
+#[inline]
+pub fn linf_distance(a: &[f32], b: &[f32]) -> f32 {
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    {
+        if std::is_x86_feature_detected!("avx512f") {
+            return linf_avx512(a, b);
+        }
+        if std::is_x86_feature_detected!("avx2") {
+            return linf_avx2(a, b);
+        }
+        if std::is_x86_feature_detected!("sse4_2") {
+            return linf_sse(a, b);
+        }
+    }
+    #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+    {
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            return linf_neon(a, b);
+        }
+    }
+    linf_scalar(a, b)
+}
+
+/// Linf 距离（标量参考实现）
+#[inline]
+pub fn linf_scalar(a: &[f32], b: &[f32]) -> f32 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0f32, |max, v| max.max(v))
+}
+
+/// Linf 距离（SSE）- 4 元素并行
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+fn linf_sse(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+    let mut max_val = _mm_setzero_ps();
+    let chunks = a.len() / 4;
+    let remainder = a.len() % 4;
+    
+    for i in 0..chunks {
+        let va = _mm_loadu_ps(&a[i * 4]);
+        let vb = _mm_loadu_ps(&b[i * 4]);
+        let diff = _mm_sub_ps(va, vb);
+        let abs_diff = _mm_max_ps(diff, _mm_xor_ps(diff, _mm_set1_ps(-0.0)));
+        max_val = _mm_max_ps(max_val, abs_diff);
+    }
+    
+    // Horizontal max
+    let mut result = _mm_cvtss_f32(max_val);
+    let high = _mm_movehl_ps(max_val, max_val);
+    result = result.max(_mm_cvtss_f32(high));
+    let mid = _mm_movehdup_ps(max_val);
+    result = result.max(_mm_cvtss_f32(mid));
+    
+    // Handle remainder
+    for i in (chunks * 4)..a.len() {
+        result = result.max((a[i] - b[i]).abs());
+    }
+    result
+}
+
+/// Linf 距离（AVX2）- 8 元素并行
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+fn linf_avx2(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+    let mut max_val = _mm256_setzero_ps();
+    let chunks = a.len() / 8;
+    let remainder = a.len() % 8;
+    
+    for i in 0..chunks {
+        let va = _mm256_loadu_ps(&a[i * 8]);
+        let vb = _mm256_loadu_ps(&b[i * 8]);
+        let diff = _mm256_sub_ps(va, vb);
+        let neg = _mm256_xor_ps(diff, _mm256_set1_ps(-0.0));
+        let abs_diff = _mm256_max_ps(diff, neg);
+        max_val = _mm256_max_ps(max_val, abs_diff);
+    }
+    
+    // Max across 256-bit register
+    let mut result = _mm256_cvtss_f32(max_val);
+    let high = _mm256_extractf128_ps(max_val, 1);
+    result = result.max(_mm_cvtss_f32(_mm_max_ps(high, _mm256_castps256to128(max_val))));
+    
+    // Handle remainder
+    for i in (chunks * 8)..a.len() {
+        result = result.max((a[i] - b[i]).abs());
+    }
+    result
+}
+
+/// Linf 距离（AVX-512）- 16 元素并行
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+fn linf_avx512(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+    let mut max_val = _mm512_setzero512();
+    let chunks = a.len() / 16;
+    let remainder = a.len() % 16;
+    
+    for i in 0..chunks {
+        let va = _mm512_loadu_ps(&a[i * 16]);
+        let vb = _mm512_loadu_ps(&b[i * 16]);
+        let diff = _mm512_sub_ps(va, vb);
+        let abs_diff = _mm512_abs_ps(diff);
+        max_val = _mm512_max_ps(max_val, abs_diff);
+    }
+    
+    // AVX-512 reduction for max
+    let mut result = _mm512_reduce_max_ps(max_val);
+    
+    // Handle remainder
+    for i in (chunks * 16)..a.len() {
+        result = result.max((a[i] - b[i]).abs());
+    }
+    result
+}
+
+/// Linf 距离（NEON）- 4 元素并行
+#[cfg(all(feature = "simd", target_arch = "aarch64"))]
+#[inline]
+fn linf_neon(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::aarch64::*;
+    unsafe {
+        let mut max_val = vdupq_n_f32(0.0);
+        let chunks = a.len() / 4;
+        let remainder = a.len() % 4;
+        
+        for i in 0..chunks {
+            let va = vld1q_f32(&a[i * 4]);
+            let vb = vld1q_f32(&b[i * 4]);
+            let diff = vsubq_f32(va, vb);
+            let abs_diff = vabsq_f32(diff);
+            max_val = vmaxq_f32(max_val, abs_diff);
+        }
+        
+        // Horizontal max: pairwise max reduction
+        let mut result = vgetq_lane_f32(max_val, 0);
+        result = result.max(vgetq_lane_f32(max_val, 1));
+        result = result.max(vgetq_lane_f32(max_val, 2));
+        result = result.max(vgetq_lane_f32(max_val, 3));
+        
+        for i in (chunks * 4)..a.len() {
+            result = result.max((a[i] - b[i]).abs());
+        }
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,5 +840,69 @@ mod tests {
         let b = [4.0, 5.0, 6.0];
         let ip = inner_product(&a, &b);
         assert!((ip - 32.0).abs() < 0.01);
+    }
+    
+    #[test]
+    fn test_l1_scalar() {
+        let a = [1.0, 2.0, 3.0];
+        let b = [4.0, 5.0, 6.0];
+        let dist = l1_scalar(&a, &b);
+        assert!((dist - 9.0).abs() < 0.01); // |1-4| + |2-5| + |3-6| = 3+3+3 = 9
+    }
+    
+    #[test]
+    fn test_l1_equivalence() {
+        let a = vec![1.0; 128];
+        let b = vec![0.0; 128];
+        let scalar = l1_scalar(&a, &b);
+        let simd = l1_distance(&a, &b);
+        assert!((scalar - simd).abs() < 1e-5);
+    }
+    
+    #[test]
+    fn test_l1_128() {
+        let a: Vec<f32> = (0..128).map(|i| i as f32).collect();
+        let b: Vec<f32> = (128..256).map(|i| i as f32).collect();
+        let scalar = l1_scalar(&a, &b);
+        let simd = l1_distance(&a, &b);
+        assert!((scalar - simd).abs() < 1e-5);
+    }
+    
+    #[test]
+    fn test_linf_scalar() {
+        let a = [1.0, 2.0, 3.0];
+        let b = [4.0, 5.0, 6.0];
+        let dist = linf_scalar(&a, &b);
+        assert!((dist - 3.0).abs() < 0.01); // max(|1-4|, |2-5|, |3-6|) = 3
+    }
+    
+    #[test]
+    fn test_linf_equivalence() {
+        let a = vec![1.0; 128];
+        let b = vec![0.0; 128];
+        let scalar = linf_scalar(&a, &b);
+        let simd = linf_distance(&a, &b);
+        assert!((scalar - simd).abs() < 1e-5);
+    }
+    
+    #[test]
+    fn test_linf_128() {
+        let a: Vec<f32> = (0..128).map(|i| i as f32).collect();
+        let b: Vec<f32> = (128..256).map(|i| i as f32).collect();
+        let scalar = linf_scalar(&a, &b);
+        let simd = linf_distance(&a, &b);
+        assert!((scalar - simd).abs() < 1e-5);
+    }
+    
+    #[test]
+    fn test_linf_mixed() {
+        // Test with mixed positive/negative values
+        let a: Vec<f32> = vec![-10.0, 5.0, 3.0, 100.0];
+        let b: Vec<f32> = vec![20.0, -15.0, 3.0, 50.0];
+        let scalar = linf_scalar(&a, &b);
+        let simd = linf_distance(&a, &b);
+        assert!((scalar - simd).abs() < 1e-5);
+        // max(|-30|, |20|, |0|, |50|) = 50
+        assert!((scalar - 50.0).abs() < 0.01);
     }
 }

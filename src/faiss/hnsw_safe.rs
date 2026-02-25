@@ -136,6 +136,46 @@ impl Index for HnswIndex {
         Ok(SearchResult::new(ids, dists, 0.0))
     }
     
+    fn range_search(&self, dataset: &Dataset, radius: f32) -> Result<SearchResult, IndexError> {
+        // 简化实现：暴力搜索 + 半径过滤
+        let queries = dataset.vectors();
+        let q_dim = queries.len() / dataset.num_vectors();
+        
+        let mut ids = Vec::new();
+        let mut dists = Vec::new();
+        
+        for q_idx in 0..dataset.num_vectors() {
+            let q_start = q_idx * q_dim;
+            let query = &queries[q_start..q_start + q_dim];
+            
+            // 找所有在半径内的向量
+            for i in 0..self.num_nodes {
+                let d = self.l2_distance(query, i);
+                if d <= radius {
+                    ids.push(i as i64);
+                    dists.push(d);
+                }
+            }
+        }
+        
+        Ok(SearchResult::new(ids, dists, 0.0))
+    }
+    
+    fn get_vector_by_ids(&self, ids: &[i64]) -> Result<Vec<f32>, IndexError> {
+        let mut result = Vec::with_capacity(ids.len() * self.config.dim);
+        
+        for &id in ids {
+            let idx = id as usize;
+            if idx >= self.num_nodes {
+                return Err(IndexError::InvalidArg(format!("invalid id: {}", id)));
+            }
+            let start = idx * self.config.dim;
+            result.extend_from_slice(&self.vectors[start..start + self.config.dim]);
+        }
+        
+        Ok(result)
+    }
+    
     fn save(&self, path: &str) -> Result<(), IndexError> {
         std::fs::write(path, "HNSW").map_err(|_| IndexError::Unsupported("save".into())
     }
