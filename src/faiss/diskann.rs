@@ -431,4 +431,51 @@ mod tests {
         let result = index.search(&query, &req).unwrap();
         assert_eq!(result.ids.len(), 2);
     }
+    
+    #[test]
+    fn test_diskann_save_load() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            params: crate::api::IndexParams::default(),
+        };
+        
+        // Create and train index
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0, 0.0, 0.0, 1.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+        
+        // Save to temp file
+        let temp_path = std::env::temp_dir().join("diskann_test.bin");
+        index.save(&temp_path).unwrap();
+        
+        // Create new index and load
+        let mut index2 = DiskAnnIndex::new(&config).unwrap();
+        index2.load(&temp_path).unwrap();
+        
+        // Verify search results match
+        let query = vec![0.1, 0.1, 0.1, 0.1];
+        let req = SearchRequest {
+            top_k: 2,
+            nprobe: 10,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        
+        let result1 = index.search(&query, &req).unwrap();
+        let result2 = index2.search(&query, &req).unwrap();
+        
+        // Results should be identical after reload
+        assert_eq!(result1.ids, result2.ids);
+        
+        // Cleanup
+        std::fs::remove_file(temp_path).ok();
+    }
 }
