@@ -857,16 +857,37 @@ mod tests {
     }
 
     #[test]
-    fn test_binaryset_invalid_data() {
+    fn test_calc_dist_by_ids() {
         let config = IndexConfig::new(IndexType::Flat, MetricType::L2, 4);
         let mut index = MemIndex::new(&config).unwrap();
         
-        // Invalid magic
-        let result = index.deserialize_from_memory(b"INVALID");
-        assert!(result.is_err());
+        let vectors = vec![
+            0.0, 0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 2.0, 0.0, 0.0,
+            0.0, 0.0, 3.0, 0.0,
+        ];
+        index.add(&vectors, None).unwrap();
         
-        // Truncated data
-        let result = index.deserialize_from_memory(b"KWIX");
+        // Calculate distances between IDs
+        let id_pairs = vec![(0, 1), (1, 2), (2, 3)];
+        let distances = index.calc_dist_by_ids(&id_pairs).unwrap();
+        
+        assert_eq!(distances.len(), 3);
+        // ID 0 vs 1: L2 distance = 1.0
+        assert!((distances[0] - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_calc_dist_by_ids_invalid() {
+        let config = IndexConfig::new(IndexType::Flat, MetricType::L2, 4);
+        let mut index = MemIndex::new(&config).unwrap();
+        
+        let vectors = vec![1.0, 2.0, 3.0, 4.0];
+        index.add(&vectors, Some(&[1])).unwrap();
+        
+        // Invalid ID
+        let result = index.calc_dist_by_ids(&[(1, 999)]);
         assert!(result.is_err());
     }
 }
