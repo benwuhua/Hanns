@@ -19,6 +19,7 @@ pub struct HnswIndex {
     m: usize,  // Number of connections per layer
     max_level: usize,
     level_0_nodes: Vec<usize>,  // Layer 0 node indices
+    metric_type: MetricType,
 }
 
 impl HnswIndex {
@@ -52,6 +53,7 @@ impl HnswIndex {
             m,
             max_level: 0,
             level_0_nodes: Vec::new(),
+            metric_type: config.metric_type,
         })
     }
 
@@ -105,7 +107,7 @@ impl HnswIndex {
                 // Exact for small
                 let mut d = Vec::with_capacity(base_count + i);
                 for j in 0..base_count + i {
-                    d.push((self.ids[j], self.l2_sqr(new_vec, j)));
+                    d.push((self.ids[j], self.distance(new_vec, j)));
                 }
                 d.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
                 d.truncate(k);
@@ -155,7 +157,7 @@ impl HnswIndex {
         let mut samples: Vec<(usize, f32)> = Vec::with_capacity(k);
         
         for i in (0..n).step_by(sample_rate) {
-            let dist = self.l2_sqr(query, i);
+            let dist = self.distance(query, i);
             samples.push((i, dist));
         }
         
@@ -170,7 +172,7 @@ impl HnswIndex {
             let start = idx.saturating_sub(refine_radius / 2);
             let end = (idx + refine_radius / 2).min(n);
             for j in start..end {
-                let dist = self.l2_sqr(query, j);
+                let dist = self.distance(query, j);
                 candidates.push((j, dist));
             }
         }
@@ -194,6 +196,59 @@ impl HnswIndex {
             sum += diff * diff;
         }
         sum
+    }
+
+    /// Calculate distance based on metric type
+    #[inline]
+    fn distance(&self, query: &[f32], idx: usize) -> f32 {
+        let start = idx * self.dim;
+        let stored = &self.vectors[start..start + self.dim];
+        
+        match self.metric_type {
+            MetricType::L2 => {
+                let mut sum = 0.0f32;
+                for i in 0..self.dim {
+                    let diff = query[i] - stored[i];
+                    sum += diff * diff;
+                }
+                sum
+            }
+            MetricType::Ip => {
+                // For IP, we return negative inner product (so larger = better)
+                let mut sum = 0.0f32;
+                for i in 0..self.dim {
+                    sum += query[i] * stored[i];
+                }
+                -sum
+            }
+            MetricType::Cosine => {
+                // Cosine distance = 1 - cosine_similarity
+                let mut ip = 0.0f32;
+                let mut q_norm = 0.0f32;
+                let mut v_norm = 0.0f32;
+                for i in 0..self.dim {
+                    ip += query[i] * stored[i];
+                    q_norm += query[i] * query[i];
+                    v_norm += stored[i] * stored[i];
+                }
+                q_norm = q_norm.sqrt();
+                v_norm = v_norm.sqrt();
+                if q_norm > 0.0 && v_norm > 0.0 {
+                    1.0 - ip / (q_norm * v_norm)
+                } else {
+                    1.0
+                }
+            }
+            _ => {
+                // Default to L2 for unknown types
+                let mut sum = 0.0f32;
+                for i in 0..self.dim {
+                    let diff = query[i] - stored[i];
+                    sum += diff * diff;
+                }
+                sum
+            }
+        }
     }
 
     pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<SearchResult> {
@@ -252,7 +307,7 @@ impl HnswIndex {
         
         if let Some(ep_id) = self.entry_point {
             if let Some(ep_idx) = self.ids.iter().position(|&id| id == ep_id) {
-                let dist = self.l2_sqr(query, ep_idx);
+                let dist = self.distance(query, ep_idx);
                 candidates.push((dist, ep_idx));
             }
         }
@@ -263,7 +318,7 @@ impl HnswIndex {
             }
             visited[cand_idx] = visited_mark;
             
-            let node_dist = self.l2_sqr(query, cand_idx);
+            let node_dist = self.distance(query, cand_idx);
             results.push((node_dist, cand_idx));
             
             if results.len() >= ef {
@@ -278,7 +333,7 @@ impl HnswIndex {
                 for &(nbr_id, _) in nbrs {
                     if let Some(nbr_idx) = self.ids.iter().position(|&id| id == nbr_id) {
                         if visited[nbr_idx] != visited_mark {
-                            let nbr_dist = self.l2_sqr(query, nbr_idx);
+                            let nbr_dist = self.distance(query, nbr_idx);
                             
                             let worst = results.last().map(|(d, _)| *d).unwrap_or(f32::MAX);
                             if results.len() < ef || nbr_dist < worst {
