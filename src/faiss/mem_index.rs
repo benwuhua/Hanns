@@ -51,6 +51,11 @@ impl MemIndex {
         }
         
         let n = vectors.len() / self.config.dim;
+        if n * self.config.dim != vectors.len() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "vector dimension mismatch".to_string(),
+            ));
+        }
         
         for i in 0..n {
             let start = i * self.config.dim;
@@ -253,5 +258,132 @@ mod tests {
         
         let result = index.search(&query, &req).unwrap();
         assert_eq!(result.ids.len(), 2);
+    }
+
+    #[test]
+    fn test_mem_index_with_ids() {
+        let config = IndexConfig::new(IndexType::Flat, MetricType::L2, 4);
+        let mut index = MemIndex::new(&config).unwrap();
+        
+        let vectors = vec![1.0, 0.0, 0.0, 0.0];
+        let ids = vec![100i64];
+        index.add(&vectors, Some(&ids)).unwrap();
+        
+        let query = vec![0.0, 0.0, 0.0, 1.0];
+        let req = SearchRequest {
+            top_k: 1,
+            nprobe: 1,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        
+        let result = index.search(&query, &req).unwrap();
+        assert_eq!(result.ids[0], 100);
+    }
+
+    #[test]
+    fn test_mem_index_empty() {
+        let config = IndexConfig::new(IndexType::Flat, MetricType::L2, 4);
+        let index = MemIndex::new(&config).unwrap();
+        
+        let query = vec![0.0, 0.0, 0.0, 1.0];
+        let req = SearchRequest {
+            top_k: 2,
+            nprobe: 1,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        
+        let result = index.search(&query, &req);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mem_index_invalid_dim() {
+        let config = IndexConfig::new(IndexType::Flat, MetricType::L2, 0);
+        let result = MemIndex::new(&config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mem_index_dimension_mismatch() {
+        let config = IndexConfig::new(IndexType::Flat, MetricType::L2, 4);
+        let mut index = MemIndex::new(&config).unwrap();
+        
+        // Wrong dimension
+        let vectors = vec![1.0, 2.0, 3.0]; // dim=3 instead of 4
+        let result = index.add(&vectors, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mem_index_search_dimension_mismatch() {
+        let config = IndexConfig::new(IndexType::Flat, MetricType::L2, 4);
+        let mut index = MemIndex::new(&config).unwrap();
+        
+        let vectors = vec![1.0, 0.0, 0.0, 0.0];
+        index.add(&vectors, None).unwrap();
+        
+        // Wrong query dimension
+        let query = vec![0.0, 0.0, 0.0]; // dim=3 instead of 4
+        let req = SearchRequest {
+            top_k: 1,
+            nprobe: 1,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        
+        let result = index.search(&query, &req);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mem_index_inner_product() {
+        let config = IndexConfig::new(IndexType::Flat, MetricType::Ip, 4);
+        let mut index = MemIndex::new(&config).unwrap();
+        
+        let vectors = vec![
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+        ];
+        index.add(&vectors, None).unwrap();
+        
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+        let req = SearchRequest {
+            top_k: 1,
+            nprobe: 1,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        
+        let result = index.search(&query, &req).unwrap();
+        assert_eq!(result.ids[0], 0); // Should return first vector (highest IP)
+    }
+
+    #[test]
+    fn test_mem_index_serialize() {
+        let config = IndexConfig::new(IndexType::Flat, MetricType::L2, 4);
+        let mut index = MemIndex::new(&config).unwrap();
+        
+        let vectors = vec![1.0, 0.0, 0.0, 0.0];
+        let ids = vec![42i64];
+        index.add(&vectors, Some(&ids)).unwrap();
+        
+        // Save
+        let path = std::env::temp_dir().join("test_flat_idx");
+        index.save(&path).unwrap();
+        
+        // Load
+        let mut loaded = MemIndex::new(&config).unwrap();
+        loaded.load(&path).unwrap();
+        
+        assert_eq!(loaded.ntotal(), 1);
+        
+        // Clean up
+        std::fs::remove_file(path).ok();
     }
 }
