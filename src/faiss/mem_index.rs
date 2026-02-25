@@ -129,6 +129,154 @@ impl MemIndex {
         self.vectors.len()
     }
 
+    /// Get vectors by their IDs
+    /// Returns vectors in the order of the requested IDs
+    /// Missing IDs are skipped (not included in result)
+    pub fn get_vector_by_ids(&self, ids: &[i64]) -> Result<Vec<f32>> {
+        if self.vectors.is_empty() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "index is empty".to_string(),
+            ));
+        }
+
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build ID to index mapping
+        let id_to_idx: std::collections::HashMap<i64, usize> = self.ids
+            .iter()
+            .enumerate()
+            .map(|(i, &id)| (id, i))
+            .collect();
+
+        // Collect vectors in the order of requested IDs
+        let mut result = Vec::with_capacity(ids.len() * self.config.dim);
+        let mut found_count = 0;
+
+        for &id in ids {
+            if let Some(&idx) = id_to_idx.get(&id) {
+                result.extend_from_slice(&self.vectors[idx]);
+                found_count += 1;
+            }
+        }
+
+        if found_count == 0 {
+            return Err(crate::api::KnowhereError::NotFound(
+                "none of the requested IDs found".to_string(),
+            ));
+        }
+
+        Ok(result)
+    }
+
+    /// Range search: find all vectors within radius
+    pub fn range_search(&self, query: &[f32], radius: f32) -> Result<(Vec<i64>, Vec<f32>)> {
+        if self.vectors.is_empty() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "index is empty".to_string(),
+            ));
+        }
+
+        let n = query.len() / self.config.dim;
+        if n * self.config.dim != query.len() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "query dimension mismatch".to_string(),
+            ));
+        }
+
+        let mut result_ids = Vec::new();
+        let mut result_distances = Vec::new();
+
+        // For each query vector
+        for q_idx in 0..n {
+            let q_start = q_idx * self.config.dim;
+            let q_end = q_start + self.config.dim;
+            let query_vec = &query[q_start..q_end];
+
+            // Compute distances to all vectors
+            for (i, v) in self.vectors.iter().enumerate() {
+                let dist = match self.config.metric_type {
+                    MetricType::L2 => l2_distance(query_vec, v),
+                    MetricType::Ip => -inner_product(query_vec, v), // Negative because IP is max
+                    MetricType::Cosine => -cosine_similarity(query_vec, v),
+                };
+
+                // For L2: dist <= radius; for IP/Cosine: -dist >= radius (since we negated)
+                let within_radius = if self.config.metric_type == MetricType::L2 {
+                    dist <= radius
+                } else {
+                    -dist <= radius
+                };
+
+                if within_radius {
+                    result_ids.push(self.ids[i]);
+                    result_distances.push(dist);
+                }
+            }
+        }
+
+        Ok((result_ids, result_distances))
+    }
+
+    /// Range search with predicate filter
+    pub fn range_search_with_filter(
+        &self,
+        query: &[f32],
+        radius: f32,
+        filter: &dyn crate::api::Predicate,
+    ) -> Result<(Vec<i64>, Vec<f32>)> {
+        if self.vectors.is_empty() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "index is empty".to_string(),
+            ));
+        }
+
+        let n = query.len() / self.config.dim;
+        if n * self.config.dim != query.len() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "query dimension mismatch".to_string(),
+            ));
+        }
+
+        let mut result_ids = Vec::new();
+        let mut result_distances = Vec::new();
+
+        // For each query vector
+        for q_idx in 0..n {
+            let q_start = q_idx * self.config.dim;
+            let q_end = q_start + self.config.dim;
+            let query_vec = &query[q_start..q_end];
+
+            // Compute distances to all vectors
+            for (i, v) in self.vectors.iter().enumerate() {
+                // Apply predicate filter
+                if !filter.evaluate(self.ids[i]) {
+                    continue;
+                }
+
+                let dist = match self.config.metric_type {
+                    MetricType::L2 => l2_distance(query_vec, v),
+                    MetricType::Ip => -inner_product(query_vec, v),
+                    MetricType::Cosine => -cosine_similarity(query_vec, v),
+                };
+
+                let within_radius = if self.config.metric_type == MetricType::L2 {
+                    dist <= radius
+                } else {
+                    -dist <= radius
+                };
+
+                if within_radius {
+                    result_ids.push(self.ids[i]);
+                    result_distances.push(dist);
+                }
+            }
+        }
+
+        Ok((result_ids, result_distances))
+    }
+
     pub fn save(&self, path: &Path) -> Result<()> {
         use std::fs::File;
         use std::io::Write;
