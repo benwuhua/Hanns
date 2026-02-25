@@ -21,6 +21,7 @@ pub mod binary;
 pub mod annoy;
 pub mod hnsw_quantized;
 pub mod sparse;
+pub mod scann;
 
 pub use index::FaissIndex;
 pub use mem_index::MemIndex;
@@ -30,3 +31,4 @@ pub use ivf::IvfIndex;
 pub use ivfpq::IvfPqIndex;
 pub use pq::PqEncoder;
 pub use diskann::DiskAnnIndex;
+pub use scann::{ScaNNIndex, ScaNNConfig};
