@@ -4,10 +4,6 @@
 //! 
 //! SIMD 优化：当启用 "simd" feature 时，使用 SIMD 加速计算
 
-use crate::bitset::BitsetView;
-use crate::dataset::Dataset;
-use crate::api::KnowhereError;
-
 /// 距离度量类型
 /// 
 /// 与 Milvus/KnowHere 对齐

@@ -4,8 +4,6 @@
 //! 
 //! 参考: /Users/ryan/Code/vectorDB/knowhere
 
-use crate::error::KnowhereError;
-
 /// FP16 (IEEE 754 half-precision, 16-bit)
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[repr(transparent)]

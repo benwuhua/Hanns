@@ -1,7 +1,6 @@
 //! Faiss index wrapper
 
 use std::path::Path;
-use std::sync::Arc;
 
 use crate::api::{IndexConfig, IndexType, KnowhereError, MetricType, Result, SearchRequest, SearchResult};
 

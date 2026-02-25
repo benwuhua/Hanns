@@ -18,6 +18,9 @@ pub enum IndexType {
     DiskAnn,
     /// ANNOY
     Annoy,
+    /// SCANN (Google ScaNN) - for future implementation
+    #[cfg(feature = "scann")]
+    Scann,
 }
 
 impl Default for IndexType {
@@ -35,6 +38,8 @@ impl IndexType {
             "hnsw" => Some(IndexType::Hnsw),
             "diskann" | "disk_ann" => Some(IndexType::DiskAnn),
             "annoy" => Some(IndexType::Annoy),
+            #[cfg(feature = "scann")]
+            "scann" => Some(IndexType::Scann),
             _ => None,
         }
     }

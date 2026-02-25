@@ -79,7 +79,7 @@ impl RaBitQEncoder {
             
             // 选择较近的码字
             let bit = if dist_low < dist_high { 0 } else { 1 };
-            codes[sub_idx / 8] |= (bit << (sub_idx % 8));
+            codes[sub_idx / 8] |= bit << (sub_idx % 8);
         }
         
         codes
@@ -130,7 +130,7 @@ impl RaBitQEncoder {
     }
     
     /// 使用距离表计算与编码向量的距离
-    pub fn compute_distance(&self, table: &[([f32; 2])], codes: &[u8]) -> f32 {
+    pub fn compute_distance(&self, table: &[[f32; 2]], codes: &[u8]) -> f32 {
         let num_subs = self.dim / self.sub_dim;
         let mut sum = 0.0f32;
         
