@@ -170,6 +170,59 @@ impl MemIndex {
         Ok(result)
     }
 
+    /// Calculate distances between vectors by their IDs
+    /// Returns distances in the order of id_pairs
+    /// id_pairs: [(id1, id2), ...]
+    pub fn calc_dist_by_ids(&self, id_pairs: &[(i64, i64)]) -> Result<Vec<f32>> {
+        if self.vectors.is_empty() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "index is empty".to_string(),
+            ));
+        }
+
+        if id_pairs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build ID to index mapping
+        let id_to_idx: std::collections::HashMap<i64, usize> = self.ids
+            .iter()
+            .enumerate()
+            .map(|(i, &id)| (id, i))
+            .collect();
+
+        let dim = self.config.dim;
+        let mut distances = Vec::with_capacity(id_pairs.len());
+
+        for &(id1, id2) in id_pairs {
+            let idx1 = id_to_idx.get(&id1);
+            let idx2 = id_to_idx.get(&id2);
+
+            match (idx1, idx2) {
+                (Some(&i1), Some(&i2)) => {
+                    let v1 = &self.vectors[i1];
+                    let v2 = &self.vectors[i2];
+                    let dist = match self.config.metric_type {
+                        MetricType::L2 => l2_distance(v1, v2),
+                        MetricType::Ip => inner_product(v1, v2),
+                        MetricType::Cosine => {
+                            let cos = inner_product(v1, v2);
+                            1.0 - cos
+                        }
+                    };
+                    distances.push(dist);
+                }
+                _ => {
+                    return Err(crate::api::KnowhereError::NotFound(
+                        format!("ID not found: {} or {}", id1, id2),
+                    ));
+                }
+            }
+        }
+
+        Ok(distances)
+    }
+
     /// Range search: find all vectors within radius
     pub fn range_search(&self, query: &[f32], radius: f32) -> Result<(Vec<i64>, Vec<f32>)> {
         if self.vectors.is_empty() {
