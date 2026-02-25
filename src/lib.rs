@@ -10,6 +10,7 @@ pub mod simd;
 pub mod half;  // fp16/bf16 support
 pub mod index;
 pub mod faiss;
+pub mod federation;
 pub mod storage;
 pub mod codec;
 pub mod executor;
