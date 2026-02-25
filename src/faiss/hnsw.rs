@@ -1,10 +1,10 @@
 //! HNSW - High Performance Version
 //! 
-//! Optimized HNSW with progressive sampling.
+//! Optimized HNSW with progressive sampling and multi-layer support.
 
 use crate::api::{IndexConfig, IndexType, MetricType, Result, SearchRequest, SearchResult};
 
-/// HNSW index with progressive sampling
+/// HNSW index with progressive sampling and configurable M parameter
 pub struct HnswIndex {
     config: IndexConfig,
     entry_point: Option<i64>,
@@ -15,6 +15,10 @@ pub struct HnswIndex {
     trained: bool,
     dim: usize,
     ef_construction: usize,
+    ef_search: usize,
+    m: usize,  // Number of connections per layer
+    max_level: usize,
+    level_0_nodes: Vec<usize>,  // Layer 0 node indices
 }
 
 impl HnswIndex {
@@ -25,6 +29,15 @@ impl HnswIndex {
             ));
         }
 
+        // Get M parameter (default 16)
+        let m = config.params.m.unwrap_or(16).max(1);
+        
+        // Get ef_search parameter (default 50)
+        let ef_search = config.params.ef_search.unwrap_or(50).max(1);
+        
+        // Get ef_construction parameter
+        let ef_construction = config.params.ef_construction.unwrap_or(200).max(1);
+
         Ok(Self {
             config: config.clone(),
             entry_point: None,
@@ -34,7 +47,11 @@ impl HnswIndex {
             next_id: 0,
             trained: false,
             dim: config.dim,
-            ef_construction: config.params.ef_construction.unwrap_or(16).max(1),
+            ef_construction,
+            ef_search,
+            m,
+            max_level: 0,
+            level_0_nodes: Vec::new(),
         })
     }
 
@@ -49,7 +66,7 @@ impl HnswIndex {
         Ok(())
     }
 
-    /// Optimized add with progressive sampling
+    /// Optimized add with progressive sampling and M-based pruning
     pub fn add(&mut self, vectors: &[f32], ids: Option<&[i64]>) -> Result<usize> {
         if !self.trained {
             return Err(crate::api::KnowhereError::InvalidArg(
@@ -63,6 +80,7 @@ impl HnswIndex {
         }
 
         let k = self.ef_construction;
+        let m = self.m;
         
         let base_count = self.ids.len();
         self.vectors.reserve(n * self.dim);
@@ -79,7 +97,8 @@ impl HnswIndex {
             let id = ids.map(|ids| ids[i]).unwrap_or(self.next_id);
             self.next_id += 1;
             
-            let mut dists = if use_progressive {
+            // Find candidates
+            let mut candidates = if use_progressive {
                 // Progressive sampling: check every Nth, then refine
                 self.progressive_knn(new_vec, k * 2)
             } else {
@@ -93,9 +112,30 @@ impl HnswIndex {
                 d
             };
             
+            // Apply M-based pruning: keep only top M connections
+            // This is critical for HNSW performance
+            candidates.truncate(m);
+            
             self.ids.push(id);
             self.vectors.extend_from_slice(new_vec);
-            self.neighbors.push(dists);
+            self.neighbors.push(candidates.clone());
+            self.level_0_nodes.push(self.ids.len() - 1);
+            
+            // Update neighbors of existing nodes (bidirectional connections)
+            if !candidates.is_empty() {
+                for (cand_id, cand_dist) in &candidates {
+                    if let Some(cand_idx) = self.ids.iter().position(|&x| x == *cand_id) {
+                        // Add reverse connection
+                        let nbrs = &mut self.neighbors[cand_idx];
+                        nbrs.push((id, *cand_dist));
+                        // Prune to M
+                        if nbrs.len() > m {
+                            nbrs.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                            nbrs.truncate(m);
+                        }
+                    }
+                }
+            }
             
             if self.entry_point.is_none() {
                 self.entry_point = Some(id);
@@ -170,7 +210,8 @@ impl HnswIndex {
             ));
         }
 
-        let ef = req.nprobe.max(1);
+        // Use ef_search from config, fallback to req.nprobe
+        let ef = self.ef_search.max(req.nprobe.max(1));
         let k = req.top_k;
         
         let mut all_ids = Vec::with_capacity(n_queries * k);
@@ -272,10 +313,15 @@ impl HnswIndex {
         
         let mut file = File::create(path)?;
         
+        // Version 2: includes M and ef parameters
         file.write_all(b"HNSW")?;
-        file.write_all(&1u32.to_le_bytes())?;
+        file.write_all(&2u32.to_le_bytes())?;
         file.write_all(&(self.dim as u32).to_le_bytes())?;
         file.write_all(&(self.ids.len() as u64).to_le_bytes())?;
+        
+        // Save M and ef parameters
+        file.write_all(&(self.m as u32).to_le_bytes())?;
+        file.write_all(&(self.ef_search as u32).to_le_bytes())?;
         
         let bytes: Vec<u8> = self.vectors.iter()
             .flat_map(|f| f.to_le_bytes())
@@ -318,6 +364,7 @@ impl HnswIndex {
         
         let mut ver = [0u8; 4];
         file.read_exact(&mut ver)?;
+        let version = u32::from_le_bytes(ver);
         
         let mut dim_bytes = [0u8; 4];
         file.read_exact(&mut dim_bytes)?;
@@ -330,6 +377,17 @@ impl HnswIndex {
         let mut count_bytes = [0u8; 8];
         file.read_exact(&mut count_bytes)?;
         let count = u64::from_le_bytes(count_bytes) as usize;
+        
+        // Load M and ef_search if version >= 2
+        if version >= 2 {
+            let mut m_bytes = [0u8; 4];
+            file.read_exact(&mut m_bytes)?;
+            self.m = u32::from_le_bytes(m_bytes) as usize;
+            
+            let mut ef_bytes = [0u8; 4];
+            file.read_exact(&mut ef_bytes)?;
+            self.ef_search = u32::from_le_bytes(ef_bytes) as usize;
+        }
         
         let mut vec_bytes = vec![0u8; count * dim * 4];
         file.read_exact(&mut vec_bytes)?;
@@ -366,6 +424,9 @@ impl HnswIndex {
             }
             self.neighbors.push(nbrs);
         }
+        
+        // Load level 0 nodes
+        self.level_0_nodes = (0..count).collect();
         
         let mut has_ep = [0u8; 1];
         file.read_exact(&mut has_ep)?;
