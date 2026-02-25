@@ -3,6 +3,7 @@
 //! Inverted File Index with Product Quantization
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use crate::api::{IndexConfig, IndexType, MetricType, Result, SearchRequest, SearchResult};
 use crate::executor::l2_distance;
@@ -182,6 +183,76 @@ impl IvfPqIndex {
         Ok(n)
     }
 
+    /// Add vectors in parallel (requires rayon)
+    #[cfg(feature = "parallel")]
+    pub fn add_parallel(&mut self, vectors: &[f32], ids: Option<&[i64]>, _num_threads: usize) -> Result<usize> {
+        use rayon::prelude::*;
+        
+        if !self.trained {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "index must be trained first".to_string(),
+            ));
+        }
+
+        let n = vectors.len() / self.dim;
+        let dim = self.dim;
+        let nlist = self.nlist;
+        let centroids = self.centroids.clone();
+        
+        // Parallel: assign vectors to clusters (use rayon defaults)
+        let assignments: Vec<(usize, usize, Vec<f32>)> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let start = i * dim;
+                let vector = &vectors[start..start + dim];
+                
+                // Find nearest centroid
+                let mut min_dist = f32::MAX;
+                let mut cluster = 0;
+                for c in 0..nlist {
+                    let dist = l2_distance(vector, &centroids[c * dim..]);
+                    if dist < min_dist {
+                        min_dist = dist;
+                        cluster = c;
+                    }
+                }
+                
+                // Compute residual
+                let mut residual = vec![0.0f32; dim];
+                for j in 0..dim {
+                    residual[j] = vector[j] - centroids[cluster * dim + j];
+                }
+                
+                let id = ids.map(|ids| ids[i]).unwrap_or(i as i64);
+                (cluster, id as usize, residual)
+            })
+            .collect();
+        
+        // Collect by cluster
+        let mut cluster_data: HashMap<usize, Vec<(i64, Vec<f32>)>> = HashMap::new();
+        for (cluster, id, residual) in assignments {
+            cluster_data.entry(cluster).or_insert_with(Vec::new).push((id as i64, residual));
+        }
+        
+        // Merge into inverted lists
+        for (cluster, mut items) in cluster_data {
+            let list = self.inverted_lists.get_mut(&cluster).unwrap();
+            list.append(&mut items);
+        }
+        
+        // Update ids and vectors
+        for i in 0..n {
+            let id = ids.map(|ids| ids[i]).unwrap_or(i as i64);
+            self.ids.push(id);
+            let start = i * self.dim;
+            self.vectors.extend_from_slice(&vectors[start..start + self.dim]);
+        }
+        self.next_id = n as i64;
+        
+        tracing::debug!("Added {} vectors to IVF-PQ (parallel)", n);
+        Ok(n)
+    }
+
     /// Search
     pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<SearchResult> {
         if self.vectors.is_empty() {
@@ -245,6 +316,95 @@ impl IvfPqIndex {
                     all_dists.push(f32::MAX);
                 }
             }
+        }
+
+        Ok(SearchResult::new(all_ids, all_dists, 0.0))
+    }
+
+    /// Search multiple queries in parallel (requires rayon)
+    #[cfg(feature = "parallel")]
+    pub fn search_parallel(&self, query: &[f32], req: &SearchRequest, _num_threads: usize) -> Result<SearchResult> {
+        use rayon::prelude::*;
+        
+        if self.vectors.is_empty() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "index is empty".to_string(),
+            ));
+        }
+
+        let n_queries = query.len() / self.dim;
+        if n_queries * self.dim != query.len() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "query dimension mismatch".to_string(),
+            ));
+        }
+
+        let nprobe = req.nprobe.max(1).min(self.nlist);
+        let k = req.top_k;
+        let dim = self.dim;
+        let nlist = self.nlist;
+        let centroids = self.centroids.clone();
+        let inverted_lists: Vec<(usize, Vec<(i64, Vec<f32>)>)> = self.inverted_lists
+            .iter()
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+
+        // Parallel search for each query (use rayon defaults)
+        let results: Vec<(Vec<i64>, Vec<f32>)> = (0..n_queries)
+            .into_par_iter()
+            .map(|q_idx| {
+                let q_start = q_idx * dim;
+                let query_vec = &query[q_start..q_start + dim];
+                
+                // Find nearest clusters
+                let mut cluster_dists: Vec<(usize, f32)> = (0..nlist)
+                    .map(|c| {
+                        let dist = l2_distance(query_vec, &centroids[c * dim..]);
+                        (c, dist)
+                    })
+                    .collect();
+                cluster_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                
+                // Search top nprobe clusters
+                let mut candidates: Vec<(i64, f32)> = Vec::new();
+                
+                for (cluster, _) in cluster_dists.iter().take(nprobe) {
+                    if let Some(list) = inverted_lists.iter().find(|(c, _)| *c == *cluster) {
+                        for (id, residual) in &list.1 {
+                            let mut reconstructed = vec![0.0f32; dim];
+                            for j in 0..dim {
+                                reconstructed[j] = query_vec[j] - centroids[*cluster * dim + j] + residual[j];
+                            }
+                            let dist = l2_distance(query_vec, &reconstructed);
+                            candidates.push((*id, dist));
+                        }
+                    }
+                }
+                
+                // Sort and take top k
+                candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                
+                let mut ids = Vec::with_capacity(k);
+                let mut dists = Vec::with_capacity(k);
+                for i in 0..k {
+                    if i < candidates.len() {
+                        ids.push(candidates[i].0);
+                        dists.push(candidates[i].1);
+                    } else {
+                        ids.push(-1);
+                        dists.push(f32::MAX);
+                    }
+                }
+                
+                (ids, dists)
+            })
+            .collect();
+
+        let mut all_ids = Vec::new();
+        let mut all_dists = Vec::new();
+        for (ids, dists) in results {
+            all_ids.extend(ids);
+            all_dists.extend(dists);
         }
 
         Ok(SearchResult::new(all_ids, all_dists, 0.0))
