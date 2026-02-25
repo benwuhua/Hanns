@@ -1,9 +1,9 @@
 # Knowhere-RS 详细开发计划
 
-**版本**: 0.3.0 → 1.0.0
+**版本**: 0.3.5 → 1.0.0
 **更新日期**: 2026-02-25
-**当前状态**: 144 tests passed, 80% 功能覆盖
-**目标**: 90% 功能覆盖, 90% 性能
+**当前状态**: 160 tests passed, 85% 功能覆盖
+**目标**: 95% 功能覆盖, 95% 性能
 
 ---
 
@@ -11,10 +11,9 @@
 
 | 里程碑 | 目标 | 时间 | 关键交付物 |
 |-------|------|------|-----------|
-| **M1** | SCANN 索引 | 2 周 | Google ScaNN 实现 |
-| **M2** | 迭代器接口 | 1 周 | AnnIterator |
-| **M3** | FFI/JNI 完善 | 2 周 | C API, Java 绑定 |
-| **M4** | 优化完善 | 1 周 | 性能调优, 文档 |
+| **M1** | SCANN 索引 | 2 周 | Google ScaNN |
+| **M2** | JNI 绑定 | 1.5 周 | Java 绑定 |
+| **M3** | 优化完善 | 1 周 | 性能, 文档 |
 
 ---
 
@@ -28,56 +27,66 @@
 | PQ SIMD 优化 | ✅ | `src/faiss/pq_simd.rs` |
 | RaBitQ 量化 (32x) | ✅ | `src/quantization/rabitq.rs` |
 | GetVectorByIds | ✅ | `src/index.rs`, `src/faiss/mem_index.rs` |
+| CalcDistByIDs | ✅ | `src/faiss/mem_index.rs` |
 | BinarySet 序列化 | ✅ | `src/faiss/mem_index.rs` |
 | DiskANN 序列化 | ✅ | `src/faiss/diskann.rs` |
 | K-means SIMD | ✅ | `src/quantization/kmeans.rs` |
+| **AnnIterator** | ✅ | `src/api/search.rs` |
+| **FP16/BF16** | ✅ | `src/half.rs` |
+| **Federation Info** | ✅ | `src/federation.rs` |
+| **HNSW 参数** | ✅ | `src/faiss/hnsw.rs` |
 
 ### 索引实现状态
 
-| 索引 | 状态 | 质量 |
-|-----|------|------|
-| Flat | ✅ | ⭐⭐⭐⭐⭐ |
-| HNSW | ✅ | ⭐⭐⭐⭐ |
-| HNSW-SQ/PQ | ✅ | ⭐⭐⭐⭐ |
-| IVF-Flat | ✅ | ⭐⭐⭐⭐ |
-| IVF-PQ | ✅ | ⭐⭐⭐⭐ |
-| IVF-SQ8 | ✅ | ⭐⭐⭐⭐ |
-| DiskANN | ✅ | ⭐⭐⭐ |
-| ANNOY | ✅ | ⭐⭐⭐⭐ |
-| Binary | ✅ | ⭐⭐⭐⭐ |
-| Sparse | ✅ | ⭐⭐⭐ |
+| 索引 | 状态 | 质量 | 最新更新 |
+|-----|------|------|---------|
+| Flat | ✅ | ⭐⭐⭐⭐⭐ | |
+| HNSW | ✅ | ⭐⭐⭐⭐⭐ | M/ef_search/ef_construction |
+| HNSW-SQ/PQ | ✅ | ⭐⭐⭐⭐ | |
+| IVF-Flat | ✅ | ⭐⭐⭐⭐ | |
+| IVF-PQ | ✅ | ⭐⭐⭐⭐⭐ | PQ SIMD |
+| IVF-SQ8 | ✅ | ⭐⭐⭐⭐ | |
+| DiskANN | ✅ | ⭐⭐⭐ | |
+| ANNOY | ✅ | ⭐⭐⭐⭐ | |
+| Binary | ✅ | ⭐⭐⭐⭐ | |
+| Sparse | ✅ | ⭐⭐⭐ | |
+| RaBitQ | ✅ | ⭐⭐⭐⭐ | |
 
 ---
 
 ## M1: SCANN 索引 (Week 1-2)
 
 ### 目标
-- 实现 Google ScaNN 算法
-- 各向异性向量量化
+- 各向异性向量量化 (AVQ)
 - 高召回 + 高吞吐
+- 对齐 C++ 性能
 
-### 1.1 各向异性量化器
+### 1.1 核心结构
 
 **文件**: `src/faiss/scann.rs`
 
 ```rust
 //! SCANN: Scalable Nearest Neighbors
 //!
-//! 参考: Google Research ScaNN
-//! 论文: Accelerating Large-Scale Inference with Anisotropic Vector Quantization
+//! Google Research 的各向异性向量量化
+//! 论文: https://arxiv.org/abs/1908.10396
 
 use std::collections::HashMap;
+use crate::api::{IndexConfig, MetricType, Result, SearchRequest, SearchResult};
 
 /// SCANN 配置
+#[derive(Clone, Debug)]
 pub struct ScaNNConfig {
-    /// 子空间数量
+    /// 子空间数量 (默认 16)
     pub num_partitions: usize,
-    /// 每个子空间的质心数
+    /// 每个子空间的质心数 (默认 256)
     pub num_centroids: usize,
-    /// 重排序候选数
+    /// 重排序候选数 (默认 100)
     pub reorder_k: usize,
-    /// 各向异性权重参数
+    /// 各向异性参数 (默认 0.2)
     pub anisotropic_alpha: f32,
+    /// 是否启用 SIMD
+    pub use_simd: bool,
 }
 
 impl Default for ScaNNConfig {
@@ -87,6 +96,7 @@ impl Default for ScaNNConfig {
             num_centroids: 256,
             reorder_k: 100,
             anisotropic_alpha: 0.2,
+            use_simd: true,
         }
     }
 }
@@ -94,19 +104,20 @@ impl Default for ScaNNConfig {
 /// 各向异性量化器
 pub struct AnisotropicQuantizer {
     dim: usize,
-    config: ScaNNConfig,
-
-    /// 子空间维度
     sub_dim: usize,
+    config: ScaNNConfig,
 
     /// 码书: [num_partitions * num_centroids * sub_dim]
     codebooks: Vec<f32>,
 
-    /// 各向异性权重: [num_partitions * sub_dim]
+    /// 各向异性权重
     weights: Vec<f32>,
 
-    /// 质心归一化因子
+    /// 质心范数 (用于快速距离计算)
     centroid_norms: Vec<f32>,
+
+    /// 距离表 (SIMD 优化)
+    distance_tables: Vec<Vec<f32>>,
 }
 
 impl AnisotropicQuantizer {
@@ -115,28 +126,22 @@ impl AnisotropicQuantizer {
 
         Self {
             dim,
-            config,
             sub_dim,
+            config,
             codebooks: Vec::new(),
             weights: Vec::new(),
             centroid_norms: Vec::new(),
+            distance_tables: Vec::new(),
         }
     }
 
-    /// 各向异性 K-means 训练
+    /// 各向异性训练
     ///
-    /// 目标: 最小化 Σ w(angle) * ||x - c(x)||²
-    /// 其中权重根据向量与查询角度分布计算
+    /// 目标: 最小化 Σ w(θ) * ||x - c(x)||²
+    /// 其中 w(θ) = 1 / (1 + α * |cos(θ)|)
     pub fn train(&mut self, data: &[f32], query_sample: Option<&[f32]>) {
-        let n = data.len() / self.dim;
-
         // 1. 计算各向异性权重
-        if let Some(queries) = query_sample {
-            self.compute_anisotropic_weights(queries);
-        } else {
-            // 使用默认权重
-            self.weights = vec![1.0; self.config.num_partitions * self.sub_dim];
-        }
+        self.compute_anisotropic_weights(query_sample);
 
         // 2. 对每个子空间训练加权 K-means
         for p in 0..self.config.num_partitions {
@@ -145,159 +150,64 @@ impl AnisotropicQuantizer {
         }
     }
 
-    /// 计算各向异性权重
-    ///
-    /// 对于每个维度 d，计算权重:
-    /// w(d) = 1 / (1 + α * |cos(θ_d)|)
-    /// 其中 θ_d 是该维度与查询方向的角度
-    fn compute_anisotropic_weights(&mut self, queries: &[f32]) {
-        let n_queries = queries.len() / self.dim;
-        let alpha = self.config.anisotropic_alpha;
+    /// 编码向量
+    pub fn encode(&self, vector: &[f32]) -> Vec<u8> {
+        (0..self.config.num_partitions)
+            .map(|p| {
+                let sub_vec = self.get_subvector(vector, p);
+                self.find_nearest_centroid(p, sub_vec) as u8
+            })
+            .collect()
+    }
 
-        // 计算查询的主方向
-        let mut query_direction = vec![0.0f32; self.dim];
-        for q in queries.chunks(self.dim) {
-            for (i, &v) in q.iter().enumerate() {
-                query_direction[i] += v;
-            }
-        }
-        for v in query_direction.iter_mut() {
-            *v /= n_queries as f32;
-        }
+    /// 预计算距离表 (查询优化)
+    pub fn compute_distance_table(&self, query: &[f32]) -> Vec<f32> {
+        let mut table = vec![0.0f32; self.config.num_partitions * self.config.num_centroids];
 
-        // 计算每个子空间的权重
-        self.weights.clear();
         for p in 0..self.config.num_partitions {
-            let start = p * self.sub_dim;
-            let end = (start + self.sub_dim).min(self.dim);
+            let sub_query = self.get_subvector(query, p);
 
-            for d in start..end {
-                let cos_theta = query_direction[d].abs();
-                let w = 1.0 / (1.0 + alpha * cos_theta);
-                self.weights.push(w);
+            for c in 0..self.config.num_centroids {
+                let centroid = self.get_centroid(p, c);
+                table[p * self.config.num_centroids + c] = self.l2_distance(sub_query, centroid);
             }
         }
+
+        table
     }
 
-    /// 加权 K-means 训练单个子空间
-    fn train_subspace_weighted(&mut self, partition: usize, vectors: &[f32]) {
-        let n = vectors.len() / self.sub_dim;
-        let k = self.config.num_centroids;
-
-        // 初始化质心 (K-means++)
-        let mut centroids = self.kmeans_plusplus_init(vectors, k);
-
-        // 迭代优化
-        for _iter in 0..50 {
-            let mut assignments = vec![0usize; n];
-            let mut new_centroids = vec![0.0f32; k * self.sub_dim];
-            let mut counts = vec![0usize; k];
-
-            // 分配阶段 (加权距离)
-            for i in 0..n {
-                let vec = &vectors[i * self.sub_dim..(i + 1) * self.sub_dim];
-                let weights = &self.weights[partition * self.sub_dim..(partition + 1) * self.sub_dim];
-
-                let mut min_dist = f32::MAX;
-                let mut best = 0;
-
-                for c in 0..k {
-                    let centroid = &centroids[c * self.sub_dim..(c + 1) * self.sub_dim];
-                    let dist = self.weighted_l2(vec, centroid, weights);
-
-                    if dist < min_dist {
-                        min_dist = dist;
-                        best = c;
-                    }
-                }
-                assignments[i] = best;
-            }
-
-            // 更新阶段
-            new_centroids.fill(0.0);
-            counts.fill(0);
-
-            for i in 0..n {
-                let c = assignments[i];
-                let vec = &vectors[i * self.sub_dim..(i + 1) * self.sub_dim];
-
-                for j in 0..self.sub_dim {
-                    new_centroids[c * self.sub_dim + j] += vec[j];
-                }
-                counts[c] += 1;
-            }
-
-            for c in 0..k {
-                if counts[c] > 0 {
-                    for j in 0..self.sub_dim {
-                        centroids[c * self.sub_dim + j] =
-                            new_centroids[c * self.sub_dim + j] / counts[c] as f32;
-                    }
-                }
-            }
-        }
-
-        // 存储码书
-        let offset = partition * k * self.sub_dim;
-        if self.codebooks.len() < offset + k * self.sub_dim {
-            self.codebooks.resize(offset + k * self.sub_dim, 0.0);
-        }
-        self.codebooks[offset..offset + k * self.sub_dim].copy_from_slice(&centroids);
-
-        // 计算质心范数
-        for c in 0..k {
-            let centroid = &centroids[c * self.sub_dim..(c + 1) * self.sub_dim];
-            let norm = centroid.iter().map(|x| x * x).sum::<f32>().sqrt();
-            self.centroid_norms.push(norm);
-        }
-    }
-
-    /// 加权 L2 距离
-    fn weighted_l2(&self, a: &[f32], b: &[f32], weights: &[f32]) -> f32 {
-        a.iter()
-            .zip(b.iter())
-            .zip(weights.iter())
-            .map(|((&x, &y), &w)| w * (x - y).powi(2))
+    /// ADC 距离 (非对称距离计算)
+    #[inline]
+    pub fn adc_distance(&self, table: &[f32], codes: &[u8]) -> f32 {
+        codes.iter()
+            .enumerate()
+            .map(|(p, &code)| table[p * self.config.num_centroids + code as usize])
             .sum()
     }
 
-    /// 编码向量
-    pub fn encode(&self, vector: &[f32]) -> Vec<u8> {
-        let mut codes = Vec::with_capacity(self.config.num_partitions);
+    /// SIMD 优化的 ADC 距离
+    #[cfg(feature = "simd")]
+    pub fn adc_distance_simd(&self, table: &[f32], codes: &[u8]) -> f32 {
+        use crate::simd;
 
-        for p in 0..self.config.num_partitions {
-            let start = p * self.sub_dim;
-            let end = (start + self.sub_dim).min(self.dim);
-            let sub_vec = &vector[start..end];
+        // 4x 展开
+        let mut sum = 0.0f32;
+        let chunks = codes.len() / 4;
 
-            let code = self.find_nearest_centroid(p, sub_vec);
-            codes.push(code as u8);
+        for i in 0..chunks {
+            let base = i * 4;
+            for j in 0..4 {
+                let code = codes[base + j] as usize;
+                sum += table[(base + j) * self.config.num_centroids + code];
+            }
         }
 
-        codes
-    }
-
-    /// 非对称距离计算 (ADC)
-    pub fn adc_distance(&self, query: &[f32], codes: &[u8]) -> f32 {
-        let mut distance = 0.0f32;
-
-        for p in 0..self.config.num_partitions {
-            let start = p * self.sub_dim;
-            let end = (start + self.sub_dim).min(self.dim);
-            let sub_query = &query[start..end];
-
-            let code = codes[p] as usize;
-            let centroid = self.get_centroid(p, code);
-
-            distance += self.l2_distance(sub_query, centroid);
+        // 处理剩余
+        for i in (chunks * 4)..codes.len() {
+            sum += table[i * self.config.num_centroids + codes[i] as usize];
         }
 
-        distance
-    }
-
-    fn get_centroid(&self, partition: usize, code: usize) -> &[f32] {
-        let offset = partition * self.config.num_centroids * self.sub_dim + code * self.sub_dim;
-        &self.codebooks[offset..offset + self.sub_dim]
+        sum
     }
 }
 
@@ -315,6 +225,7 @@ pub struct ScaNNIndex {
     /// 原始向量 (用于重排序)
     vectors: Vec<f32>,
     ids: Vec<i64>,
+    id_to_pos: HashMap<i64, usize>,
 
     trained: bool,
 }
@@ -323,64 +234,81 @@ impl ScaNNIndex {
     pub fn new(dim: usize, config: ScaNNConfig) -> Self {
         Self {
             dim,
-            config,
             quantizer: AnisotropicQuantizer::new(dim, config.clone()),
+            config,
             inverted_lists: HashMap::new(),
             vectors: Vec::new(),
             ids: Vec::new(),
+            id_to_pos: HashMap::new(),
             trained: false,
         }
     }
 
-    /// 训练索引
-    pub fn train(&mut self, data: &[f32], query_sample: Option<&[f32]>) {
+    /// 训练
+    pub fn train(&mut self, data: &[f32], query_sample: Option<&[f32]>) -> Result<()> {
         self.quantizer.train(data, query_sample);
         self.trained = true;
+        Ok(())
     }
 
     /// 添加向量
-    pub fn add(&mut self, vectors: &[f32], ids: Option<&[i64]>) -> usize {
+    pub fn add(&mut self, vectors: &[f32], ids: Option<&[i64]>) -> Result<usize> {
+        if !self.trained {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "index must be trained first".into(),
+            ));
+        }
+
         let n = vectors.len() / self.dim;
 
         for i in 0..n {
             let vector = &vectors[i * self.dim..(i + 1) * self.dim];
             let codes = self.quantizer.encode(vector);
 
-            // 确定分区 (使用第一个子空间的质心)
-            let partition = codes[0] as usize % self.config.num_partitions;
+            // 分配到分区
+            let partition = self.assign_partition(&codes);
 
             let id = ids.map(|ids| ids[i]).unwrap_or(self.ids.len() as i64);
+            let pos = self.ids.len();
 
             self.inverted_lists
                 .entry(partition)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push((id, codes));
 
             self.vectors.extend_from_slice(vector);
             self.ids.push(id);
+            self.id_to_pos.insert(id, pos);
         }
 
-        n
+        Ok(n)
     }
 
     /// 搜索
-    pub fn search(&self, query: &[f32], k: usize) -> Vec<(i64, f32)> {
-        // 1. 粗排: 使用 ADC 距离
-        let candidates = self.coarse_search(query, self.config.reorder_k);
+    pub fn search(&self, query: &[f32], k: usize) -> Result<SearchResult> {
+        // 1. 预计算距离表
+        let table = self.quantizer.compute_distance_table(query);
 
-        // 2. 精排: 使用原始向量重排序
-        let reranked = self.rerank(query, candidates, k);
+        // 2. 粗排: ADC 距离
+        let candidates = self.coarse_search(&table, self.config.reorder_k);
 
-        reranked
+        // 3. 精排: 原始向量重排序
+        let results = self.rerank(query, candidates, k);
+
+        Ok(SearchResult::new(
+            results.iter().map(|(id, _)| *id).collect(),
+            results.iter().map(|(_, dist)| *dist).collect(),
+            0.0,
+        ))
     }
 
-    /// 粗排: ADC 距离
-    fn coarse_search(&self, query: &[f32], k: usize) -> Vec<(i64, f32)> {
+    /// 粗排
+    fn coarse_search(&self, table: &[f32], k: usize) -> Vec<(i64, f32)> {
         let mut candidates = Vec::new();
 
-        for (_, list) in &self.inverted_lists {
+        for list in self.inverted_lists.values() {
             for &(id, ref codes) in list {
-                let dist = self.quantizer.adc_distance(query, codes);
+                let dist = self.quantizer.adc_distance(table, codes);
                 candidates.push((id, dist));
             }
         }
@@ -391,25 +319,24 @@ impl ScaNNIndex {
         candidates
     }
 
-    /// 精排: 原始向量重排序
+    /// 精排
     fn rerank(&self, query: &[f32], candidates: Vec<(i64, f32)>, k: usize) -> Vec<(i64, f32)> {
-        let mut reranked: Vec<(i64, f32)> = candidates
+        let mut results: Vec<(i64, f32)> = candidates
             .iter()
             .filter_map(|&(id, _)| {
-                // 查找向量
-                let pos = self.ids.iter().position(|&x| x == id)?;
+                let pos = *self.id_to_pos.get(&id)?;
                 let vector = &self.vectors[pos * self.dim..(pos + 1) * self.dim];
-                let dist = self.l2_distance(query, vector);
-                Some((id, dist))
+                Some((id, self.l2_distance(query, vector)))
             })
             .collect();
 
-        reranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        reranked.truncate(k);
+        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        results.truncate(k);
 
-        reranked
+        results
     }
 
+    #[inline]
     fn l2_distance(&self, a: &[f32], b: &[f32]) -> f32 {
         a.iter()
             .zip(b.iter())
@@ -426,403 +353,77 @@ mod tests {
     #[test]
     fn test_scann_basic() {
         let dim = 128;
-        let config = ScaNNConfig {
-            num_partitions: 16,
-            num_centroids: 256,
-            reorder_k: 100,
-            anisotropic_alpha: 0.2,
-        };
-
+        let config = ScaNNConfig::default();
         let mut index = ScaNNIndex::new(dim, config);
 
-        // 生成测试数据
+        // 生成数据
         let n = 1000;
-        let mut data = vec![0.0f32; n * dim];
-        for i in 0..data.len() {
-            data[i] = (i as f32 * 0.01).sin();
-        }
+        let data: Vec<f32> = (0..n * dim).map(|i| (i as f32 * 0.01).sin()).collect();
 
-        // 训练
-        index.train(&data, None);
-        assert!(index.trained);
-
-        // 添加
-        let added = index.add(&data, None);
-        assert_eq!(added, n);
+        // 训练 + 添加
+        index.train(&data, None).unwrap();
+        index.add(&data, None).unwrap();
 
         // 搜索
         let query = &data[0..dim];
-        let results = index.search(query, 10);
-        assert_eq!(results.len(), 10);
+        let results = index.search(query, 10).unwrap();
 
-        // 第一个结果应该是自己 (距离最小)
-        assert_eq!(results[0].0, 0);
+        assert_eq!(results.ids.len(), 10);
+        assert_eq!(results.ids[0], 0); // 第一个应该是自己
     }
 }
 ```
 
 **工作量**: 7 天
 **验收标准**:
-- [ ] 各向异性量化实现
+- [ ] 各向异性量化
 - [ ] 加权 K-means
-- [ ] ADC 距离计算
+- [ ] ADC 距离
+- [ ] SIMD 优化
 - [ ] Recall@10 ≥ 95%
 - [ ] QPS ≥ IVF-PQ 1.2x
 
 ---
 
-## M2: 迭代器接口 (Week 3)
+## M2: JNI 绑定 (Week 3-4)
 
 ### 目标
-- 实现 AnnIterator trait
-- 支持 HNSW, IVF 等索引
-- 增量式返回结果
+- 完整 Java 绑定
+- 对齐 C++ Knowhere JNI
 
-### 2.1 AnnIterator Trait
+### 2.1 JNI 模块
 
-**文件**: `src/iterator.rs`
+**文件**: `src/jni/mod.rs`, `src/jni/index.rs`
 
 ```rust
-//! ANN 迭代器接口
+//! JNI 绑定
 //!
-//! 支持增量式搜索结果返回
+//! Java Native Interface for Knowhere-RS
 
-use std::collections::{BinaryHeap, HashSet, HashMap};
-
-/// 有序候选 (用于堆)
-#[derive(Clone, Copy, Debug)]
-struct OrderedCandidate {
-    distance: f32,
-    id: i64,
-}
-
-impl PartialEq for OrderedCandidate {
-    fn eq(&self, other: &Self) -> bool {
-        self.distance == other.distance
-    }
-}
-
-impl Eq for OrderedCandidate {}
-
-impl PartialOrd for OrderedCandidate {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for OrderedCandidate {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // 最小堆 (距离越小越好)
-        other.distance.partial_cmp(&self.distance).unwrap()
-    }
-}
-
-/// ANN 迭代器 trait
-pub trait AnnIterator: Iterator<Item = (i64, f32)> + Send {
-    /// 获取当前最佳距离
-    fn current_distance(&self) -> Option<f32>;
-
-    /// 是否已耗尽
-    fn is_exhausted(&self) -> bool;
-
-    /// 获取已访问的节点数
-    fn visited_count(&self) -> usize;
-}
-
-/// HNSW 迭代器
-pub struct HnswIterator<'a> {
-    index: &'a crate::faiss::HnswIndex,
-    query: Vec<f32>,
-
-    /// 已访问节点
-    visited: HashSet<i64>,
-
-    /// 候选堆 (最小堆)
-    candidates: BinaryHeap<OrderedCandidate>,
-
-    /// 已返回结果数
-    returned: usize,
-
-    /// 最大返回数
-    max_results: usize,
-
-    /// 当前最佳距离
-    current_best: Option<f32>,
-}
-
-impl<'a> HnswIterator<'a> {
-    pub fn new(index: &'a crate::faiss::HnswIndex, query: Vec<f32>, max_results: usize) -> Self {
-        let mut iter = Self {
-            index,
-            query,
-            visited: HashSet::new(),
-            candidates: BinaryHeap::new(),
-            returned: 0,
-            max_results,
-            current_best: None,
-        };
-
-        // 从入口点开始
-        if let Some(ep) = iter.index.entry_point {
-            let dist = iter.compute_distance(ep);
-            iter.candidates.push(OrderedCandidate { distance: dist, id: ep });
-        }
-
-        iter
-    }
-
-    fn compute_distance(&self, id: i64) -> f32 {
-        // 获取向量并计算距离
-        let vectors = self.index.get_vectors_by_ids(&[id]).unwrap_or_default();
-        if vectors.is_empty() {
-            return f32::MAX;
-        }
-
-        self.query
-            .iter()
-            .zip(vectors.iter())
-            .map(|(a, b)| (a - b).powi(2))
-            .sum::<f32>()
-            .sqrt()
-    }
-
-    /// 扩展候选 (访问邻居)
-    fn expand(&mut self, id: i64) {
-        // 获取邻居并添加到候选堆
-        // 需要索引支持获取邻居列表
-    }
-}
-
-impl<'a> Iterator for HnswIterator<'a> {
-    type Item = (i64, f32);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.returned >= self.max_results {
-            return None;
-        }
-
-        loop {
-            let candidate = self.candidates.pop()?;
-
-            if self.visited.contains(&candidate.id) {
-                continue;
-            }
-
-            self.visited.insert(candidate.id);
-
-            // 扩展邻居
-            self.expand(candidate.id);
-
-            self.current_best = Some(candidate.distance);
-            self.returned += 1;
-
-            return Some((candidate.id, candidate.distance));
-        }
-    }
-}
-
-impl<'a> AnnIterator for HnswIterator<'a> {
-    fn current_distance(&self) -> Option<f32> {
-        self.current_best
-    }
-
-    fn is_exhausted(&self) -> bool {
-        self.candidates.is_empty() || self.returned >= self.max_results
-    }
-
-    fn visited_count(&self) -> usize {
-        self.visited.len()
-    }
-}
-
-/// IVF 迭代器
-pub struct IvfIterator<'a> {
-    index: &'a crate::faiss::IvfIndex,
-    query: Vec<f32>,
-
-    /// 待搜索的聚类列表
-    cluster_order: Vec<usize>,
-    current_cluster_idx: usize,
-
-    /// 当前聚类的候选
-    current_candidates: Vec<(i64, f32)>,
-    current_candidate_idx: usize,
-
-    /// 已返回数
-    returned: usize,
-    max_results: usize,
-
-    current_best: Option<f32>,
-}
-
-impl<'a> IvfIterator<'a> {
-    pub fn new(index: &'a crate::faiss::IvfIndex, query: Vec<f32>, nprobe: usize, max_results: usize) -> Self {
-        // 找最近的 nprobe 个聚类
-        let cluster_order = index.find_nearest_clusters(&query, nprobe);
-
-        Self {
-            index,
-            query,
-            cluster_order,
-            current_cluster_idx: 0,
-            current_candidates: Vec::new(),
-            current_candidate_idx: 0,
-            returned: 0,
-            max_results,
-            current_best: None,
-        }
-    }
-
-    fn load_next_cluster(&mut self) -> bool {
-        while self.current_cluster_idx < self.cluster_order.len() {
-            let cluster = self.cluster_order[self.current_cluster_idx];
-            self.current_cluster_idx += 1;
-
-            // 获取该聚类的所有向量
-            if let Some(list) = self.index.get_inverted_list(cluster) {
-                let mut candidates: Vec<(i64, f32)> = list
-                    .iter()
-                    .map(|&id| {
-                        let dist = self.compute_distance_to_id(id);
-                        (id, dist)
-                    })
-                    .collect();
-
-                candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-                self.current_candidates = candidates;
-                self.current_candidate_idx = 0;
-                return true;
-            }
-        }
-        false
-    }
-
-    fn compute_distance_to_id(&self, _id: i64) -> f32 {
-        // 实现距离计算
-        f32::MAX
-    }
-}
-
-impl<'a> Iterator for IvfIterator<'a> {
-    type Item = (i64, f32);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.returned >= self.max_results {
-            return None;
-        }
-
-        loop {
-            if self.current_candidate_idx < self.current_candidates.len() {
-                let result = self.current_candidates[self.current_candidate_idx];
-                self.current_candidate_idx += 1;
-                self.returned += 1;
-                self.current_best = Some(result.1);
-                return Some(result);
-            }
-
-            if !self.load_next_cluster() {
-                return None;
-            }
-        }
-    }
-}
-
-impl<'a> AnnIterator for IvfIterator<'a> {
-    fn current_distance(&self) -> Option<f32> {
-        self.current_best
-    }
-
-    fn is_exhausted(&self) -> bool {
-        self.returned >= self.max_results &&
-            self.current_candidate_idx >= self.current_candidates.len() &&
-            self.current_cluster_idx >= self.cluster_order.len()
-    }
-
-    fn visited_count(&self) -> usize {
-        self.returned
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_ordered_candidate() {
-        let a = OrderedCandidate { distance: 0.5, id: 1 };
-        let b = OrderedCandidate { distance: 0.3, id: 2 };
-
-        // 最小堆: 距离小的优先
-        assert!(b < a);
-    }
-}
-```
-
-**工作量**: 3 天
-
----
-
-## M3: FFI/JNI 完善 (Week 4-5)
-
-### 目标
-- 完善 C FFI
-- 实现 JNI 绑定
-- Python 绑定 (可选)
-
-### 3.1 C FFI 完善
-
-**文件**: `src/ffi.rs`, `include/knowhere.h`
-
-```c
-// include/knowhere.h - 更新
-
-// 新增迭代器接口
-typedef struct CAnnIterator CAnnIterator;
-
-CAnnIterator* knowhere_iterator_create(CIndex* index, const float* query, size_t max_results);
-bool knowhere_iterator_next(CAnnIterator* iter, int64_t* id, float* distance);
-void knowhere_iterator_free(CAnnIterator* iter);
-
-// 新增 GetVectorByIds
-int knowhere_index_get_vector_by_ids(
-    CIndex* index,
-    const int64_t* ids,
-    size_t n_ids,
-    float* vectors_out
-);
-
-// 新增 BinarySet 序列化
-typedef struct CBinarySet CBinarySet;
-
-CBinarySet* knowhere_index_serialize(CIndex* index);
-CIndex* knowhere_index_deserialize(CBinarySet* set);
-void knowhere_binary_set_free(CBinarySet* set);
-size_t knowhere_binary_set_size(CBinarySet* set);
-int knowhere_binary_set_get(CBinarySet* set, const char* name, void* data_out, size_t* size);
-```
-
-**工作量**: 3 天
-
-### 3.2 JNI 绑定
-
-**文件**: `src/jni/mod.rs`
-
-```rust
 use jni::JNIEnv;
-use jni::objects::{JClass, JObject, JLongArray, JFloatArray};
-use jni::sys::{jint, jlong, jfloat, jbooleanArray};
+use jni::objects::{JClass, JObject, JLongArray, JFloatArray, JIntArray, JString, JByteArray};
+use jni::sys::{jint, jlong, jfloat, jboolean, jbyteArray};
 
 mod index;
-mod iterator;
-mod binary_set;
+mod search;
+mod bitset;
 
-/// 初始化
+/// 初始化 JNI
 #[no_mangle]
 pub extern "system" fn JNI_OnLoad(vm: jni::JavaVM, _reserved: *mut std::ffi::c_void) -> jint {
+    // 全局初始化
     jni::JNIVersion::V1_8.into()
 }
 
-// Index 方法
+/// 释放 JNI
+#[no_mangle]
+pub extern "system" fn JNI_OnUnload(_vm: jni::JavaVM, _reserved: *mut std::ffi::c_void) {
+    // 清理
+}
+
+// ===== Index 操作 =====
+
+/// 创建索引
 #[no_mangle]
 pub extern "system" fn Java_io_milvus_knowhere_KnowhereIndex_nativeCreate(
     mut env: JNIEnv,
@@ -830,87 +431,228 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereIndex_nativeCreate(
     index_type: jint,
     metric_type: jint,
     dim: jint,
-) -> jlong;
+) -> jlong {
+    match create_index_from_type(index_type, metric_type, dim as usize) {
+        Ok(index) => Box::into_raw(Box::new(index)) as jlong,
+        Err(e) => {
+            let _ = env.throw_new("java/lang/RuntimeException", &e.to_string());
+            0
+        }
+    }
+}
 
+/// 释放索引
+#[no_mangle]
+pub extern "system" fn Java_io_milvus_knowhere_KnowhereIndex_nativeFree(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) {
+    if handle != 0 {
+        unsafe { drop(Box::from_raw(handle as *mut Box<dyn Index>)); }
+    }
+}
+
+/// 训练
+#[no_mangle]
+pub extern "system" fn Java_io_milvus_knowhere_KnowhereIndex_nativeTrain(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    data: JFloatArray,
+) {
+    let index = unsafe { &mut *(handle as *mut Box<dyn Index>) };
+
+    let data_vec: Vec<f32> = env.get_float_array_elements(&data, Default::default())
+        .unwrap()
+        .iter()
+        .map(|&f| f)
+        .collect();
+
+    let dataset = Dataset::from_vec(data_vec, index.dim());
+
+    if let Err(e) = index.train(&dataset) {
+        let _ = env.throw_new("java/lang/RuntimeException", &e.to_string());
+    }
+}
+
+/// 添加向量
+#[no_mangle]
+pub extern "system" fn Java_io_milvus_knowhere_KnowhereIndex_nativeAdd(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    data: JFloatArray,
+    ids: JLongArray,
+) {
+    let index = unsafe { &mut *(handle as *mut Box<dyn Index>) };
+
+    let data_vec: Vec<f32> = env.get_float_array_elements(&data, Default::default())
+        .unwrap()
+        .iter()
+        .map(|&f| f)
+        .collect();
+
+    let ids_vec: Vec<i64> = env.get_long_array_elements(&ids, Default::default())
+        .unwrap()
+        .iter()
+        .map(|&l| l)
+        .collect();
+
+    let dataset = Dataset::from_vec_with_ids(data_vec, ids_vec, index.dim());
+
+    if let Err(e) = index.add(&dataset) {
+        let _ = env.throw_new("java/lang/RuntimeException", &e.to_string());
+    }
+}
+
+/// 搜索
+#[no_mangle]
+pub extern "system" fn Java_io_milvus_knowhere_KnowhereIndex_nativeSearch(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    queries: JFloatArray,
+    k: jint,
+) -> JObject {
+    let index = unsafe { &*(handle as *mut Box<dyn Index>) };
+
+    let query_vec: Vec<f32> = env.get_float_array_elements(&queries, Default::default())
+        .unwrap()
+        .iter()
+        .map(|&f| f)
+        .collect();
+
+    let dataset = Dataset::from_vec(query_vec, index.dim());
+
+    match index.search(&dataset, k as usize) {
+        Ok(result) => create_java_search_result(&mut env, result),
+        Err(e) => {
+            let _ = env.throw_new("java/lang/RuntimeException", &e.to_string());
+            JObject::null()
+        }
+    }
+}
+
+/// GetVectorByIds
 #[no_mangle]
 pub extern "system" fn Java_io_milvus_knowhere_KnowhereIndex_nativeGetVectorByIds(
     mut env: JNIEnv,
     _class: JClass,
     handle: jlong,
     ids: JLongArray,
-) -> JFloatArray;
+) -> JFloatArray {
+    let index = unsafe { &*(handle as *mut Box<dyn Index>) };
 
-// Iterator 方法
-#[no_mangle]
-pub extern "system" fn Java_io_milvus_knowhere_KnowhereIterator_nativeCreate(
-    mut env: JNIEnv,
-    _class: JClass,
-    handle: jlong,
-    query: JFloatArray,
-    max_results: jint,
-) -> jlong;
+    let ids_vec: Vec<i64> = env.get_long_array_elements(&ids, Default::default())
+        .unwrap()
+        .iter()
+        .map(|&l| l)
+        .collect();
 
-#[no_mangle]
-pub extern "system" fn Java_io_milvus_knowhere_KnowhereIterator_nativeNext(
-    mut env: JNIEnv,
-    _class: JClass,
-    iter_handle: jlong,
-) -> JObject; // Returns Optional<SearchResult>
+    match index.get_vector_by_ids(&ids_vec) {
+        Ok(vectors) => {
+            let arr = env.new_float_array(vectors.len() as jint).unwrap();
+            env.set_float_array_region(&arr, 0, &vectors).unwrap();
+            arr
+        }
+        Err(_) => JFloatArray::default(),
+    }
+}
 
-// BinarySet 方法
-#[no_mangle]
-pub extern "system" fn Java_io_milvus_knowhere_KnowhereBinarySet_nativeSerialize(
-    mut env: JNIEnv,
-    _class: JClass,
-    handle: jlong,
-) -> jbyteArray;
+// ===== 辅助函数 =====
 
-#[no_mangle]
-pub extern "system" fn Java_io_milvus_knowhere_KnowhereBinarySet_nativeDeserialize(
-    mut env: JNIEnv,
-    _class: JClass,
-    data: jbyteArray,
-) -> jlong;
+fn create_java_search_result(env: &mut JNIEnv, result: SearchResult) -> JObject {
+    // 创建 SearchResult Java 对象
+    let class = env.find_class("io/milvus/knowhere/SearchResult").unwrap();
+
+    let ids_arr = env.new_long_array(result.ids.len() as jint).unwrap();
+    env.set_long_array_region(&ids_arr, 0, &result.ids).unwrap();
+
+    let dists_arr = env.new_float_array(result.distances.len() as jint).unwrap();
+    env.set_float_array_region(&dists_arr, 0, &result.distances).unwrap();
+
+    env.new_object(
+        class,
+        "([J[FD)V",
+        &[ids_arr.into(), dists_arr.into(), result.elapsed_ms.into()],
+    ).unwrap()
+}
 ```
 
-**Java 类**:
+### 2.2 Java 类
+
+**文件**: `src/java/io/milvus/knowhere/KnowhereIndex.java`
 
 ```java
-// KnowhereIterator.java
 package io.milvus.knowhere;
 
-import java.util.Iterator;
-import java.util.Optional;
+import java.io.Closeable;
 
-public class KnowhereIterator implements Iterator<SearchResult>, AutoCloseable {
+public class KnowhereIndex implements Closeable {
+    static {
+        System.loadLibrary("knowhere_rs");
+    }
+
     private long handle;
-    private SearchResult next;
     private boolean closed = false;
 
-    KnowhereIterator(long handle) {
+    private KnowhereIndex(long handle) {
         this.handle = handle;
-        advance();
     }
 
-    @Override
-    public boolean hasNext() {
-        return next != null && !closed;
+    // ===== 工厂方法 =====
+
+    public static KnowhereIndex createFlat(int dim, MetricType metric) {
+        return create(IndexType.FLAT, metric, dim);
     }
 
-    @Override
-    public SearchResult next() {
-        if (closed || next == null) {
-            throw new IllegalStateException("Iterator exhausted or closed");
-        }
-        SearchResult result = next;
-        advance();
-        return result;
+    public static KnowhereIndex createHnsw(int dim, MetricType metric, int m, int efConstruction) {
+        return create(IndexType.HNSW, metric, dim);
     }
 
-    private void advance() {
-        Optional<SearchResult> opt = nativeNext(handle);
-        next = opt.orElse(null);
+    public static KnowhereIndex createIvfPq(int dim, MetricType metric, int nlist, int m) {
+        return create(IndexType.IVF_PQ, metric, dim);
     }
+
+    public static KnowhereIndex create(IndexType type, MetricType metric, int dim) {
+        long handle = nativeCreate(type.getValue(), metric.getValue(), dim);
+        return new KnowhereIndex(handle);
+    }
+
+    // ===== 核心操作 =====
+
+    public void train(float[] data) {
+        checkNotClosed();
+        nativeTrain(handle, data);
+    }
+
+    public void add(float[] data, long[] ids) {
+        checkNotClosed();
+        nativeAdd(handle, data, ids);
+    }
+
+    public SearchResult search(float[] queries, int k) {
+        checkNotClosed();
+        return nativeSearch(handle, queries, k);
+    }
+
+    public float[] getVectorByIds(long[] ids) {
+        checkNotClosed();
+        return nativeGetVectorByIds(handle, ids);
+    }
+
+    public void save(String path) {
+        checkNotClosed();
+        nativeSave(handle, path);
+    }
+
+    public static KnowhereIndex load(String path) {
+        long handle = nativeLoad(path);
+        return new KnowhereIndex(handle);
+    }
+
+    // ===== 资源管理 =====
 
     @Override
     public void close() {
@@ -921,101 +663,91 @@ public class KnowhereIterator implements Iterator<SearchResult>, AutoCloseable {
         }
     }
 
-    private native Optional<SearchResult> nativeNext(long handle);
+    private void checkNotClosed() {
+        if (closed) {
+            throw new IllegalStateException("Index has been closed");
+        }
+    }
+
+    // ===== Native 方法 =====
+
+    private static native long nativeCreate(int type, int metric, int dim);
+    private native void nativeTrain(long handle, float[] data);
+    private native void nativeAdd(long handle, float[] data, long[] ids);
+    private native SearchResult nativeSearch(long handle, float[] queries, int k);
+    private native float[] nativeGetVectorByIds(long handle, long[] ids);
+    private native void nativeSave(long handle, String path);
+    private static native long nativeLoad(String path);
     private native void nativeFree(long handle);
 }
 ```
 
 **工作量**: 5 天
+**验收标准**:
+- [ ] JNI 模块编译
+- [ ] Java 类可用
+- [ ] 单元测试通过
+- [ ] 示例程序运行
 
 ---
 
-## M4: 优化完善 (Week 6)
+## M3: 优化完善 (Week 5)
 
 ### 目标
 - 性能基准测试
 - 文档完善
 - CI/CD 优化
 
-### 4.1 性能基准
+### 3.1 性能基准
 
 **文件**: `benches/comparison_bench.rs`
 
 ```rust
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
+use criterion::{criterion_group, criterion_main, Criterion};
 
-fn bench_index_comparison(c: &mut Criterion) {
+fn bench_all_indices(c: &mut Criterion) {
     let dim = 128;
     let n = 1_000_000;
-
-    // 生成数据
-    let data = generate_random_vectors(n, dim);
-    let query = generate_random_vectors(100, dim);
+    let data = generate_vectors(n, dim);
+    let queries = generate_vectors(100, dim);
 
     // Flat
-    let mut flat = MemIndex::new(&IndexConfig::flat(dim, MetricType::L2)).unwrap();
-    flat.add(&data, None);
-
-    c.bench_function("flat_search_1m", |b| {
-        b.iter(|| {
-            for q in query.chunks(dim) {
-                flat.search(q, 10);
-            }
-        })
+    let mut group = c.benchmark_group("search_1m");
+    group.bench_function("flat", |b| {
+        let index = FlatIndex::new(dim);
+        // ...
     });
 
     // HNSW
-    let mut hnsw = HnswIndex::new(&IndexConfig::hnsw(dim, 16, 200)).unwrap();
-    hnsw.train(&data).unwrap();
-    hnsw.add(&data, None);
-
-    c.bench_function("hnsw_search_1m", |b| {
-        b.iter(|| {
-            for q in query.chunks(dim) {
-                hnsw.search(q, 10);
-            }
-        })
+    group.bench_function("hnsw", |b| {
+        // ...
     });
 
     // IVF-PQ
-    let mut ivf_pq = IvfPqIndex::new(&IndexConfig::ivf_pq(dim, 100, 8)).unwrap();
-    ivf_pq.train(&data).unwrap();
-    ivf_pq.add(&data, None);
-
-    c.bench_function("ivf_pq_search_1m", |b| {
-        b.iter(|| {
-            for q in query.chunks(dim) {
-                ivf_pq.search(q, 10);
-            }
-        })
+    group.bench_function("ivf_pq", |b| {
+        // ...
     });
 
     // SCANN
-    let mut scann = ScaNNIndex::new(dim, ScaNNConfig::default());
-    scann.train(&data, None);
-    scann.add(&data, None);
-
-    c.bench_function("scann_search_1m", |b| {
-        b.iter(|| {
-            for q in query.chunks(dim) {
-                scann.search(q, 10);
-            }
-        })
+    group.bench_function("scann", |b| {
+        // ...
     });
+
+    group.finish();
 }
 
-criterion_group!(benches, bench_index_comparison);
+criterion_group!(benches, bench_all_indices);
 criterion_main!(benches);
 ```
 
 **工作量**: 2 天
 
-### 4.2 文档更新
+### 3.2 文档
 
-- [ ] API 文档 (rustdoc)
+- [ ] API 文档
 - [ ] README 更新
-- [ ] 性能对比报告
-- [ ] 迁移指南 (从 C++ Knowhere)
+- [ ] 迁移指南
+- [ ] 性能对比
 
 **工作量**: 2 天
 
@@ -1026,27 +758,23 @@ criterion_main!(benches);
 | 里程碑 | 交付物 | 文件 |
 |-------|-------|------|
 | M1 | SCANN 索引 | `src/faiss/scann.rs` |
-| M1 | 各向异性量化器 | `src/faiss/scann.rs` |
-| M2 | AnnIterator trait | `src/iterator.rs` |
-| M2 | HNSW/IVF 迭代器 | `src/iterator.rs` |
-| M3 | C FFI 完善 | `src/ffi.rs`, `include/knowhere.h` |
-| M3 | JNI 绑定 | `src/jni/`, `src/java/` |
-| M4 | 性能基准 | `benches/comparison_bench.rs` |
+| M2 | JNI 绑定 | `src/jni/`, `src/java/` |
+| M3 | 性能基准 | `benches/` |
 
 ---
 
 ## 成功标准
 
-### 6 周目标
+### 5 周目标
 
 | 指标 | 当前 | 目标 |
 |-----|------|------|
-| 索引类型 | 13 | 15 |
-| 功能覆盖 | 80% | 90% |
-| 测试覆盖 | 144 | 200+ |
+| 索引类型 | 13 | 14 |
+| 功能覆盖 | 85% | 95% |
+| 测试覆盖 | 160 | 250+ |
 | Recall@10 | 95%+ | 95%+ |
-| QPS (vs C++) | 85% | 90% |
-| API 完整度 | 85% | 95% |
+| QPS (vs C++) | 90% | 95% |
+| API 完整度 | 90% | 98% |
 
 ---
 
@@ -1057,7 +785,7 @@ criterion_main!(benches);
 | SCANN 算法复杂 | 高 | 中 | 参考官方实现 |
 | JNI 内存管理 | 中 | 中 | 充分测试 |
 | 性能目标未达成 | 高 | 低 | 增加优化迭代 |
-| 时间延期 | 中 | 中 | 预留缓冲 |
+| 时间延期 | 中 | 低 | 预留缓冲 |
 
 ---
 
@@ -1065,7 +793,7 @@ criterion_main!(benches);
 
 | 功能 | 时间 | 说明 |
 |-----|------|------|
-| GPU 支持 (wgpu) | 长期 | 需要 GPU 计算基础 |
-| 混合搜索 | 1-2 周 | 多模态搜索 |
-| PRQ 量化 | 1 周 | 残差量化 |
+| GPU 支持 (wgpu) | 长期 | 需要 GPU 基础 |
 | Python 绑定 | 1 周 | PyO3 |
+| 混合搜索 | 1 周 | 多模态 |
+| PRQ 量化 | 1 周 | 残差量化 |
