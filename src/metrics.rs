@@ -1,6 +1,8 @@
 //! Metrics 距离度量枚举与计算
 //! 
 //! 对齐 C++ 的 MetricType，实现 L2, IP, COSINE 等距离计算
+//! 
+//! SIMD 优化：当启用 "simd" feature 时，使用 SIMD 加速计算
 
 use crate::bitset::BitsetView;
 use crate::dataset::Dataset;
@@ -48,78 +50,132 @@ pub trait Distance {
     fn compute_batch(&self, a: &[f32], b: &[f32], dim: usize) -> Vec<f32>;
 }
 
-/// L2 距离计算
+/// L2 距离计算（使用 SIMD 加速）
 pub struct L2Distance;
+
+impl L2Distance {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for L2Distance {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Distance for L2Distance {
     #[inline]
     fn compute(&self, a: &[f32], b: &[f32]) -> f32 {
         assert_eq!(a.len(), b.len(), "Vector dimensions must match");
         
-        let mut sum = 0.0f32;
-        for i in 0..a.len() {
-            let diff = a[i] - b[i];
-            sum += diff * diff;
+        #[cfg(feature = "simd")]
+        {
+            // Use SIMD-optimized L2 distance
+            crate::simd::l2_distance(a, b)
         }
-        sum.sqrt()
+        #[cfg(not(feature = "simd"))]
+        {
+            let mut sum = 0.0f32;
+            for i in 0..a.len() {
+                let diff = a[i] - b[i];
+                sum += diff * diff;
+            }
+            sum.sqrt()
+        }
     }
     
     #[inline]
     fn compute_batch(&self, a: &[f32], b: &[f32], dim: usize) -> Vec<f32> {
-        let na = a.len() / dim;
-        let nb = b.len() / dim;
-        
-        let mut result = Vec::with_capacity(na * nb);
-        
-        for i in 0..na {
-            let a_start = i * dim;
-            let a_vec = &a[a_start..a_start + dim];
-            
-            for j in 0..nb {
-                let b_start = j * dim;
-                let b_vec = &b[b_start..b_start + dim];
-                result.push(self.compute(a_vec, b_vec));
-            }
+        #[cfg(feature = "simd")]
+        {
+            crate::simd::l2_batch(a, b, dim)
         }
-        
-        result
+        #[cfg(not(feature = "simd"))]
+        {
+            let na = a.len() / dim;
+            let nb = b.len() / dim;
+            
+            let mut result = Vec::with_capacity(na * nb);
+            
+            for i in 0..na {
+                let a_start = i * dim;
+                let a_vec = &a[a_start..a_start + dim];
+                
+                for j in 0..nb {
+                    let b_start = j * dim;
+                    let b_vec = &b[b_start..b_start + dim];
+                    result.push(self.compute(a_vec, b_vec));
+                }
+            }
+            
+            result
+        }
     }
 }
 
-/// 内积距离计算
+/// 内积距离计算（使用 SIMD 加速）
 pub struct InnerProductDistance;
+
+impl InnerProductDistance {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for InnerProductDistance {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Distance for InnerProductDistance {
     #[inline]
     fn compute(&self, a: &[f32], b: &[f32]) -> f32 {
         assert_eq!(a.len(), b.len(), "Vector dimensions must match");
         
-        let mut sum = 0.0f32;
-        for i in 0..a.len() {
-            sum += a[i] * b[i];
+        #[cfg(feature = "simd")]
+        {
+            // Use SIMD-optimized inner product
+            crate::simd::inner_product(a, b)
         }
-        sum
+        #[cfg(not(feature = "simd"))]
+        {
+            let mut sum = 0.0f32;
+            for i in 0..a.len() {
+                sum += a[i] * b[i];
+            }
+            sum
+        }
     }
     
     #[inline]
     fn compute_batch(&self, a: &[f32], b: &[f32], dim: usize) -> Vec<f32> {
-        let na = a.len() / dim;
-        let nb = b.len() / dim;
-        
-        let mut result = Vec::with_capacity(na * nb);
-        
-        for i in 0..na {
-            let a_start = i * dim;
-            let a_vec = &a[a_start..a_start + dim];
-            
-            for j in 0..nb {
-                let b_start = j * dim;
-                let b_vec = &b[b_start..b_start + dim];
-                result.push(self.compute(a_vec, b_vec));
-            }
+        #[cfg(feature = "simd")]
+        {
+            crate::simd::ip_batch(a, b, dim)
         }
-        
-        result
+        #[cfg(not(feature = "simd"))]
+        {
+            let na = a.len() / dim;
+            let nb = b.len() / dim;
+            
+            let mut result = Vec::with_capacity(na * nb);
+            
+            for i in 0..na {
+                let a_start = i * dim;
+                let a_vec = &a[a_start..a_start + dim];
+                
+                for j in 0..nb {
+                    let b_start = j * dim;
+                    let b_vec = &b[b_start..b_start + dim];
+                    result.push(self.compute(a_vec, b_vec));
+                }
+            }
+            
+            result
+        }
     }
 }
 

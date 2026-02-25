@@ -36,7 +36,8 @@ pub fn detect_simd_level() -> SimdLevel {
 pub fn detect_simd_level() -> SimdLevel {
     #[cfg(feature = "simd")]
     {
-        if std::is_aarch64_feature_detected!("neon") {
+        // NEON is available on all aarch64 CPUs, use runtime detection via std::arch
+        if std::arch::is_aarch64_feature_detected!("neon") {
             return SimdLevel::NEON;
         }
     }
@@ -94,14 +95,12 @@ pub fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
     }
     #[cfg(all(feature = "simd", target_arch = "aarch64"))]
     {
-        if std::is_aarch64_feature_detected!("neon") {
+        if std::arch::is_aarch64_feature_detected!("neon") {
             return l2_neon(a, b);
         }
     }
     l2_scalar(a, b)
 }
-
-/// L2 距离（标量）
 #[inline]
 pub fn l2_scalar(a: &[f32], b: &[f32]) -> f32 {
     a.iter()
@@ -172,26 +171,28 @@ fn l2_avx2(a: &[f32], b: &[f32]) -> f32 {
 #[inline]
 fn l2_neon(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::aarch64::*;
-    let mut sum = vdupq_n_f32(0.0);
-    let chunks = a.len() / 4;
-    let remainder = a.len() % 4;
-    
-    for i in 0..chunks {
-        let va = vld1q_f32(&a[i * 4]);
-        let vb = vld1q_f32(&b[i * 4]);
-        let diff = vsubq_f32(va, vb);
-        let sq = vmulq_f32(diff, diff);
-        sum = vaddq_f32(sum, sq);
+    unsafe {
+        let mut sum = vdupq_n_f32(0.0);
+        let chunks = a.len() / 4;
+        let remainder = a.len() % 4;
+        
+        for i in 0..chunks {
+            let va = vld1q_f32(&a[i * 4]);
+            let vb = vld1q_f32(&b[i * 4]);
+            let diff = vsubq_f32(va, vb);
+            let sq = vmulq_f32(diff, diff);
+            sum = vaddq_f32(sum, sq);
+        }
+        
+        let mut result = vgetq_lane_f32(sum, 0) + vgetq_lane_f32(sum, 1) +
+                         vgetq_lane_f32(sum, 2) + vgetq_lane_f32(sum, 3);
+        
+        for i in (chunks * 4)..a.len() {
+            let diff = a[i] - b[i];
+            result += diff * diff;
+        }
+        result.sqrt()
     }
-    
-    let mut result = vgetq_lane_f32(sum, 0) + vgetq_lane_f32(sum, 1) +
-                     vgetq_lane_f32(sum, 2) + vgetq_lane_f32(sum, 3);
-    
-    for i in (chunks * 4)..a.len() {
-        let diff = a[i] - b[i];
-        result += diff * diff;
-    }
-    result.sqrt()
 }
 
 /// Batch L2 距离（并行 + SIMD 优化）
@@ -293,7 +294,7 @@ pub fn inner_product(a: &[f32], b: &[f32]) -> f32 {
     }
     #[cfg(all(feature = "simd", target_arch = "aarch64"))]
     {
-        if std::is_aarch64_feature_detected!("neon") {
+        if std::arch::is_aarch64_feature_detected!("neon") {
             return ip_neon(a, b);
         }
     }
@@ -367,24 +368,26 @@ fn ip_avx2(a: &[f32], b: &[f32]) -> f32 {
 #[inline]
 fn ip_neon(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::aarch64::*;
-    let mut sum = vdupq_n_f32(0.0);
-    let chunks = a.len() / 4;
-    
-    for i in 0..chunks {
-        let va = vld1q_f32(&a[i * 4]);
-        let vb = vld1q_f32(&b[i * 4]);
-        let prod = vmulq_f32(va, vb);
-        sum = vaddq_f32(sum, prod);
+    unsafe {
+        let mut sum = vdupq_n_f32(0.0);
+        let chunks = a.len() / 4;
+        
+        for i in 0..chunks {
+            let va = vld1q_f32(&a[i * 4]);
+            let vb = vld1q_f32(&b[i * 4]);
+            let prod = vmulq_f32(va, vb);
+            sum = vaddq_f32(sum, prod);
+        }
+        
+        let mut result = vgetq_lane_f32(sum, 0) + vgetq_lane_f32(sum, 1) +
+                         vgetq_lane_f32(sum, 2) + vgetq_lane_f32(sum, 3);
+        
+        // Handle remainder
+        for i in (chunks * 4)..a.len() {
+            result += a[i] * b[i];
+        }
+        result
     }
-    
-    let mut result = vgetq_lane_f32(sum, 0) + vgetq_lane_f32(sum, 1) +
-                     vgetq_lane_f32(sum, 2) + vgetq_lane_f32(sum, 3);
-    
-    // Handle remainder
-    for i in (chunks * 4)..a.len() {
-        result += a[i] * b[i];
-    }
-    result
 }
 
 /// 内积（AVX-512）

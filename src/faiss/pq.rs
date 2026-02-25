@@ -70,12 +70,12 @@ impl PqEncoder {
         for _ in 0..max_iter {
             // 分配
             for i in 0..n {
-                let sub_vec = &vectors[i * self.sub_dim..];
+                let sub_vec = &vectors[i * self.sub_dim..(i + 1) * self.sub_dim];
                 let mut min_dist = f32::MAX;
                 let mut best = 0;
                 
                 for c in 0..self.k {
-                    let dist = self.l2_sqr(sub_vec, &centroids[c * self.sub_dim..]);
+                    let dist = self.l2_sqr(sub_vec, &centroids[c * self.sub_dim..(c + 1) * self.sub_dim]);
                     if dist < min_dist {
                         min_dist = dist;
                         best = c;
@@ -133,10 +133,10 @@ impl PqEncoder {
             let mut sum = 0.0f32;
             
             for i in 0..n {
-                let sub_vec = &vectors[i * self.sub_dim..];
+                let sub_vec = &vectors[i * self.sub_dim..(i + 1) * self.sub_dim];
                 let mut min_dist = f32::MAX;
                 for cc in 0..c {
-                    let d = self.l2_sqr(sub_vec, &centroids[cc * self.sub_dim..]);
+                    let d = self.l2_sqr(sub_vec, &centroids[cc * self.sub_dim..(cc + 1) * self.sub_dim]);
                     min_dist = min_dist.min(d);
                 }
                 distances[i] = min_dist;
@@ -165,15 +165,15 @@ impl PqEncoder {
         let mut codes = vec![0u8; self.m];
         
         for m_idx in 0..self.m {
-            let sub_vec = &vector[m_idx * self.sub_dim..];
-            let codebook = &self.codebooks[m_idx * self.k * self.sub_dim..];
+            let sub_vec = &vector[m_idx * self.sub_dim..(m_idx + 1) * self.sub_dim];
+            let codebook = &self.codebooks[m_idx * self.k * self.sub_dim..(m_idx + 1) * self.k * self.sub_dim];
             
             // 找最近邻
             let mut min_dist = f32::MAX;
             let mut best = 0;
             
             for c in 0..self.k {
-                let cent = &codebook[c * self.sub_dim..];
+                let cent = &codebook[c * self.sub_dim..(c + 1) * self.sub_dim];
                 let d = simd::l2_distance(sub_vec, cent);
                 if d < min_dist {
                     min_dist = d;
@@ -210,11 +210,11 @@ impl PqEncoder {
         let mut table = vec![vec![0.0; self.k]; self.m];
         
         for m_idx in 0..self.m {
-            let query_sub = &query[m_idx * self.sub_dim..];
-            let codebook = &self.codebooks[m_idx * self.k * self.sub_dim..];
+            let query_sub = &query[m_idx * self.sub_dim..(m_idx + 1) * self.sub_dim];
+            let codebook = &self.codebooks[m_idx * self.k * self.sub_dim..(m_idx + 1) * self.k * self.sub_dim];
             
             for c in 0..self.k {
-                let cent = &codebook[c * self.sub_dim..];
+                let cent = &codebook[c * self.sub_dim..(c + 1) * self.sub_dim];
                 table[m_idx][c] = simd::l2_distance(query_sub, cent);
             }
         }
