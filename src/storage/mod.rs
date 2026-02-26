@@ -2,9 +2,11 @@
 
 pub mod mem;
 pub mod disk;
+pub mod mmap;
 
 pub use mem::MemStorage;
 pub use disk::DiskStorage;
+pub use mmap::MmapFloatArray;
 
 use crate::api::{KnowhereError, Result};
 
