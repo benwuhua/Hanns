@@ -365,15 +365,120 @@ pub fn bf16_ip_scalar(a: &[u16], b: &[u16]) -> f32 {
     sum
 }
 
+/// FP16 内积 (AVX2 SIMD)
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+unsafe fn fp16_ip_avx2(a: &[u16], b: &[u16]) -> f32 {
+    use std::arch::x86_64::*;
+    
+    let mut sum = _mm256_setzero_ps();
+    let chunks = a.len() / 4;
+    let remainder = a.len() % 4;
+    
+    // 每次处理 4 个 fp16
+    for i in 0..chunks {
+        // 加载 4 个 fp16
+        let va_raw = _mm_loadu_si64(a.as_ptr().add(i * 4) as *const i64);
+        let vb_raw = _mm_loadu_si64(b.as_ptr().add(i * 4) as *const i64);
+        
+        // 扩展到 f32
+        let va_f32 = _mm256_cvtph_ps(_mm_set_epi64x(
+            ((va_raw >> 48) & 0xFFFF) as i16,
+            ((va_raw >> 32) & 0xFFFF) as i16,
+            ((va_raw >> 16) & 0xFFFF) as i16,
+            (va_raw & 0xFFFF) as i16,
+        ));
+        
+        let vb_f32 = _mm256_cvtph_ps(_mm_set_epi64x(
+            ((vb_raw >> 48) & 0xFFFF) as i16,
+            ((vb_raw >> 32) & 0xFFFF) as i16,
+            ((vb_raw >> 16) & 0xFFFF) as i16,
+            (vb_raw & 0xFFFF) as i16,
+        ));
+        
+        // Multiply and add
+        sum = _mm256_fmadd_ps(va_f32, vb_f32, sum);
+    }
+    
+    let mut result = _mm256_cvtss_f32(sum);
+    let high = _mm256_extractf128_ps(sum, 1);
+    result += _mm_cvtss_f32(_mm_add_ps(high, _mm256_castps256to128(sum)));
+    
+    // 处理 remainder
+    for i in (chunks * 4)..a.len() {
+        let a_f = Fp16::from_bits(a[i]).to_f32();
+        let b_f = Fp16::from_bits(b[i]).to_f32();
+        result += a_f * b_f;
+    }
+    result
+}
+
+/// BF16 内积 (AVX2 SIMD)
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+unsafe fn bf16_ip_avx2(a: &[u16], b: &[u16]) -> f32 {
+    use std::arch::x86_64::*;
+    
+    let mut sum = _mm256_setzero_ps();
+    let chunks = a.len() / 8;
+    let remainder = a.len() % 8;
+    
+    // 每次处理 8 个 bf16
+    for i in 0..chunks {
+        // 加载 8 个 bf16
+        let va = _mm_loadu_si128(a.as_ptr().add(i * 8) as *const __m256i);
+        let vb = _mm_loadu_si128(b.as_ptr().add(i * 8) as *const __m256i);
+        
+        // 扩展 bf16 到 f32
+        let va_lo = _mm256_cvtepu16_epi32(_mm_unpacklo_epi16(va, _mm_setzero_si128()));
+        let va_hi = _mm256_cvtepu16_epi32(_mm_unpackhi_epi16(va, _mm_setzero_si128()));
+        let vb_lo = _mm256_cvtepu16_epi32(_mm_unpacklo_epi16(vb, _mm_setzero_si128()));
+        let vb_hi = _mm256_cvtepu16_epi32(_mm_unpackhi_epi16(vb, _mm_setzero_si128()));
+        
+        let va_lo_f = _mm256_castsi256_ps(va_lo);
+        let va_hi_f = _mm256_castsi256_ps(va_hi);
+        let vb_lo_f = _mm256_castsi256_ps(vb_lo);
+        let vb_hi_f = _mm256_castsi256_ps(vb_hi);
+        
+        // Multiply and add
+        sum = _mm256_fmadd_ps(va_lo_f, vb_lo_f, sum);
+        sum = _mm256_fmadd_ps(va_hi_f, vb_hi_f, sum);
+    }
+    
+    let mut result = _mm256_cvtss_f32(sum);
+    let high = _mm256_extractf128_ps(sum, 1);
+    result += _mm_cvtss_f32(_mm_add_ps(high, _mm256_castps256to128(sum)));
+    
+    // 处理 remainder
+    for i in (chunks * 8)..a.len() {
+        let a_f = Bf16::from_bits(a[i]).to_f32();
+        let b_f = Bf16::from_bits(b[i]).to_f32();
+        result += a_f * b_f;
+    }
+    result
+}
+
 /// FP16 内积
 #[inline]
 pub fn fp16_ip(a: &[u16], b: &[u16]) -> f32 {
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    {
+        if std::is_x86_feature_detected!("avx2") {
+            return unsafe { fp16_ip_avx2(a, b) };
+        }
+    }
     fp16_ip_scalar(a, b)
 }
 
 /// BF16 内积
 #[inline]
 pub fn bf16_ip(a: &[u16], b: &[u16]) -> f32 {
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    {
+        if std::is_x86_feature_detected!("avx2") {
+            return unsafe { bf16_ip_avx2(a, b) };
+        }
+    }
     bf16_ip_scalar(a, b)
 }
 
@@ -521,5 +626,73 @@ mod tests {
         let ip = bf16_ip(&a, &b);
         // 1*4 + 2*5 + 3*6 = 32
         assert!((ip - 32.0).abs() < 0.1);
+    }
+    
+    #[test]
+    fn test_fp16_ip_large_vectors() {
+        // 测试较大向量的内积
+        let size = 1024;
+        let a: Vec<f32> = (0..size).map(|i| i as f32 * 0.01).collect();
+        let b: Vec<f32> = (0..size).map(|i| (size - i) as f32 * 0.01).collect();
+        
+        let a_fp16 = f32_to_fp16(&a);
+        let b_fp16 = f32_to_fp16(&b);
+        
+        let ip = fp16_ip(&a_fp16, &b_fp16);
+        
+        // 验证结果在合理范围内
+        let expected: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        assert!((ip - expected).abs() / expected.abs() < 0.01);
+    }
+    
+    #[test]
+    fn test_bf16_ip_large_vectors() {
+        // 测试较大向量的内积
+        let size = 1024;
+        let a: Vec<f32> = (0..size).map(|i| i as f32 * 0.01).collect();
+        let b: Vec<f32> = (0..size).map(|i| (size - i) as f32 * 0.01).collect();
+        
+        let a_bf16 = f32_to_bf16(&a);
+        let b_bf16 = f32_to_bf16(&b);
+        
+        let ip = bf16_ip(&a_bf16, &b_bf16);
+        
+        // 验证结果在合理范围内
+        let expected: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        assert!((ip - expected).abs() / expected.abs() < 0.01);
+    }
+    
+    #[test]
+    fn test_fp16_l2_large_vectors() {
+        // 测试较大向量的 L2 距离
+        let size = 512;
+        let a: Vec<f32> = vec![0.0; size];
+        let b: Vec<f32> = (0..size).map(|i| i as f32 * 0.1).collect();
+        
+        let a_fp16 = f32_to_fp16(&a);
+        let b_fp16 = f32_to_fp16(&b);
+        
+        let dist = fp16_l2(&a_fp16, &b_fp16);
+        
+        // 验证结果
+        let expected: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((dist - expected).abs() / expected.abs() < 0.01);
+    }
+    
+    #[test]
+    fn test_bf16_l2_large_vectors() {
+        // 测试较大向量的 L2 距离
+        let size = 512;
+        let a: Vec<f32> = vec![0.0; size];
+        let b: Vec<f32> = (0..size).map(|i| i as f32 * 0.1).collect();
+        
+        let a_bf16 = f32_to_bf16(&a);
+        let b_bf16 = f32_to_bf16(&b);
+        
+        let dist = bf16_l2(&a_bf16, &b_bf16);
+        
+        // 验证结果
+        let expected: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((dist - expected).abs() / expected.abs() < 0.01);
     }
 }
