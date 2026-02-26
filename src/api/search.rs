@@ -42,6 +42,34 @@ impl SearchResult {
     }
 }
 
+/// Range search result - 返回满足半径阈值的所有向量
+#[derive(Debug, Clone)]
+pub struct RangeSearchResult {
+    /// IDs of vectors within radius
+    pub ids: Vec<i64>,
+    /// Distances to the query vector
+    pub distances: Vec<f32>,
+    /// Elapsed time in milliseconds
+    pub elapsed_ms: f64,
+    /// Number of vectors within radius
+    pub result_count: usize,
+    /// Total number of vectors searched
+    pub num_visited: usize,
+}
+
+impl RangeSearchResult {
+    pub fn new(ids: Vec<i64>, distances: Vec<f32>, elapsed_ms: f64, num_visited: usize) -> Self {
+        let result_count = ids.len();
+        Self {
+            ids,
+            distances,
+            elapsed_ms,
+            result_count,
+            num_visited,
+        }
+    }
+}
+
 /// AnnIterator - 迭代器风格的近似最近邻搜索
 /// 
 /// 对齐 C++ Knowhere 的 AnnIterator 接口，支持流式结果迭代

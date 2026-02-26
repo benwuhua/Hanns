@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use crate::api::{IndexConfig, IndexType, MetricType, Predicate, Result, SearchRequest, SearchResult};
+use crate::api::{IndexConfig, IndexType, MetricType, Predicate, RangeSearchResult, Result, SearchRequest, SearchResult};
 
 /// HNSW index with progressive sampling and configurable M parameter
 pub struct HnswIndex {
