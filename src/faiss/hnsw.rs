@@ -7,6 +7,9 @@ use std::sync::Arc;
 use crate::api::{IndexConfig, IndexType, MetricType, Predicate, RangeSearchResult, Result, SearchRequest, SearchResult};
 
 /// HNSW index with progressive sampling and configurable M parameter
+/// 
+/// Multi-layer structure: each layer contains a subset of nodes with
+/// connections to nearby neighbors at that level.
 pub struct HnswIndex {
     config: IndexConfig,
     entry_point: Option<i64>,
@@ -22,6 +25,9 @@ pub struct HnswIndex {
     max_level: usize,
     level_0_nodes: Vec<usize>,  // Layer 0 node indices
     metric_type: MetricType,
+    /// Multi-layer structure: layers[0] is base layer (all nodes),
+    /// layers[i] for i > 0 are upper layers with fewer nodes
+    layers: Vec<Vec<usize>>,  // Each level's node indices
 }
 
 impl HnswIndex {
@@ -56,6 +62,7 @@ impl HnswIndex {
             max_level: 0,
             level_0_nodes: Vec::new(),
             metric_type: config.metric_type,
+            layers: vec![Vec::new()],  // Initialize with empty base layer
         })
     }
 
