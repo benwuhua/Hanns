@@ -332,24 +332,124 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_freeResult(
 pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_serializeIndex(
     mut env: JNIEnv,
     _class: JClass,
-    _handle: jlong,
+    handle: jlong,
 ) -> JByteArray {
-    // TODO: 实现序列化
-    match env.new_byte_array(0) {
-        Ok(arr) => arr.into(),
-        Err(_) => JObjectArray::null(&env).into(),
+    if handle == 0 {
+        return JObjectArray::null(&env).into();
+    }
+
+    let guard = match get_registry().ok() {
+        Some(g) => g,
+        None => return JObjectArray::null(&env).into(),
+    };
+
+    let index = match guard.as_ref().and_then(|r| r.get(&handle)) {
+        Some(i) => i,
+        None => return JObjectArray::null(&env).into(),
+    };
+
+    // 使用 Index trait 的 serialize_to_memory 方法
+    match index.serialize_to_memory() {
+        Ok(data) => {
+            match env.new_byte_array(data.len() as jint) {
+                Ok(arr) => {
+                    // 将 Vec<u8> 转换为 jbyte 数组
+                    let slice: &[i8] = unsafe {
+                        std::slice::from_raw_parts(data.as_ptr() as *const i8, data.len())
+                    };
+                    if env.set_array_region(&arr, 0, slice).is_ok() {
+                        arr.into()
+                    } else {
+                        JObjectArray::null(&env).into()
+                    }
+                }
+                Err(_) => JObjectArray::null(&env).into(),
+            }
+        }
+        Err(e) => {
+            tracing::error!("Serialize failed: {:?}", e);
+            JObjectArray::null(&env).into()
+        }
     }
 }
 
 /// 反序列化索引
 #[no_mangle]
 pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_deserializeIndex(
-    _env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
-    _data: JByteArray,
+    data: JByteArray,
 ) -> jlong {
-    // TODO: 实现反序列化
-    0
+    if data.is_null() {
+        return 0;
+    }
+
+    // 获取字节数组长度
+    let len = match env.get_array_length(&data) {
+        Ok(l) => l as usize,
+        Err(_) => return 0,
+    };
+
+    if len == 0 {
+        return 0;
+    }
+
+    // 获取字节数据
+    let mut buf = vec![0i8; len];
+    match env.get_array_region(&data, 0, &mut buf) {
+        Ok(()) => {}
+        Err(_) => return 0,
+    }
+
+    let bytes: Vec<u8> = unsafe {
+        std::slice::from_raw_parts(buf.as_ptr() as *const u8, len).to_vec()
+    };
+
+    // 解析头部获取维度等信息
+    if bytes.len() < 21 {
+        tracing::error!("deserialize: data too short");
+        return 0;
+    }
+
+    let magic = &bytes[0..4];
+    if magic != b"KWIX" {
+        tracing::error!("deserialize: invalid magic");
+        return 0;
+    }
+
+    // 从序列化数据中提取维度来创建正确的索引类型
+    let dim = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
+    let num = u64::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15], bytes[16], bytes[17], bytes[18], bytes[19]]) as usize;
+
+    // 创建 MemIndex 并反序列化
+    // 注意: 实际应用中需要保存索引类型信息
+    let config = IndexConfig {
+        index_type: IndexType::Flat,
+        dim,
+        metric_type: MetricType::L2,
+        params: IndexParams::default(),
+    };
+
+    let mut index = match MemIndex::new(config) {
+        Ok(idx) => idx,
+        Err(e) => {
+            tracing::error!("Failed to create index for deserialization: {:?}", e);
+            return 0;
+        }
+    };
+
+    match index.deserialize_from_memory(&bytes) {
+        Ok(()) => {
+            let handle = next_handle();
+            let mut guard = get_registry();
+            guard.as_mut().unwrap().insert(handle, Box::new(index));
+            handle
+        }
+        Err(e) => {
+            tracing::error!("Deserialize failed: {:?}", e);
+            0
+        }
+    }
 }
 
 #[cfg(test)]

@@ -103,12 +103,12 @@
 | getResultIds | ✅ | 获取结果 ID |
 | getResultDistances | ✅ | 获取结果距离 |
 | freeResult | ✅ | 释放结果 |
-| serializeIndex | ⚠️ | TODO |
-| deserializeIndex | ⚠️ | TODO |
+| serializeIndex | ✅ | 序列化到字节数组 |
+| deserializeIndex | ✅ | 从字节数组反序列化 |
 
 ### 待完成
 
-1. **序列化 API**: 实现 serializeIndex/deserializeIndex
+1. ~~**序列化 API**: 实现 serializeIndex/deserializeIndex~~ ✅
 2. **Java 类**: 创建 KnowhereIndex.java 包装类
 3. **单元测试**: JNI 单元测试
 4. **性能测试**: JNI 调用开销测试
@@ -133,7 +133,7 @@
 | 优化项 | 优先级 | 工作量 |
 |-------|-------|--------|
 | SCANN SIMD | P1 | 2 天 |
-| JNI 序列化 | P1 | 1 天 |
+| ~~JNI 序列化~~ | P1 | ~~1 天~~ ✅ |
 | 内存池优化 | P2 | 2 天 |
 
 ### 3.3 文档
