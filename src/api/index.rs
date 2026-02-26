@@ -72,6 +72,15 @@ impl MetricType {
             _ => None,
         }
     }
+    
+    pub fn from_bytes(b: u8) -> Self {
+        match b {
+            0 => MetricType::L2,
+            1 => MetricType::Ip,
+            2 => MetricType::Cosine,
+            _ => MetricType::L2,
+        }
+    }
 }
 
 /// Index configuration

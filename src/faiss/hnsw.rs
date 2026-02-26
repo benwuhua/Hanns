@@ -730,3 +730,161 @@ mod tests {
         assert!(result.ids.contains(&0) || result.ids.contains(&2));
     }
 }
+
+impl crate::serialize::Serializable for HnswIndex {
+    fn serialize(&self, writer: &mut dyn std::io::Write) -> std::io::Result<()> {
+        // Header: magic + version
+        writer.write_all(b"HNSW")?;
+        writer.write_all(&2u32.to_le_bytes())?;
+        
+        // Config
+        writer.write_all(&(self.dim as u32).to_le_bytes())?;
+        writer.write_all(&(self.m as u32).to_le_bytes())?;
+        writer.write_all(&(self.ef_search as u32).to_le_bytes())?;
+        writer.write_all(&(self.ef_construction as u32).to_le_bytes())?;
+        writer.write_all(&(self.max_level as u32).to_le_bytes())?;
+        
+        // Metric type
+        writer.write_all(&(self.metric_type as u8).to_le_bytes())?;
+        
+        // Vectors
+        writer.write_all(&(self.ids.len() as u64).to_le_bytes())?;
+        for v in &self.vectors {
+            writer.write_all(&v.to_le_bytes())?;
+        }
+        
+        // IDs
+        for &id in &self.ids {
+            writer.write_all(&id.to_le_bytes())?;
+        }
+        
+        // Neighbors
+        for nbrs in &self.neighbors {
+            writer.write_all(&(nbrs.len() as u32).to_le_bytes())?;
+            for &(id, dist) in nbrs {
+                writer.write_all(&id.to_le_bytes())?;
+                writer.write_all(&dist.to_le_bytes())?;
+            }
+        }
+        
+        // Entry point
+        if let Some(ep) = self.entry_point {
+            writer.write_all(&1u8.to_le_bytes())?;
+            writer.write_all(&ep.to_le_bytes())?;
+        } else {
+            writer.write_all(&0u8.to_le_bytes())?;
+        }
+        
+        // Level 0 nodes
+        writer.write_all(&(self.level_0_nodes.len() as u64).to_le_bytes())?;
+        for &idx in &self.level_0_nodes {
+            writer.write_all(&(idx as u64).to_le_bytes())?;
+        }
+        
+        Ok(())
+    }
+    
+    fn deserialize(&mut self, reader: &mut dyn std::io::Read) -> std::io::Result<()> {
+        // Read magic
+        let mut magic = [0u8; 4];
+        reader.read_exact(&mut magic)?;
+        if &magic != b"HNSW" {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid HNSW magic"));
+        }
+        
+        // Version
+        let mut version_buf = [0u8; 4];
+        reader.read_exact(&mut version_buf)?;
+        let _version = u32::from_le_bytes(version_buf);
+        
+        // Config
+        let mut dim_buf = [0u8; 4];
+        reader.read_exact(&mut dim_buf)?;
+        self.dim = u32::from_le_bytes(dim_buf) as usize;
+        
+        let mut m_buf = [0u8; 4];
+        reader.read_exact(&mut m_buf)?;
+        self.m = u32::from_le_bytes(m_buf) as usize;
+        
+        let mut ef_buf = [0u8; 4];
+        reader.read_exact(&mut ef_buf)?;
+        self.ef_search = u32::from_le_bytes(ef_buf) as usize;
+        
+        let mut ef_c_buf = [0u8; 4];
+        reader.read_exact(&mut ef_c_buf)?;
+        self.ef_construction = u32::from_le_bytes(ef_c_buf) as usize;
+        
+        let mut max_level_buf = [0u8; 4];
+        reader.read_exact(&mut max_level_buf)?;
+        self.max_level = u32::from_le_bytes(max_level_buf) as usize;
+        
+        // Metric type
+        let mut metric_buf = [0u8; 1];
+        reader.read_exact(&mut metric_buf)?;
+        self.metric_type = MetricType::from_bytes(metric_buf[0]);
+        
+        // Vectors
+        let mut count_buf = [0u8; 8];
+        reader.read_exact(&mut count_buf)?;
+        let count = u64::from_le_bytes(count_buf) as usize;
+        
+        self.vectors = vec![0.0f32; count * self.dim];
+        for v in &mut self.vectors {
+            let mut buf = [0u8; 4];
+            reader.read_exact(&mut buf)?;
+            *v = f32::from_le_bytes(buf);
+        }
+        
+        // IDs
+        self.ids = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut buf = [0u8; 8];
+            reader.read_exact(&mut buf)?;
+            self.ids.push(i64::from_le_bytes(buf));
+        }
+        
+        // Neighbors
+        self.neighbors = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut len_buf = [0u8; 4];
+            reader.read_exact(&mut len_buf)?;
+            let len = u32::from_le_bytes(len_buf) as usize;
+            
+            let mut nbrs = Vec::with_capacity(len);
+            for _ in 0..len {
+                let mut id_buf = [0u8; 8];
+                let mut dist_buf = [0u8; 4];
+                reader.read_exact(&mut id_buf)?;
+                reader.read_exact(&mut dist_buf)?;
+                nbrs.push((i64::from_le_bytes(id_buf), f32::from_le_bytes(dist_buf)));
+            }
+            self.neighbors.push(nbrs);
+        }
+        
+        // Entry point
+        let mut ep_flag = [0u8; 1];
+        reader.read_exact(&mut ep_flag)?;
+        if ep_flag[0] == 1 {
+            let mut ep_buf = [0u8; 8];
+            reader.read_exact(&mut ep_buf)?;
+            self.entry_point = Some(i64::from_le_bytes(ep_buf));
+        } else {
+            self.entry_point = None;
+        }
+        
+        // Level 0 nodes
+        let mut level_count_buf = [0u8; 8];
+        reader.read_exact(&mut level_count_buf)?;
+        let level_count = u64::from_le_bytes(level_count_buf) as usize;
+        
+        self.level_0_nodes = Vec::with_capacity(level_count);
+        for _ in 0..level_count {
+            let mut idx_buf = [0u8; 8];
+            reader.read_exact(&mut idx_buf)?;
+            self.level_0_nodes.push(u64::from_le_bytes(idx_buf) as usize);
+        }
+        
+        self.trained = true;
+        Ok(())
+    }
+}
