@@ -906,3 +906,219 @@ mod tests {
         assert!((scalar - 50.0).abs() < 0.01);
     }
 }
+
+/// Binary distance functions - Hamming and Jaccard
+/// Optimized with SIMD POPCNT instructions where available
+
+/// Hamming distance for binary vectors (u8 slices)
+/// Returns the number of differing bits
+pub fn hamming_distance(a: &[u8], b: &[u8]) -> usize {
+    assert_eq!(a.len(), b.len());
+    
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    {
+        if std::is_x86_feature_detected!("popcnt") {
+            return unsafe { hamming_popcnt(a, b) };
+        }
+    }
+    
+    // Scalar fallback
+    hamming_scalar(a, b)
+}
+
+/// Scalar Hamming distance
+#[inline]
+pub fn hamming_scalar(a: &[u8], b: &[u8]) -> usize {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (*x ^ *y).count_ones() as usize)
+        .sum()
+}
+
+/// POPCNT-optimized Hamming distance (x86_64 only)
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+unsafe fn hamming_popcnt(a: &[u8], b: &[u8]) -> usize {
+    use std::arch::x86_64::*;
+    
+    let mut total = 0usize;
+    let chunks = a.len() / 32;
+    let remainder = a.len() % 32;
+    
+    // Process 32 bytes at a time using AVX2 if available
+    if std::is_x86_feature_detected!("avx2") {
+        for i in 0..chunks {
+            let offset = i * 32;
+            let va = _mm256_loadu_si256(a.as_ptr().add(offset) as *const __m256i);
+            let vb = _mm256_loadu_si256(b.as_ptr().add(offset) as *const __m256i);
+            let vx = _mm256_xor_si256(va, vb);
+            
+            // Extract each byte and count bits
+            let bytes = std::slice::from_raw_parts(
+                &vx as *const _ as *const u8,
+                32
+            );
+            for &byte in bytes {
+                total += _popcnt64(byte as i64) as usize;
+            }
+        }
+    } else {
+        // SSE or scalar chunks
+        for i in 0..chunks {
+            let offset = i * 32;
+            for j in 0..32 {
+                total += ((a[offset + j] ^ b[offset + j]).count_ones()) as usize;
+            }
+        }
+    }
+    
+    // Remainder
+    let start = chunks * 32;
+    for i in start..a.len() {
+        total += ((a[i] ^ b[i]).count_ones()) as usize;
+    }
+    
+    total
+}
+
+/// Jaccard similarity for binary vectors
+/// Returns intersection / union
+pub fn jaccard_similarity(a: &[u8], b: &[u8]) -> f32 {
+    assert_eq!(a.len(), b.len());
+    
+    let (intersection, union) = jaccard_counts(a, b);
+    
+    if union == 0 {
+        1.0 // Both empty = identical
+    } else {
+        intersection as f32 / union as f32
+    }
+}
+
+/// Jaccard distance (1 - similarity)
+pub fn jaccard_distance(a: &[u8], b: &[u8]) -> f32 {
+    1.0 - jaccard_similarity(a, b)
+}
+
+/// Compute intersection and union counts for Jaccard
+#[inline]
+pub fn jaccard_counts(a: &[u8], b: &[u8]) -> (usize, usize) {
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    {
+        if std::is_x86_feature_detected!("popcnt") {
+            return unsafe { jaccard_counts_popcnt(a, b) };
+        }
+    }
+    
+    jaccard_counts_scalar(a, b)
+}
+
+/// Scalar Jaccard counts
+#[inline]
+pub fn jaccard_counts_scalar(a: &[u8], b: &[u8]) -> (usize, usize) {
+    let mut intersection = 0usize;
+    let mut union_count = 0usize;
+    
+    for (x, y) in a.iter().zip(b.iter()) {
+        let ix = *x;
+        let iy = *y;
+        intersection += (ix & iy).count_ones() as usize;
+        union_count += (ix | iy).count_ones() as usize;
+    }
+    
+    (intersection, union_count)
+}
+
+/// POPCNT-optimized Jaccard counts (x86_64 only)
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+unsafe fn jaccard_counts_popcnt(a: &[u8], b: &[u8]) -> (usize, usize) {
+    use std::arch::x86_64::*;
+    
+    let mut intersection = 0usize;
+    let mut union_count = 0usize;
+    
+    let chunks = a.len() / 8;
+    let remainder = a.len() % 8;
+    
+    // Process 8 bytes at a time
+    for i in 0..chunks {
+        let offset = i * 8;
+        let va: u64 = *(a.as_ptr().add(offset) as *const u64);
+        let vb: u64 = *(b.as_ptr().add(offset) as *const u64);
+        
+        let v_and = va & vb;
+        let v_or = va | vb;
+        
+        intersection += _popcnt64(v_and as i64) as usize;
+        union_count += _popcnt64(v_or as i64) as usize;
+    }
+    
+    // Remainder
+    let start = chunks * 8;
+    for i in start..a.len() {
+        let ix = a[i];
+        let iy = b[i];
+        intersection += (ix & iy).count_ones() as usize;
+        union_count += (ix | iy).count_ones() as usize;
+    }
+    
+    (intersection, union_count)
+}
+
+#[cfg(test)]
+mod binary_tests {
+    use super::*;
+    
+    #[test]
+    fn test_hamming_basic() {
+        let a = vec![0b00001111u8, 0b11110000];
+        let b = vec![0b00001111u8, 0b11110000];
+        assert_eq!(hamming_distance(&a, &b), 0);
+        
+        let c = vec![0b11110000u8, 0b00001111];
+        assert_eq!(hamming_distance(&a, &c), 16);
+    }
+    
+    #[test]
+    fn test_jaccard_basic() {
+        // 0b00001111 & 0b00000111 = 0b00000111 (3 bits)
+        // 0b00001111 | 0b00000111 = 0b00001111 (4 bits)
+        let a = vec![0b00001111u8];
+        let b = vec![0b00000111u8];
+        let sim = jaccard_similarity(&a, &b);
+        assert!((sim - 0.75).abs() < 0.01); // 3/4
+        
+        let dist = jaccard_distance(&a, &b);
+        assert!((dist - 0.25).abs() < 0.01); // 1 - 3/4
+    }
+    
+    #[test]
+    fn test_hamming_large() {
+        // Test with larger vectors to exercise SIMD path
+        let n = 256;
+        let a: Vec<u8> = (0..n).map(|i| i as u8).collect();
+        let b: Vec<u8> = (0..n).map(|i| (i ^ 0xFF) as u8).collect();
+        
+        let simd_dist = hamming_distance(&a, &b);
+        let scalar_dist = hamming_scalar(&a, &b);
+        
+        assert_eq!(simd_dist, scalar_dist);
+        assert_eq!(simd_dist, n * 8); // All bits differ
+    }
+    
+    #[test]
+    fn test_jaccard_large() {
+        let n = 256;
+        let a: Vec<u8> = vec![0xAA; n]; // 10101010
+        let b: Vec<u8> = vec![0x55; n]; // 01010101
+        
+        let (intersection, union) = jaccard_counts(&a, &b);
+        let (int_scalar, uni_scalar) = jaccard_counts_scalar(&a, &b);
+        
+        assert_eq!(intersection, int_scalar);
+        assert_eq!(union, uni_scalar);
+        assert_eq!(intersection, 0); // No overlapping bits
+        assert_eq!(union, n * 8); // All bits set in union
+    }
+}
