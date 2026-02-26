@@ -268,6 +268,55 @@ impl Distance for HammingDistance {
     }
 }
 
+/// Jaccard 距离计算（用于二进制向量的f32表示）
+pub struct JaccardDistance;
+
+impl Distance for JaccardDistance {
+    #[inline]
+    fn compute(&self, a: &[f32], b: &[f32]) -> f32 {
+        assert_eq!(a.len(), b.len(), "Vector dimensions must match");
+        
+        let mut intersection = 0usize;
+        let mut union_count = 0usize;
+        
+        for i in 0..a.len() {
+            let bit_a = a[i] >= 0.0;
+            let bit_b = b[i] >= 0.0;
+            
+            if bit_a && bit_b {
+                intersection += 1;
+            }
+            if bit_a || bit_b {
+                union_count += 1;
+            }
+        }
+        
+        if union_count == 0 {
+            0.0
+        } else {
+            1.0 - (intersection as f32 / union_count as f32)
+        }
+    }
+    
+    #[inline]
+    fn compute_batch(&self, a: &[f32], b: &[f32], dim: usize) -> Vec<f32> {
+        let na = a.len() / dim;
+        let nb = b.len() / dim;
+        
+        let mut result = Vec::with_capacity(na * nb);
+        for i in 0..na {
+            let a_start = i * dim;
+            let a_vec = &a[a_start..a_start + dim];
+            for j in 0..nb {
+                let b_start = j * dim;
+                let b_vec = &b[b_start..b_start + dim];
+                result.push(self.compute(a_vec, b_vec));
+            }
+        }
+        result
+    }
+}
+
 /// 根据 MetricType 获取距离计算器
 pub fn get_distance_calculator(metric: MetricType) -> Box<dyn Distance> {
     match metric {
@@ -275,7 +324,7 @@ pub fn get_distance_calculator(metric: MetricType) -> Box<dyn Distance> {
         MetricType::IP => Box::new(InnerProductDistance),
         MetricType::COSINE => Box::new(CosineDistance),
         MetricType::Hamming => Box::new(HammingDistance),
-        MetricType::Jaccard => Box::new(HammingDistance), // Jaccard 用 Hamming 近似
+        MetricType::Jaccard => Box::new(JaccardDistance),
     }
 }
 
@@ -354,5 +403,15 @@ mod tests {
         assert_eq!(MetricType::from_str("ip"), Some(MetricType::IP));
         assert_eq!(MetricType::from_str("cosine"), Some(MetricType::COSINE));
         assert_eq!(MetricType::from_str("unknown"), None);
+    }
+    
+    #[test]
+    fn test_jaccard_distance() {
+        let jaccard = JaccardDistance;
+        let a = vec![1.0, -1.0, 1.0, -1.0]; // 1, 0, 1, 0
+        let b = vec![1.0, 1.0, -1.0, -1.0]; // 1, 1, 0, 0
+        // Intersect: 1 (idx 0), Union: 3 (idx 0, 1, 2)
+        // Jaccard similarity: 1/3, Distance: 1 - 1/3 = 2/3
+        assert!((jaccard.compute(&a, &b) - (2.0 / 3.0)).abs() < 1e-6);
     }
 }

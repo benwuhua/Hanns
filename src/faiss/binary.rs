@@ -111,26 +111,13 @@ impl BinaryIndex {
     /// Hamming 距离
     #[inline]
     fn hamming_distance(&self, a: &[u8], b: &[u8]) -> usize {
-        a.iter()
-            .zip(b.iter())
-            .map(|(x, y)| (*x ^ *y).count_ones() as usize)
-            .sum()
+        crate::simd::hamming_distance(a, b)
     }
     
     /// Jaccard 相似度
     #[inline]
     fn jaccard_similarity(&self, a: &[u8], b: &[u8]) -> f32 {
-        let mut intersection = 0usize;
-        let mut union = 0usize;
-        
-        for (x, y) in a.iter().zip(b.iter()) {
-            let ix = *x;
-            let iy = *y;
-            intersection += (ix & iy).count_ones() as usize;
-            union += (ix | iy).count_ones() as usize;
-        }
-        
-        if union == 0 { 1.0 } else { intersection as f32 / union as f32 }
+        crate::simd::jaccard_similarity(a, b)
     }
     
     #[inline]
@@ -297,10 +284,7 @@ impl BinaryIvfIndex {
     
     #[inline]
     fn hamming_distance(&self, a: &[u8], b: &[u8]) -> usize {
-        a.iter()
-            .zip(b.iter())
-            .map(|(x, y)| (*x ^ *y).count_ones() as usize)
-            .sum()
+        crate::simd::hamming_distance(a, b)
     }
 }
 
