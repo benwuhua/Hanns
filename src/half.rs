@@ -629,6 +629,48 @@ mod tests {
     }
     
     #[test]
+    fn test_fp16_ip_simd_large() {
+        // Large vector to exercise AVX2 SIMD path (processes 4 elements at a time)
+        let n = 128;
+        let a_f32: Vec<f32> = (0..n).map(|i| i as f32).collect();
+        let b_f32: Vec<f32> = (0..n).map(|i| (n - i) as f32).collect();
+        
+        let a: Vec<u16> = f32_to_fp16(&a_f32);
+        let b: Vec<u16> = f32_to_fp16(&b_f32);
+        
+        let ip = fp16_ip(&a, &b);
+        
+        // Calculate expected result using scalar method
+        let expected: f32 = a_f32.iter().zip(b_f32.iter())
+            .map(|(x, y)| x * y)
+            .sum();
+        
+        // FP16 has limited precision, allow larger tolerance
+        assert!((ip - expected).abs() < expected.abs() * 0.05 + 1.0);
+    }
+    
+    #[test]
+    fn test_bf16_ip_simd_large() {
+        // Large vector to exercise AVX2 SIMD path (processes 8 elements at a time)
+        let n = 256;
+        let a_f32: Vec<f32> = (0..n).map(|i| i as f32 * 0.5).collect();
+        let b_f32: Vec<f32> = (0..n).map(|i| (n - i) as f32 * 0.5).collect();
+        
+        let a: Vec<u16> = f32_to_bf16(&a_f32);
+        let b: Vec<u16> = f32_to_bf16(&b_f32);
+        
+        let ip = bf16_ip(&a, &b);
+        
+        // Calculate expected result
+        let expected: f32 = a_f32.iter().zip(b_f32.iter())
+            .map(|(x, y)| x * y)
+            .sum();
+        
+        // BF16 has better precision than FP16
+        assert!((ip - expected).abs() < expected.abs() * 0.01 + 0.5);
+    }
+    
+    #[test]
     fn test_fp16_ip_large_vectors() {
         // 测试较大向量的内积
         let size = 1024;
