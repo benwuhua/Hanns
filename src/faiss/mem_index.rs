@@ -891,3 +891,91 @@ mod tests {
         assert!(result.is_err());
     }
 }
+
+impl crate::serialize::Serializable for MemIndex {
+    fn serialize(&self, writer: &mut dyn std::io::Write) -> std::io::Result<()> {
+        // Header: magic + version
+        writer.write_all(b"FLAT")?;
+        writer.write_all(&1u32.to_le_bytes())?;
+        
+        // Config
+        writer.write_all(&(self.config.dim as u32).to_le_bytes())?;
+        writer.write_all(&(self.config.metric_type as u8).to_le_bytes())?;
+        
+        // Vectors
+        writer.write_all(&(self.vectors.len() as u64).to_le_bytes())?;
+        for v in &self.vectors {
+            for &f in v {
+                writer.write_all(&f.to_le_bytes())?;
+            }
+        }
+        
+        // IDs
+        writer.write_all(&(self.ids.len() as u64).to_le_bytes())?;
+        for &id in &self.ids {
+            writer.write_all(&id.to_le_bytes())?;
+        }
+        
+        // Trained flag
+        writer.write_all(&[self.trained as u8])?;
+        
+        Ok(())
+    }
+    
+    fn deserialize(&mut self, reader: &mut dyn std::io::Read) -> std::io::Result<()> {
+        // Read magic
+        let mut magic = [0u8; 4];
+        reader.read_exact(&mut magic)?;
+        if &magic != b"FLAT" {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid FLAT magic"));
+        }
+        
+        // Version
+        let mut version_buf = [0u8; 4];
+        reader.read_exact(&mut version_buf)?;
+        let _version = u32::from_le_bytes(version_buf);
+        
+        // Config
+        let mut dim_buf = [0u8; 4];
+        reader.read_exact(&mut dim_buf)?;
+        let dim = u32::from_le_bytes(dim_buf) as usize;
+        
+        let mut metric_buf = [0u8; 1];
+        reader.read_exact(&mut metric_buf)?;
+        let metric_type = crate::api::MetricType::from_bytes(metric_buf[0]);
+        
+        self.config.dim = dim;
+        self.config.metric_type = metric_type;
+        
+        // Vectors count
+        let mut count_buf = [0u8; 8];
+        reader.read_exact(&mut count_buf)?;
+        let count = u64::from_le_bytes(count_buf) as usize;
+        
+        self.vectors = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut v = Vec::with_capacity(dim);
+            for _ in 0..dim {
+                let mut buf = [0u8; 4];
+                reader.read_exact(&mut buf)?;
+                v.push(f32::from_le_bytes(buf));
+            }
+            self.vectors.push(v);
+        }
+        
+        // IDs
+        self.ids = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut buf = [0u8; 8];
+            reader.read_exact(&mut buf)?;
+            self.ids.push(i64::from_le_bytes(buf));
+        }
+        
+        // Trained flag
+        let mut trained_buf = [0u8; 1];
+        reader.read_exact(&mut trained_buf)?;
+        self.trained = trained_buf[0] != 0;
+        
+        Ok(())
+    }
+}
