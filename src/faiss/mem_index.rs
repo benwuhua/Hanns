@@ -587,6 +587,19 @@ impl MemIndex {
     pub fn has_raw_data(&self) -> bool {
         true
     }
+    
+    /// Get index memory size in bytes (estimate)
+    pub fn size(&self) -> usize {
+        // Estimate: vectors + ids + overhead
+        let vectors_size = self.vectors.len() * self.config.dim * std::mem::size_of::<f32>();
+        let ids_size = self.ids.len() * std::mem::size_of::<i64>();
+        vectors_size + ids_size
+    }
+    
+    /// Get metric type
+    pub fn metric_type(&self) -> MetricType {
+        self.config.metric_type
+    }
 }
 
 fn inner_product(a: &[f32], b: &[f32]) -> f32 {

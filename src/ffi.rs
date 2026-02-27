@@ -337,6 +337,54 @@ impl IndexWrapper {
         self.dim
     }
     
+    /// Get index memory size in bytes
+    fn size(&self) -> usize {
+        if let Some(ref idx) = self.flat {
+            idx.size()
+        } else if let Some(ref idx) = self.hnsw {
+            idx.size()
+        } else if let Some(ref idx) = self.scann {
+            idx.size()
+        } else {
+            0
+        }
+    }
+    
+    /// Get index type name as string
+    fn index_type(&self) -> &'static str {
+        if self.flat.is_some() {
+            "Flat"
+        } else if self.hnsw.is_some() {
+            "HNSW"
+        } else if self.scann.is_some() {
+            "ScaNN"
+        } else {
+            "Unknown"
+        }
+    }
+    
+    /// Get metric type name as string
+    fn metric_type(&self) -> &'static str {
+        if let Some(ref idx) = self.flat {
+            match idx.metric_type() {
+                MetricType::L2 => "L2",
+                MetricType::Ip => "IP",
+                MetricType::Cosine => "Cosine",
+            }
+        } else if let Some(ref idx) = self.hnsw {
+            match idx.metric_type() {
+                MetricType::L2 => "L2",
+                MetricType::Ip => "IP",
+                MetricType::Cosine => "Cosine",
+            }
+        } else if let Some(ref idx) = self.scann {
+            // ScaNN doesn't expose metric_type directly, assume L2
+            "L2"
+        } else {
+            "Unknown"
+        }
+    }
+    
     fn get_vectors(&self, ids: &[i64]) -> Result<(Vec<f32>, usize), CError> {
         if ids.is_empty() {
             return Ok((Vec::new(), 0));
@@ -833,6 +881,112 @@ pub extern "C" fn knowhere_get_index_dim(index: *const std::ffi::c_void) -> usiz
     unsafe {
         let index = &*(index as *const IndexWrapper);
         index.dim()
+    }
+}
+
+/// 获取索引内存大小（字节）
+/// 
+/// 返回索引占用的内存大小（以字节为单位）。
+/// 
+/// # Arguments
+/// * `index` - 索引指针 (由 knowhere_create_index 创建)
+/// 
+/// # Returns
+/// 索引内存大小（字节），如果索引指针为 NULL 则返回 0。
+/// 
+/// # C API 使用示例
+/// ```c
+/// CIndex* index = knowhere_create_index(config);
+/// // ... add vectors ...
+/// size_t size = knowhere_get_index_size(index);
+/// printf("Index size: %zu bytes\n", size);
+/// knowhere_free_index(index);
+/// ```
+#[no_mangle]
+pub extern "C" fn knowhere_get_index_size(index: *const std::ffi::c_void) -> usize {
+    if index.is_null() {
+        return 0;
+    }
+    
+    unsafe {
+        let index = &*(index as *const IndexWrapper);
+        index.size()
+    }
+}
+
+/// 获取索引类型名称
+/// 
+/// 返回索引类型的字符串名称（"Flat"、"HNSW" 或 "ScaNN"）。
+/// 
+/// # Arguments
+/// * `index` - 索引指针 (由 knowhere_create_index 创建)
+/// 
+/// # Returns
+/// 索引类型名称的 C 字符串指针。如果索引指针为 NULL 则返回 "Unknown"。
+/// 返回的字符串是静态的，调用者不需要释放。
+/// 
+/// # C API 使用示例
+/// ```c
+/// CIndex* index = knowhere_create_index(config);
+/// const char* type = knowhere_get_index_type(index);
+/// printf("Index type: %s\n", type);  // 输出：Index type: Flat
+/// knowhere_free_index(index);
+/// ```
+#[no_mangle]
+pub extern "C" fn knowhere_get_index_type(index: *const std::ffi::c_void) -> *const std::os::raw::c_char {
+    let type_str = if index.is_null() {
+        "Unknown"
+    } else {
+        unsafe {
+            let index = &*(index as *const IndexWrapper);
+            index.index_type()
+        }
+    };
+    
+    // Use static C string (no allocation, no need to free)
+    match type_str {
+        "Flat" => b"Flat\0".as_ptr() as *const std::os::raw::c_char,
+        "HNSW" => b"HNSW\0".as_ptr() as *const std::os::raw::c_char,
+        "ScaNN" => b"ScaNN\0".as_ptr() as *const std::os::raw::c_char,
+        _ => b"Unknown\0".as_ptr() as *const std::os::raw::c_char,
+    }
+}
+
+/// 获取度量类型名称
+/// 
+/// 返回度量类型的字符串名称（"L2"、"IP" 或 "Cosine"）。
+/// 
+/// # Arguments
+/// * `index` - 索引指针 (由 knowhere_create_index 创建)
+/// 
+/// # Returns
+/// 度量类型名称的 C 字符串指针。如果索引指针为 NULL 则返回 "Unknown"。
+/// 返回的字符串是静态的，调用者不需要释放。
+/// 
+/// # C API 使用示例
+/// ```c
+/// CIndex* index = knowhere_create_index(config);
+/// const char* metric = knowhere_get_index_metric(index);
+/// printf("Metric type: %s\n", metric);  // 输出：Metric type: L2
+/// knowhere_free_index(index);
+/// ```
+#[no_mangle]
+pub extern "C" fn knowhere_get_index_metric(index: *const std::ffi::c_void) -> *const std::os::raw::c_char {
+    let metric_str = if index.is_null() {
+        "Unknown"
+    } else {
+        unsafe {
+            let index = &*(index as *const IndexWrapper);
+            index.metric_type()
+        }
+    };
+    
+    // Use static C string (no allocation, no need to free)
+    match metric_str {
+        "L2" => b"L2\0".as_ptr() as *const std::os::raw::c_char,
+        "IP" => b"IP\0".as_ptr() as *const std::os::raw::c_char,
+        "Cosine" => b"Cosine\0".as_ptr() as *const std::os::raw::c_char,
+        _ => b"Unknown\0".as_ptr() as *const std::os::raw::c_char,
     }
 }
 
@@ -1534,6 +1688,134 @@ mod tests {
         assert_eq!(dim, 128);
         
         knowhere_free_index(index);
+    }
+    
+    #[test]
+    fn test_index_statistics_flat() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Flat,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            ..Default::default()
+        };
+        
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+        
+        // Test initial size (should be 0 or very small)
+        let initial_size = unsafe { knowhere_get_index_size(index) };
+        
+        // Add some vectors
+        let vectors: Vec<f32> = (0..100 * 16).map(|i| i as f32).collect();
+        let ids: Vec<i64> = (0..100).collect();
+        
+        let train_result = knowhere_train_index(index, vectors.as_ptr(), 100, 16);
+        assert_eq!(train_result, CError::Success as i32);
+        
+        let add_result = knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 100, 16);
+        assert_eq!(add_result, CError::Success as i32);
+        
+        // Test size after adding vectors (should be larger)
+        let size_after = unsafe { knowhere_get_index_size(index) };
+        assert!(size_after > initial_size);
+        
+        // Test index type
+        let type_ptr = unsafe { knowhere_get_index_type(index) };
+        assert!(!type_ptr.is_null());
+        let type_str = unsafe { std::ffi::CStr::from_ptr(type_ptr) }.to_str().unwrap();
+        assert_eq!(type_str, "Flat");
+        
+        // Test metric type
+        let metric_ptr = unsafe { knowhere_get_index_metric(index) };
+        assert!(!metric_ptr.is_null());
+        let metric_str = unsafe { std::ffi::CStr::from_ptr(metric_ptr) }.to_str().unwrap();
+        assert_eq!(metric_str, "L2");
+        
+        knowhere_free_index(index);
+    }
+    
+    #[test]
+    fn test_index_statistics_hnsw() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Hnsw,
+            metric_type: CMetricType::Ip,
+            dim: 32,
+            ef_construction: 200,
+            ef_search: 64,
+            ..Default::default()
+        };
+        
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+        
+        // Test index type
+        let type_ptr = unsafe { knowhere_get_index_type(index) };
+        assert!(!type_ptr.is_null());
+        let type_str = unsafe { std::ffi::CStr::from_ptr(type_ptr) }.to_str().unwrap();
+        assert_eq!(type_str, "HNSW");
+        
+        // Test metric type
+        let metric_ptr = unsafe { knowhere_get_index_metric(index) };
+        assert!(!metric_ptr.is_null());
+        let metric_str = unsafe { std::ffi::CStr::from_ptr(metric_ptr) }.to_str().unwrap();
+        assert_eq!(metric_str, "IP");
+        
+        // Test size
+        let size = unsafe { knowhere_get_index_size(index) };
+        assert!(size >= 0);
+        
+        knowhere_free_index(index);
+    }
+    
+    #[test]
+    fn test_index_statistics_scann() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Scann,
+            metric_type: CMetricType::Cosine,
+            dim: 64,
+            num_partitions: 16,
+            num_centroids: 256,
+            reorder_k: 100,
+            ..Default::default()
+        };
+        
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+        
+        // Test index type
+        let type_ptr = unsafe { knowhere_get_index_type(index) };
+        assert!(!type_ptr.is_null());
+        let type_str = unsafe { std::ffi::CStr::from_ptr(type_ptr) }.to_str().unwrap();
+        assert_eq!(type_str, "ScaNN");
+        
+        // Test metric type (ScaNN defaults to L2)
+        let metric_ptr = unsafe { knowhere_get_index_metric(index) };
+        assert!(!metric_ptr.is_null());
+        let metric_str = unsafe { std::ffi::CStr::from_ptr(metric_ptr) }.to_str().unwrap();
+        assert_eq!(metric_str, "L2");
+        
+        // Test size
+        let size = unsafe { knowhere_get_index_size(index) };
+        assert!(size >= 0);
+        
+        knowhere_free_index(index);
+    }
+    
+    #[test]
+    fn test_index_statistics_null_pointer() {
+        // Test with null pointer - should return safe defaults
+        let size = unsafe { knowhere_get_index_size(std::ptr::null()) };
+        assert_eq!(size, 0);
+        
+        let type_ptr = unsafe { knowhere_get_index_type(std::ptr::null()) };
+        assert!(!type_ptr.is_null());
+        let type_str = unsafe { std::ffi::CStr::from_ptr(type_ptr) }.to_str().unwrap();
+        assert_eq!(type_str, "Unknown");
+        
+        let metric_ptr = unsafe { knowhere_get_index_metric(std::ptr::null()) };
+        assert!(!metric_ptr.is_null());
+        let metric_str = unsafe { std::ffi::CStr::from_ptr(metric_ptr) }.to_str().unwrap();
+        assert_eq!(metric_str, "Unknown");
     }
     
     #[test]

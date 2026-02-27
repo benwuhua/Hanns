@@ -767,6 +767,24 @@ impl ScaNNIndex {
     pub fn has_raw_data(&self) -> bool {
         self.config.reorder_k > 0
     }
+    
+    /// Get index memory size in bytes (estimate)
+    pub fn size(&self) -> usize {
+        // Estimate: vectors + codes + inverted lists
+        let vectors_size = self.vectors.read().unwrap().len() * std::mem::size_of::<f32>();
+        let ids_size = self.ids.read().unwrap().len() * std::mem::size_of::<i64>();
+        let il = self.inverted_lists.read().unwrap();
+        let codes_size: usize = il.values().map(|list| {
+            list.len() * (std::mem::size_of::<i64>() + std::mem::size_of::<Vec<u8>>())
+        }).sum();
+        vectors_size + ids_size + codes_size
+    }
+    
+    /// Get metric type (ScaNN defaults to L2)
+    pub fn metric_type(&self) -> crate::api::MetricType {
+        // ScaNN currently only supports L2 distance
+        crate::api::MetricType::L2
+    }
 }
 
 #[cfg(test)]

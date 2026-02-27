@@ -878,6 +878,21 @@ impl HnswIndex {
     pub fn has_raw_data(&self) -> bool {
         true
     }
+    
+    /// Get index memory size in bytes (estimate)
+    pub fn size(&self) -> usize {
+        // Estimate: vectors + ids + graph structure
+        let vectors_size = self.vectors.len() * std::mem::size_of::<f32>();
+        let ids_size = self.ids.len() * std::mem::size_of::<i64>();
+        let node_info_size = self.node_info.len() * std::mem::size_of::<NodeInfo>();
+        let map_overhead = self.id_to_idx.len() * (std::mem::size_of::<i64>() + std::mem::size_of::<usize>());
+        vectors_size + ids_size + node_info_size + map_overhead
+    }
+    
+    /// Get metric type
+    pub fn metric_type(&self) -> MetricType {
+        self.metric_type
+    }
 }
 
 /// Generate a random level for a new node using exponential distribution.
