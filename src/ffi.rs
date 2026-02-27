@@ -76,6 +76,9 @@ pub struct CIndexConfig {
     pub dim: usize,
     pub ef_construction: usize,
     pub ef_search: usize,
+    pub num_partitions: usize,
+    pub num_centroids: usize,
+    pub reorder_k: usize,
 }
 
 impl Default for CIndexConfig {
@@ -86,6 +89,9 @@ impl Default for CIndexConfig {
             dim: 0,
             ef_construction: 200,
             ef_search: 64,
+            num_partitions: 16,
+            num_centroids: 256,
+            reorder_k: 100,
         }
     }
 }
@@ -100,10 +106,21 @@ pub struct CSearchResult {
     pub elapsed_ms: f32,
 }
 
-/// 包装索引对象 - 只支持 Flat 和 HNSW
+/// C 风格的向量查询结果
+#[repr(C)]
+#[derive(Debug)]
+pub struct CVectorResult {
+    pub vectors: *mut f32,
+    pub ids: *mut i64,
+    pub num_vectors: usize,
+    pub dim: usize,
+}
+
+/// 包装索引对象 - 支持 Flat, HNSW 和 ScaNN
 struct IndexWrapper {
     flat: Option<MemIndex>,
     hnsw: Option<HnswIndex>,
+    scann: Option<ScaNNIndex>,
     dim: usize,
 }
 
@@ -129,7 +146,7 @@ impl IndexWrapper {
                     params: IndexParams::default(),
                 };
                 let flat = MemIndex::new(&index_config).ok()?;
-                Some(Self { flat: Some(flat), hnsw: None, dim })
+                Some(Self { flat: Some(flat), hnsw: None, scann: None, dim })
             }
             CIndexType::Hnsw => {
                 let mut index_config = IndexConfig {
@@ -145,11 +162,27 @@ impl IndexWrapper {
                     index_config.params.ef_search = Some(config.ef_search);
                 }
                 let hnsw = HnswIndex::new(&index_config).ok()?;
-                Some(Self { flat: None, hnsw: Some(hnsw), dim })
+                Some(Self { flat: None, hnsw: Some(hnsw), scann: None, dim })
             }
             CIndexType::Scann => {
-                // SCANN not yet supported in FFI
-                None
+                let num_partitions = if config.num_partitions > 0 {
+                    config.num_partitions
+                } else {
+                    16
+                };
+                let num_centroids = if config.num_centroids > 0 {
+                    config.num_centroids
+                } else {
+                    256
+                };
+                let reorder_k = if config.reorder_k > 0 {
+                    config.reorder_k
+                } else {
+                    100
+                };
+                let scann_config = ScaNNConfig::new(num_partitions, num_centroids, reorder_k);
+                let scann = ScaNNIndex::new(dim, scann_config).ok()?;
+                Some(Self { flat: None, hnsw: None, scann: Some(scann), dim })
             }
         }
     }
@@ -159,6 +192,8 @@ impl IndexWrapper {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
         } else if let Some(ref mut idx) = self.hnsw {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
+        } else if let Some(ref idx) = self.scann {
+            Ok(idx.add(vectors, ids))
         } else {
             Err(CError::InvalidArg)
         }
@@ -169,6 +204,9 @@ impl IndexWrapper {
             idx.train(vectors).map_err(|_| CError::Internal)
         } else if let Some(ref mut idx) = self.hnsw {
             idx.train(vectors).map_err(|_| CError::Internal)
+        } else if let Some(ref mut idx) = self.scann {
+            idx.train(vectors, None);
+            Ok(())
         } else {
             Err(CError::InvalidArg)
         }
@@ -182,11 +220,19 @@ impl IndexWrapper {
             params: None,
             radius: None,
         };
-        
+
         if let Some(ref idx) = self.flat {
             idx.search(query, &req).map_err(|_| CError::Internal)
         } else if let Some(ref idx) = self.hnsw {
             idx.search(query, &req).map_err(|_| CError::Internal)
+        } else if let Some(ref idx) = self.scann {
+            let start = std::time::Instant::now();
+            let results = idx.search(query, top_k);
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+            let (ids, distances): (Vec<i64>, Vec<f32>) = results.into_iter().unzip();
+            let num_visited = ids.len();
+            Ok(ApiSearchResult::new(ids, distances, elapsed_ms))
         } else {
             Err(CError::InvalidArg)
         }
@@ -197,6 +243,8 @@ impl IndexWrapper {
             idx.ntotal()
         } else if let Some(ref idx) = self.hnsw {
             idx.ntotal()
+        } else if let Some(ref idx) = self.scann {
+            idx.count()
         } else {
             0
         }
@@ -204,6 +252,35 @@ impl IndexWrapper {
     
     fn dim(&self) -> usize {
         self.dim
+    }
+    
+    fn get_vectors(&self, ids: &[i64]) -> Result<(Vec<f32>, usize), CError> {
+        if ids.is_empty() {
+            return Ok((Vec::new(), 0));
+        }
+        
+        if let Some(ref idx) = self.flat {
+            match idx.get_vector_by_ids(ids) {
+                Ok(vectors) => {
+                    let num_found = vectors.len() / self.dim;
+                    Ok((vectors, num_found))
+                }
+                Err(_) => Err(CError::NotFound),
+            }
+        } else if let Some(ref _idx) = self.hnsw {
+            // HnswIndex doesn't have get_vector_by_ids yet
+            Err(CError::NotImplemented)
+        } else if let Some(ref idx) = self.scann {
+            match idx.get_vector_by_ids(ids) {
+                Ok(vectors) => {
+                    let num_found = vectors.len() / self.dim;
+                    Ok((vectors, num_found))
+                }
+                Err(_) => Err(CError::NotFound),
+            }
+        } else {
+            Err(CError::InvalidArg)
+        }
     }
 }
 
@@ -371,6 +448,64 @@ pub extern "C" fn knowhere_free_result(result: *mut CSearchResult) {
     }
 }
 
+/// 根据 ID 获取向量
+#[no_mangle]
+pub extern "C" fn knowhere_get_vectors_by_ids(
+    index: *const std::ffi::c_void,
+    ids: *const i64,
+    count: usize,
+) -> *mut CVectorResult {
+    if index.is_null() || ids.is_null() || count == 0 {
+        return std::ptr::null_mut();
+    }
+    
+    unsafe {
+        let index = &*(index as *const IndexWrapper);
+        let ids_slice = std::slice::from_raw_parts(ids, count);
+        
+        match index.get_vectors(ids_slice) {
+            Ok((mut vectors, num_found)) => {
+                let dim = index.dim();
+                let mut ids_out = ids_slice[..num_found].to_vec();
+                
+                let vectors_ptr = vectors.as_mut_ptr();
+                let ids_ptr = ids_out.as_mut_ptr();
+                
+                // 防止析构函数释放内存
+                std::mem::forget(vectors);
+                std::mem::forget(ids_out);
+                
+                let cvr = CVectorResult {
+                    vectors: vectors_ptr,
+                    ids: ids_ptr,
+                    num_vectors: num_found,
+                    dim,
+                };
+                
+                Box::into_raw(Box::new(cvr))
+            }
+            Err(_) => std::ptr::null_mut(),
+        }
+    }
+}
+
+/// 释放向量查询结果
+#[no_mangle]
+pub extern "C" fn knowhere_free_vector_result(result: *mut CVectorResult) {
+    if !result.is_null() {
+        unsafe {
+            let r = &mut *result;
+            if !r.vectors.is_null() && r.num_vectors > 0 && r.dim > 0 {
+                Vec::from_raw_parts(r.vectors, r.num_vectors * r.dim, r.num_vectors * r.dim);
+            }
+            if !r.ids.is_null() && r.num_vectors > 0 {
+                Vec::from_raw_parts(r.ids, r.num_vectors, r.num_vectors);
+            }
+            Box::from_raw(result);
+        }
+    }
+}
+
 // ========== BitsetView C 包装 ==========
 
 use crate::bitset::BitsetView;
@@ -485,13 +620,121 @@ mod tests {
             ef_search: 64,
             ..Default::default()
         };
-        
+
         let index = knowhere_create_index(config);
         assert!(!index.is_null());
-        
+
         let dim = knowhere_get_index_dim(index);
         assert_eq!(dim, 128);
-        
+
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_create_scann_index() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Scann,
+            metric_type: CMetricType::L2,
+            dim: 128,
+            num_partitions: 16,
+            num_centroids: 256,
+            reorder_k: 100,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        let dim = knowhere_get_index_dim(index);
+        assert_eq!(dim, 128);
+
+        let count = knowhere_get_index_count(index);
+        assert_eq!(count, 0);
+
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_scann_add_and_search() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Scann,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            num_partitions: 16,
+            num_centroids: 256,
+            reorder_k: 100,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        // Create simple test vectors: 10 vectors of dim 16
+        let vectors: Vec<f32> = (0..10 * 16).map(|i| i as f32).collect();
+        let ids: Vec<i64> = (0..10).collect();
+
+        // Train the index
+        let train_result = knowhere_train_index(index, vectors.as_ptr(), 10, 16);
+        assert_eq!(train_result, CError::Success as i32);
+
+        // Add vectors
+        let add_result = knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 10, 16);
+        assert_eq!(add_result, CError::Success as i32);
+
+        let count = knowhere_get_index_count(index);
+        assert_eq!(count, 10);
+
+        // Search
+        let query: Vec<f32> = (0..16).map(|i| i as f32).collect();
+        let result = knowhere_search(index, query.as_ptr(), 1, 3, 16);
+        assert!(!result.is_null());
+
+        let result = unsafe { &mut *result };
+        assert_eq!(result.num_results, 3);
+
+        knowhere_free_result(result);
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_get_vectors_by_ids() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Flat,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        // Create test vectors: 10 vectors of dim 16
+        let vectors: Vec<f32> = (0..10 * 16).map(|i| i as f32).collect();
+        let ids: Vec<i64> = (0..10).collect();
+
+        // Train and add vectors
+        let train_result = knowhere_train_index(index, vectors.as_ptr(), 10, 16);
+        assert_eq!(train_result, CError::Success as i32);
+
+        let add_result = knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 10, 16);
+        assert_eq!(add_result, CError::Success as i32);
+
+        // Get vectors by IDs
+        let query_ids: Vec<i64> = vec![0, 5, 9];
+        let result = knowhere_get_vectors_by_ids(index, query_ids.as_ptr(), query_ids.len());
+        assert!(!result.is_null());
+
+        let result = unsafe { &mut *result };
+        assert_eq!(result.num_vectors, 3);
+        assert_eq!(result.dim, 16);
+
+        // Verify vector values (first element of each vector)
+        let vectors_slice = unsafe { std::slice::from_raw_parts(result.vectors, result.num_vectors * result.dim) };
+        assert_eq!(vectors_slice[0], 0.0);  // First element of vector 0
+        assert_eq!(vectors_slice[16], 80.0); // First element of vector 5 (5*16=80)
+        assert_eq!(vectors_slice[32], 144.0); // First element of vector 9 (9*16=144)
+
+        knowhere_free_vector_result(result);
         knowhere_free_index(index);
     }
 }
