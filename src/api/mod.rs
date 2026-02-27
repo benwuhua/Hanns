@@ -4,7 +4,7 @@ pub mod search;
 pub mod index;
 pub mod admin;
 
-pub use search::{SearchRequest, SearchResult, RangeSearchResult, Predicate, RangePredicate, IdsPredicate};
+pub use search::{SearchRequest, SearchResult, RangeSearchResult, Predicate, RangePredicate, IdsPredicate, BitsetPredicate};
 pub use index::{IndexType, MetricType, IndexConfig, IndexParams};
 pub use admin::Admin;
 

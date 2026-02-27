@@ -555,6 +555,132 @@ pub extern "C" fn knowhere_search(
     }
 }
 
+/// 搜索 with Bitset 过滤
+/// 
+/// 使用 bitset 过滤掉某些向量（例如已删除的向量）。
+/// Bitset 中每个 bit 代表一个向量：1=过滤（排除），0=保留（包括）。
+/// 
+/// # Arguments
+/// * `index` - 索引指针
+/// * `query` - 查询向量指针 (count * dim)
+/// * `count` - 查询向量数量
+/// * `top_k` - 返回的最近邻数量
+/// * `dim` - 向量维度
+/// * `bitset` - Bitset 指针 (由 knowhere_bitset_create 创建)
+/// 
+/// # Returns
+/// 成功时返回 CSearchResult 指针，失败返回 NULL。
+/// 调用者需使用 knowhere_free_result() 释放返回的结果。
+/// 
+/// # C API 使用示例
+/// ```c
+/// // 创建 bitset，过滤掉 ID 为 5 和 10 的向量
+/// CBitset* bitset = knowhere_bitset_create(1000);
+/// knowhere_bitset_set(bitset, 5, true);
+/// knowhere_bitset_set(bitset, 10, true);
+/// 
+/// // 搜索
+/// float query[] = { ... };
+/// CSearchResult* result = knowhere_search_with_bitset(index, query, 1, 10, 128, bitset);
+/// 
+/// if (result != NULL) {
+///     // 访问结果（不包含被过滤的向量）
+///     for (size_t i = 0; i < result->num_results; i++) {
+///         printf("id=%ld, dist=%f\n", result->ids[i], result->distances[i]);
+///     }
+///     knowhere_free_result(result);
+/// }
+/// 
+/// knowhere_bitset_free(bitset);
+/// ```
+#[no_mangle]
+pub extern "C" fn knowhere_search_with_bitset(
+    index: *const std::ffi::c_void,
+    query: *const f32,
+    count: usize,
+    top_k: usize,
+    dim: usize,
+    bitset: *const CBitset,
+) -> *mut CSearchResult {
+    if index.is_null() || query.is_null() || count == 0 || top_k == 0 || dim == 0 || bitset.is_null() {
+        return std::ptr::null_mut();
+    }
+    
+    unsafe {
+        let index = &*(index as *const IndexWrapper);
+        let bitset_wrapper = &*bitset;
+        
+        let query_slice = std::slice::from_raw_parts(query, count * dim);
+        
+        // 重建 BitsetView
+        let bitset_data = std::slice::from_raw_parts(
+            bitset_wrapper.data,
+            (bitset_wrapper.len + 63) / 64,
+        ).to_vec();
+        let bitset_view = crate::bitset::BitsetView::from_vec(bitset_data, bitset_wrapper.len);
+        
+        // 使用 BitsetPredicate 进行搜索
+        let req = SearchRequest {
+            top_k,
+            nprobe: 8,
+            filter: Some(std::sync::Arc::new(crate::api::BitsetPredicate::new(bitset_view.clone()))),
+            params: None,
+            radius: None,
+        };
+        
+        if let Some(ref idx) = index.flat {
+            match idx.search_with_bitset(query_slice, &req, &bitset_view) {
+                Ok(result) => {
+                    let mut ids = result.ids;
+                    let mut distances = result.distances;
+                    
+                    let num_results = ids.len();
+                    let ids_ptr = ids.as_mut_ptr();
+                    let distances_ptr = distances.as_mut_ptr();
+                    
+                    std::mem::forget(ids);
+                    std::mem::forget(distances);
+                    
+                    let csr = CSearchResult {
+                        ids: ids_ptr,
+                        distances: distances_ptr,
+                        num_results,
+                        elapsed_ms: result.elapsed_ms as f32,
+                    };
+                    
+                    Box::into_raw(Box::new(csr))
+                }
+                Err(_) => std::ptr::null_mut(),
+            }
+        } else {
+            // 其他索引类型暂时使用普通搜索（不支持 bitset）
+            match index.search(query_slice, top_k) {
+                Ok(result) => {
+                    let mut ids = result.ids;
+                    let mut distances = result.distances;
+                    
+                    let num_results = ids.len();
+                    let ids_ptr = ids.as_mut_ptr();
+                    let distances_ptr = distances.as_mut_ptr();
+                    
+                    std::mem::forget(ids);
+                    std::mem::forget(distances);
+                    
+                    let csr = CSearchResult {
+                        ids: ids_ptr,
+                        distances: distances_ptr,
+                        num_results,
+                        elapsed_ms: result.elapsed_ms as f32,
+                    };
+                    
+                    Box::into_raw(Box::new(csr))
+                }
+                Err(_) => std::ptr::null_mut(),
+            }
+        }
+    }
+}
+
 /// 范围搜索 (Range Search)
 /// 
 /// 查找所有在指定半径内的向量，返回满足条件的所有结果。
@@ -1224,8 +1350,8 @@ use crate::bitset::BitsetView;
 /// BitsetView C 包装
 #[repr(C)]
 pub struct CBitset {
-    data: *mut u64,
-    len: usize,
+    pub data: *mut u64,
+    pub len: usize,
 }
 
 impl From<&BitsetView> for CBitset {
@@ -1270,23 +1396,75 @@ pub extern "C" fn knowhere_bitset_free(bitset: *mut CBitset) {
 }
 
 /// 设置位
+/// 
+/// # Arguments
+/// * `bitset` - Bitset 指针（可变）
+/// * `index` - 位索引
+/// * `value` - true=1 (过滤), false=0 (保留)
 #[no_mangle]
-pub extern "C" fn knowhere_bitset_set(_bitset: &mut CBitset, _index: usize, _value: bool) {
-    // TODO: 需要修改 BitsetView 支持可变引用
+pub extern "C" fn knowhere_bitset_set(bitset: *mut CBitset, index: usize, value: bool) {
+    if bitset.is_null() {
+        return;
+    }
+    
+    unsafe {
+        let cb = &mut *bitset;
+        if index >= cb.len {
+            return;
+        }
+        
+        let word_idx = index >> 6;  // index / 64
+        let bit_idx = index & 63;   // index % 64
+        let mask = 1u64 << bit_idx;
+        
+        if value {
+            *cb.data.add(word_idx) |= mask;
+        } else {
+            *cb.data.add(word_idx) &= !mask;
+        }
+    }
 }
 
 /// 获取位
+/// 
+/// # Returns
+/// true=1 (过滤), false=0 (保留)
 #[no_mangle]
-pub extern "C" fn knowhere_bitset_get(_bitset: &CBitset, _index: usize) -> bool {
-    // TODO: 需要实现
-    false
+pub extern "C" fn knowhere_bitset_get(bitset: *const CBitset, index: usize) -> bool {
+    if bitset.is_null() {
+        return false;
+    }
+    
+    unsafe {
+        let cb = &*bitset;
+        if index >= cb.len {
+            return false;
+        }
+        
+        let word_idx = index >> 6;
+        let bit_idx = index & 63;
+        let mask = 1u64 << bit_idx;
+        
+        *cb.data.add(word_idx) & mask != 0
+    }
 }
 
-/// 统计
+/// 统计为 1 的位数
+/// 
+/// # Returns
+/// 被过滤的向量数量
 #[no_mangle]
-pub extern "C" fn knowhere_bitset_count(_bitset: &CBitset) -> usize {
-    // TODO: 需要实现
-    0
+pub extern "C" fn knowhere_bitset_count(bitset: *const CBitset) -> usize {
+    if bitset.is_null() {
+        return 0;
+    }
+    
+    unsafe {
+        let cb = &*bitset;
+        let num_words = (cb.len + 63) / 64;
+        let slice = std::slice::from_raw_parts(cb.data, num_words);
+        slice.iter().map(|w| w.count_ones() as usize).sum()
+    }
 }
 
 #[cfg(test)]
@@ -2107,5 +2285,123 @@ mod tests {
         assert!(result.is_null());
 
         knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_bitset_create_and_set() {
+        let bitset = knowhere_bitset_create(100);
+        assert!(!bitset.is_null());
+        
+        // Check initial count (all zeros)
+        let count = unsafe { knowhere_bitset_count(bitset) };
+        assert_eq!(count, 0);
+        
+        // Set some bits
+        unsafe {
+            knowhere_bitset_set(bitset, 5, true);
+            knowhere_bitset_set(bitset, 10, true);
+            knowhere_bitset_set(bitset, 50, true);
+        }
+        
+        // Check count
+        let count = unsafe { knowhere_bitset_count(bitset) };
+        assert_eq!(count, 3);
+        
+        // Check individual bits
+        assert!(unsafe { knowhere_bitset_get(bitset, 5) });
+        assert!(unsafe { knowhere_bitset_get(bitset, 10) });
+        assert!(unsafe { knowhere_bitset_get(bitset, 50) });
+        assert!(!unsafe { knowhere_bitset_get(bitset, 0) });
+        assert!(!unsafe { knowhere_bitset_get(bitset, 7) });
+        
+        knowhere_bitset_free(bitset);
+    }
+
+    #[test]
+    fn test_search_with_bitset_flat() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Flat,
+            metric_type: CMetricType::L2,
+            dim: 4,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        // Add test vectors: 10 vectors at different positions
+        let vectors: Vec<f32> = (0..10 * 4).map(|i| i as f32).collect();
+        let ids: Vec<i64> = (0..10).collect();
+
+        let train_result = knowhere_train_index(index, vectors.as_ptr(), 10, 4);
+        assert_eq!(train_result, CError::Success as i32);
+
+        let add_result = knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 10, 4);
+        assert_eq!(add_result, CError::Success as i32);
+
+        // Create bitset to filter out vectors 0, 1, 2 (the closest to query at origin)
+        let bitset = knowhere_bitset_create(10);
+        unsafe {
+            knowhere_bitset_set(bitset, 0, true);
+            knowhere_bitset_set(bitset, 1, true);
+            knowhere_bitset_set(bitset, 2, true);
+        }
+
+        // Search with bitset filter
+        let query: Vec<f32> = vec![0.0, 0.0, 0.0, 0.0];
+        let result = knowhere_search_with_bitset(
+            index,
+            query.as_ptr(),
+            1,
+            5,
+            4,
+            bitset,
+        );
+        assert!(!result.is_null());
+
+        unsafe {
+            let result_ref = &*result;
+            assert_eq!(result_ref.num_results, 5);
+            
+            // Results should NOT include IDs 0, 1, 2 (they were filtered)
+            for i in 0..result_ref.num_results {
+                let id = *result_ref.ids.add(i);
+                assert!(id >= 3, "ID {} should have been filtered out", id);
+            }
+        }
+
+        knowhere_free_result(result);
+        knowhere_bitset_free(bitset as *mut _);
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_search_with_bitset_null_params() {
+        let query: Vec<f32> = vec![0.0, 0.0, 0.0, 0.0];
+        
+        // Null index
+        let result = knowhere_search_with_bitset(
+            std::ptr::null(),
+            query.as_ptr(),
+            1,
+            5,
+            4,
+            std::ptr::null(),
+        );
+        assert!(result.is_null());
+        
+        // Null query
+        let bitset = knowhere_bitset_create(10);
+        let result = knowhere_search_with_bitset(
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+            5,
+            4,
+            bitset,
+        );
+        assert!(result.is_null());
+        
+        knowhere_bitset_free(bitset as *mut _);
     }
 }

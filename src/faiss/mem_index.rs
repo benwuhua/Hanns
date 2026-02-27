@@ -272,6 +272,79 @@ impl MemIndex {
         Ok((result_ids, result_distances))
     }
 
+    /// Search with bitset filter
+    /// 
+    /// # Arguments
+    /// * `query` - Query vector(s)
+    /// * `req` - Search request parameters
+    /// * `bitset` - BitsetView where 1=filtered out, 0=kept
+    /// 
+    /// # Returns
+    /// SearchResult with filtered results
+    pub fn search_with_bitset(
+        &self,
+        query: &[f32],
+        req: &SearchRequest,
+        bitset: &crate::bitset::BitsetView,
+    ) -> Result<SearchResult> {
+        if self.vectors.is_empty() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "index is empty".to_string(),
+            ));
+        }
+        
+        let n = query.len() / self.config.dim;
+        if n * self.config.dim != query.len() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "query dimension mismatch".to_string(),
+            ));
+        }
+        
+        let k = req.top_k.min(self.vectors.len());
+        
+        let mut results: Vec<(i64, f32)> = Vec::new();
+        
+        // For each query vector
+        for q_idx in 0..n {
+            let q_start = q_idx * self.config.dim;
+            let q_end = q_start + self.config.dim;
+            let query_vec = &query[q_start..q_end];
+            
+            // Compute distances to all vectors, applying bitset filter
+            let mut distances: Vec<(i64, f32)> = self.vectors
+                .iter()
+                .enumerate()
+                .filter_map(|(i, v)| {
+                    // Check bitset: 1=filtered, 0=kept
+                    // Skip if bit is set (filtered out)
+                    if i < bitset.len() && bitset.get(i) {
+                        return None;
+                    }
+                    
+                    let dist = match self.config.metric_type {
+                        MetricType::L2 => l2_distance(query_vec, v),
+                        MetricType::Ip => -inner_product(query_vec, v),
+                        MetricType::Cosine => -cosine_similarity(query_vec, v),
+                    };
+                    Some((self.ids[i], dist))
+                })
+                .collect();
+            
+            // Sort by distance
+            distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            
+            // Take top k
+            for i in 0..k.min(distances.len()) {
+                results.push(distances[i].clone());
+            }
+        }
+        
+        let ids: Vec<i64> = results.iter().map(|(id, _)| *id).collect();
+        let distances: Vec<f32> = results.iter().map(|(_, d)| *d).collect();
+        
+        Ok(SearchResult::new(ids, distances, 0.0))
+    }
+
     /// Range search with predicate filter
     pub fn range_search_with_filter(
         &self,

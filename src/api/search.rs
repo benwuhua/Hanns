@@ -181,3 +181,43 @@ impl Predicate for IdsPredicate {
         self.ids.contains(&id)
     }
 }
+
+/// Bitset predicate for filtering using BitsetView
+/// 
+/// This predicate uses a bitset to filter vectors by their index position.
+/// Bit value 1 = filtered out (excluded), 0 = kept (included).
+/// 
+/// # Example
+/// ```ignore
+/// let bitset = BitsetView::new(1000);
+/// bitset.set(5, true);  // Filter out vector at position 5
+/// let predicate = BitsetPredicate::new(bitset);
+/// ```
+pub struct BitsetPredicate {
+    bitset: crate::bitset::BitsetView,
+}
+
+impl BitsetPredicate {
+    pub fn new(bitset: crate::bitset::BitsetView) -> Self {
+        Self { bitset }
+    }
+    
+    pub fn from_raw(data: Vec<u64>, len: usize) -> Self {
+        Self {
+            bitset: crate::bitset::BitsetView::from_vec(data, len),
+        }
+    }
+}
+
+impl Predicate for BitsetPredicate {
+    fn evaluate(&self, id: i64) -> bool {
+        // id 是向量 ID，需要转换为位置索引
+        // 对于连续 ID (0, 1, 2, ...)，id 本身就是位置
+        // bitset 中 1 表示过滤，0 表示保留
+        // Predicate::evaluate 返回 true 表示保留
+        if id < 0 || id as usize >= self.bitset.len() {
+            return true; // 超出范围，保留
+        }
+        !self.bitset.get(id as usize) // 0=保留 (true), 1=过滤 (false)
+    }
+}

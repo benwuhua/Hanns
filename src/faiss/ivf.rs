@@ -95,6 +95,45 @@ impl IvfIndex {
         results
     }
     
+    /// 搜索时使用 Bitset 过滤
+    /// 
+    /// Bitset 用于过滤掉某些向量（例如已删除的向量）。
+    /// Bitset 参数是一个位图，每个 bit 代表一个向量是否被过滤（1=过滤，0=保留）。
+    /// 
+    /// # Arguments
+    /// * `query` - 查询向量
+    /// * `top_k` - 返回的最近邻数量
+    /// * `bitset` - BitsetView，用于过滤向量
+    /// 
+    /// # Returns
+    /// 返回搜索结果，不包含被过滤的向量
+    pub fn search_with_bitset(&self, query: &[f32], top_k: usize, bitset: &crate::bitset::BitsetView) -> Vec<(usize, f32)> {
+        let mut results: Vec<(usize, f32)> = Vec::new();
+        
+        // 找最近的 nprobe 个簇
+        let mut cluster_dists: Vec<(usize, f32)> = (0..self.nlist)
+            .map(|c| (c, self.l2_dist(query, c)))
+            .collect();
+        cluster_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        cluster_dists.truncate(self.nprobe);
+        
+        // 遍历候选向量，应用 bitset 过滤
+        for (c, _) in cluster_dists {
+            for &idx in &self.lists[c] {
+                // 检查 bitset：1=过滤，0=保留
+                // 如果 idx 超出 bitset 范围或 bit 为 0，则保留
+                if idx >= bitset.len() || !bitset.get(idx) {
+                    let d = self.l2_dist_query(query, idx);
+                    results.push((idx, d));
+                }
+            }
+        }
+        
+        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        results.truncate(top_k);
+        results
+    }
+    
     #[inline]
     fn l2_dist(&self, v: &[f32], c: usize) -> f32 {
         let mut sum = 0.0f32;

@@ -61,6 +61,41 @@ pub trait Index: Send + Sync {
         Err(IndexError::Unsupported("range_search not implemented".into()))
     }
 
+    /// 搜索时使用 Bitset 过滤
+    /// 
+    /// Bitset 用于过滤掉某些向量（例如已删除的向量）。
+    /// Bitset 参数是一个位图，每个 bit 代表一个向量是否被过滤（1=过滤，0=保留）。
+    /// 
+    /// # Arguments
+    /// * `query` - 查询向量
+    /// * `top_k` - 返回的最近邻数量
+    /// * `bitset` - BitsetView，用于过滤向量
+    /// 
+    /// # Returns
+    /// 返回搜索结果，不包含被过滤的向量
+    fn search_with_bitset(&self, query: &Dataset, top_k: usize, bitset: &crate::bitset::BitsetView) -> Result<SearchResult, IndexError> {
+        // 默认实现：先搜索，然后过滤
+        let mut result = self.search(query, top_k)?;
+        
+        // 过滤掉 bitset 中标记为 1 的向量
+        let mut filtered_ids = Vec::new();
+        let mut filtered_distances = Vec::new();
+        
+        for (id, dist) in result.ids.iter().zip(result.distances.iter()) {
+            // 检查 ID 是否在 bitset 范围内
+            let idx = *id as usize;
+            if idx < bitset.len() && !bitset.get(idx) {
+                // 未被过滤，保留
+                filtered_ids.push(*id);
+                filtered_distances.push(*dist);
+            }
+        }
+        
+        result.ids = filtered_ids;
+        result.distances = filtered_distances;
+        Ok(result)
+    }
+
     /// 按 ID 获取向量 (GetVectorByIds)
     fn get_vector_by_ids(&self, ids: &[i64]) -> Result<Vec<f32>, IndexError> {
         Err(IndexError::Unsupported("get_vector_by_ids not implemented".into()))
