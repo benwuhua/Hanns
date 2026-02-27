@@ -29,6 +29,9 @@ pub enum KnowhereError {
     
     #[error("Codec error: {0}")]
     Codec(String),
+    
+    #[error("Internal error: {0}")]
+    InternalError(String),
 }
 
 pub type Result<T> = std::result::Result<T, KnowhereError>;

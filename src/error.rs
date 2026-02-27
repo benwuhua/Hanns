@@ -23,6 +23,10 @@ pub enum KnowhereError {
     Interrupted,
     /// Operation was interrupted with a custom message
     InterruptedWithMessage(String),
+    /// Internal error (e.g., lock poisoning)
+    InternalError(String),
+    /// Invalid argument
+    InvalidArg(String),
 }
 
 impl KnowhereError {
@@ -42,6 +46,8 @@ impl KnowhereError {
         match self {
             Self::Standard { code, .. } => *code,
             Self::Interrupted | Self::InterruptedWithMessage(_) => ErrorCode::INTERRUPTED,
+            Self::InternalError(_) => ErrorCode::IO_ERROR,
+            Self::InvalidArg(_) => ErrorCode::INVALID_ARG,
         }
     }
     
@@ -50,6 +56,8 @@ impl KnowhereError {
             Self::Standard { msg, .. } => msg,
             Self::Interrupted => "Operation interrupted",
             Self::InterruptedWithMessage(msg) => msg,
+            Self::InternalError(msg) => msg,
+            Self::InvalidArg(msg) => msg,
         }
     }
 }

@@ -25,6 +25,7 @@ pub mod hnsw_prq;
 pub mod sparse;
 pub mod scann;
 pub mod ivf_rabitq;
+pub mod ivf_flat_cc;
 
 pub use index::FaissIndex;
 pub use mem_index::MemIndex;
@@ -34,6 +35,7 @@ pub use ivf::IvfIndex;
 pub use ivfpq::IvfPqIndex;
 pub use ivf_sq8::IvfSq8Index;
 pub use ivf_flat::IvfFlatIndex;
+pub use ivf_flat_cc::IvfFlatCcIndex;
 pub use pq::PqEncoder;
 pub use diskann::DiskAnnIndex;
 pub use scann::{ScaNNIndex, ScaNNConfig};

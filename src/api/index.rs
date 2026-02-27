@@ -25,6 +25,8 @@ pub enum IndexType {
     HnswPrq,
     /// IVF-RaBitQ (Rotated Adaptive Bit Quantization)
     IvfRabitq,
+    /// IVF-FLAT-CC (Concurrent Version)
+    IvfFlatCc,
 }
 
 impl Default for IndexType {
@@ -46,6 +48,7 @@ impl IndexType {
             "scann" => Some(IndexType::Scann),
             "hnsw_prq" | "hnsw-prq" => Some(IndexType::HnswPrq),
             "ivf_rabitq" | "ivf-rabitq" | "rabitq" => Some(IndexType::IvfRabitq),
+            "ivf_flat_cc" | "ivf-flat-cc" | "ivfcc" => Some(IndexType::IvfFlatCc),
             _ => None,
         }
     }
@@ -162,6 +165,12 @@ pub struct IndexParams {
     /// For RaBitQ: number of bits for query
     #[serde(default)]
     pub rabitq_bits_query: Option<usize>,
+    /// For IVF-CC: segment size for concurrent operations
+    #[serde(default)]
+    pub ssize: Option<usize>,
+    /// For IVF: use Elkan algorithm for k-means
+    #[serde(default)]
+    pub use_elkan: Option<bool>,
 }
 
 impl IndexParams {
@@ -186,6 +195,15 @@ impl IndexParams {
         Self {
             m: Some(m),
             nbits_per_idx: Some(nbits_per_idx),
+            ..Default::default()
+        }
+    }
+    
+    pub fn ivf_cc(nlist: usize, nprobe: usize, ssize: usize) -> Self {
+        Self {
+            nlist: Some(nlist),
+            nprobe: Some(nprobe),
+            ssize: Some(ssize),
             ..Default::default()
         }
     }
