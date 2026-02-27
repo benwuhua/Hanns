@@ -263,13 +263,13 @@ mod tests {
             d: 32,
             nsplits: 2,
             msub: 4,
-            nbits: 8,
+            nbits: 6,  // Reduced from 8 to 6 (64 codebooks) to work with fewer training vectors
             max_beam_size: 5,
         };
         let mut prq = ProductResidualQuantizer::new(config).unwrap();
 
-        // Generate training data
-        let n_train = 100;
+        // Generate training data - need at least as many vectors as codebooks per subquantizer
+        let n_train = 512;  // Increased to ensure enough vectors for k-means
         let mut train_data = vec![0.0f32; n_train * 32];
         for i in 0..n_train {
             for j in 0..32 {

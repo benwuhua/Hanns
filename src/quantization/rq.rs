@@ -117,12 +117,13 @@ impl ResidualQuantizer {
             }
 
             // Perform k-means clustering for this subspace
+            let codebook_slice = codebooks_per_sub * self.sub_dim;
             ResidualQuantizer::kmeans_train_static(
                 &sub_vectors,
                 n,
                 codebooks_per_sub,
                 self.sub_dim,
-                &mut self.codebooks[sub_codebook_offset..],
+                &mut self.codebooks[sub_codebook_offset..sub_codebook_offset + codebook_slice],
             )?;
         }
 

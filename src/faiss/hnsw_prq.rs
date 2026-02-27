@@ -385,21 +385,24 @@ impl HnswPrqIndex {
 
             // Connect neighbors to new node (bidirectional)
             for &(n_idx, dist) in &neighbors {
-                let neighbors_list = &mut self.node_info[n_idx].layer_neighbors[layer].neighbors;
-                if neighbors_list.len() < max_m {
-                    neighbors_list.push((self.ids[idx], dist));
-                } else {
-                    // Find the furthest neighbor and replace if closer
-                    let mut furthest_idx = 0;
-                    let mut furthest_dist = f32::MIN;
-                    for (i, &(_, d)) in neighbors_list.iter().enumerate() {
-                        if d > furthest_dist {
-                            furthest_dist = d;
-                            furthest_idx = i;
+                // Only connect if the neighbor exists at this layer
+                if layer <= self.node_info[n_idx].max_layer {
+                    let neighbors_list = &mut self.node_info[n_idx].layer_neighbors[layer].neighbors;
+                    if neighbors_list.len() < max_m {
+                        neighbors_list.push((self.ids[idx], dist));
+                    } else {
+                        // Find the furthest neighbor and replace if closer
+                        let mut furthest_idx = 0;
+                        let mut furthest_dist = f32::MIN;
+                        for (i, &(_, d)) in neighbors_list.iter().enumerate() {
+                            if d > furthest_dist {
+                                furthest_dist = d;
+                                furthest_idx = i;
+                            }
                         }
-                    }
-                    if dist < furthest_dist {
-                        neighbors_list[furthest_idx] = (self.ids[idx], dist);
+                        if dist < furthest_dist {
+                            neighbors_list[furthest_idx] = (self.ids[idx], dist);
+                        }
                     }
                 }
             }
@@ -434,16 +437,18 @@ impl HnswPrqIndex {
             results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
             results.truncate(ef);
 
-            // Explore neighbors
-            let neighbors = &self.node_info[idx].layer_neighbors[layer].neighbors;
-            for &(neighbor_id, _) in neighbors {
-                if let Some(&neighbor_idx) = self.id_to_idx.get(&neighbor_id) {
-                    if !visited.contains(&neighbor_idx) {
-                        visited.insert(neighbor_idx);
-                        let neighbor_dist =
-                            self.compute_distance_to_code(query, &self.node_info[neighbor_idx].code);
-                        candidates.push((neighbor_dist, neighbor_idx));
-                        candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+            // Explore neighbors (only if this node exists at this layer)
+            if layer <= self.node_info[idx].max_layer {
+                let neighbors = &self.node_info[idx].layer_neighbors[layer].neighbors;
+                for &(neighbor_id, _) in neighbors {
+                    if let Some(&neighbor_idx) = self.id_to_idx.get(&neighbor_id) {
+                        if !visited.contains(&neighbor_idx) {
+                            visited.insert(neighbor_idx);
+                            let neighbor_dist =
+                                self.compute_distance_to_code(query, &self.node_info[neighbor_idx].code);
+                            candidates.push((neighbor_dist, neighbor_idx));
+                            candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+                        }
                     }
                 }
             }
@@ -620,12 +625,12 @@ mod tests {
             .with_m(8)
             .with_ef_construction(100)
             .with_ef_search(32)
-            .with_prq_params(2, 4, 8);
+            .with_prq_params(2, 4, 6);  // Reduced nbits from 8 to 6 (64 codebooks)
 
         let mut index = HnswPrqIndex::new(config).unwrap();
 
-        // Generate training data
-        let n_train = 100;
+        // Generate training data - need enough vectors for k-means (at least 2^6 = 64 per subquantizer)
+        let n_train = 512;
         let mut train_data = vec![0.0f32; n_train * 16];
         for i in 0..n_train {
             for j in 0..16 {
@@ -638,7 +643,7 @@ mod tests {
 
         // Add vectors
         index.add(&train_data, None).unwrap();
-        assert_eq!(index.count(), 100);
+        assert_eq!(index.count(), 512);
 
         // Search
         let query: Vec<f32> = (0..16).map(|i| i as f32 * 0.1).collect();
