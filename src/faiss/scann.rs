@@ -11,6 +11,10 @@ use std::sync::RwLock;
 use thiserror::Error;
 use serde::{Serialize, Deserialize};
 
+use crate::bitset::BitsetView;
+use crate::dataset::Dataset;
+use crate::index::{Index as IndexTrait, IndexError, SearchResult as IndexSearchResult};
+
 #[derive(Error, Debug)]
 pub enum ScannError {
     #[error("Index not trained")]
@@ -497,6 +501,110 @@ impl ScaNNIndex {
         reranked
     }
 
+    /// Search for nearest neighbors with bitset filtering
+    ///
+    /// # Arguments
+    /// * `query` - Query vector(s)
+    /// * `k` - Number of results to return
+    /// * `bitset` - BitsetView for filtering (1=filtered, 0=kept)
+    ///
+    /// # Returns
+    /// Filtered search results
+    pub fn search_with_bitset(&self, query: &[f32], k: usize, bitset: &crate::bitset::BitsetView) -> Vec<(i64, f32)> {
+        if !self.trained {
+            return Vec::new();
+        }
+
+        let n_queries = query.len() / self.dim;
+        let mut all_results = Vec::new();
+
+        for q_idx in 0..n_queries {
+            let q_start = q_idx * self.dim;
+            let query_vec = &query[q_start..q_start + self.dim];
+
+            let results = self.search_single_with_bitset(query_vec, k, bitset);
+            all_results.extend(results.into_iter().take(k));
+        }
+
+        all_results
+    }
+
+    /// Search single query with bitset filtering
+    ///
+    /// Integrates bitset checking directly into the search algorithm.
+    ///
+    /// # Arguments
+    /// * `query` - Query vector
+    /// * `k` - Number of results to return
+    /// * `bitset` - BitsetView for filtering (1=filtered, 0=kept)
+    ///
+    /// # Returns
+    /// Filtered search results
+    fn search_single_with_bitset(&self, query: &[f32], k: usize, bitset: &crate::bitset::BitsetView) -> Vec<(i64, f32)> {
+        // Phase 1: Coarse search with bitset filtering
+        let candidates = self.coarse_search_with_bitset(query, self.config.reorder_k, bitset);
+
+        // Phase 2: Rerank using original vectors with bitset filtering
+        let reranked = self.rerank_with_bitset(query, candidates, k, bitset);
+
+        reranked
+    }
+
+    /// Coarse search using ADC with bitset filtering
+    fn coarse_search_with_bitset(&self, query: &[f32], k: usize, bitset: &crate::bitset::BitsetView) -> Vec<(i64, f32)> {
+        let inverted_lists = self.inverted_lists.read().unwrap();
+        let id_list = self.ids.read().unwrap();
+        let mut candidates = Vec::new();
+
+        for (_, list) in inverted_lists.iter() {
+            for &(id, ref codes) in list {
+                // Check bitset: find internal index for this ID
+                if let Some(idx) = id_list.iter().position(|&x| x == id) {
+                    // Skip if filtered (bitset: 1=filtered, 0=kept)
+                    if idx < bitset.len() && bitset.get(idx) {
+                        continue;
+                    }
+                }
+
+                let dist = self.quantizer.adc_distance(query, codes);
+                candidates.push((id, dist));
+            }
+        }
+
+        // Sort by distance and take top k
+        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        candidates.truncate(k);
+
+        candidates
+    }
+
+    /// Rerank candidates using original vectors with bitset filtering
+    fn rerank_with_bitset(&self, query: &[f32], candidates: Vec<(i64, f32)>, k: usize, bitset: &crate::bitset::BitsetView) -> Vec<(i64, f32)> {
+        let vecs = self.vectors.read().unwrap();
+        let id_list = self.ids.read().unwrap();
+
+        let mut reranked: Vec<(i64, f32)> = candidates
+            .iter()
+            .filter_map(|&(id, _)| {
+                let pos = id_list.iter().position(|&x| x == id)?;
+
+                // Double-check bitset during reranking
+                if pos < bitset.len() && bitset.get(pos) {
+                    return None;
+                }
+
+                let vector = &vecs[pos * self.dim..(pos + 1) * self.dim];
+                let dist = self.l2_distance(query, vector);
+                Some((id, dist))
+            })
+            .collect();
+
+        reranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        reranked.truncate(k);
+
+        reranked
+    }
+
     /// Coarse search using ADC
     fn coarse_search(&self, query: &[f32], k: usize) -> Vec<(i64, f32)> {
         let inverted_lists = self.inverted_lists.read().unwrap();
@@ -787,6 +895,76 @@ impl ScaNNIndex {
     }
 }
 
+// Implement Index trait for ScaNNIndex
+impl crate::index::Index for ScaNNIndex {
+    fn index_type(&self) -> &str {
+        "SCANN"
+    }
+
+    fn dim(&self) -> usize {
+        self.dim
+    }
+
+    fn count(&self) -> usize {
+        self.count()
+    }
+
+    fn is_trained(&self) -> bool {
+        self.trained
+    }
+
+    fn train(&mut self, dataset: &crate::dataset::Dataset) -> Result<(), crate::index::IndexError> {
+        let vectors = dataset.vectors();
+        let query_sample = None; // Could use dataset queries if available
+        self.train(&vectors, query_sample);
+        Ok(())
+    }
+
+    fn add(&mut self, dataset: &crate::dataset::Dataset) -> Result<usize, crate::index::IndexError> {
+        let vectors = dataset.vectors();
+        let ids = dataset.ids();
+        // Call inherent method using fully qualified syntax to avoid trait method conflict
+        let added = ScaNNIndex::add(self, &vectors, ids);
+        Ok(added)
+    }
+
+    fn search(&self, query: &crate::dataset::Dataset, top_k: usize) -> Result<crate::index::SearchResult, crate::index::IndexError> {
+        let vectors = query.vectors();
+        let results = self.search(&vectors, top_k);
+        
+        let ids: Vec<i64> = results.iter().map(|(id, _)| *id).collect();
+        let distances: Vec<f32> = results.iter().map(|(_, dist)| *dist).collect();
+        
+        Ok(crate::index::SearchResult::new(ids, distances, 0.0))
+    }
+
+    fn search_with_bitset(&self, query: &crate::dataset::Dataset, top_k: usize, bitset: &crate::bitset::BitsetView) -> Result<crate::index::SearchResult, crate::index::IndexError> {
+        let vectors = query.vectors();
+        let results = self.search_with_bitset(&vectors, top_k, bitset);
+        
+        let ids: Vec<i64> = results.iter().map(|(id, _)| *id).collect();
+        let distances: Vec<f32> = results.iter().map(|(_, dist)| *dist).collect();
+        
+        Ok(crate::index::SearchResult::new(ids, distances, 0.0))
+    }
+
+    fn get_vector_by_ids(&self, ids: &[i64]) -> Result<Vec<f32>, crate::index::IndexError> {
+        self.get_vector_by_ids(ids).map_err(|e| crate::index::IndexError::Unsupported(e.to_string()))
+    }
+
+    fn save(&self, path: &str) -> Result<(), crate::index::IndexError> {
+        self.save(path).map_err(|e| crate::index::IndexError::Unsupported(e.to_string()))
+    }
+
+    fn load(&mut self, path: &str) -> Result<(), crate::index::IndexError> {
+        self.load(path).map_err(|e| crate::index::IndexError::Unsupported(e.to_string()))
+    }
+
+    fn has_raw_data(&self) -> bool {
+        self.has_raw_data()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -965,5 +1143,108 @@ mod tests {
         // Test ADC distance
         let dist = quantizer.adc_distance(vector, &codes);
         assert!(dist.is_finite());
+    }
+
+    #[test]
+    fn test_scann_search_with_bitset() {
+        let dim = 64;
+        let config = ScaNNConfig::new(8, 64, 50);
+
+        let mut index = ScaNNIndex::new(dim, config).unwrap();
+
+        // Generate test data
+        let n = 200;
+        let mut data = vec![0.0f32; n * dim];
+        for i in 0..data.len() {
+            data[i] = (i as f32 * 0.01).sin();
+        }
+
+        // Train and add
+        index.train(&data, None);
+        index.add(&data, None);
+
+        // Create bitset: filter out first 10 vectors (indices 0-9)
+        let mut bitset_data = vec![0u8; (n + 7) / 8];
+        for i in 0..10 {
+            bitset_data[i / 8] |= 1 << (i % 8);
+        }
+        let bitset = crate::bitset::BitsetView::from_vec(
+            bitset_data.iter().map(|&b| b as u64).collect(),
+            n
+        );
+
+        // Search with bitset
+        let query = &data[0..dim];
+        let results = index.search_with_bitset(query, 10, &bitset);
+
+        // Verify results don't include filtered IDs (0-9)
+        assert!(results.len() <= 10, "Should return at most k=10 results, got {}", results.len());
+        for (id, _) in &results {
+            assert!(*id >= 10, "Filtered ID {} should not appear in results", id);
+        }
+
+        // First result should be close to query (index 0 is filtered, so next closest)
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_scann_search_with_bitset_all_filtered() {
+        let dim = 32;
+        let config = ScaNNConfig::new(4, 32, 20);
+
+        let mut index = ScaNNIndex::new(dim, config).unwrap();
+
+        let n = 50;
+        let mut data = vec![0.0f32; n * dim];
+        for i in 0..data.len() {
+            data[i] = (i as f32 * 0.05).sin();
+        }
+
+        index.train(&data, None);
+        index.add(&data, None);
+
+        // Create bitset: filter all vectors
+        let mut bitset = crate::bitset::BitsetView::new(n);
+        bitset.set_all();
+
+        // Search with all filtered
+        let query = &data[0..dim];
+        let results = index.search_with_bitset(query, 10, &bitset);
+
+        // Should return empty results
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_scann_search_with_bitset_partial_filter() {
+        let dim = 64;
+        let config = ScaNNConfig::new(8, 64, 50);
+
+        let mut index = ScaNNIndex::new(dim, config).unwrap();
+
+        let n = 100;
+        let mut data = vec![0.0f32; n * dim];
+        for i in 0..data.len() {
+            data[i] = (i as f32 * 0.02).cos();
+        }
+
+        index.train(&data, None);
+        index.add(&data, None);
+
+        // Create bitset: filter every other vector (even indices)
+        let mut bitset = crate::bitset::BitsetView::new(n);
+        for i in (0..n).step_by(2) {
+            bitset.set(i, true);
+        }
+
+        // Search with bitset
+        let query = &data[1..1 + dim]; // Query vector at index 1 (odd, not filtered)
+        let results = index.search_with_bitset(query, 5, &bitset);
+
+        // Verify all results are odd indices (not filtered)
+        assert!(results.len() > 0);
+        for (id, _) in &results {
+            assert_eq!(*id % 2, 1, "ID {} should be odd (not filtered)", id);
+        }
     }
 }

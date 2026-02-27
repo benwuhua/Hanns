@@ -288,7 +288,8 @@ impl IndexWrapper {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
         } else if let Some(ref mut idx) = self.hnsw {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
-        } else if let Some(ref mut idx) = self.scann {
+        } else if let Some(ref idx) = self.scann {
+            // ScaNN uses interior mutability (RwLock)
             Ok(idx.add(vectors, ids))
         } else if let Some(ref mut idx) = self.hnsw_prq {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
