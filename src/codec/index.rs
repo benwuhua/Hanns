@@ -26,6 +26,7 @@ impl IndexCodec {
             IndexType::DiskAnn => 4,
             IndexType::Annoy => 5,
             IndexType::HnswPrq => 7,
+            IndexType::IvfRabitq => 8,
         };
         writer.write_all(&idx_type.to_le_bytes())?;
         
@@ -72,6 +73,8 @@ impl IndexCodec {
             3 => IndexType::Hnsw,
             4 => IndexType::DiskAnn,
             5 => IndexType::Annoy,
+            7 => IndexType::HnswPrq,
+            8 => IndexType::IvfRabitq,
             _ => return Err(KnowhereError::Codec(format!("unknown index type: {}", idx_type))),
         };
         

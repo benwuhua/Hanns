@@ -76,6 +76,7 @@ pub enum CIndexType {
     Hnsw = 1,
     Scann = 2,
     HnswPrq = 3,
+    IvfRabitq = 4,
 }
 
 /// Metric 类型枚举
@@ -103,6 +104,9 @@ pub struct CIndexConfig {
     pub prq_nsplits: usize,
     pub prq_msub: usize,
     pub prq_nbits: usize,
+    // IVF-RaBitQ parameters
+    pub num_clusters: usize,
+    pub nprobe: usize,
 }
 
 impl Default for CIndexConfig {
@@ -119,6 +123,8 @@ impl Default for CIndexConfig {
             prq_nsplits: 2,
             prq_msub: 4,
             prq_nbits: 8,
+            num_clusters: 256,
+            nprobe: 8,
         }
     }
 }
@@ -181,12 +187,13 @@ pub struct CGetVectorResult {
     pub ids: *mut i64,
 }
 
-/// 包装索引对象 - 支持 Flat, HNSW, ScaNN 和 HNSW-PRQ
+/// 包装索引对象 - 支持 Flat, HNSW, ScaNN, HNSW-PRQ 和 IVF-RaBitQ
 struct IndexWrapper {
     flat: Option<MemIndex>,
     hnsw: Option<HnswIndex>,
     scann: Option<ScaNNIndex>,
     hnsw_prq: Option<crate::faiss::HnswPrqIndex>,
+    ivf_rabitq: Option<crate::faiss::IvfRaBitqIndex>,
     dim: usize,
 }
 
@@ -212,7 +219,7 @@ impl IndexWrapper {
                     params: IndexParams::default(),
                 };
                 let flat = MemIndex::new(&index_config).ok()?;
-                Some(Self { flat: Some(flat), hnsw: None, scann: None, hnsw_prq: None, dim })
+                Some(Self { flat: Some(flat), hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, dim })
             }
             CIndexType::Hnsw => {
                 let mut index_config = IndexConfig {
@@ -228,7 +235,7 @@ impl IndexWrapper {
                     index_config.params.ef_search = Some(config.ef_search);
                 }
                 let hnsw = HnswIndex::new(&index_config).ok()?;
-                Some(Self { flat: None, hnsw: Some(hnsw), scann: None, hnsw_prq: None, dim })
+                Some(Self { flat: None, hnsw: Some(hnsw), scann: None, hnsw_prq: None, ivf_rabitq: None, dim })
             }
             CIndexType::Scann => {
                 let num_partitions = if config.num_partitions > 0 {
@@ -248,7 +255,7 @@ impl IndexWrapper {
                 };
                 let scann_config = ScaNNConfig::new(num_partitions, num_centroids, reorder_k);
                 let scann = ScaNNIndex::new(dim, scann_config).ok()?;
-                Some(Self { flat: None, hnsw: None, scann: Some(scann), hnsw_prq: None, dim })
+                Some(Self { flat: None, hnsw: None, scann: Some(scann), hnsw_prq: None, ivf_rabitq: None, dim })
             }
             CIndexType::HnswPrq => {
                 let mut index_config = IndexConfig {
@@ -278,7 +285,18 @@ impl IndexWrapper {
                     .with_metric_type(metric);
                 
                 let hnsw_prq = crate::faiss::HnswPrqIndex::new(hnsw_prq_config).ok()?;
-                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: Some(hnsw_prq), dim })
+                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: Some(hnsw_prq), ivf_rabitq: None, dim })
+            }
+            CIndexType::IvfRabitq => {
+                let nlist = if config.num_clusters > 0 { config.num_clusters } else { 256 };
+                let nprobe = if config.nprobe > 0 { config.nprobe } else { 8 };
+                
+                let ivf_rabitq_config = crate::faiss::IvfRaBitqConfig::new(dim, nlist)
+                    .with_nprobe(nprobe)
+                    .with_metric(metric);
+                
+                let ivf_rabitq = crate::faiss::IvfRaBitqIndex::new(ivf_rabitq_config);
+                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: Some(ivf_rabitq), dim })
             }
         }
     }
@@ -292,6 +310,8 @@ impl IndexWrapper {
             // ScaNN uses interior mutability (RwLock)
             Ok(idx.add(vectors, ids))
         } else if let Some(ref mut idx) = self.hnsw_prq {
+            idx.add(vectors, ids).map_err(|_| CError::Internal)
+        } else if let Some(ref mut idx) = self.ivf_rabitq {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
         } else {
             Err(CError::InvalidArg)
@@ -307,6 +327,8 @@ impl IndexWrapper {
             idx.train(vectors, None);
             Ok(())
         } else if let Some(ref mut idx) = self.hnsw_prq {
+            idx.train(vectors).map_err(|_| CError::Internal)
+        } else if let Some(ref mut idx) = self.ivf_rabitq {
             idx.train(vectors).map_err(|_| CError::Internal)
         } else {
             Err(CError::InvalidArg)
@@ -337,6 +359,11 @@ impl IndexWrapper {
         } else if let Some(ref idx) = self.hnsw_prq {
             let start = std::time::Instant::now();
             let results = idx.search(query, top_k, None).map_err(|_| CError::Internal)?;
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
+        } else if let Some(ref idx) = self.ivf_rabitq {
+            let start = std::time::Instant::now();
+            let results = idx.search(query, &req).map_err(|_| CError::Internal)?;
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
             Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
         } else {

@@ -23,6 +23,8 @@ pub enum IndexType {
     Scann,
     /// HNSW-PRQ (Progressive Residual Quantization)
     HnswPrq,
+    /// IVF-RaBitQ (Rotated Adaptive Bit Quantization)
+    IvfRabitq,
 }
 
 impl Default for IndexType {
@@ -43,6 +45,7 @@ impl IndexType {
             #[cfg(feature = "scann")]
             "scann" => Some(IndexType::Scann),
             "hnsw_prq" | "hnsw-prq" => Some(IndexType::HnswPrq),
+            "ivf_rabitq" | "ivf-rabitq" | "rabitq" => Some(IndexType::IvfRabitq),
             _ => None,
         }
     }
@@ -156,6 +159,9 @@ pub struct IndexParams {
     /// For PRQ: number of bits per subquantizer (nbits)
     #[serde(default)]
     pub prq_nbits: Option<usize>,
+    /// For RaBitQ: number of bits for query
+    #[serde(default)]
+    pub rabitq_bits_query: Option<usize>,
 }
 
 impl IndexParams {
