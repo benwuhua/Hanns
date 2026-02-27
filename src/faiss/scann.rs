@@ -760,6 +760,13 @@ impl ScaNNIndex {
 
         Ok(())
     }
+
+    /// Check if this index contains raw data
+    /// 
+    /// ScaNN stores raw vectors for re-ranking when reorder_k > 0
+    pub fn has_raw_data(&self) -> bool {
+        self.config.reorder_k > 0
+    }
 }
 
 #[cfg(test)]

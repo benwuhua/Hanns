@@ -580,6 +580,13 @@ impl MemIndex {
         
         Ok(())
     }
+
+    /// Check if this index contains raw data
+    /// 
+    /// MemIndex (Flat index) always stores raw vectors
+    pub fn has_raw_data(&self) -> bool {
+        true
+    }
 }
 
 fn inner_product(a: &[f32], b: &[f32]) -> f32 {

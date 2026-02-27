@@ -836,6 +836,43 @@ pub extern "C" fn knowhere_get_index_dim(index: *const std::ffi::c_void) -> usiz
     }
 }
 
+/// 检查索引是否包含原始数据 (HasRawData)
+/// 
+/// 用于判断索引是否存储了原始向量数据，以便支持 GetVectorByIds 等操作。
+/// 
+/// # Arguments
+/// * `index` - 索引指针 (由 knowhere_create_index 创建)
+/// 
+/// # Returns
+/// 1 如果索引包含原始数据，0 否则
+#[no_mangle]
+pub extern "C" fn knowhere_has_raw_data(index: *const std::ffi::c_void) -> i32 {
+    if index.is_null() {
+        return 0;
+    }
+    
+    unsafe {
+        let wrapper = &*(index as *const IndexWrapper);
+        // Check which index type is active and call has_raw_data
+        if let Some(ref flat) = wrapper.flat {
+            if flat.has_raw_data() {
+                return 1;
+            }
+        }
+        if let Some(ref hnsw) = wrapper.hnsw {
+            if hnsw.has_raw_data() {
+                return 1;
+            }
+        }
+        if let Some(ref scann) = wrapper.scann {
+            if scann.has_raw_data() {
+                return 1;
+            }
+        }
+        0
+    }
+}
+
 /// 释放搜索结果
 #[no_mangle]
 pub extern "C" fn knowhere_free_result(result: *mut CSearchResult) {

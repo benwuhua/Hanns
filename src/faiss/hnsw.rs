@@ -871,6 +871,13 @@ impl HnswIndex {
         self.trained = true;
         Ok(())
     }
+
+    /// Check if this index contains raw data
+    /// 
+    /// HNSW index stores raw vectors in the graph nodes
+    pub fn has_raw_data(&self) -> bool {
+        true
+    }
 }
 
 /// Generate a random level for a new node using exponential distribution.

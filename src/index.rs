@@ -116,6 +116,17 @@ pub trait Index: Send + Sync {
     
     /// 从文件加载
     fn load(&mut self, path: &str) -> Result<(), IndexError>;
+    
+    /// 检查索引是否包含原始数据 (HasRawData)
+    /// 
+    /// 用于判断索引是否存储了原始向量数据，以便支持 GetVectorByIds 等操作。
+    /// 
+    /// # Returns
+    /// true 如果索引包含原始数据，false 否则
+    fn has_raw_data(&self) -> bool {
+        // 默认实现：返回 false
+        false
+    }
 }
 
 /// 搜索结果
