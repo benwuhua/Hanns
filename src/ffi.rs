@@ -33,6 +33,8 @@
 //! knowhere_free_index(index);
 //! ```
 
+pub mod minhash_lsh_ffi;
+
 use std::path::Path;
 use crate::api::{IndexConfig, IndexType, MetricType, IndexParams, SearchRequest, SearchResult as ApiSearchResult, Result as ApiResult};
 use crate::faiss::{MemIndex, HnswIndex, ScaNNIndex, ScaNNConfig};

@@ -2,6 +2,8 @@
 //! 
 //! 统一的索引接口
 
+pub mod minhash_lsh;
+
 use crate::api::KnowhereError;
 use crate::dataset::Dataset;
 use crate::bitset::BitsetView;
