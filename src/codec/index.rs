@@ -25,6 +25,7 @@ impl IndexCodec {
             IndexType::Hnsw => 3,
             IndexType::DiskAnn => 4,
             IndexType::Annoy => 5,
+            IndexType::HnswPrq => 7,
         };
         writer.write_all(&idx_type.to_le_bytes())?;
         

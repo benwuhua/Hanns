@@ -21,6 +21,7 @@ pub mod diskann;
 pub mod binary;
 pub mod annoy;
 pub mod hnsw_quantized;
+pub mod hnsw_prq;
 pub mod sparse;
 pub mod scann;
 
@@ -37,3 +38,4 @@ pub use diskann::DiskAnnIndex;
 pub use scann::{ScaNNIndex, ScaNNConfig};
 pub use binary::BinaryIndex;
 pub use sparse::{SparseIndex, SparseVector};
+pub use hnsw_prq::{HnswPrqIndex, HnswPrqConfig};

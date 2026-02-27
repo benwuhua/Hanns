@@ -21,6 +21,8 @@ pub enum IndexType {
     /// SCANN (Google ScaNN) - for future implementation
     #[cfg(feature = "scann")]
     Scann,
+    /// HNSW-PRQ (Progressive Residual Quantization)
+    HnswPrq,
 }
 
 impl Default for IndexType {
@@ -40,6 +42,7 @@ impl IndexType {
             "annoy" => Some(IndexType::Annoy),
             #[cfg(feature = "scann")]
             "scann" => Some(IndexType::Scann),
+            "hnsw_prq" | "hnsw-prq" => Some(IndexType::HnswPrq),
             _ => None,
         }
     }
@@ -144,6 +147,15 @@ pub struct IndexParams {
     /// For DiskANN: beam width for search
     #[serde(default)]
     pub beamwidth: Option<usize>,
+    /// For PRQ: number of subquantizer splits (m)
+    #[serde(default)]
+    pub prq_m: Option<usize>,
+    /// For PRQ: number of residual quantizers (nrq)
+    #[serde(default)]
+    pub prq_nrq: Option<usize>,
+    /// For PRQ: number of bits per subquantizer (nbits)
+    #[serde(default)]
+    pub prq_nbits: Option<usize>,
 }
 
 impl IndexParams {

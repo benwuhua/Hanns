@@ -37,7 +37,9 @@ pub mod minhash_lsh_ffi;
 
 use std::path::Path;
 use crate::api::{IndexConfig, IndexType, MetricType, IndexParams, SearchRequest, SearchResult as ApiSearchResult, Result as ApiResult};
+use crate::dataset::Dataset;
 use crate::faiss::{MemIndex, HnswIndex, ScaNNIndex, ScaNNConfig};
+use crate::index::Index;
 
 /// C API 错误码
 #[repr(i32)]
@@ -58,6 +60,7 @@ pub enum CIndexType {
     Flat = 0,
     Hnsw = 1,
     Scann = 2,
+    HnswPrq = 3,
 }
 
 /// Metric 类型枚举
@@ -81,6 +84,10 @@ pub struct CIndexConfig {
     pub num_partitions: usize,
     pub num_centroids: usize,
     pub reorder_k: usize,
+    // PRQ parameters for HNSW-PRQ
+    pub prq_nsplits: usize,
+    pub prq_msub: usize,
+    pub prq_nbits: usize,
 }
 
 impl Default for CIndexConfig {
@@ -94,6 +101,9 @@ impl Default for CIndexConfig {
             num_partitions: 16,
             num_centroids: 256,
             reorder_k: 100,
+            prq_nsplits: 2,
+            prq_msub: 4,
+            prq_nbits: 8,
         }
     }
 }
@@ -156,11 +166,12 @@ pub struct CGetVectorResult {
     pub ids: *mut i64,
 }
 
-/// 包装索引对象 - 支持 Flat, HNSW 和 ScaNN
+/// 包装索引对象 - 支持 Flat, HNSW, ScaNN 和 HNSW-PRQ
 struct IndexWrapper {
     flat: Option<MemIndex>,
     hnsw: Option<HnswIndex>,
     scann: Option<ScaNNIndex>,
+    hnsw_prq: Option<crate::faiss::HnswPrqIndex>,
     dim: usize,
 }
 
@@ -186,7 +197,7 @@ impl IndexWrapper {
                     params: IndexParams::default(),
                 };
                 let flat = MemIndex::new(&index_config).ok()?;
-                Some(Self { flat: Some(flat), hnsw: None, scann: None, dim })
+                Some(Self { flat: Some(flat), hnsw: None, scann: None, hnsw_prq: None, dim })
             }
             CIndexType::Hnsw => {
                 let mut index_config = IndexConfig {
@@ -202,7 +213,7 @@ impl IndexWrapper {
                     index_config.params.ef_search = Some(config.ef_search);
                 }
                 let hnsw = HnswIndex::new(&index_config).ok()?;
-                Some(Self { flat: None, hnsw: Some(hnsw), scann: None, dim })
+                Some(Self { flat: None, hnsw: Some(hnsw), scann: None, hnsw_prq: None, dim })
             }
             CIndexType::Scann => {
                 let num_partitions = if config.num_partitions > 0 {
@@ -222,7 +233,37 @@ impl IndexWrapper {
                 };
                 let scann_config = ScaNNConfig::new(num_partitions, num_centroids, reorder_k);
                 let scann = ScaNNIndex::new(dim, scann_config).ok()?;
-                Some(Self { flat: None, hnsw: None, scann: Some(scann), dim })
+                Some(Self { flat: None, hnsw: None, scann: Some(scann), hnsw_prq: None, dim })
+            }
+            CIndexType::HnswPrq => {
+                let mut index_config = IndexConfig {
+                    index_type: IndexType::HnswPrq,
+                    metric_type: metric,
+                    dim,
+                    params: IndexParams {
+                        m: Some(16),
+                        ef_construction: if config.ef_construction > 0 { Some(config.ef_construction) } else { None },
+                        ef_search: if config.ef_search > 0 { Some(config.ef_search) } else { None },
+                        prq_m: Some(if config.prq_nsplits > 0 { config.prq_nsplits } else { 2 }),
+                        prq_nrq: Some(if config.prq_msub > 0 { config.prq_msub } else { 4 }),
+                        prq_nbits: Some(if config.prq_nbits > 0 { config.prq_nbits } else { 8 }),
+                        ..Default::default()
+                    },
+                };
+                
+                let hnsw_prq_config = crate::faiss::HnswPrqConfig::new(dim)
+                    .with_m(16)
+                    .with_ef_construction(config.ef_construction)
+                    .with_ef_search(config.ef_search)
+                    .with_prq_params(
+                        if config.prq_nsplits > 0 { config.prq_nsplits } else { 2 },
+                        if config.prq_msub > 0 { config.prq_msub } else { 4 },
+                        if config.prq_nbits > 0 { config.prq_nbits } else { 8 },
+                    )
+                    .with_metric_type(metric);
+                
+                let hnsw_prq = crate::faiss::HnswPrqIndex::new(hnsw_prq_config).ok()?;
+                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: Some(hnsw_prq), dim })
             }
         }
     }
@@ -232,8 +273,10 @@ impl IndexWrapper {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
         } else if let Some(ref mut idx) = self.hnsw {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
-        } else if let Some(ref idx) = self.scann {
+        } else if let Some(ref mut idx) = self.scann {
             Ok(idx.add(vectors, ids))
+        } else if let Some(ref mut idx) = self.hnsw_prq {
+            idx.add(vectors, ids).map_err(|_| CError::Internal)
         } else {
             Err(CError::InvalidArg)
         }
@@ -247,6 +290,8 @@ impl IndexWrapper {
         } else if let Some(ref mut idx) = self.scann {
             idx.train(vectors, None);
             Ok(())
+        } else if let Some(ref mut idx) = self.hnsw_prq {
+            idx.train(vectors).map_err(|_| CError::Internal)
         } else {
             Err(CError::InvalidArg)
         }
@@ -273,6 +318,11 @@ impl IndexWrapper {
             let (ids, distances): (Vec<i64>, Vec<f32>) = results.into_iter().unzip();
             let num_visited = ids.len();
             Ok(ApiSearchResult::new(ids, distances, elapsed_ms))
+        } else if let Some(ref idx) = self.hnsw_prq {
+            let start = std::time::Instant::now();
+            let results = idx.search(query, top_k, None).map_err(|_| CError::Internal)?;
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
         } else {
             Err(CError::InvalidArg)
         }
@@ -461,6 +511,8 @@ impl IndexWrapper {
         } else if let Some(ref _idx) = self.scann {
             // ScaNN 暂不支持文件保存
             Err(CError::NotImplemented)
+        } else if let Some(ref idx) = self.hnsw_prq {
+            idx.save(path.to_str().unwrap()).map_err(|_| CError::Internal)
         } else {
             Err(CError::InvalidArg)
         }
@@ -478,6 +530,8 @@ impl IndexWrapper {
             idx.load(path).map_err(|_| CError::Internal)
         } else if let Some(ref _idx) = self.scann {
             Err(CError::NotImplemented)
+        } else if let Some(ref mut idx) = self.hnsw_prq {
+            idx.load(path.to_str().unwrap()).map_err(|_| CError::Internal)
         } else {
             Err(CError::InvalidArg)
         }
