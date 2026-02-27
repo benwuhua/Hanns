@@ -10,7 +10,10 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use rand::Rng;
 
-use crate::api::{IndexConfig, IndexType, MetricType, Predicate, RangeSearchResult, Result, SearchRequest, SearchResult};
+use crate::api::{IndexConfig, IndexType, MetricType, Predicate, RangeSearchResult, Result, SearchRequest, SearchResult as ApiSearchResult};
+use crate::bitset::BitsetView;
+use crate::dataset::Dataset;
+use crate::index::{Index as IndexTrait, IndexError, SearchResult as IndexSearchResult};
 
 /// Maximum number of layers in the HNSW graph
 const MAX_LAYERS: usize = 16;
@@ -572,7 +575,7 @@ impl HnswIndex {
         }
     }
 
-    pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<SearchResult> {
+    pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<ApiSearchResult> {
         if self.vectors.is_empty() {
             return Err(crate::api::KnowhereError::InvalidArg(
                 "index is empty".to_string(),
@@ -624,7 +627,75 @@ impl HnswIndex {
             }
         }
 
-        Ok(SearchResult::new(all_ids, all_dists, 0.0))
+        Ok(ApiSearchResult::new(all_ids, all_dists, 0.0))
+    }
+
+    /// Search with Bitset filtering
+    /// 
+    /// Bitset is used to filter out certain vectors (e.g., soft-deleted vectors).
+    /// Each bit in the bitset corresponds to a vector index: 1 = filtered out, 0 = kept.
+    /// 
+    /// This is more efficient than using Predicate because it integrates bitset checking
+    /// directly into the search algorithm, avoiding post-filtering.
+    /// 
+    /// # Arguments
+    /// * `query` - Query vector(s)
+    /// * `req` - Search request
+    /// * `bitset` - BitsetView for filtering vectors by index
+    /// 
+    /// # Returns
+    /// Search results excluding filtered vectors
+    pub fn search_with_bitset(&self, query: &[f32], req: &SearchRequest, bitset: &crate::bitset::BitsetView) -> Result<ApiSearchResult> {
+        if self.vectors.is_empty() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "index is empty".to_string(),
+            ));
+        }
+
+        let n_queries = query.len() / self.dim;
+        if n_queries * self.dim != query.len() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "query dimension mismatch".to_string(),
+            ));
+        }
+
+        let ef = self.ef_search.max(req.nprobe.max(1));
+        let k = req.top_k;
+        
+        let mut all_ids = Vec::new();
+        let mut all_dists = Vec::new();
+        
+        for q_idx in 0..n_queries {
+            let q_start = q_idx * self.dim;
+            let query_vec = &query[q_start..q_start + self.dim];
+            
+            let results = self.search_single_with_bitset(query_vec, ef, k, bitset);
+            
+            for (id, dist) in results.into_iter().take(k) {
+                all_ids.push(id);
+                all_dists.push(dist);
+            }
+        }
+        
+        // Finalize distances
+        for i in 0..all_dists.len() {
+            if all_ids[i] != -1 {
+                match self.metric_type {
+                    MetricType::L2 => {
+                        all_dists[i] = all_dists[i].sqrt();
+                    }
+                    MetricType::Ip => {
+                        all_dists[i] = -all_dists[i];
+                    }
+                    MetricType::Cosine => {}
+                    _ => {
+                        all_dists[i] = all_dists[i].sqrt();
+                    }
+                }
+            }
+        }
+
+        Ok(ApiSearchResult::new(all_ids, all_dists, 0.0))
     }
 
     fn search_single(&self, query: &[f32], ef: usize, k: usize, filter: &Option<Arc<dyn Predicate>>) -> Vec<(i64, f32)> {
@@ -691,6 +762,179 @@ impl HnswIndex {
         }
 
         final_results
+    }
+
+    /// Search single query with bitset filtering
+    /// 
+    /// Integrates bitset checking directly into the search algorithm for better performance.
+    /// 
+    /// # Arguments
+    /// * `query` - Query vector
+    /// * `ef` - Search ef parameter
+    /// * `k` - Number of results to return
+    /// * `bitset` - BitsetView for filtering
+    /// 
+    /// # Returns
+    /// Filtered search results
+    fn search_single_with_bitset(&self, query: &[f32], ef: usize, k: usize, bitset: &crate::bitset::BitsetView) -> Vec<(i64, f32)> {
+        if self.ids.is_empty() || self.entry_point.is_none() {
+            return vec![];
+        }
+
+        // Multi-layer search with layer-wise jumping: start from top layer
+        let mut curr_ep = self.entry_point.unwrap();
+
+        // Enhanced layer descent with bitset filtering
+        for level in (1..=self.max_level).rev() {
+            let jump_ef = if level >= self.max_level / 2 {
+                1
+            } else {
+                ef.min(4)
+            };
+
+            let results = self.search_layer_with_bitset(query, curr_ep, level, jump_ef, bitset);
+
+            // Find the best valid result for jumping
+            let mut best_valid_id = curr_ep;
+
+            for (id, _dist) in results {
+                // Check bitset: 0 = kept, 1 = filtered
+                if let Some(&idx) = self.id_to_idx.get(&id) {
+                    if idx < bitset.len() && !bitset.get(idx) {
+                        best_valid_id = id;
+                        break;
+                    }
+                }
+            }
+
+            if best_valid_id != curr_ep {
+                curr_ep = best_valid_id;
+            }
+        }
+
+        // Final search at layer 0 with full ef
+        let results = self.search_layer_with_bitset(query, curr_ep, 0, ef, bitset);
+
+        // Apply bitset filter and return top k
+        let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
+        for (id, dist) in results {
+            // Use id_to_idx to get the internal index
+            if let Some(&idx) = self.id_to_idx.get(&id) {
+                // Check bitset: 0 = kept (include), 1 = filtered (skip)
+                if idx >= bitset.len() || !bitset.get(idx) {
+                    final_results.push((id, dist));
+                    if final_results.len() >= k {
+                        break;
+                    }
+                }
+            }
+        }
+
+        final_results
+    }
+
+    /// Search for nearest neighbors at a specific layer with bitset filtering
+    fn search_layer_with_bitset(&self, query: &[f32], entry_id: i64, level: usize, ef: usize, bitset: &crate::bitset::BitsetView) -> Vec<(i64, f32)> {
+        use std::collections::BinaryHeap;
+        
+        // Wrapper for f32 to implement Ord for BinaryHeap
+        #[derive(Clone, Copy, PartialEq)]
+        struct OrderedDist(f32);
+        
+        impl Eq for OrderedDist {}
+        
+        impl PartialOrd for OrderedDist {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                if self.0.is_nan() {
+                    return Some(std::cmp::Ordering::Greater);
+                }
+                if other.0.is_nan() {
+                    return Some(std::cmp::Ordering::Less);
+                }
+                other.0.partial_cmp(&self.0)
+            }
+        }
+        
+        impl Ord for OrderedDist {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+            }
+        }
+        
+        let mut visited = HashSet::new();
+        let mut candidates: BinaryHeap<(OrderedDist, i64)> = BinaryHeap::new();
+        let mut results: BinaryHeap<(OrderedDist, i64)> = BinaryHeap::new();
+        
+        let entry_idx = match self.id_to_idx.get(&entry_id) {
+            Some(&idx) => idx,
+            None => return vec![],
+        };
+        
+        // Check if entry point is filtered - if so, still use it as starting point
+        // but don't add it to results if it's filtered
+        let entry_is_filtered = entry_idx < bitset.len() && bitset.get(entry_idx);
+        
+        let entry_dist = self.distance(query, entry_idx);
+        candidates.push((OrderedDist(entry_dist), entry_id));
+        if !entry_is_filtered {
+            results.push((OrderedDist(entry_dist), entry_id));
+        }
+        visited.insert(entry_id);
+        
+        while let Some((OrderedDist(cand_dist), cand_id)) = candidates.pop() {
+            if results.len() >= ef {
+                if let Some(&(OrderedDist(worst_dist), _)) = results.peek() {
+                    if cand_dist > worst_dist {
+                        break;
+                    }
+                }
+            }
+            
+            let cand_idx = match self.id_to_idx.get(&cand_id) {
+                Some(&idx) => idx,
+                None => continue,
+            };
+            
+            let node_info = &self.node_info[cand_idx];
+            if level > node_info.max_layer {
+                continue;
+            }
+            
+            for &(nbr_id, _) in &node_info.layer_neighbors[level].neighbors {
+                if visited.insert(nbr_id) {
+                    // Check bitset early to prune filtered nodes
+                    let nbr_idx = match self.id_to_idx.get(&nbr_id) {
+                        Some(&idx) => idx,
+                        None => continue,
+                    };
+                    
+                    // Skip filtered nodes
+                    if nbr_idx < bitset.len() && bitset.get(nbr_idx) {
+                        continue; // This node is filtered out
+                    }
+                    
+                    let nbr_dist = self.distance(query, nbr_idx);
+                    
+                    if results.len() < ef {
+                        results.push((OrderedDist(nbr_dist), nbr_id));
+                        candidates.push((OrderedDist(nbr_dist), nbr_id));
+                    } else if let Some(&(OrderedDist(worst_dist), _)) = results.peek() {
+                        if nbr_dist < worst_dist {
+                            results.pop();
+                            results.push((OrderedDist(nbr_dist), nbr_id));
+                            candidates.push((OrderedDist(nbr_dist), nbr_id));
+                        }
+                    }
+                }
+            }
+        }
+        
+        let mut sorted: Vec<(i64, f32)> = results.into_sorted_vec()
+            .into_iter()
+            .map(|(OrderedDist(d), id)| (id, d))
+            .collect();
+        sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        sorted
     }
 
     pub fn ntotal(&self) -> usize {
@@ -895,6 +1139,76 @@ impl HnswIndex {
     }
 }
 
+/// Implement Index trait for HnswIndex
+impl IndexTrait for HnswIndex {
+    fn index_type(&self) -> &str {
+        "HNSW"
+    }
+
+    fn dim(&self) -> usize {
+        self.dim
+    }
+
+    fn count(&self) -> usize {
+        self.ids.len()
+    }
+
+    fn is_trained(&self) -> bool {
+        self.trained
+    }
+
+    fn train(&mut self, dataset: &Dataset) -> std::result::Result<(), IndexError> {
+        let vectors = dataset.vectors();
+        self.train(&vectors).map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn add(&mut self, dataset: &Dataset) -> std::result::Result<usize, IndexError> {
+        let vectors = dataset.vectors();
+        let ids = dataset.ids();
+        self.add(&vectors, ids.as_deref()).map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn search(&self, query: &Dataset, top_k: usize) -> std::result::Result<IndexSearchResult, IndexError> {
+        let vectors = query.vectors();
+        let req = SearchRequest {
+            top_k,
+            nprobe: 10,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let api_result = self.search(&vectors, &req).map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        Ok(IndexSearchResult::new(api_result.ids, api_result.distances, api_result.elapsed_ms))
+    }
+
+    fn search_with_bitset(&self, query: &Dataset, top_k: usize, bitset: &BitsetView) -> std::result::Result<IndexSearchResult, IndexError> {
+        let vectors = query.vectors();
+        let req = SearchRequest {
+            top_k,
+            nprobe: 10,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let api_result = self.search_with_bitset(&vectors, &req, bitset).map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        Ok(IndexSearchResult::new(api_result.ids, api_result.distances, api_result.elapsed_ms))
+    }
+
+    fn save(&self, path: &str) -> std::result::Result<(), IndexError> {
+        let path = std::path::Path::new(path);
+        self.save(path).map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn load(&mut self, path: &str) -> std::result::Result<(), IndexError> {
+        let path = std::path::Path::new(path);
+        self.load(path).map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn has_raw_data(&self) -> bool {
+        true
+    }
+}
+
 /// Generate a random level for a new node using exponential distribution.
 ///
 /// This implements the original HNSW algorithm for level selection:
@@ -1078,6 +1392,101 @@ mod tests {
     }
     
     #[test]
+    fn test_hnsw_search_with_bitset() {
+        use crate::bitset::BitsetView;
+        
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 4,
+            params: crate::api::IndexParams::default(),
+        };
+        
+        let mut index = HnswIndex::new(&config).unwrap();
+        
+        let vectors = vec![
+            0.0, 0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0,
+            2.0, 0.0, 0.0, 0.0,
+            3.0, 0.0, 0.0, 0.0,
+            4.0, 0.0, 0.0, 0.0,
+        ];
+        let ids = vec![0, 1, 2, 3, 4];
+        
+        index.train(&vectors).unwrap();
+        index.add(&vectors, Some(&ids)).unwrap();
+        
+        let query = vec![0.5, 0.0, 0.0, 0.0];
+        let req = SearchRequest {
+            top_k: 5,
+            nprobe: 10,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        
+        // Search without bitset
+        let result_no_filter = index.search(&query, &req).unwrap();
+        assert_eq!(result_no_filter.ids.len(), 5);
+        
+        // Create bitset to filter out vectors at positions 0 and 2
+        let mut bitset = BitsetView::new(5);
+        bitset.set(0, true);  // Filter out vector 0
+        bitset.set(2, true);  // Filter out vector 2
+        
+        // Search with bitset
+        let result_with_bitset = index.search_with_bitset(&query, &req, &bitset).unwrap();
+        assert_eq!(result_with_bitset.ids.len(), 3);
+        // Results should not contain filtered IDs 0 and 2
+        assert!(!result_with_bitset.ids.contains(&0));
+        assert!(!result_with_bitset.ids.contains(&2));
+        // Should contain IDs 1, 3, 4
+        assert!(result_with_bitset.ids.contains(&1));
+        assert!(result_with_bitset.ids.contains(&3));
+        assert!(result_with_bitset.ids.contains(&4));
+    }
+    
+    #[test]
+    fn test_hnsw_search_with_bitset_all_filtered() {
+        use crate::bitset::BitsetView;
+        
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 4,
+            params: crate::api::IndexParams::default(),
+        };
+        
+        let mut index = HnswIndex::new(&config).unwrap();
+        
+        let vectors = vec![
+            0.0, 0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0,
+            2.0, 0.0, 0.0, 0.0,
+        ];
+        let ids = vec![0, 1, 2];
+        
+        index.train(&vectors).unwrap();
+        index.add(&vectors, Some(&ids)).unwrap();
+        
+        let query = vec![0.5, 0.0, 0.0, 0.0];
+        let req = SearchRequest {
+            top_k: 3,
+            nprobe: 10,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        
+        // Filter all vectors
+        let mut bitset = BitsetView::new(3);
+        bitset.set_all();
+        
+        let result = index.search_with_bitset(&query, &req, &bitset).unwrap();
+        assert_eq!(result.ids.len(), 0);
+    }
+    
+    #[test]
     fn test_random_level_distribution() {
         let config = IndexConfig {
             index_type: IndexType::Hnsw,
@@ -1151,5 +1560,51 @@ mod tests {
         
         let result = index.search(&query, &req).unwrap();
         assert_eq!(result.ids.len(), 5);
+    }
+
+    #[test]
+    fn test_hnsw_index_trait_with_bitset() {
+        use crate::index::Index as IndexTrait;
+        use crate::dataset::Dataset;
+        
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 4,
+            params: crate::api::IndexParams::default(),
+        };
+        
+        let mut index = HnswIndex::new(&config).unwrap();
+        
+        // Add vectors
+        let vectors = vec![
+            0.0, 0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0,
+            2.0, 0.0, 0.0, 0.0,
+            3.0, 0.0, 0.0, 0.0,
+        ];
+        let ids = vec![10, 11, 12, 13];
+        
+        index.train(&vectors).unwrap();
+        index.add(&vectors, Some(&ids)).unwrap();
+        
+        // Create dataset for query
+        let query_vec = vec![1.5, 0.0, 0.0, 0.0];
+        let query_dataset = Dataset::from_vectors(query_vec.clone(), 4);
+        
+        // Search without filter using Index trait
+        let result = IndexTrait::search(&index, &query_dataset, 4).unwrap();
+        assert_eq!(result.ids.len(), 4);
+        
+        // Create bitset to filter out first two vectors (indices 0 and 1)
+        let mut bitset = BitsetView::new(4);
+        bitset.set(0, true);
+        bitset.set(1, true);
+        
+        // Search with bitset filter using Index trait
+        let result_filtered = IndexTrait::search_with_bitset(&index, &query_dataset, 4, &bitset).unwrap();
+        assert_eq!(result_filtered.ids.len(), 2);
+        // Should only contain IDs 12 and 13 (indices 2 and 3)
+        assert!(result_filtered.ids.contains(&12) || result_filtered.ids.contains(&13));
     }
 }
