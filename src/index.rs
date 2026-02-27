@@ -7,6 +7,7 @@ pub mod minhash_lsh;
 use crate::api::KnowhereError;
 use crate::dataset::Dataset;
 use crate::bitset::BitsetView;
+use crate::interrupt::Interrupt;
 
 /// 索引错误
 #[derive(Debug)]
@@ -128,6 +129,74 @@ pub trait Index: Send + Sync {
     fn has_raw_data(&self) -> bool {
         // 默认实现：返回 false
         false
+    }
+
+    /// 训练索引（支持中断）
+    /// 
+    /// # Arguments
+    /// * `dataset` - 训练数据集
+    /// * `interrupt` - 中断标志，用于取消长时间运行的训练操作
+    /// 
+    /// # Returns
+    /// 成功返回 Ok(())，失败返回错误，中断返回 IndexError::Unsupported
+    fn train_with_interrupt(&mut self, dataset: &Dataset, _interrupt: &Interrupt) -> Result<(), IndexError> {
+        // 默认实现：调用普通 train
+        // 具体实现应该在子类中覆盖
+        self.train(dataset)
+    }
+
+    /// 搜索（支持中断）
+    /// 
+    /// # Arguments
+    /// * `query` - 查询向量
+    /// * `top_k` - 返回的最近邻数量
+    /// * `interrupt` - 中断标志，用于取消长时间运行的搜索操作
+    /// 
+    /// # Returns
+    /// 返回搜索结果，中断时返回 IndexError::Unsupported
+    fn search_with_interrupt(&self, query: &Dataset, top_k: usize, _interrupt: &Interrupt) -> Result<SearchResult, IndexError> {
+        // 默认实现：调用普通 search
+        // 具体实现应该在子类中覆盖
+        self.search(query, top_k)
+    }
+
+    /// 搜索时使用 Bitset 过滤（支持中断）
+    /// 
+    /// # Arguments
+    /// * `query` - 查询向量
+    /// * `top_k` - 返回的最近邻数量
+    /// * `bitset` - BitsetView，用于过滤向量
+    /// * `interrupt` - 中断标志，用于取消长时间运行的搜索操作
+    /// 
+    /// # Returns
+    /// 返回搜索结果，不包含被过滤的向量，中断时返回 IndexError::Unsupported
+    fn search_with_bitset_and_interrupt(
+        &self,
+        query: &Dataset,
+        top_k: usize,
+        bitset: &crate::bitset::BitsetView,
+        interrupt: &Interrupt,
+    ) -> Result<SearchResult, IndexError> {
+        // 默认实现：先搜索，然后过滤
+        let mut result = self.search_with_interrupt(query, top_k, interrupt)?;
+        
+        // 过滤掉 bitset 中标记为 1 的向量
+        let mut filtered_ids = Vec::new();
+        let mut filtered_distances = Vec::new();
+        
+        for (id, dist) in result.ids.iter().zip(result.distances.iter()) {
+            // 检查 ID 是否在 bitset 范围内
+            let idx = *id as usize;
+            if idx < bitset.len() && !bitset.get(idx) {
+                // 未被过滤，保留
+                filtered_ids.push(*id);
+                filtered_distances.push(*dist);
+            }
+        }
+        
+        result.ids = filtered_ids;
+        result.distances = filtered_distances;
+        Ok(result)
     }
 }
 

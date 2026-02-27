@@ -8,6 +8,7 @@ use std::io::{Read, Write, Seek, SeekFrom};
 use std::cmp::{min, max};
 use crate::error::KnowhereError;
 use crate::bitset::BitsetView;
+use crate::interrupt::Interrupt;
 
 type Result<T> = std::result::Result<T, KnowhereError>;
 
@@ -55,6 +56,11 @@ impl MinHashBandIndex {
 
     /// Build the band index from sorted KV pairs
     pub fn build(&mut self, sorted_kv: &[KVPair], block_size: usize) -> Result<usize> {
+        self.build_with_interrupt(sorted_kv, block_size, &Interrupt::new())
+    }
+
+    /// Build the band index from sorted KV pairs (with interrupt support)
+    pub fn build_with_interrupt(&mut self, sorted_kv: &[KVPair], block_size: usize, interrupt: &Interrupt) -> Result<usize> {
         self.block_size = block_size;
         let max_num_per_block = block_size / (std::mem::size_of::<KeyType>() + std::mem::size_of::<ValueType>());
         self.blocks_num = (sorted_kv.len() + max_num_per_block - 1) / max_num_per_block;
@@ -66,6 +72,11 @@ impl MinHashBandIndex {
         let mut data_buf = Vec::new();
         
         for i in 0..self.blocks_num {
+            // Check interrupt periodically (every 100 blocks)
+            if i % 100 == 0 && interrupt.is_interrupted() {
+                return Err(KnowhereError::interrupted());
+            }
+            
             let beg = i * max_num_per_block;
             let end = min((i + 1) * max_num_per_block, sorted_kv.len());
             let num = end - beg;
@@ -451,6 +462,26 @@ impl MinHashLSHIndex {
         bands: usize,
         with_raw_data: bool,
     ) -> Result<()> {
+        self.build_with_interrupt(
+            data,
+            mh_vec_length,
+            mh_vec_element_size,
+            bands,
+            with_raw_data,
+            &Interrupt::new(),
+        )
+    }
+
+    /// Build the index from raw data (with interrupt support)
+    pub fn build_with_interrupt(
+        &mut self,
+        data: &[u8],
+        mh_vec_length: usize,
+        mh_vec_element_size: usize,
+        bands: usize,
+        with_raw_data: bool,
+        interrupt: &Interrupt,
+    ) -> Result<()> {
         self.mh_vec_length = mh_vec_length;
         self.mh_vec_element_size = mh_vec_element_size;
         self.with_raw_data = with_raw_data;
@@ -485,6 +516,11 @@ impl MinHashLSHIndex {
         let all_kv = Self::gen_transposed_hash_kv(data, self.ntotal, band_num, band_size);
         
         for band_i in 0..band_num {
+            // Check interrupt for each band
+            if interrupt.is_interrupted() {
+                return Err(KnowhereError::interrupted());
+            }
+            
             let band_start = band_i * self.ntotal;
             let band_end = band_start + self.ntotal;
             
@@ -501,7 +537,7 @@ impl MinHashLSHIndex {
             }
 
             let mut band_index = MinHashBandIndex::new();
-            band_index.build(&band_kv, 8192)?;
+            band_index.build_with_interrupt(&band_kv, 8192, interrupt)?;
             self.band_indexes.push(band_index);
         }
 
@@ -515,9 +551,25 @@ impl MinHashLSHIndex {
         topk: usize,
         id_selector: Option<&BitsetView>,
     ) -> Result<(Vec<i64>, Vec<f32>)> {
+        self.search_with_interrupt(query, topk, id_selector, &Interrupt::new())
+    }
+
+    /// Search for nearest neighbors (with interrupt support)
+    pub fn search_with_interrupt(
+        &self,
+        query: &[u8],
+        topk: usize,
+        id_selector: Option<&BitsetView>,
+        interrupt: &Interrupt,
+    ) -> Result<(Vec<i64>, Vec<f32>)> {
         let mut res = MinHashLSHResultHandler::new(topk);
 
         for band_i in 0..self.bands {
+            // Check interrupt for each band
+            if interrupt.is_interrupted() {
+                return Err(KnowhereError::interrupted());
+            }
+            
             let hash = Self::get_hash_key(query, self.bands, band_i);
             
             if self.bloom_filters[band_i].contains(hash) {
@@ -540,12 +592,29 @@ impl MinHashLSHIndex {
         topk: usize,
         id_selectors: Option<&[BitsetView]>,
     ) -> Result<(Vec<Vec<i64>>, Vec<Vec<f32>>)> {
+        self.batch_search_with_interrupt(queries, nq, topk, id_selectors, &Interrupt::new())
+    }
+
+    /// Batch search for multiple queries (with interrupt support)
+    pub fn batch_search_with_interrupt(
+        &self,
+        queries: &[u8],
+        nq: usize,
+        topk: usize,
+        id_selectors: Option<&[BitsetView]>,
+        interrupt: &Interrupt,
+    ) -> Result<(Vec<Vec<i64>>, Vec<Vec<f32>>)> {
         let mut all_ids = Vec::with_capacity(nq);
         let mut all_distances = Vec::with_capacity(nq);
 
         let vec_size = self.mh_vec_length * self.mh_vec_element_size;
 
         for i in 0..nq {
+            // Check interrupt for each query
+            if interrupt.is_interrupted() {
+                return Err(KnowhereError::interrupted());
+            }
+            
             let query_start = i * vec_size;
             let query_end = query_start + vec_size;
             
@@ -554,7 +623,7 @@ impl MinHashLSHIndex {
             }
 
             let selector = id_selectors.and_then(|s| s.get(i));
-            let (ids, dists) = self.search(&queries[query_start..query_end], topk, selector)?;
+            let (ids, dists) = self.search_with_interrupt(&queries[query_start..query_end], topk, selector, interrupt)?;
             
             all_ids.push(ids);
             all_distances.push(dists);

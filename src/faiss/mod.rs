@@ -24,6 +24,7 @@ pub mod hnsw_quantized;
 pub mod hnsw_prq;
 pub mod sparse;
 pub mod scann;
+pub mod ivf_rabitq;
 
 pub use index::FaissIndex;
 pub use mem_index::MemIndex;
@@ -39,3 +40,7 @@ pub use scann::{ScaNNIndex, ScaNNConfig};
 pub use binary::BinaryIndex;
 pub use sparse::{SparseIndex, SparseVector};
 pub use hnsw_prq::{HnswPrqIndex, HnswPrqConfig};
+pub use ivf_rabitq::{IvfRaBitqIndex, IvfRaBitqConfig};
+
+#[cfg(feature = "ffi")]
+pub mod rabitq_ffi;

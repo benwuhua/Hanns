@@ -34,6 +34,21 @@
 //! ```
 
 pub mod minhash_lsh_ffi;
+pub mod interrupt_ffi;
+
+// Re-export interrupt FFI types and functions for C API
+pub use interrupt_ffi::{
+    CInterrupt,
+    CInterruptError,
+    knowhere_interrupt_create,
+    knowhere_interrupt_create_with_state,
+    knowhere_interrupt_is_interrupted,
+    knowhere_interrupt_interrupt,
+    knowhere_interrupt_reset,
+    knowhere_interrupt_test_and_set,
+    knowhere_interrupt_clone,
+    knowhere_interrupt_free,
+};
 
 use std::path::Path;
 use crate::api::{IndexConfig, IndexType, MetricType, IndexParams, SearchRequest, SearchResult as ApiSearchResult, Result as ApiResult};

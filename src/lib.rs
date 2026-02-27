@@ -34,6 +34,7 @@ pub mod utils;
 pub mod prealloc;
 pub mod ring;
 pub mod once_cell;
+pub mod interrupt;
 pub mod ffi;
 
 #[cfg(feature = "jni-bindings")]
@@ -46,9 +47,11 @@ pub use dataset::{Dataset, DataType};
 pub use metrics::{Distance, get_distance_calculator, L2Distance, InnerProductDistance, CosineDistance, HammingDistance};
 pub use half::{Fp16, Bf16, f32_to_fp16, fp16_to_f32, f32_to_bf16, bf16_to_f32, fp16_l2, bf16_l2};
 pub use index::{Index, IndexError, SearchResult as IndexSearchResult};
+pub use interrupt::Interrupt;
 
 // Export all index types
 pub use faiss::{FaissIndex, MemIndex, HnswIndex, IvfPqIndex, IvfSq8Index, DiskAnnIndex, ScaNNIndex, ScaNNConfig};
+pub use faiss::{IvfRaBitqIndex, IvfRaBitqConfig};
 
 use tracing::info;
 
