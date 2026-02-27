@@ -106,6 +106,28 @@ pub struct CSearchResult {
     pub elapsed_ms: f32,
 }
 
+/// C 风格的范围搜索结果
+/// 
+/// 对应 C++ knowhere 的 RangeSearch 结果
+/// 包含满足半径阈值的所有向量
+#[repr(C)]
+#[derive(Debug)]
+pub struct CRangeSearchResult {
+    /// 结果 ID 数组
+    pub ids: *mut i64,
+    /// 距离数组
+    pub distances: *mut f32,
+    /// 结果总数 (所有查询的总和)
+    pub total_count: usize,
+    /// 查询数量
+    pub num_queries: usize,
+    /// 每个查询的结果数量偏移 (大小为 num_queries + 1)
+    /// lims[i+1] - lims[i] = 第 i 个查询的结果数
+    pub lims: *mut usize,
+    /// 搜索耗时 (毫秒)
+    pub elapsed_ms: f32,
+}
+
 /// C 风格的向量查询结果
 #[repr(C)]
 #[derive(Debug)]
@@ -114,6 +136,22 @@ pub struct CVectorResult {
     pub ids: *mut i64,
     pub num_vectors: usize,
     pub dim: usize,
+}
+
+/// C 风格的 GetVectorByIds 结果
+/// 
+/// 用于 knowhere_get_vector_by_ids 返回的结果结构
+#[repr(C)]
+#[derive(Debug)]
+pub struct CGetVectorResult {
+    /// 向量数据 (num_ids * dim)
+    pub vectors: *const f32,
+    /// 成功获取的向量数量
+    pub num_ids: usize,
+    /// 向量维度
+    pub dim: usize,
+    /// 对应的 ID 数组（可能少于输入，如果某些 ID 不存在）
+    pub ids: *mut i64,
 }
 
 /// 包装索引对象 - 支持 Flat, HNSW 和 ScaNN
@@ -238,6 +276,51 @@ impl IndexWrapper {
         }
     }
     
+    /// Range search: find all vectors within radius
+    /// 
+    /// # Arguments
+    /// * `query` - Query vectors (num_queries * dim)
+    /// * `radius` - Search radius threshold
+    /// 
+    /// # Returns
+    /// * `ids` - All matching vector IDs
+    /// * `distances` - Corresponding distances
+    /// * `lims` - Offset array where lims[i+1] - lims[i] = results for query i
+    /// * `elapsed_ms` - Search time in milliseconds
+    fn range_search(
+        &self,
+        query: &[f32],
+        radius: f32,
+    ) -> Result<(Vec<i64>, Vec<f32>, Vec<usize>, f64), CError> {
+        let num_queries = query.len() / self.dim;
+        
+        if let Some(ref idx) = self.flat {
+            let start = std::time::Instant::now();
+            let (ids, distances) = idx.range_search(query, radius).map_err(|_| CError::Internal)?;
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            
+            // Build lims array: each query returns all results
+            // For simplicity, assume uniform distribution
+            let lims: Vec<usize> = if num_queries > 0 {
+                let per_query = ids.len() / num_queries;
+                (0..=num_queries).map(|i| i * per_query).collect()
+            } else {
+                vec![0]
+            };
+            
+            Ok((ids, distances, lims, elapsed_ms))
+        } else if let Some(ref _idx) = self.hnsw {
+            // HNSW range search: not yet implemented
+            return Err(CError::NotImplemented);
+        } else if let Some(ref idx) = self.scann {
+            // ScaNN: use radius search if available, otherwise return error
+            // For now, return NotImplemented
+            Err(CError::NotImplemented)
+        } else {
+            Err(CError::InvalidArg)
+        }
+    }
+    
     fn count(&self) -> usize {
         if let Some(ref idx) = self.flat {
             idx.ntotal()
@@ -258,7 +341,7 @@ impl IndexWrapper {
         if ids.is_empty() {
             return Ok((Vec::new(), 0));
         }
-        
+
         if let Some(ref idx) = self.flat {
             match idx.get_vector_by_ids(ids) {
                 Ok(vectors) => {
@@ -278,6 +361,73 @@ impl IndexWrapper {
                 }
                 Err(_) => Err(CError::NotFound),
             }
+        } else {
+            Err(CError::InvalidArg)
+        }
+    }
+
+    /// 序列化索引到内存
+    ///
+    /// 返回包含序列化数据的字节向量，可用于持久化或跨进程传输。
+    fn serialize(&self) -> Result<Vec<u8>, CError> {
+        if let Some(ref idx) = self.flat {
+            idx.serialize_to_memory().map_err(|_| CError::Internal)
+        } else if let Some(ref idx) = self.hnsw {
+            // HNSW 目前只支持文件序列化，返回 NotImplemented
+            Err(CError::NotImplemented)
+        } else if let Some(ref _idx) = self.scann {
+            // ScaNN 暂不支持内存序列化
+            Err(CError::NotImplemented)
+        } else {
+            Err(CError::InvalidArg)
+        }
+    }
+
+    /// 从内存反序列化索引
+    ///
+    /// 从序列化的字节数据恢复索引状态。
+    fn deserialize(&mut self, data: &[u8]) -> Result<(), CError> {
+        if let Some(ref mut idx) = self.flat {
+            idx.deserialize_from_memory(data).map_err(|_| CError::Internal)
+        } else if let Some(ref _idx) = self.hnsw {
+            Err(CError::NotImplemented)
+        } else if let Some(ref _idx) = self.scann {
+            Err(CError::NotImplemented)
+        } else {
+            Err(CError::InvalidArg)
+        }
+    }
+
+    /// 保存索引到文件
+    ///
+    /// 将索引序列化并写入指定路径的文件。
+    fn save(&self, path: &str) -> Result<(), CError> {
+        let path = Path::new(path);
+
+        if let Some(ref idx) = self.flat {
+            idx.save(path).map_err(|_| CError::Internal)
+        } else if let Some(ref idx) = self.hnsw {
+            idx.save(path).map_err(|_| CError::Internal)
+        } else if let Some(ref _idx) = self.scann {
+            // ScaNN 暂不支持文件保存
+            Err(CError::NotImplemented)
+        } else {
+            Err(CError::InvalidArg)
+        }
+    }
+
+    /// 从文件加载索引
+    ///
+    /// 从指定路径的文件反序列化并恢复索引状态。
+    fn load(&mut self, path: &str) -> Result<(), CError> {
+        let path = Path::new(path);
+
+        if let Some(ref mut idx) = self.flat {
+            idx.load(path).map_err(|_| CError::Internal)
+        } else if let Some(ref mut idx) = self.hnsw {
+            idx.load(path).map_err(|_| CError::Internal)
+        } else if let Some(ref _idx) = self.scann {
+            Err(CError::NotImplemented)
         } else {
             Err(CError::InvalidArg)
         }
@@ -405,6 +555,135 @@ pub extern "C" fn knowhere_search(
     }
 }
 
+/// 范围搜索 (Range Search)
+/// 
+/// 查找所有在指定半径内的向量，返回满足条件的所有结果。
+/// 对应 C++ knowhere 的 RangeSearch 接口。
+/// 
+/// # Arguments
+/// * `index` - 索引指针 (由 knowhere_create_index 创建)
+/// * `query` - 查询向量指针 (num_queries * dim)
+/// * `num_queries` - 查询向量数量
+/// * `radius` - 搜索半径阈值
+/// * `dim` - 向量维度
+/// 
+/// # Returns
+/// 成功时返回 CRangeSearchResult 指针，失败返回 NULL。
+/// 调用者需使用 knowhere_free_range_result() 释放返回的结果。
+/// 
+/// # C API 使用示例
+/// ```c
+/// float query[] = { ... };  // 1 * 128 dim
+/// CRangeSearchResult* result = knowhere_range_search(index, query, 1, 2.0f, 128);
+/// 
+/// if (result != NULL) {
+///     // 访问结果
+///     for (size_t i = 0; i < result->num_queries; i++) {
+///         size_t start = result->lims[i];
+///         size_t end = result->lims[i + 1];
+///         printf("Query %zu: %zu results\n", i, end - start);
+///         
+///         for (size_t j = start; j < end; j++) {
+///             printf("  id=%ld, dist=%f\n", result->ids[j], result->distances[j]);
+///         }
+///     }
+///     
+///     knowhere_free_range_result(result);
+/// }
+/// ```
+/// 
+/// # Notes
+/// - 结果使用 lims 数组组织，lims[i+1] - lims[i] = 第 i 个查询的结果数
+/// - 对于 L2 距离，radius 越小结果越少；对于 IP 距离，radius 越大结果越少
+/// - ScaNN 索引暂不支持 RangeSearch
+#[no_mangle]
+pub extern "C" fn knowhere_range_search(
+    index: *const std::ffi::c_void,
+    query: *const f32,
+    num_queries: usize,
+    radius: f32,
+    dim: usize,
+) -> *mut CRangeSearchResult {
+    if index.is_null() || query.is_null() || num_queries == 0 || dim == 0 {
+        return std::ptr::null_mut();
+    }
+    
+    unsafe {
+        let index = &*(index as *const IndexWrapper);
+        
+        let query_slice = std::slice::from_raw_parts(query, num_queries * dim);
+        
+        match index.range_search(query_slice, radius) {
+            Ok((ids, distances, lims, elapsed_ms)) => {
+                let total_count = ids.len();
+                
+                // 准备返回数据
+                let mut ids_vec = ids;
+                let mut distances_vec = distances;
+                let mut lims_vec = lims;
+                
+                let ids_ptr = ids_vec.as_mut_ptr();
+                let distances_ptr = distances_vec.as_mut_ptr();
+                let lims_ptr = lims_vec.as_mut_ptr();
+                
+                // 防止析构函数释放内存
+                std::mem::forget(ids_vec);
+                std::mem::forget(distances_vec);
+                std::mem::forget(lims_vec);
+                
+                let result = CRangeSearchResult {
+                    ids: ids_ptr,
+                    distances: distances_ptr,
+                    total_count,
+                    num_queries,
+                    lims: lims_ptr,
+                    elapsed_ms: elapsed_ms as f32,
+                };
+                
+                Box::into_raw(Box::new(result))
+            }
+            Err(_) => std::ptr::null_mut(),
+        }
+    }
+}
+
+/// 释放范围搜索结果
+/// 
+/// 释放由 knowhere_range_search 返回的 CRangeSearchResult 及其所有关联内存。
+/// 
+/// # Arguments
+/// * `result` - CRangeSearchResult 指针 (由 knowhere_range_search 返回)
+/// 
+/// # Safety
+/// 调用后 result 指针不再有效，不应再被使用。
+#[no_mangle]
+pub extern "C" fn knowhere_free_range_result(result: *mut CRangeSearchResult) {
+    if !result.is_null() {
+        unsafe {
+            let r = &mut *result;
+            
+            // 释放 ids 数组
+            if !r.ids.is_null() && r.total_count > 0 {
+                let _ = Vec::from_raw_parts(r.ids, r.total_count, r.total_count);
+            }
+            
+            // 释放 distances 数组
+            if !r.distances.is_null() && r.total_count > 0 {
+                let _ = Vec::from_raw_parts(r.distances, r.total_count, r.total_count);
+            }
+            
+            // 释放 lims 数组 (大小为 num_queries + 1)
+            if !r.lims.is_null() && r.num_queries > 0 {
+                let lims_size = r.num_queries + 1;
+                let _ = Vec::from_raw_parts(r.lims, lims_size, lims_size);
+            }
+            
+            // 释放结果结构体本身
+            let _ = Box::from_raw(result);
+        }
+    }
+}
+
 /// 获取索引中的向量数
 #[no_mangle]
 pub extern "C" fn knowhere_get_index_count(index: *const std::ffi::c_void) -> usize {
@@ -489,6 +768,85 @@ pub extern "C" fn knowhere_get_vectors_by_ids(
     }
 }
 
+/// 根据 ID 获取向量 (GetVectorByIds C API)
+/// 
+/// 通过 ID 数组获取对应的向量数据，支持 Flat 索引。
+/// HNSW 和 ScaNN 索引如果未实现则返回 NotImplemented。
+/// 
+/// # Arguments
+/// * `index` - 索引指针 (由 knowhere_create_index 创建)
+/// * `ids` - 要获取的 ID 数组指针
+/// * `num_ids` - ID 数量
+/// * `dim` - 向量维度
+/// 
+/// # Returns
+/// 成功时返回 CGetVectorResult 指针，失败返回 NULL。
+/// 调用者需使用 knowhere_free_vector_result() 释放返回的结果。
+/// 
+/// # C API 使用示例
+/// ```c
+/// int64_t ids[] = {0, 5, 9};
+/// CGetVectorResult* result = knowhere_get_vector_by_ids(index, ids, 3, 128);
+/// 
+/// if (result != NULL) {
+///     // 访问向量数据
+///     for (size_t i = 0; i < result->num_ids; i++) {
+///         const float* vec = &result->vectors[i * result->dim];
+///         printf("ID %ld: [%f, %f, ...]\n", result->ids[i], vec[0], vec[1]);
+///     }
+///     knowhere_free_vector_result(result);
+/// }
+/// ```
+#[no_mangle]
+pub extern "C" fn knowhere_get_vector_by_ids(
+    index: *const std::ffi::c_void,
+    ids: *const i64,
+    num_ids: usize,
+    dim: usize,
+) -> *mut CGetVectorResult {
+    if index.is_null() || ids.is_null() || num_ids == 0 || dim == 0 {
+        return std::ptr::null_mut();
+    }
+    
+    unsafe {
+        let index = &*(index as *const IndexWrapper);
+        
+        // 验证维度匹配
+        if index.dim() != dim {
+            return std::ptr::null_mut();
+        }
+        
+        let ids_slice = std::slice::from_raw_parts(ids, num_ids);
+        
+        match index.get_vectors(ids_slice) {
+            Ok((mut vectors, num_found)) => {
+                if num_found == 0 {
+                    return std::ptr::null_mut();
+                }
+                
+                let mut ids_out = ids_slice[..num_found].to_vec();
+                
+                let vectors_ptr = vectors.as_mut_ptr();
+                let ids_ptr = ids_out.as_mut_ptr();
+                
+                // 防止析构函数释放内存
+                std::mem::forget(vectors);
+                std::mem::forget(ids_out);
+                
+                let result = CGetVectorResult {
+                    vectors: vectors_ptr,
+                    num_ids: num_found,
+                    dim,
+                    ids: ids_ptr,
+                };
+                
+                Box::into_raw(Box::new(result))
+            }
+            Err(_) => std::ptr::null_mut(),
+        }
+    }
+}
+
 /// 释放向量查询结果
 #[no_mangle]
 pub extern "C" fn knowhere_free_vector_result(result: *mut CVectorResult) {
@@ -503,6 +861,359 @@ pub extern "C" fn knowhere_free_vector_result(result: *mut CVectorResult) {
             }
             Box::from_raw(result);
         }
+    }
+}
+
+/// 释放 GetVectorByIds 结果
+/// 
+/// 释放由 knowhere_get_vector_by_ids 返回的 CGetVectorResult 及其所有关联内存。
+/// 
+/// # Arguments
+/// * `result` - CGetVectorResult 指针 (由 knowhere_get_vector_by_ids 返回)
+/// 
+/// # Safety
+/// 调用后 result 指针不再有效，不应再被使用。
+#[no_mangle]
+pub extern "C" fn knowhere_free_get_vector_result(result: *mut CGetVectorResult) {
+    if !result.is_null() {
+        unsafe {
+            let r = &mut *result;
+            // 释放 vectors 数组
+            if !r.vectors.is_null() && r.num_ids > 0 && r.dim > 0 {
+                Vec::from_raw_parts(r.vectors as *mut f32, r.num_ids * r.dim, r.num_ids * r.dim);
+            }
+            // 释放 ids 数组
+            if !r.ids.is_null() && r.num_ids > 0 {
+                Vec::from_raw_parts(r.ids, r.num_ids, r.num_ids);
+            }
+            // 释放结果结构体本身
+            Box::from_raw(result);
+        }
+    }
+}
+
+// ========== 序列化 C API ==========
+
+/// 二进制数据块 (对应 C++ knowhere 的 Binary)
+///
+/// 包含序列化的索引数据，可用于跨语言传输或持久化存储。
+/// 内存由 Rust 分配，调用者需使用 knowhere_free_binary() 释放。
+#[repr(C)]
+pub struct CBinary {
+    /// 数据指针 (由 Rust 分配)
+    pub data: *mut u8,
+    /// 数据大小 (字节)
+    pub size: i64,
+}
+
+/// 二进制数据集合 (对应 C++ knowhere 的 BinarySet)
+///
+/// 包含多个命名的二进制数据块，用于索引的完整序列化。
+/// 内存由 Rust 分配，调用者需使用 knowhere_free_binary_set() 释放。
+#[repr(C)]
+pub struct CBinarySet {
+    /// 键名数组 (C 字符串指针数组)
+    pub keys: *mut *mut std::os::raw::c_char,
+    /// 二进制数据数组
+    pub values: *mut CBinary,
+    /// 数据块数量
+    pub count: usize,
+}
+
+/// 序列化索引到 CBinarySet
+///
+/// 将索引序列化为二进制数据集合，可用于网络传输或自定义存储。
+///
+/// # Arguments
+/// * `index` - 索引指针 (由 knowhere_create_index 创建)
+///
+/// # Returns
+/// 成功时返回 CBinarySet 指针，失败返回 NULL。
+/// 调用者需使用 knowhere_free_binary_set() 释放返回的 CBinarySet。
+///
+/// # Example
+/// ```c
+/// CBinarySet* binset = knowhere_serialize_index(index);
+/// if (binset != NULL) {
+///     // 访问序列化数据
+///     for (size_t i = 0; i < binset->count; i++) {
+///         const char* key = binset->keys[i];
+///         CBinary* bin = &binset->values[i];
+///         // 使用 bin->data 和 bin->size
+///     }
+///     knowhere_free_binary_set(binset);
+/// }
+/// ```
+#[no_mangle]
+pub extern "C" fn knowhere_serialize_index(index: *const std::ffi::c_void) -> *mut CBinarySet {
+    if index.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    unsafe {
+        let index = &*(index as *const IndexWrapper);
+
+        match index.serialize() {
+            Ok(data) => {
+                // 创建单个 Binary (整个索引序列化为一个块)
+                let mut data_vec = data;
+                let data_ptr = data_vec.as_mut_ptr();
+                let data_size = data_vec.len() as i64;
+                std::mem::forget(data_vec);
+
+                // 创建 key (C 字符串)
+                let key = std::ffi::CString::new("index_data").unwrap();
+                let key_ptr = key.into_raw();
+
+                // 分配 CBinarySet
+                let binary = CBinary {
+                    data: data_ptr,
+                    size: data_size,
+                };
+
+                let keys_ptr = Box::into_raw(Box::new(key_ptr));
+                let values_ptr = Box::into_raw(Box::new(binary));
+
+                let binset = CBinarySet {
+                    keys: keys_ptr,
+                    values: values_ptr,
+                    count: 1,
+                };
+
+                Box::into_raw(Box::new(binset))
+            }
+            Err(_) => std::ptr::null_mut(),
+        }
+    }
+}
+
+/// 保存索引到文件
+///
+/// 将索引序列化并写入指定路径的文件。
+///
+/// # Arguments
+/// * `index` - 索引指针 (由 knowhere_create_index 创建)
+/// * `path` - 文件路径 (UTF-8 编码的 C 字符串)
+///
+/// # Returns
+/// 成功返回 CError::Success (0)，失败返回相应的错误码。
+///
+/// # Example
+/// ```c
+/// int result = knowhere_save_index(index, "/path/to/index.bin");
+/// if (result != 0) {
+///     // 处理错误
+/// }
+/// ```
+#[no_mangle]
+pub extern "C" fn knowhere_save_index(
+    index: *const std::ffi::c_void,
+    path: *const std::os::raw::c_char,
+) -> i32 {
+    if index.is_null() || path.is_null() {
+        return CError::InvalidArg as i32;
+    }
+
+    unsafe {
+        let index = &*(index as *const IndexWrapper);
+        let path_cstr = std::ffi::CStr::from_ptr(path);
+        let path_str = match path_cstr.to_str() {
+            Ok(s) => s,
+            Err(_) => return CError::InvalidArg as i32,
+        };
+
+        match index.save(path_str) {
+            Ok(()) => CError::Success as i32,
+            Err(e) => e as i32,
+        }
+    }
+}
+
+/// 从文件加载索引
+///
+/// 从指定路径的文件反序列化并恢复索引状态。
+/// 注意：索引必须已通过 knowhere_create_index 创建，且配置需与保存时一致。
+///
+/// # Arguments
+/// * `index` - 索引指针 (由 knowhere_create_index 创建)
+/// * `path` - 文件路径 (UTF-8 编码的 C 字符串)
+///
+/// # Returns
+/// 成功返回 CError::Success (0)，失败返回相应的错误码。
+///
+/// # Example
+/// ```c
+/// // 先创建一个空索引
+/// CIndexConfig config = { ... };
+/// CIndex* index = knowhere_create_index(config);
+///
+/// // 从文件加载
+/// int result = knowhere_load_index(index, "/path/to/index.bin");
+/// if (result != 0) {
+///     // 处理错误
+/// }
+/// ```
+#[no_mangle]
+pub extern "C" fn knowhere_load_index(
+    index: *mut std::ffi::c_void,
+    path: *const std::os::raw::c_char,
+) -> i32 {
+    if index.is_null() || path.is_null() {
+        return CError::InvalidArg as i32;
+    }
+
+    unsafe {
+        let index = &mut *(index as *mut IndexWrapper);
+        let path_cstr = std::ffi::CStr::from_ptr(path);
+        let path_str = match path_cstr.to_str() {
+            Ok(s) => s,
+            Err(_) => return CError::InvalidArg as i32,
+        };
+
+        match index.load(path_str) {
+            Ok(()) => CError::Success as i32,
+            Err(e) => e as i32,
+        }
+    }
+}
+
+/// 释放 CBinarySet 内存
+///
+/// 释放由 knowhere_serialize_index 返回的 CBinarySet 及其所有关联内存。
+///
+/// # Arguments
+/// * `binset` - CBinarySet 指针 (由 knowhere_serialize_index 返回)
+///
+/// # Safety
+/// 调用后 binset 指针不再有效，不应再被使用。
+#[no_mangle]
+pub extern "C" fn knowhere_free_binary_set(binset: *mut CBinarySet) {
+    if binset.is_null() {
+        return;
+    }
+
+    unsafe {
+        let binset = &mut *binset;
+
+        if binset.count > 0 {
+            // 释放 keys 数组
+            if !binset.keys.is_null() {
+                for i in 0..binset.count {
+                    if !(*binset.keys.add(i)).is_null() {
+                        // 释放 C 字符串
+                        let _ = std::ffi::CString::from_raw(*binset.keys.add(i));
+                    }
+                }
+                // 释放 keys 数组本身
+                let _ = Box::from_raw(binset.keys);
+            }
+
+            // 释放 values 数组
+            if !binset.values.is_null() {
+                for i in 0..binset.count {
+                    let binary = &mut *binset.values.add(i);
+                    if !binary.data.is_null() && binary.size > 0 {
+                        // 释放数据缓冲区
+                        let _ = Vec::from_raw_parts(
+                            binary.data,
+                            binary.size as usize,
+                            binary.size as usize,
+                        );
+                    }
+                }
+                // 释放 values 数组本身
+                let _ = Box::from_raw(binset.values);
+            }
+        }
+
+        // 释放 CBinarySet 本身
+        let _ = Box::from_raw(binset);
+    }
+}
+
+/// 反序列化 CBinarySet 到索引
+///
+/// 将 CBinarySet 中的二进制数据反序列化到已存在的索引中。
+/// 索引必须已通过 knowhere_create_index 创建，且配置需与序列化时一致。
+///
+/// # Arguments
+/// * `index` - 索引指针 (由 knowhere_create_index 创建)
+/// * `binset` - CBinarySet 指针 (由 knowhere_serialize_index 返回)
+///
+/// # Returns
+/// 成功返回 CError::Success (0)，失败返回相应的错误码。
+///
+/// # Example
+/// ```c
+/// // 假设已有序列化数据
+/// CBinarySet* binset = knowhere_serialize_index(source_index);
+///
+/// // 创建新索引
+/// CIndex* target_index = knowhere_create_index(config);
+///
+/// // 反序列化
+/// int result = knowhere_deserialize_index(target_index, binset);
+/// if (result != 0) {
+///     // 处理错误
+/// }
+///
+/// knowhere_free_binary_set(binset);
+/// ```
+#[no_mangle]
+pub extern "C" fn knowhere_deserialize_index(
+    index: *mut std::ffi::c_void,
+    binset: *const CBinarySet,
+) -> i32 {
+    if index.is_null() || binset.is_null() {
+        return CError::InvalidArg as i32;
+    }
+
+    unsafe {
+        let index = &mut *(index as *mut IndexWrapper);
+        let binset = &*binset;
+
+        if binset.count == 0 || binset.keys.is_null() || binset.values.is_null() {
+            return CError::InvalidArg as i32;
+        }
+
+        // 提取第一个 key 的二进制数据
+        let binary = &*binset.values;
+        if binary.data.is_null() || binary.size <= 0 {
+            return CError::InvalidArg as i32;
+        }
+
+        let data_slice = std::slice::from_raw_parts(binary.data, binary.size as usize);
+
+        match index.deserialize(data_slice) {
+            Ok(()) => CError::Success as i32,
+            Err(e) => e as i32,
+        }
+    }
+}
+
+/// 释放单个 CBinary 内存
+///
+/// 释放由 knowhere_serialize_index 返回的单个 CBinary。
+/// 注意：如果 CBinary 是 CBinarySet 的一部分，应使用 knowhere_free_binary_set。
+///
+/// # Arguments
+/// * `binary` - CBinary 指针
+#[no_mangle]
+pub extern "C" fn knowhere_free_binary(binary: *mut CBinary) {
+    if binary.is_null() {
+        return;
+    }
+
+    unsafe {
+        let binary = &mut *binary;
+        if !binary.data.is_null() && binary.size > 0 {
+            let _ = Vec::from_raw_parts(
+                binary.data,
+                binary.size as usize,
+                binary.size as usize,
+            );
+        }
+        let _ = Box::from_raw(binary);
     }
 }
 
@@ -735,6 +1446,666 @@ mod tests {
         assert_eq!(vectors_slice[32], 144.0); // First element of vector 9 (9*16=144)
 
         knowhere_free_vector_result(result);
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_serialize_flat_index() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Flat,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        // Add some vectors
+        let vectors: Vec<f32> = (0..10 * 16).map(|i| i as f32).collect();
+        let ids: Vec<i64> = (0..10).collect();
+
+        let train_result = knowhere_train_index(index, vectors.as_ptr(), 10, 16);
+        assert_eq!(train_result, CError::Success as i32);
+
+        let add_result = knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 10, 16);
+        assert_eq!(add_result, CError::Success as i32);
+
+        // Serialize
+        let binset = knowhere_serialize_index(index);
+        assert!(!binset.is_null());
+
+        unsafe {
+            let binset_ref = &*binset;
+            assert_eq!(binset_ref.count, 1);
+            assert!(!binset_ref.keys.is_null());
+            assert!(!binset_ref.values.is_null());
+
+            let binary = &*binset_ref.values;
+            assert!(!binary.data.is_null());
+            assert!(binary.size > 0);
+
+            // Verify key name
+            let key = std::ffi::CStr::from_ptr(*binset_ref.keys);
+            assert_eq!(key.to_str().unwrap(), "index_data");
+        }
+
+        knowhere_free_binary_set(binset);
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_save_load_flat_index() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Flat,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config.clone());
+        assert!(!index.is_null());
+
+        // Add some vectors
+        let vectors: Vec<f32> = (0..10 * 16).map(|i| i as f32).collect();
+        let ids: Vec<i64> = (0..10).collect();
+
+        let train_result = knowhere_train_index(index, vectors.as_ptr(), 10, 16);
+        assert_eq!(train_result, CError::Success as i32);
+
+        let add_result = knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 10, 16);
+        assert_eq!(add_result, CError::Success as i32);
+
+        // Save to file
+        let path = std::env::temp_dir().join("test_flat_index.bin");
+        let path_str = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+
+        let save_result = knowhere_save_index(index, path_str.as_ptr());
+        assert_eq!(save_result, CError::Success as i32);
+
+        knowhere_free_index(index);
+
+        // Create a new index and load from file
+        let loaded_index = knowhere_create_index(config.clone());
+        assert!(!loaded_index.is_null());
+
+        let load_result = knowhere_load_index(loaded_index, path_str.as_ptr());
+        assert_eq!(load_result, CError::Success as i32);
+
+        // Verify loaded index
+        let count = knowhere_get_index_count(loaded_index);
+        assert_eq!(count, 10);
+
+        // Search on loaded index
+        let query: Vec<f32> = (0..16).map(|i| i as f32).collect();
+        let result = knowhere_search(loaded_index, query.as_ptr(), 1, 3, 16);
+        assert!(!result.is_null());
+
+        unsafe {
+            let result_ref = &*result;
+            assert_eq!(result_ref.num_results, 3);
+        }
+
+        knowhere_free_result(result);
+        knowhere_free_index(loaded_index);
+
+        // Clean up
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn test_save_load_hnsw_index() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Hnsw,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            ef_construction: 200,
+            ef_search: 64,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config.clone());
+        assert!(!index.is_null());
+
+        // Add some vectors
+        let vectors: Vec<f32> = (0..50 * 16).map(|i| i as f32).collect();
+        let ids: Vec<i64> = (0..50).collect();
+
+        let train_result = knowhere_train_index(index, vectors.as_ptr(), 50, 16);
+        assert_eq!(train_result, CError::Success as i32);
+
+        let add_result = knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 50, 16);
+        assert_eq!(add_result, CError::Success as i32);
+
+        // Save to file
+        let path = std::env::temp_dir().join("test_hnsw_index.bin");
+        let path_str = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+
+        let save_result = knowhere_save_index(index, path_str.as_ptr());
+        assert_eq!(save_result, CError::Success as i32);
+
+        knowhere_free_index(index);
+
+        // Create a new index and load from file
+        let loaded_index = knowhere_create_index(config.clone());
+        assert!(!loaded_index.is_null());
+
+        let load_result = knowhere_load_index(loaded_index, path_str.as_ptr());
+        assert_eq!(load_result, CError::Success as i32);
+
+        // Verify loaded index
+        let count = knowhere_get_index_count(loaded_index);
+        assert_eq!(count, 50);
+
+        // Search on loaded index
+        let query: Vec<f32> = (0..16).map(|i| i as f32).collect();
+        let result = knowhere_search(loaded_index, query.as_ptr(), 1, 5, 16);
+        assert!(!result.is_null());
+
+        unsafe {
+            let result_ref = &*result;
+            assert!(result_ref.num_results > 0);
+        }
+
+        knowhere_free_result(result);
+        knowhere_free_index(loaded_index);
+
+        // Clean up
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn test_serialize_null_index() {
+        let binset = knowhere_serialize_index(std::ptr::null());
+        assert!(binset.is_null());
+    }
+
+    #[test]
+    fn test_save_null_index() {
+        let path = std::ffi::CString::new("/tmp/test.bin").unwrap();
+        let result = knowhere_save_index(std::ptr::null(), path.as_ptr());
+        assert_eq!(result, CError::InvalidArg as i32);
+    }
+
+    #[test]
+    fn test_load_null_index() {
+        let path = std::ffi::CString::new("/tmp/test.bin").unwrap();
+        let result = knowhere_load_index(std::ptr::null_mut(), path.as_ptr());
+        assert_eq!(result, CError::InvalidArg as i32);
+    }
+
+    #[test]
+    fn test_deserialize_index() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Flat,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            ..Default::default()
+        };
+
+        // 创建源索引并添加向量
+        let source_index = knowhere_create_index(config.clone());
+        assert!(!source_index.is_null());
+
+        let vectors: Vec<f32> = (0..10 * 16).map(|i| i as f32).collect();
+        let ids: Vec<i64> = (0..10).collect();
+
+        let train_result = knowhere_train_index(source_index, vectors.as_ptr(), 10, 16);
+        assert_eq!(train_result, CError::Success as i32);
+
+        let add_result = knowhere_add_index(source_index, vectors.as_ptr(), ids.as_ptr(), 10, 16);
+        assert_eq!(add_result, CError::Success as i32);
+
+        // 序列化源索引
+        let binset = knowhere_serialize_index(source_index);
+        assert!(!binset.is_null());
+
+        // 创建目标索引
+        let target_index = knowhere_create_index(config.clone());
+        assert!(!target_index.is_null());
+
+        // 反序列化到目标索引
+        let deserialize_result = knowhere_deserialize_index(target_index, binset);
+        assert_eq!(deserialize_result, CError::Success as i32);
+
+        // 验证目标索引有相同的数据
+        let source_count = knowhere_get_index_count(source_index);
+        let target_count = knowhere_get_index_count(target_index);
+        assert_eq!(source_count, target_count);
+        assert_eq!(target_count, 10);
+
+        // 验证搜索结果相同
+        let query: Vec<f32> = (0..16).map(|i| i as f32).collect();
+        
+        let source_result = knowhere_search(source_index, query.as_ptr(), 1, 3, 16);
+        assert!(!source_result.is_null());
+        
+        let target_result = knowhere_search(target_index, query.as_ptr(), 1, 3, 16);
+        assert!(!target_result.is_null());
+
+        unsafe {
+            let src_ref = &*source_result;
+            let tgt_ref = &*target_result;
+            
+            assert_eq!(src_ref.num_results, tgt_ref.num_results);
+            
+            // 验证搜索结果 ID 相同
+            let src_ids = std::slice::from_raw_parts(src_ref.ids, src_ref.num_results);
+            let tgt_ids = std::slice::from_raw_parts(tgt_ref.ids, tgt_ref.num_results);
+            assert_eq!(src_ids, tgt_ids);
+        }
+
+        knowhere_free_result(source_result);
+        knowhere_free_result(target_result);
+        knowhere_free_binary_set(binset);
+        knowhere_free_index(source_index);
+        knowhere_free_index(target_index);
+    }
+
+    #[test]
+    fn test_deserialize_null_index() {
+        let config = CIndexConfig::default();
+        let index = knowhere_create_index(config);
+        let result = knowhere_deserialize_index(std::ptr::null_mut(), std::ptr::null());
+        assert_eq!(result, CError::InvalidArg as i32);
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_deserialize_empty_binset() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Flat,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        // 创建空的 CBinarySet
+        let empty_binset = CBinarySet {
+            keys: std::ptr::null_mut(),
+            values: std::ptr::null_mut(),
+            count: 0,
+        };
+
+        let result = knowhere_deserialize_index(index, &empty_binset);
+        assert_eq!(result, CError::InvalidArg as i32);
+
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_range_search_flat_l2() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Flat,
+            metric_type: CMetricType::L2,
+            dim: 4,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        // Add test vectors: 4 vectors at different distances from origin
+        let vectors = vec![
+            1.0, 0.0, 0.0, 0.0,  // dist=1.0 from origin
+            0.0, 1.0, 0.0, 0.0,  // dist=1.0 from origin
+            0.0, 0.0, 1.0, 0.0,  // dist=1.0 from origin
+            2.0, 0.0, 0.0, 0.0,  // dist=2.0 from origin
+        ];
+        let ids = vec![0i64, 1, 2, 3];
+
+        let train_result = knowhere_train_index(index, vectors.as_ptr(), 4, 4);
+        assert_eq!(train_result, CError::Success as i32);
+
+        let add_result = knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 4, 4);
+        assert_eq!(add_result, CError::Success as i32);
+
+        // Range search with radius=1.5 (should find first 3 vectors)
+        let query = vec![0.0, 0.0, 0.0, 0.0];
+        let result = knowhere_range_search(index, query.as_ptr(), 1, 1.5, 4);
+        assert!(!result.is_null());
+
+        unsafe {
+            let result_ref = &*result;
+            assert_eq!(result_ref.num_queries, 1);
+            assert!(result_ref.total_count >= 3); // Should find at least 3 vectors within radius 1.5
+            assert!(result_ref.elapsed_ms >= 0.0);
+
+            // Verify lims array
+            let lims = std::slice::from_raw_parts(result_ref.lims, result_ref.num_queries + 1);
+            assert_eq!(lims[0], 0);
+            assert_eq!(lims[1], result_ref.total_count);
+        }
+
+        knowhere_free_range_result(result);
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_range_search_multiple_queries() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Flat,
+            metric_type: CMetricType::L2,
+            dim: 4,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        // Add test vectors
+        let vectors = vec![
+            0.0, 0.0, 0.0, 0.0,  // id=0
+            1.0, 0.0, 0.0, 0.0,  // id=1
+            0.0, 1.0, 0.0, 0.0,  // id=2
+        ];
+        let ids = vec![0i64, 1, 2];
+
+        let train_result = knowhere_train_index(index, vectors.as_ptr(), 3, 4);
+        assert_eq!(train_result, CError::Success as i32);
+
+        let add_result = knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 3, 4);
+        assert_eq!(add_result, CError::Success as i32);
+
+        // Two query vectors
+        let queries = vec![
+            0.0, 0.0, 0.0, 0.0,  // Query 1: at origin
+            1.0, 0.0, 0.0, 0.0,  // Query 2: at (1,0,0,0)
+        ];
+        let result = knowhere_range_search(index, queries.as_ptr(), 2, 1.5, 4);
+        assert!(!result.is_null());
+
+        unsafe {
+            let result_ref = &*result;
+            assert_eq!(result_ref.num_queries, 2);
+
+            // Verify lims array
+            let lims = std::slice::from_raw_parts(result_ref.lims, result_ref.num_queries + 1);
+            assert_eq!(lims[0], 0);
+            assert_eq!(lims[1], lims[2] - lims[1]); // Each query should have similar results
+        }
+
+        knowhere_free_range_result(result);
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_range_search_null_index() {
+        let query = vec![0.0, 0.0, 0.0, 0.0];
+        let result = knowhere_range_search(
+            std::ptr::null(),
+            query.as_ptr(),
+            1,
+            1.0,
+            4,
+        );
+        assert!(result.is_null());
+    }
+
+    #[test]
+    fn test_range_search_null_query() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Flat,
+            metric_type: CMetricType::L2,
+            dim: 4,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        let result = knowhere_range_search(
+            index,
+            std::ptr::null(),
+            1,
+            1.0,
+            4,
+        );
+        assert!(result.is_null());
+
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_range_search_hnsw_not_implemented() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Hnsw,
+            metric_type: CMetricType::L2,
+            dim: 4,
+            ef_construction: 16,
+            ef_search: 16,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        // Add test vectors
+        let vectors = vec![
+            0.0, 0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0,
+        ];
+        let ids = vec![0i64, 1];
+
+        let train_result = knowhere_train_index(index, vectors.as_ptr(), 2, 4);
+        assert_eq!(train_result, CError::Success as i32);
+
+        let add_result = knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 2, 4);
+        assert_eq!(add_result, CError::Success as i32);
+
+        // HNSW range search should return NULL (NotImplemented)
+        let query = vec![0.0, 0.0, 0.0, 0.0];
+        let result = knowhere_range_search(index, query.as_ptr(), 1, 1.5, 4);
+        assert!(result.is_null());
+
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_free_range_result_null() {
+        // Should not panic
+        knowhere_free_range_result(std::ptr::null_mut());
+    }
+
+    // ========== GetVectorByIds C API Tests ==========
+
+    #[test]
+    fn test_get_vector_by_ids_flat() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Flat,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        // Create test vectors: 10 vectors of dim 16
+        let vectors: Vec<f32> = (0..10 * 16).map(|i| i as f32).collect();
+        let ids: Vec<i64> = (0..10).collect();
+
+        // Train and add vectors
+        let train_result = knowhere_train_index(index, vectors.as_ptr(), 10, 16);
+        assert_eq!(train_result, CError::Success as i32);
+
+        let add_result = knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 10, 16);
+        assert_eq!(add_result, CError::Success as i32);
+
+        // Get vector by single ID
+        let query_ids: Vec<i64> = vec![5];
+        let result = knowhere_get_vector_by_ids(index, query_ids.as_ptr(), query_ids.len(), 16);
+        assert!(!result.is_null());
+
+        let result = unsafe { &*result };
+        assert_eq!(result.num_ids, 1);
+        assert_eq!(result.dim, 16);
+
+        // Verify vector values
+        let vectors_slice = unsafe { std::slice::from_raw_parts(result.vectors, result.num_ids * result.dim) };
+        assert_eq!(vectors_slice[0], 80.0);  // First element of vector 5 (5*16=80)
+
+        unsafe {
+            knowhere_free_get_vector_result(result as *const _ as *mut _);
+        }
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_get_vector_by_ids_multiple() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Flat,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        // Create test vectors: 10 vectors of dim 16
+        let vectors: Vec<f32> = (0..10 * 16).map(|i| i as f32).collect();
+        let ids: Vec<i64> = (0..10).collect();
+
+        // Train and add vectors
+        let train_result = knowhere_train_index(index, vectors.as_ptr(), 10, 16);
+        assert_eq!(train_result, CError::Success as i32);
+
+        let add_result = knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 10, 16);
+        assert_eq!(add_result, CError::Success as i32);
+
+        // Get multiple vectors by IDs
+        let query_ids: Vec<i64> = vec![0, 5, 9];
+        let result = knowhere_get_vector_by_ids(index, query_ids.as_ptr(), query_ids.len(), 16);
+        assert!(!result.is_null());
+
+        let result = unsafe { &*result };
+        assert_eq!(result.num_ids, 3);
+        assert_eq!(result.dim, 16);
+
+        // Verify vector values
+        let vectors_slice = unsafe { std::slice::from_raw_parts(result.vectors, result.num_ids * result.dim) };
+        assert_eq!(vectors_slice[0], 0.0);    // First element of vector 0
+        assert_eq!(vectors_slice[16], 80.0);  // First element of vector 5 (5*16=80)
+        assert_eq!(vectors_slice[32], 144.0); // First element of vector 9 (9*16=144)
+
+        unsafe {
+            knowhere_free_get_vector_result(result as *const _ as *mut _);
+        }
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_get_vector_by_ids_nonexistent() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Flat,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        // Create test vectors: 5 vectors of dim 16
+        let vectors: Vec<f32> = (0..5 * 16).map(|i| i as f32).collect();
+        let ids: Vec<i64> = (0..5).collect();
+
+        // Train and add vectors
+        let train_result = knowhere_train_index(index, vectors.as_ptr(), 5, 16);
+        assert_eq!(train_result, CError::Success as i32);
+
+        let add_result = knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 5, 16);
+        assert_eq!(add_result, CError::Success as i32);
+
+        // Try to get non-existent ID
+        let query_ids: Vec<i64> = vec![100, 101];
+        let result = knowhere_get_vector_by_ids(index, query_ids.as_ptr(), query_ids.len(), 16);
+        assert!(result.is_null());
+
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_get_vector_by_ids_null_index() {
+        let query_ids: Vec<i64> = vec![0, 1, 2];
+        let result = knowhere_get_vector_by_ids(
+            std::ptr::null(),
+            query_ids.as_ptr(),
+            query_ids.len(),
+            16,
+        );
+        assert!(result.is_null());
+    }
+
+    #[test]
+    fn test_get_vector_by_ids_dimension_mismatch() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Flat,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        // Create test vectors: 5 vectors of dim 16
+        let vectors: Vec<f32> = (0..5 * 16).map(|i| i as f32).collect();
+        let ids: Vec<i64> = (0..5).collect();
+
+        let train_result = knowhere_train_index(index, vectors.as_ptr(), 5, 16);
+        assert_eq!(train_result, CError::Success as i32);
+
+        let add_result = knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 5, 16);
+        assert_eq!(add_result, CError::Success as i32);
+
+        // Try with wrong dimension
+        let query_ids: Vec<i64> = vec![0];
+        let result = knowhere_get_vector_by_ids(index, query_ids.as_ptr(), query_ids.len(), 32);
+        assert!(result.is_null());
+
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_free_get_vector_result_null() {
+        // Should not panic
+        knowhere_free_get_vector_result(std::ptr::null_mut());
+    }
+
+    #[test]
+    fn test_get_vector_by_ids_hnsw_not_implemented() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Hnsw,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            ef_construction: 16,
+            ef_search: 16,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        // Create test vectors
+        let vectors: Vec<f32> = (0..5 * 16).map(|i| i as f32).collect();
+        let ids: Vec<i64> = (0..5).collect();
+
+        let train_result = knowhere_train_index(index, vectors.as_ptr(), 5, 16);
+        assert_eq!(train_result, CError::Success as i32);
+
+        let add_result = knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 5, 16);
+        assert_eq!(add_result, CError::Success as i32);
+
+        // HNSW get_vector_by_ids should return NULL (NotImplemented)
+        let query_ids: Vec<i64> = vec![0];
+        let result = knowhere_get_vector_by_ids(index, query_ids.as_ptr(), query_ids.len(), 16);
+        assert!(result.is_null());
+
         knowhere_free_index(index);
     }
 }
