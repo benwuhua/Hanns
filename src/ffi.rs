@@ -1658,6 +1658,70 @@ pub extern "C" fn knowhere_bitset_count(bitset: *const CBitset) -> usize {
     }
 }
 
+/// 获取 bitset 的字节大小
+/// 
+/// 返回存储 bitset 所需的字节数，与 C++ knowhere 的 BitsetView::byte_size() 对齐。
+/// 
+/// # Arguments
+/// * `bitset` - Bitset 指针
+/// 
+/// # Returns
+/// bitset 占用的字节数。如果 bitset 为 NULL 则返回 0。
+/// 
+/// # C API 使用示例
+/// ```c
+/// CBitset* bitset = knowhere_bitset_create(1000);
+/// size_t size = knowhere_bitset_byte_size(bitset);
+/// printf("Bitset size: %zu bytes\n", size);  // 输出：Bitset size: 125 bytes
+/// knowhere_bitset_free(bitset);
+/// ```
+#[no_mangle]
+pub extern "C" fn knowhere_bitset_byte_size(bitset: *const CBitset) -> usize {
+    if bitset.is_null() {
+        return 0;
+    }
+    
+    unsafe {
+        let cb = &*bitset;
+        // 与 C++ knowhere 的 byte_size() 对齐：(num_bits + 7) / 8
+        (cb.len + 7) / 8
+    }
+}
+
+/// 获取 bitset 的底层数据指针
+/// 
+/// 返回指向 bitset 内部 u64 数组的指针，与 C++ knowhere 的 BitsetView::data() 对齐。
+/// 注意：C++ 版本返回 uint8_t*，而 Rust 版本返回 u64*（因为内部存储是 u64 数组）。
+/// 
+/// # Arguments
+/// * `bitset` - Bitset 指针
+/// 
+/// # Returns
+/// 指向底层数据的指针。如果 bitset 为 NULL 则返回 NULL。
+/// 返回的指针在 bitset 的整个生命周期内有效，调用者不应释放。
+/// 
+/// # C API 使用示例
+/// ```c
+/// CBitset* bitset = knowhere_bitset_create(1000);
+/// const uint64_t* data = knowhere_bitset_data(bitset);
+/// // 访问数据（1000 bits = 16 u64 words）
+/// for (size_t i = 0; i < 16; i++) {
+///     printf("word[%zu] = %lu\n", i, data[i]);
+/// }
+/// knowhere_bitset_free(bitset);
+/// ```
+#[no_mangle]
+pub extern "C" fn knowhere_bitset_data(bitset: *const CBitset) -> *const u64 {
+    if bitset.is_null() {
+        return std::ptr::null();
+    }
+    
+    unsafe {
+        let cb = &*bitset;
+        cb.data
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2722,5 +2786,78 @@ mod tests {
         assert!(result.is_null());
         
         knowhere_bitset_free(bitset as *mut _);
+    }
+
+    #[test]
+    fn test_bitset_byte_size() {
+        // Test various sizes
+        let bitset_1 = knowhere_bitset_create(1);
+        unsafe {
+            assert_eq!(knowhere_bitset_byte_size(bitset_1), 1);  // (1+7)/8 = 1
+        }
+        knowhere_bitset_free(bitset_1);
+
+        let bitset_8 = knowhere_bitset_create(8);
+        unsafe {
+            assert_eq!(knowhere_bitset_byte_size(bitset_8), 1);  // (8+7)/8 = 1
+        }
+        knowhere_bitset_free(bitset_8);
+
+        let bitset_64 = knowhere_bitset_create(64);
+        unsafe {
+            assert_eq!(knowhere_bitset_byte_size(bitset_64), 8);  // (64+7)/8 = 8
+        }
+        knowhere_bitset_free(bitset_64);
+
+        let bitset_100 = knowhere_bitset_create(100);
+        unsafe {
+            assert_eq!(knowhere_bitset_byte_size(bitset_100), 13);  // (100+7)/8 = 13
+        }
+        knowhere_bitset_free(bitset_100);
+
+        let bitset_1000 = knowhere_bitset_create(1000);
+        unsafe {
+            assert_eq!(knowhere_bitset_byte_size(bitset_1000), 125);  // (1000+7)/8 = 125
+        }
+        knowhere_bitset_free(bitset_1000);
+
+        // Null pointer
+        unsafe {
+            assert_eq!(knowhere_bitset_byte_size(std::ptr::null()), 0);
+        }
+    }
+
+    #[test]
+    fn test_bitset_data() {
+        let bitset = knowhere_bitset_create(128);
+        assert!(!bitset.is_null());
+
+        // Get data pointer
+        let data = unsafe { knowhere_bitset_data(bitset) };
+        assert!(!data.is_null());
+
+        // Verify we can read the data (should be all zeros initially)
+        unsafe {
+            let slice = std::slice::from_raw_parts(data, 2);  // 128 bits = 2 u64s
+            assert_eq!(slice[0], 0);
+            assert_eq!(slice[1], 0);
+
+            // Set some bits and verify
+            knowhere_bitset_set(bitset, 0, true);
+            knowhere_bitset_set(bitset, 64, true);
+            
+            // Re-read data
+            let data2 = knowhere_bitset_data(bitset);
+            let slice2 = std::slice::from_raw_parts(data2, 2);
+            assert_eq!(slice2[0], 1u64);      // First bit set
+            assert_eq!(slice2[1], 1u64);      // 65th bit set (first bit of second u64)
+        }
+
+        knowhere_bitset_free(bitset);
+
+        // Null pointer
+        unsafe {
+            assert!(knowhere_bitset_data(std::ptr::null()).is_null());
+        }
     }
 }
