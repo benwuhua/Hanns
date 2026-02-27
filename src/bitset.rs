@@ -1,6 +1,7 @@
 //! BitsetView - 高性能位图实现
 //! 
 //! 用于 Milvus 的软删除机制，支持高效的位运算。
+//! 与 C++ knowhere 的 BitsetView 对齐，支持 out_ids 用于压缩 bitset。
 
 use std::ops::{BitAnd, BitOr, BitXor};
 
@@ -31,12 +32,24 @@ impl<'a> Iterator for BitsetIter<'a> {
 /// - O(1) 访问时间
 /// - 内存高效（按需分配）
 /// - 与 C++ BitsetView 对齐
+/// - 支持 out_ids 用于压缩 bitset（ID 映射）
 #[derive(Clone)]
 pub struct BitsetView {
-    /// 内部存储：每个元素是一个 u64（64位）
+    /// 内部存储：每个元素是一个 u64（64 位）
     data: Vec<u64>,
     /// 位图长度（位数，非字节）
     len: usize,
+    /// 被过滤的位数（为 1 的位数）
+    num_filtered_out_bits: usize,
+    /// ID 偏移量（用于多 chunk 场景）
+    id_offset: usize,
+    /// 可选的 ID 映射（用于压缩 bitset）
+    /// 如果 Some，则 out_ids[i] 表示第 i 个内部 ID 对应的外部 ID
+    out_ids: Option<Vec<u32>>,
+    /// 内部 ID 数量（当使用 out_ids 时）
+    num_internal_ids: usize,
+    /// 被过滤的内部 ID 数量（当使用 out_ids 时）
+    num_filtered_out_ids: usize,
 }
 
 impl BitsetView {
@@ -47,36 +60,80 @@ impl BitsetView {
         Self {
             data: vec![0u64; words],
             len,
+            num_filtered_out_bits: 0,
+            id_offset: 0,
+            out_ids: None,
+            num_internal_ids: 0,
+            num_filtered_out_ids: 0,
         }
     }
     
     /// 从现有数据创建位图
     #[inline]
     pub fn from_vec(data: Vec<u64>, len: usize) -> Self {
-        Self { data, len }
+        Self {
+            data,
+            len,
+            num_filtered_out_bits: 0,
+            id_offset: 0,
+            out_ids: None,
+            num_internal_ids: 0,
+            num_filtered_out_ids: 0,
+        }
     }
     
     /// 获取位图长度
+    /// 如果有 out_ids，返回内部 ID 数量；否则返回位数
     #[inline]
     pub fn len(&self) -> usize {
+        if self.out_ids.is_some() {
+            self.num_internal_ids
+        } else {
+            self.len
+        }
+    }
+    
+    /// 获取原始位图长度（位数）
+    #[inline]
+    pub fn num_bits(&self) -> usize {
         self.len
     }
     
     /// 检查是否为空
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.len() == 0
     }
     
     /// 获取指定位置的位值
+    /// 如果有 out_ids，会先进行 ID 映射
     #[inline]
     pub fn get(&self, index: usize) -> bool {
-        if index >= self.len {
-            return false;
+        // 应用 ID 偏移
+        let out_id = if let Some(ref out_ids) = self.out_ids {
+            if index >= out_ids.len() {
+                return false;
+            }
+            out_ids[index] as usize
+        } else {
+            index + self.id_offset
+        };
+        
+        // 检查是否超出范围
+        if out_id >= self.len {
+            return true; // 超出范围的被视为已过滤
         }
-        let word_idx = index >> 6;
-        let bit_idx = index & 63;
+        
+        let word_idx = out_id >> 6;
+        let bit_idx = out_id & 63;
         self.data[word_idx] & (1u64 << bit_idx) != 0
+    }
+    
+    /// 测试指定索引是否被过滤（与 C++ test() 对齐）
+    /// 如果 test 返回 true，则该索引应该在搜索时被跳过
+    #[inline]
+    pub fn test(&self, index: usize) -> bool {
+        self.get(index)
     }
     
     /// 设置指定位置的位值
@@ -90,10 +147,18 @@ impl BitsetView {
         let bit_idx = index & 63;
         let mask = 1u64 << bit_idx;
         
+        let was_set = self.data[word_idx] & mask != 0;
+        
         if value {
             self.data[word_idx] |= mask;
+            if !was_set {
+                self.num_filtered_out_bits += 1;
+            }
         } else {
             self.data[word_idx] &= !mask;
+            if was_set {
+                self.num_filtered_out_bits -= 1;
+            }
         }
     }
     
@@ -120,7 +185,14 @@ impl BitsetView {
         let bit_idx = index & 63;
         let mask = 1u64 << bit_idx;
         
+        let was_set = self.data[word_idx] & mask != 0;
         self.data[word_idx] ^= mask;
+        
+        if was_set {
+            self.num_filtered_out_bits -= 1;
+        } else {
+            self.num_filtered_out_bits += 1;
+        }
     }
     
     /// 检查是否所有位都为 1
@@ -162,10 +234,21 @@ impl BitsetView {
         !self.none()
     }
     
-    /// 统计为 1 的位数
+    /// 统计为 1 的位数（被过滤的数量）
+    /// 如果有 out_ids，返回被过滤的内部 ID 数量
     #[inline]
     pub fn count(&self) -> usize {
-        self.data.iter().map(|w| w.count_ones() as usize).sum()
+        if self.out_ids.is_some() {
+            self.num_filtered_out_ids
+        } else {
+            self.num_filtered_out_bits
+        }
+    }
+    
+    /// 获取被过滤的位数（不使用 out_ids 时的原始计数）
+    #[inline]
+    pub fn num_filtered_out_bits(&self) -> usize {
+        self.num_filtered_out_bits
     }
     
     /// 获取所有为 1 的位的索引迭代器
@@ -220,6 +303,8 @@ impl BitsetView {
         for word in &mut self.data {
             *word = 0;
         }
+        self.num_filtered_out_bits = 0;
+        self.num_filtered_out_ids = 0;
     }
     
     /// 设置所有位为 1
@@ -235,6 +320,8 @@ impl BitsetView {
         if remaining > 0 {
             self.data[full_words] = (1u64 << remaining) - 1;
         }
+        
+        self.num_filtered_out_bits = self.len;
     }
     
     /// 获取底层数据（用于 FFI）
@@ -248,6 +335,101 @@ impl BitsetView {
     pub fn as_mut_slice(&mut self) -> &mut [u64] {
         &mut self.data
     }
+    
+    // ========== out_ids 相关方法（与 C++ knowhere 对齐） ==========
+    
+    /// 检查是否有 out_ids（ID 映射）
+    #[inline]
+    pub fn has_out_ids(&self) -> bool {
+        self.out_ids.is_some()
+    }
+    
+    /// 设置 out_ids（ID 映射）
+    /// 
+    /// # Arguments
+    /// * `out_ids` - ID 映射数组，out_ids[i] 表示第 i 个内部 ID 对应的外部 ID
+    /// * `num_filtered_out_ids` - 可选的被过滤的内部 ID 数量，如果为 None 则自动计算
+    #[inline]
+    pub fn set_out_ids(&mut self, out_ids: Vec<u32>, num_filtered_out_ids: Option<usize>) {
+        let num_internal_ids = out_ids.len();
+        
+        // 如果没有提供 num_filtered_out_ids，则自动计算
+        let filtered_count = num_filtered_out_ids.unwrap_or_else(|| {
+            // 计算被过滤的内部 ID 数量
+            // 注意：这里不能直接调用 self.test()，因为 out_ids 还没设置
+            // 需要手动进行 ID 映射并检查位
+            let mut count = 0;
+            for i in 0..num_internal_ids {
+                let external_id = out_ids[i] as usize;
+                // 检查外部 ID 是否被过滤（位为 1）
+                if external_id >= self.len {
+                    // 超出范围被视为已过滤
+                    count += 1;
+                } else {
+                    let word_idx = external_id >> 6;
+                    let bit_idx = external_id & 63;
+                    if self.data[word_idx] & (1u64 << bit_idx) != 0 {
+                        count += 1;
+                    }
+                }
+            }
+            count
+        });
+        
+        self.out_ids = Some(out_ids);
+        self.num_internal_ids = num_internal_ids;
+        self.num_filtered_out_ids = filtered_count;
+    }
+    
+    /// 获取 out_ids 数据
+    #[inline]
+    pub fn out_ids_data(&self) -> Option<&[u32]> {
+        self.out_ids.as_deref()
+    }
+    
+    /// 获取 out_ids 的可变引用
+    #[inline]
+    pub fn out_ids_data_mut(&mut self) -> Option<&mut [u32]> {
+        self.out_ids.as_deref_mut()
+    }
+    
+    /// 获取内部 ID 数量
+    #[inline]
+    pub fn num_internal_ids(&self) -> usize {
+        self.num_internal_ids
+    }
+    
+    /// 设置 ID 偏移量
+    #[inline]
+    pub fn set_id_offset(&mut self, offset: usize) {
+        self.id_offset = offset;
+    }
+    
+    /// 获取 ID 偏移量
+    #[inline]
+    pub fn id_offset(&self) -> usize {
+        self.id_offset
+    }
+    
+    /// 获取过滤比例
+    #[inline]
+    pub fn filter_ratio(&self) -> f32 {
+        if self.is_empty() {
+            0.0
+        } else {
+            self.count() as f32 / self.len() as f32
+        }
+    }
+    
+    /// 获取第一个有效的索引（未被过滤的）
+    pub fn get_first_valid_index(&self) -> usize {
+        for i in 0..self.len() {
+            if !self.test(i) {
+                return i;
+            }
+        }
+        self.len()
+    }
 }
 
 impl Default for BitsetView {
@@ -258,14 +440,18 @@ impl Default for BitsetView {
 
 impl std::fmt::Debug for BitsetView {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "BitsetView(len={}, ", self.len)?;
+        write!(f, "BitsetView(len={}, ", self.len())?;
         
         // 显示前 64 位作为示例
-        let preview: String = (0..self.len.min(64))
+        let preview: String = (0..self.len().min(64))
             .map(|i| if self.get(i) { '1' } else { '0' })
             .collect();
         
-        write!(f, "preview={})", preview)
+        if self.out_ids.is_some() {
+            write!(f, "with_out_ids, preview={})", preview)
+        } else {
+            write!(f, "preview={})", preview)
+        }
     }
 }
 
@@ -405,5 +591,105 @@ mod tests {
         
         bits.set_all();
         assert!(bits.all());
+    }
+    
+    #[test]
+    fn test_out_ids_basic() {
+        let mut bits = BitsetView::new(100);
+        
+        // 设置一些位
+        bits.set(5, true);
+        bits.set(10, true);
+        bits.set(50, true);
+        
+        // 初始没有 out_ids
+        assert!(!bits.has_out_ids());
+        assert_eq!(bits.len(), 100);
+        assert_eq!(bits.count(), 3);
+        
+        // 设置 out_ids：压缩映射
+        // 内部 ID 0,1,2 映射到外部 ID 5,10,50
+        let out_ids = vec![5u32, 10, 50];
+        bits.set_out_ids(out_ids, None);
+        
+        // 现在有 out_ids
+        assert!(bits.has_out_ids());
+        assert_eq!(bits.len(), 3); // 内部 ID 数量
+        assert_eq!(bits.num_bits(), 100); // 原始位数
+        
+        // 测试映射
+        assert!(bits.get(0)); // 内部 0 -> 外部 5 (已设置)
+        assert!(bits.get(1)); // 内部 1 -> 外部 10 (已设置)
+        assert!(bits.get(2)); // 内部 2 -> 外部 50 (已设置)
+        
+        // count 应该返回被过滤的内部 ID 数量
+        assert_eq!(bits.count(), 3);
+    }
+    
+    #[test]
+    fn test_out_ids_with_explicit_count() {
+        let mut bits = BitsetView::new(100);
+        
+        // 设置 out_ids，并显式指定被过滤的数量
+        let out_ids = vec![0u32, 1, 2, 3, 4];
+        bits.set_out_ids(out_ids, Some(2));
+        
+        assert!(bits.has_out_ids());
+        assert_eq!(bits.len(), 5);
+        assert_eq!(bits.count(), 2); // 显式指定的值
+    }
+    
+    #[test]
+    fn test_out_ids_data() {
+        let mut bits = BitsetView::new(100);
+        
+        let out_ids = vec![10u32, 20, 30];
+        bits.set_out_ids(out_ids.clone(), None);
+        
+        assert_eq!(bits.out_ids_data(), Some(&[10u32, 20, 30][..]));
+        assert_eq!(bits.num_internal_ids(), 3);
+    }
+    
+    #[test]
+    fn test_id_offset() {
+        let mut bits = BitsetView::new(100);
+        bits.set(50, true);
+        
+        assert_eq!(bits.id_offset(), 0);
+        
+        bits.set_id_offset(10);
+        assert_eq!(bits.id_offset(), 10);
+        
+        // 带偏移的访问
+        // index 40 + offset 10 = 50，应该返回 true
+        assert!(bits.get(40));
+    }
+    
+    #[test]
+    fn test_filter_ratio() {
+        let mut bits = BitsetView::new(100);
+        assert_eq!(bits.filter_ratio(), 0.0);
+        
+        bits.set_all();
+        assert_eq!(bits.filter_ratio(), 1.0);
+        
+        bits.clear();
+        bits.set(0, true);
+        bits.set(1, true);
+        assert!((bits.filter_ratio() - 0.02).abs() < 0.001);
+    }
+    
+    #[test]
+    fn test_get_first_valid_index() {
+        let mut bits = BitsetView::new(100);
+        assert_eq!(bits.get_first_valid_index(), 0);
+        
+        bits.set(0, true);
+        bits.set(1, true);
+        bits.set(2, true);
+        assert_eq!(bits.get_first_valid_index(), 3);
+        
+        bits.set_all();
+        assert_eq!(bits.get_first_valid_index(), 100);
     }
 }

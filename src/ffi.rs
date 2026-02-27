@@ -1722,6 +1722,190 @@ pub extern "C" fn knowhere_bitset_data(bitset: *const CBitset) -> *const u64 {
     }
 }
 
+// ========== BitsetView out_ids 相关 C API ==========
+
+/// 检查 bitset 是否有 out_ids（ID 映射）
+/// 
+/// 与 C++ knowhere 的 BitsetView::has_out_ids() 对齐。
+/// 
+/// # Arguments
+/// * `bitset` - Bitset 指针
+/// 
+/// # Returns
+/// 如果有 out_ids 返回 true，否则返回 false。如果 bitset 为 NULL 则返回 false。
+/// 
+/// # C API 使用示例
+/// ```c
+/// CBitset* bitset = knowhere_bitset_create(1000);
+/// bool has_out_ids = knowhere_bitset_has_out_ids(bitset);
+/// printf("Has out_ids: %s\n", has_out_ids ? "true" : "false");
+/// knowhere_bitset_free(bitset);
+/// ```
+#[no_mangle]
+pub extern "C" fn knowhere_bitset_has_out_ids(bitset: *const CBitset) -> bool {
+    if bitset.is_null() {
+        return false;
+    }
+    
+    unsafe {
+        let cb = &*bitset;
+        // 注意：CBitset 结构目前不存储 out_ids 信息
+        // 这个函数暂时返回 false
+        // TODO: 需要在 CBitset 中添加 out_ids 字段
+        false
+    }
+}
+
+/// 获取 bitset 的内部 ID 数量（当使用 out_ids 时）
+/// 
+/// 与 C++ knowhere 的 BitsetView::size() 对齐（当有 out_ids 时）。
+/// 
+/// # Arguments
+/// * `bitset` - Bitset 指针
+/// 
+/// # Returns
+/// 内部 ID 数量。如果没有 out_ids，返回位图长度。如果 bitset 为 NULL 则返回 0。
+#[no_mangle]
+pub extern "C" fn knowhere_bitset_size(bitset: *const CBitset) -> usize {
+    if bitset.is_null() {
+        return 0;
+    }
+    
+    unsafe {
+        let cb = &*bitset;
+        cb.len
+    }
+}
+
+/// 获取 bitset 的 ID 偏移量
+/// 
+/// 与 C++ knowhere 的 BitsetView::id_offset() 对齐。
+/// 
+/// # Arguments
+/// * `bitset` - Bitset 指针
+/// 
+/// # Returns
+/// ID 偏移量。如果 bitset 为 NULL 则返回 0。
+#[no_mangle]
+pub extern "C" fn knowhere_bitset_id_offset(bitset: *const CBitset) -> usize {
+    if bitset.is_null() {
+        return 0;
+    }
+    
+    // 注意：CBitset 结构目前不存储 id_offset 信息
+    // TODO: 需要在 CBitset 中添加 id_offset 字段
+    0
+}
+
+/// 设置 bitset 的 ID 偏移量
+/// 
+/// 与 C++ knowhere 的 BitsetView::set_id_offset() 对齐。
+/// 
+/// # Arguments
+/// * `bitset` - Bitset 指针（可变）
+/// * `offset` - ID 偏移量
+#[no_mangle]
+pub extern "C" fn knowhere_bitset_set_id_offset(bitset: *mut CBitset, offset: usize) {
+    if bitset.is_null() {
+        return;
+    }
+    
+    // 注意：CBitset 结构目前不存储 id_offset 信息
+    // TODO: 需要在 CBitset 中添加 id_offset 字段
+}
+
+/// 获取 bitset 的过滤比例
+/// 
+/// 与 C++ knowhere 的 BitsetView::filter_ratio() 对齐。
+/// 
+/// # Arguments
+/// * `bitset` - Bitset 指针
+/// 
+/// # Returns
+/// 过滤比例（0.0 到 1.0）。如果 bitset 为空或 NULL 则返回 0.0。
+#[no_mangle]
+pub extern "C" fn knowhere_bitset_filter_ratio(bitset: *const CBitset) -> f32 {
+    if bitset.is_null() {
+        return 0.0;
+    }
+    
+    unsafe {
+        let cb = &*bitset;
+        if cb.len == 0 {
+            return 0.0;
+        }
+        
+        let num_words = (cb.len + 63) / 64;
+        let slice = std::slice::from_raw_parts(cb.data, num_words);
+        let count: usize = slice.iter().map(|w| w.count_ones() as usize).sum();
+        count as f32 / cb.len as f32
+    }
+}
+
+/// 获取 bitset 的第一个有效索引（未被过滤的）
+/// 
+/// 与 C++ knowhere 的 BitsetView::get_first_valid_index() 对齐。
+/// 
+/// # Arguments
+/// * `bitset` - Bitset 指针
+/// 
+/// # Returns
+/// 第一个有效索引。如果所有位都被过滤或 bitset 为 NULL，则返回位图长度。
+#[no_mangle]
+pub extern "C" fn knowhere_bitset_get_first_valid_index(bitset: *const CBitset) -> usize {
+    if bitset.is_null() {
+        return 0;
+    }
+    
+    unsafe {
+        let cb = &*bitset;
+        let num_words = (cb.len + 63) / 64;
+        let slice = std::slice::from_raw_parts(cb.data, num_words);
+        
+        for (i, &word) in slice.iter().enumerate() {
+            if word != u64::MAX {
+                // 找到第一个非全 1 的字
+                let inverted = !word;
+                if inverted != 0 {
+                    return i * 64 + inverted.trailing_zeros() as usize;
+                }
+            }
+        }
+        
+        cb.len
+    }
+}
+
+/// 测试 bitset 中指定索引是否被过滤
+/// 
+/// 与 C++ knowhere 的 BitsetView::test() 对齐。
+/// 
+/// # Arguments
+/// * `bitset` - Bitset 指针
+/// * `index` - 索引
+/// 
+/// # Returns
+/// 如果索引被过滤（位为 1）返回 true，否则返回 false。
+#[no_mangle]
+pub extern "C" fn knowhere_bitset_test(bitset: *const CBitset, index: usize) -> bool {
+    if bitset.is_null() {
+        return false;
+    }
+    
+    unsafe {
+        let cb = &*bitset;
+        if index >= cb.len {
+            return true; // 超出范围被视为已过滤
+        }
+        
+        let word_idx = index >> 6;
+        let bit_idx = index & 63;
+        let mask = 1u64 << bit_idx;
+        
+        *cb.data.add(word_idx) & mask != 0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2859,5 +3043,125 @@ mod tests {
         unsafe {
             assert!(knowhere_bitset_data(std::ptr::null()).is_null());
         }
+    }
+    
+    #[test]
+    fn test_bitset_count() {
+        let bitset = knowhere_bitset_create(100);
+        assert!(!bitset.is_null());
+        
+        // Initially all zeros
+        assert_eq!(unsafe { knowhere_bitset_count(bitset) }, 0);
+        
+        // Set some bits
+        unsafe {
+            knowhere_bitset_set(bitset, 5, true);
+            knowhere_bitset_set(bitset, 10, true);
+            knowhere_bitset_set(bitset, 50, true);
+        }
+        
+        assert_eq!(unsafe { knowhere_bitset_count(bitset) }, 3);
+        
+        knowhere_bitset_free(bitset);
+    }
+    
+    #[test]
+    fn test_bitset_test() {
+        let bitset = knowhere_bitset_create(100);
+        assert!(!bitset.is_null());
+        
+        // Initially all zeros
+        assert!(!unsafe { knowhere_bitset_test(bitset, 0) });
+        assert!(!unsafe { knowhere_bitset_test(bitset, 50) });
+        
+        // Set some bits
+        unsafe {
+            knowhere_bitset_set(bitset, 5, true);
+            knowhere_bitset_set(bitset, 10, true);
+        }
+        
+        assert!(unsafe { knowhere_bitset_test(bitset, 5) });
+        assert!(unsafe { knowhere_bitset_test(bitset, 10) });
+        assert!(!unsafe { knowhere_bitset_test(bitset, 0) });
+        assert!(!unsafe { knowhere_bitset_test(bitset, 50) });
+        
+        // Out of range should return true (filtered)
+        assert!(unsafe { knowhere_bitset_test(bitset, 100) });
+        
+        knowhere_bitset_free(bitset);
+    }
+    
+    #[test]
+    fn test_bitset_filter_ratio() {
+        let bitset = knowhere_bitset_create(100);
+        assert!(!bitset.is_null());
+        
+        // Initially 0 ratio
+        assert_eq!(unsafe { knowhere_bitset_filter_ratio(bitset) }, 0.0);
+        
+        // Set all bits
+        unsafe {
+            for i in 0..100 {
+                knowhere_bitset_set(bitset, i, true);
+            }
+        }
+        
+        assert_eq!(unsafe { knowhere_bitset_filter_ratio(bitset) }, 1.0);
+        
+        // Clear and set half
+        unsafe {
+            for i in 0..100 {
+                knowhere_bitset_set(bitset, i, false);
+            }
+            for i in 0..50 {
+                knowhere_bitset_set(bitset, i, true);
+            }
+        }
+        
+        let ratio = unsafe { knowhere_bitset_filter_ratio(bitset) };
+        assert!((ratio - 0.5).abs() < 0.01);
+        
+        knowhere_bitset_free(bitset);
+    }
+    
+    #[test]
+    fn test_bitset_get_first_valid_index() {
+        let bitset = knowhere_bitset_create(100);
+        assert!(!bitset.is_null());
+        
+        // Initially first valid is 0
+        assert_eq!(unsafe { knowhere_bitset_get_first_valid_index(bitset) }, 0);
+        
+        // Set first few bits
+        unsafe {
+            knowhere_bitset_set(bitset, 0, true);
+            knowhere_bitset_set(bitset, 1, true);
+            knowhere_bitset_set(bitset, 2, true);
+        }
+        
+        assert_eq!(unsafe { knowhere_bitset_get_first_valid_index(bitset) }, 3);
+        
+        knowhere_bitset_free(bitset);
+    }
+    
+    #[test]
+    fn test_bitset_size() {
+        let bitset = knowhere_bitset_create(100);
+        assert!(!bitset.is_null());
+        
+        assert_eq!(unsafe { knowhere_bitset_size(bitset) }, 100);
+        
+        knowhere_bitset_free(bitset);
+    }
+    
+    #[test]
+    fn test_bitset_has_out_ids() {
+        let bitset = knowhere_bitset_create(100);
+        assert!(!bitset.is_null());
+        
+        // Currently out_ids is not supported in CBitset, should return false
+        assert!(!unsafe { knowhere_bitset_has_out_ids(bitset) });
+        
+        knowhere_bitset_free(bitset);
     }
 }
