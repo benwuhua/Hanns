@@ -1779,6 +1779,39 @@ pub extern "C" fn knowhere_bitset_size(bitset: *const CBitset) -> usize {
     }
 }
 
+/// 检查 bitset 是否为空
+/// 
+/// 与 C++ knowhere 的 BitsetView::empty() 对齐。
+/// 
+/// # Arguments
+/// * `bitset` - Bitset 指针
+/// 
+/// # Returns
+/// true=空，false=非空。如果 bitset 为 NULL 则返回 true。
+/// 
+/// # C API 使用示例
+/// ```c
+/// CBitset* empty = knowhere_bitset_create(0);
+/// CBitset* non_empty = knowhere_bitset_create(100);
+/// 
+/// assert(knowhere_bitset_empty(empty) == true);
+/// assert(knowhere_bitset_empty(non_empty) == false);
+/// 
+/// knowhere_bitset_free(empty);
+/// knowhere_bitset_free(non_empty);
+/// ```
+#[no_mangle]
+pub extern "C" fn knowhere_bitset_empty(bitset: *const CBitset) -> bool {
+    if bitset.is_null() {
+        return true;
+    }
+    
+    unsafe {
+        let cb = &*bitset;
+        cb.len == 0
+    }
+}
+
 /// 获取 bitset 的 ID 偏移量
 /// 
 /// 与 C++ knowhere 的 BitsetView::id_offset() 对齐。
@@ -3400,6 +3433,19 @@ mod tests {
         assert_eq!(unsafe { knowhere_bitset_size(bitset) }, 100);
         
         knowhere_bitset_free(bitset);
+    }
+    
+    #[test]
+    fn test_bitset_empty() {
+        let non_empty = knowhere_bitset_create(100);
+        
+        // Non-empty bitset
+        assert!(!unsafe { knowhere_bitset_empty(non_empty) });
+        
+        // NULL bitset should return true (empty)
+        assert!(unsafe { knowhere_bitset_empty(std::ptr::null()) });
+        
+        knowhere_bitset_free(non_empty);
     }
     
     #[test]

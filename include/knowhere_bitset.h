@@ -81,6 +81,14 @@ size_t knowhere_bitset_count(const CBitset* bitset);
 size_t knowhere_bitset_size(const CBitset* bitset);
 
 /**
+ * @brief 检查 Bitset 是否为空
+ * 
+ * @param bitset Bitset 指针
+ * @return bool true=空，false=非空
+ */
+bool knowhere_bitset_empty(const CBitset* bitset);
+
+/**
  * @brief 获取 Bitset 的字节大小
  * 
  * @param bitset Bitset 指针
