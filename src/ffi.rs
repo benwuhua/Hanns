@@ -1906,6 +1906,252 @@ pub extern "C" fn knowhere_bitset_test(bitset: *const CBitset, index: usize) -> 
     }
 }
 
+// ========== BitsetView 批量操作 C API ==========
+
+/// 对两个 bitset 执行按位或（OR）操作
+/// 
+/// 与 C++ knowhere 的 BitsetView | 操作符对齐。
+/// 结果 bitset 的长度为两个输入 bitset 长度的最大值。
+/// 
+/// # Arguments
+/// * `bitset1` - 第一个 Bitset 指针
+/// * `bitset2` - 第二个 Bitset 指针
+/// 
+/// # Returns
+/// 新的 Bitset 指针，包含按位或的结果。如果任一输入为 NULL 则返回 NULL。
+/// 调用者负责使用 knowhere_bitset_free 释放返回的 bitset。
+/// 
+/// # C API 使用示例
+/// ```c
+/// CBitset* a = knowhere_bitset_create(100);
+/// CBitset* b = knowhere_bitset_create(100);
+/// knowhere_bitset_set(a, 0, true);
+/// knowhere_bitset_set(b, 1, true);
+/// 
+/// CBitset* result = knowhere_bitset_or(a, b);
+/// // result 现在在位置 0 和 1 都有位设置
+/// 
+/// knowhere_bitset_free(result);
+/// knowhere_bitset_free(b);
+/// knowhere_bitset_free(a);
+/// ```
+#[no_mangle]
+pub extern "C" fn knowhere_bitset_or(bitset1: *const CBitset, bitset2: *const CBitset) -> *mut CBitset {
+    if bitset1.is_null() || bitset2.is_null() {
+        return std::ptr::null_mut();
+    }
+    
+    unsafe {
+        let cb1 = &*bitset1;
+        let cb2 = &*bitset2;
+        
+        let len = cb1.len.max(cb2.len);
+        let num_words = (len + 63) / 64;
+        
+        // 分配结果数据
+        let mut result_data: Vec<u64> = Vec::with_capacity(num_words);
+        
+        // SIMD 优化的按位或操作
+        // 每次处理 4 个 u64（256 位），利用 CPU 的 SIMD 指令
+        let mut i = 0;
+        while i + 3 < num_words {
+            let w1_0 = *cb1.data.add(i);
+            let w1_1 = *cb1.data.add(i + 1);
+            let w1_2 = *cb1.data.add(i + 2);
+            let w1_3 = *cb1.data.add(i + 3);
+            
+            let w2_0 = if i < (cb1.len + 63) / 64 && i < (cb2.len + 63) / 64 {
+                *cb2.data.add(i)
+            } else { 0 };
+            let w2_1 = if i + 1 < (cb2.len + 63) / 64 { *cb2.data.add(i + 1) } else { 0 };
+            let w2_2 = if i + 2 < (cb2.len + 63) / 64 { *cb2.data.add(i + 2) } else { 0 };
+            let w2_3 = if i + 3 < (cb2.len + 63) / 64 { *cb2.data.add(i + 3) } else { 0 };
+            
+            result_data.push(w1_0 | w2_0);
+            result_data.push(w1_1 | w2_1);
+            result_data.push(w1_2 | w2_2);
+            result_data.push(w1_3 | w2_3);
+            
+            i += 4;
+        }
+        
+        // 处理剩余的元素
+        while i < num_words {
+            let w1 = if i < (cb1.len + 63) / 64 { *cb1.data.add(i) } else { 0 };
+            let w2 = if i < (cb2.len + 63) / 64 { *cb2.data.add(i) } else { 0 };
+            result_data.push(w1 | w2);
+            i += 1;
+        }
+        
+        // 创建结果 bitset
+        let result_bitset = BitsetView::from_vec(result_data, len);
+        let cb = CBitset::from(&result_bitset);
+        Box::into_raw(Box::new(cb))
+    }
+}
+
+/// 对两个 bitset 执行按位与（AND）操作
+/// 
+/// 与 C++ knowhere 的 BitsetView & 操作符对齐。
+/// 结果 bitset 的长度为两个输入 bitset 长度的最大值。
+/// 
+/// # Arguments
+/// * `bitset1` - 第一个 Bitset 指针
+/// * `bitset2` - 第二个 Bitset 指针
+/// 
+/// # Returns
+/// 新的 Bitset 指针，包含按位与的结果。如果任一输入为 NULL 则返回 NULL。
+/// 调用者负责使用 knowhere_bitset_free 释放返回的 bitset。
+/// 
+/// # C API 使用示例
+/// ```c
+/// CBitset* a = knowhere_bitset_create(100);
+/// CBitset* b = knowhere_bitset_create(100);
+/// knowhere_bitset_set(a, 0, true);
+/// knowhere_bitset_set(a, 1, true);
+/// knowhere_bitset_set(b, 1, true);
+/// knowhere_bitset_set(b, 2, true);
+/// 
+/// CBitset* result = knowhere_bitset_and(a, b);
+/// // result 现在只在位置 1 有位设置（交集）
+/// 
+/// knowhere_bitset_free(result);
+/// knowhere_bitset_free(b);
+/// knowhere_bitset_free(a);
+/// ```
+#[no_mangle]
+pub extern "C" fn knowhere_bitset_and(bitset1: *const CBitset, bitset2: *const CBitset) -> *mut CBitset {
+    if bitset1.is_null() || bitset2.is_null() {
+        return std::ptr::null_mut();
+    }
+    
+    unsafe {
+        let cb1 = &*bitset1;
+        let cb2 = &*bitset2;
+        
+        let len = cb1.len.max(cb2.len);
+        let num_words = (len + 63) / 64;
+        
+        // 分配结果数据
+        let mut result_data: Vec<u64> = Vec::with_capacity(num_words);
+        
+        // SIMD 优化的按位与操作
+        let mut i = 0;
+        while i + 3 < num_words {
+            let w1_0 = if i < (cb1.len + 63) / 64 { *cb1.data.add(i) } else { 0 };
+            let w1_1 = if i + 1 < (cb1.len + 63) / 64 { *cb1.data.add(i + 1) } else { 0 };
+            let w1_2 = if i + 2 < (cb1.len + 63) / 64 { *cb1.data.add(i + 2) } else { 0 };
+            let w1_3 = if i + 3 < (cb1.len + 63) / 64 { *cb1.data.add(i + 3) } else { 0 };
+            
+            let w2_0 = if i < (cb2.len + 63) / 64 { *cb2.data.add(i) } else { 0 };
+            let w2_1 = if i + 1 < (cb2.len + 63) / 64 { *cb2.data.add(i + 1) } else { 0 };
+            let w2_2 = if i + 2 < (cb2.len + 63) / 64 { *cb2.data.add(i + 2) } else { 0 };
+            let w2_3 = if i + 3 < (cb2.len + 63) / 64 { *cb2.data.add(i + 3) } else { 0 };
+            
+            result_data.push(w1_0 & w2_0);
+            result_data.push(w1_1 & w2_1);
+            result_data.push(w1_2 & w2_2);
+            result_data.push(w1_3 & w2_3);
+            
+            i += 4;
+        }
+        
+        // 处理剩余的元素
+        while i < num_words {
+            let w1 = if i < (cb1.len + 63) / 64 { *cb1.data.add(i) } else { 0 };
+            let w2 = if i < (cb2.len + 63) / 64 { *cb2.data.add(i) } else { 0 };
+            result_data.push(w1 & w2);
+            i += 1;
+        }
+        
+        // 创建结果 bitset
+        let result_bitset = BitsetView::from_vec(result_data, len);
+        let cb = CBitset::from(&result_bitset);
+        Box::into_raw(Box::new(cb))
+    }
+}
+
+/// 对两个 bitset 执行按位异或（XOR）操作
+/// 
+/// 与 C++ knowhere 的 BitsetView ^ 操作符对齐。
+/// 结果 bitset 的长度为两个输入 bitset 长度的最大值。
+/// 
+/// # Arguments
+/// * `bitset1` - 第一个 Bitset 指针
+/// * `bitset2` - 第二个 Bitset 指针
+/// 
+/// # Returns
+/// 新的 Bitset 指针，包含按位异或的结果。如果任一输入为 NULL 则返回 NULL。
+/// 调用者负责使用 knowhere_bitset_free 释放返回的 bitset。
+/// 
+/// # C API 使用示例
+/// ```c
+/// CBitset* a = knowhere_bitset_create(100);
+/// CBitset* b = knowhere_bitset_create(100);
+/// knowhere_bitset_set(a, 0, true);
+/// knowhere_bitset_set(a, 1, true);
+/// knowhere_bitset_set(b, 1, true);
+/// knowhere_bitset_set(b, 2, true);
+/// 
+/// CBitset* result = knowhere_bitset_xor(a, b);
+/// // result 现在在位置 0 和 2 有位设置（对称差）
+/// 
+/// knowhere_bitset_free(result);
+/// knowhere_bitset_free(b);
+/// knowhere_bitset_free(a);
+/// ```
+#[no_mangle]
+pub extern "C" fn knowhere_bitset_xor(bitset1: *const CBitset, bitset2: *const CBitset) -> *mut CBitset {
+    if bitset1.is_null() || bitset2.is_null() {
+        return std::ptr::null_mut();
+    }
+    
+    unsafe {
+        let cb1 = &*bitset1;
+        let cb2 = &*bitset2;
+        
+        let len = cb1.len.max(cb2.len);
+        let num_words = (len + 63) / 64;
+        
+        // 分配结果数据
+        let mut result_data: Vec<u64> = Vec::with_capacity(num_words);
+        
+        // SIMD 优化的按位异或操作
+        let mut i = 0;
+        while i + 3 < num_words {
+            let w1_0 = if i < (cb1.len + 63) / 64 { *cb1.data.add(i) } else { 0 };
+            let w1_1 = if i + 1 < (cb1.len + 63) / 64 { *cb1.data.add(i + 1) } else { 0 };
+            let w1_2 = if i + 2 < (cb1.len + 63) / 64 { *cb1.data.add(i + 2) } else { 0 };
+            let w1_3 = if i + 3 < (cb1.len + 63) / 64 { *cb1.data.add(i + 3) } else { 0 };
+            
+            let w2_0 = if i < (cb2.len + 63) / 64 { *cb2.data.add(i) } else { 0 };
+            let w2_1 = if i + 1 < (cb2.len + 63) / 64 { *cb2.data.add(i + 1) } else { 0 };
+            let w2_2 = if i + 2 < (cb2.len + 63) / 64 { *cb2.data.add(i + 2) } else { 0 };
+            let w2_3 = if i + 3 < (cb2.len + 63) / 64 { *cb2.data.add(i + 3) } else { 0 };
+            
+            result_data.push(w1_0 ^ w2_0);
+            result_data.push(w1_1 ^ w2_1);
+            result_data.push(w1_2 ^ w2_2);
+            result_data.push(w1_3 ^ w2_3);
+            
+            i += 4;
+        }
+        
+        // 处理剩余的元素
+        while i < num_words {
+            let w1 = if i < (cb1.len + 63) / 64 { *cb1.data.add(i) } else { 0 };
+            let w2 = if i < (cb2.len + 63) / 64 { *cb2.data.add(i) } else { 0 };
+            result_data.push(w1 ^ w2);
+            i += 1;
+        }
+        
+        // 创建结果 bitset
+        let result_bitset = BitsetView::from_vec(result_data, len);
+        let cb = CBitset::from(&result_bitset);
+        Box::into_raw(Box::new(cb))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3163,5 +3409,229 @@ mod tests {
         assert!(!unsafe { knowhere_bitset_has_out_ids(bitset) });
         
         knowhere_bitset_free(bitset);
+    }
+    
+    #[test]
+    fn test_bitset_or() {
+        let a = knowhere_bitset_create(100);
+        let b = knowhere_bitset_create(100);
+        assert!(!a.is_null());
+        assert!(!b.is_null());
+        
+        // 设置 a 的位：0, 1, 2
+        unsafe {
+            knowhere_bitset_set(a, 0, true);
+            knowhere_bitset_set(a, 1, true);
+            knowhere_bitset_set(a, 2, true);
+        }
+        
+        // 设置 b 的位：2, 3, 4
+        unsafe {
+            knowhere_bitset_set(b, 2, true);
+            knowhere_bitset_set(b, 3, true);
+            knowhere_bitset_set(b, 4, true);
+        }
+        
+        // 执行 OR 操作
+        let result = unsafe { knowhere_bitset_or(a, b) };
+        assert!(!result.is_null());
+        
+        // 验证结果：0, 1, 2, 3, 4 都应该被设置
+        unsafe {
+            assert!(knowhere_bitset_get(result, 0));
+            assert!(knowhere_bitset_get(result, 1));
+            assert!(knowhere_bitset_get(result, 2));
+            assert!(knowhere_bitset_get(result, 3));
+            assert!(knowhere_bitset_get(result, 4));
+            assert!(!knowhere_bitset_get(result, 5));
+        }
+        
+        // 验证计数
+        assert_eq!(unsafe { knowhere_bitset_count(result) }, 5);
+        
+        unsafe {
+            knowhere_bitset_free(result);
+            knowhere_bitset_free(b);
+            knowhere_bitset_free(a);
+        }
+    }
+    
+    #[test]
+    fn test_bitset_and() {
+        let a = knowhere_bitset_create(100);
+        let b = knowhere_bitset_create(100);
+        assert!(!a.is_null());
+        assert!(!b.is_null());
+        
+        // 设置 a 的位：0, 1, 2, 3
+        unsafe {
+            knowhere_bitset_set(a, 0, true);
+            knowhere_bitset_set(a, 1, true);
+            knowhere_bitset_set(a, 2, true);
+            knowhere_bitset_set(a, 3, true);
+        }
+        
+        // 设置 b 的位：2, 3, 4, 5
+        unsafe {
+            knowhere_bitset_set(b, 2, true);
+            knowhere_bitset_set(b, 3, true);
+            knowhere_bitset_set(b, 4, true);
+            knowhere_bitset_set(b, 5, true);
+        }
+        
+        // 执行 AND 操作
+        let result = unsafe { knowhere_bitset_and(a, b) };
+        assert!(!result.is_null());
+        
+        // 验证结果：只有 2, 3 应该被设置（交集）
+        unsafe {
+            assert!(!knowhere_bitset_get(result, 0));
+            assert!(!knowhere_bitset_get(result, 1));
+            assert!(knowhere_bitset_get(result, 2));
+            assert!(knowhere_bitset_get(result, 3));
+            assert!(!knowhere_bitset_get(result, 4));
+            assert!(!knowhere_bitset_get(result, 5));
+        }
+        
+        // 验证计数
+        assert_eq!(unsafe { knowhere_bitset_count(result) }, 2);
+        
+        unsafe {
+            knowhere_bitset_free(result);
+            knowhere_bitset_free(b);
+            knowhere_bitset_free(a);
+        }
+    }
+    
+    #[test]
+    fn test_bitset_xor() {
+        let a = knowhere_bitset_create(100);
+        let b = knowhere_bitset_create(100);
+        assert!(!a.is_null());
+        assert!(!b.is_null());
+        
+        // 设置 a 的位：0, 1, 2, 3
+        unsafe {
+            knowhere_bitset_set(a, 0, true);
+            knowhere_bitset_set(a, 1, true);
+            knowhere_bitset_set(a, 2, true);
+            knowhere_bitset_set(a, 3, true);
+        }
+        
+        // 设置 b 的位：2, 3, 4, 5
+        unsafe {
+            knowhere_bitset_set(b, 2, true);
+            knowhere_bitset_set(b, 3, true);
+            knowhere_bitset_set(b, 4, true);
+            knowhere_bitset_set(b, 5, true);
+        }
+        
+        // 执行 XOR 操作
+        let result = unsafe { knowhere_bitset_xor(a, b) };
+        assert!(!result.is_null());
+        
+        // 验证结果：0, 1, 4, 5 应该被设置（对称差）
+        unsafe {
+            assert!(knowhere_bitset_get(result, 0));
+            assert!(knowhere_bitset_get(result, 1));
+            assert!(!knowhere_bitset_get(result, 2));
+            assert!(!knowhere_bitset_get(result, 3));
+            assert!(knowhere_bitset_get(result, 4));
+            assert!(knowhere_bitset_get(result, 5));
+        }
+        
+        // 验证计数
+        assert_eq!(unsafe { knowhere_bitset_count(result) }, 4);
+        
+        unsafe {
+            knowhere_bitset_free(result);
+            knowhere_bitset_free(b);
+            knowhere_bitset_free(a);
+        }
+    }
+    
+    #[test]
+    fn test_bitset_or_different_sizes() {
+        // 测试不同长度的 bitset
+        let a = knowhere_bitset_create(50);
+        let b = knowhere_bitset_create(100);
+        assert!(!a.is_null());
+        assert!(!b.is_null());
+        
+        // 设置 a 的位：0, 1
+        unsafe {
+            knowhere_bitset_set(a, 0, true);
+            knowhere_bitset_set(a, 1, true);
+        }
+        
+        // 设置 b 的位：1, 2
+        unsafe {
+            knowhere_bitset_set(b, 1, true);
+            knowhere_bitset_set(b, 2, true);
+        }
+        
+        // 执行 OR 操作
+        let result = unsafe { knowhere_bitset_or(a, b) };
+        assert!(!result.is_null());
+        
+        // 结果长度应该是 100（最大值）
+        assert_eq!(unsafe { knowhere_bitset_size(result) }, 100);
+        
+        // 验证结果
+        unsafe {
+            assert!(knowhere_bitset_get(result, 0));
+            assert!(knowhere_bitset_get(result, 1));
+            assert!(knowhere_bitset_get(result, 2));
+            assert!(!knowhere_bitset_get(result, 3));
+        }
+        
+        unsafe {
+            knowhere_bitset_free(result);
+            knowhere_bitset_free(b);
+            knowhere_bitset_free(a);
+        }
+    }
+    
+    #[test]
+    fn test_bitset_and_empty() {
+        // 测试与空 bitset 的 AND 操作
+        let a = knowhere_bitset_create(100);
+        let b = knowhere_bitset_create(100);
+        
+        // a 有一些位设置
+        unsafe {
+            knowhere_bitset_set(a, 0, true);
+            knowhere_bitset_set(a, 1, true);
+        }
+        // b 保持全 0
+        
+        let result = unsafe { knowhere_bitset_and(a, b) };
+        assert!(!result.is_null());
+        
+        // 结果应该全为 0
+        assert_eq!(unsafe { knowhere_bitset_count(result) }, 0);
+        
+        unsafe {
+            knowhere_bitset_free(result);
+            knowhere_bitset_free(b);
+            knowhere_bitset_free(a);
+        }
+    }
+    
+    #[test]
+    fn test_bitset_null_handling() {
+        // 测试 NULL 指针处理
+        let a = knowhere_bitset_create(100);
+        
+        let result_or = unsafe { knowhere_bitset_or(a, std::ptr::null()) };
+        assert!(result_or.is_null());
+        
+        let result_and = unsafe { knowhere_bitset_and(std::ptr::null(), a) };
+        assert!(result_and.is_null());
+        
+        let result_xor = unsafe { knowhere_bitset_xor(a, std::ptr::null()) };
+        assert!(result_xor.is_null());
+        
+        knowhere_bitset_free(a);
     }
 }
