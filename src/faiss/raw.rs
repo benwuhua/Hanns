@@ -3,6 +3,8 @@
 //! This module provides unsafe FFI bindings to Faiss C API.
 //! In production, use `cxx` or `rust-cpp` for safer bindings.
 
+use std::ffi::c_char;
+
 /// Faiss return codes
 pub const FAISS_SUCCESS: i32 = 0;
 pub const FAISS_ERR_INVALID_ARG: i32 = -1;

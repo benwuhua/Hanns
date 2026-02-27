@@ -35,7 +35,7 @@
 
 use std::path::Path;
 use crate::api::{IndexConfig, IndexType, MetricType, IndexParams, SearchRequest, SearchResult as ApiSearchResult, Result as ApiResult};
-use crate::faiss::{MemIndex, HnswIndex};
+use crate::faiss::{MemIndex, HnswIndex, ScaNNIndex, ScaNNConfig};
 
 /// C API 错误码
 #[repr(i32)]
@@ -55,6 +55,7 @@ pub enum CError {
 pub enum CIndexType {
     Flat = 0,
     Hnsw = 1,
+    Scann = 2,
 }
 
 /// Metric 类型枚举
@@ -145,6 +146,10 @@ impl IndexWrapper {
                 }
                 let hnsw = HnswIndex::new(&index_config).ok()?;
                 Some(Self { flat: None, hnsw: Some(hnsw), dim })
+            }
+            CIndexType::Scann => {
+                // SCANN not yet supported in FFI
+                None
             }
         }
     }

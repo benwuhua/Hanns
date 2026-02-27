@@ -48,7 +48,7 @@ pub use half::{Fp16, Bf16, f32_to_fp16, fp16_to_f32, f32_to_bf16, bf16_to_f32, f
 pub use index::{Index, IndexError, SearchResult as IndexSearchResult};
 
 // Export all index types
-pub use faiss::{FaissIndex, MemIndex, HnswIndex, IvfPqIndex, DiskAnnIndex, ScaNNIndex, ScaNNConfig};
+pub use faiss::{FaissIndex, MemIndex, HnswIndex, IvfPqIndex, IvfSq8Index, DiskAnnIndex, ScaNNIndex, ScaNNConfig};
 
 use tracing::info;
 

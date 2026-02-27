@@ -426,6 +426,11 @@ impl IvfSq8Index {
         Ok(SearchResult::new(all_ids, all_dists, 0.0))
     }
     
+    /// Get total number of vectors
+    pub fn ntotal(&self) -> usize {
+        self.ids.len()
+    }
+    
     /// Save index
     pub fn save(&self, path: &std::path::Path) -> Result<()> {
         use std::fs::File;

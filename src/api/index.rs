@@ -132,6 +132,18 @@ pub struct IndexParams {
     /// For HNSW: level factor
     #[serde(default)]
     pub ml: Option<f32>,
+    /// For DiskANN: max degree (R)
+    #[serde(default)]
+    pub max_degree: Option<usize>,
+    /// For DiskANN: search list size
+    #[serde(default)]
+    pub search_list_size: Option<usize>,
+    /// For DiskANN: construction list size
+    #[serde(default)]
+    pub construction_l: Option<usize>,
+    /// For DiskANN: beam width for search
+    #[serde(default)]
+    pub beamwidth: Option<usize>,
 }
 
 impl IndexParams {

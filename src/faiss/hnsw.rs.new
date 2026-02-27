@@ -6,7 +6,6 @@
 //! - Layered neighbor connections (each node has connections at its levels)
 //! - Greedy search from top layer to bottom layer
 
-use std::collections::HashSet;
 use std::sync::Arc;
 use rand::Rng;
 
@@ -316,19 +315,19 @@ impl HnswIndex {
             if !layers.contains(&level) {
                 // Skip this layer but still traverse to find entry point
                 if level <= self.max_level {
-                    let nearest_results = self.search_layer(new_vec, curr_ep, level, 1);
-                    if !nearest_results.is_empty() {
-                        curr_ep = nearest_results[0].0;
+                    let (nearest_id, _) = self.search_layer(new_vec, curr_ep, level, 1);
+                    if !nearest_id.is_empty() {
+                        curr_ep = nearest_id[0].0;
                     }
                 }
                 continue;
             }
 
             // Search for nearest neighbor at this layer
-            let results = self.search_layer(new_vec, curr_ep, level, 1);
+            let (nearest_id, _) = self.search_layer(new_vec, curr_ep, level, 1);
 
-            if !results.is_empty() {
-                curr_ep = results[0].0;
+            if !nearest_id.is_empty() {
+                curr_ep = nearest_id[0].0;
             }
 
             // Find efConstruction candidates at this layer
@@ -355,10 +354,10 @@ impl HnswIndex {
         // For each layer from max_level down to 0
         for level in (0..=self.max_level.min(node_level)).rev() {
             // Search for nearest neighbor at this layer
-            let nearest_results = self.search_layer(new_vec, curr_ep, level, 1);
+            let (nearest_id, _) = self.search_layer(new_vec, curr_ep, level, 1);
             
-            if !nearest_results.is_empty() {
-                curr_ep = nearest_results[0].0;
+            if !nearest_id.is_empty() {
+                curr_ep = nearest_id[0].0;
                 curr_ep_idx = self.id_to_idx[&curr_ep];
             }
             
@@ -378,38 +377,11 @@ impl HnswIndex {
     
     /// Search for nearest neighbors at a specific layer
     fn search_layer(&self, query: &[f32], entry_id: i64, level: usize, ef: usize) -> Vec<(i64, f32)> {
-        use std::collections::BinaryHeap;
-        
-        // Wrapper for f32 to implement Ord for BinaryHeap
-        #[derive(Clone, Copy, PartialEq)]
-        struct OrderedDist(f32);
-        
-        // Manual Eq implementation - f32 doesn't implement Eq due to NaN
-        impl Eq for OrderedDist {}
-        
-        impl PartialOrd for OrderedDist {
-            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-                // Handle NaN by treating it as largest value
-                if self.0.is_nan() {
-                    return Some(std::cmp::Ordering::Greater);
-                }
-                if other.0.is_nan() {
-                    return Some(std::cmp::Ordering::Less);
-                }
-                // For normal f32, compare directly but reverse for max-heap behavior
-                other.0.partial_cmp(&self.0)
-            }
-        }
-        
-        impl Ord for OrderedDist {
-            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
-            }
-        }
+        use std::collections::{BinaryHeap, HashSet};
         
         let mut visited = HashSet::new();
-        let mut candidates: BinaryHeap<(OrderedDist, i64)> = BinaryHeap::new();
-        let mut results: BinaryHeap<(OrderedDist, i64)> = BinaryHeap::new();
+        let mut candidates = BinaryHeap::new(); // Max-heap by distance
+        let mut results = BinaryHeap::new();    // Max-heap by distance
         
         // Initialize with entry point
         let entry_idx = match self.id_to_idx.get(&entry_id) {
@@ -418,14 +390,14 @@ impl HnswIndex {
         };
         
         let entry_dist = self.distance(query, entry_idx);
-        candidates.push((OrderedDist(entry_dist), entry_id));
-        results.push((OrderedDist(entry_dist), entry_id));
+        candidates.push((entry_dist, entry_id));
+        results.push((entry_dist, entry_id));
         visited.insert(entry_id);
         
-        while let Some((OrderedDist(cand_dist), cand_id)) = candidates.pop() {
-            // Check if we can stop
+        while let Some((cand_dist, cand_id)) = candidates.pop() {
+            // Check if we can stop (worst result is better than current candidate)
             if results.len() >= ef {
-                if let Some(&(OrderedDist(worst_dist), _)) = results.peek() {
+                if let Some(&(worst_dist, _)) = results.peek() {
                     if cand_dist > worst_dist {
                         break;
                     }
@@ -453,24 +425,21 @@ impl HnswIndex {
                     let nbr_dist = self.distance(query, nbr_idx);
                     
                     if results.len() < ef {
-                        results.push((OrderedDist(nbr_dist), nbr_id));
-                        candidates.push((OrderedDist(nbr_dist), nbr_id));
-                    } else if let Some(&(OrderedDist(worst_dist), _)) = results.peek() {
+                        results.push((nbr_dist, nbr_id));
+                        candidates.push((nbr_dist, nbr_id));
+                    } else if let Some(&(worst_dist, _)) = results.peek() {
                         if nbr_dist < worst_dist {
                             results.pop();
-                            results.push((OrderedDist(nbr_dist), nbr_id));
-                            candidates.push((OrderedDist(nbr_dist), nbr_id));
+                            results.push((nbr_dist, nbr_id));
+                            candidates.push((nbr_dist, nbr_id));
                         }
                     }
                 }
             }
         }
         
-        // Convert to sorted vector
-        let mut sorted: Vec<(i64, f32)> = results.into_sorted_vec()
-            .into_iter()
-            .map(|(OrderedDist(d), id)| (id, d))
-            .collect();
+        // Convert to sorted vector (ascending by distance)
+        let mut sorted: Vec<(i64, f32)> = results.into_sorted_vec();
         sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         sorted
     }
@@ -639,46 +608,21 @@ impl HnswIndex {
                 true
             }
         };
-
-        // Multi-layer search with layer-wise jumping: start from top layer
+        
+        // Multi-layer search: start from top layer
         let mut curr_ep = self.entry_point.unwrap();
-
-        // Enhanced layer descent: use larger ef at higher layers for better jumping
-        // As we descend, reduce ef to balance quality vs speed
+        
+        // Descend through layers
         for level in (1..=self.max_level).rev() {
-            // Higher layers use smaller ef for jumping (faster but less accurate)
-            // Lower layers (closer to 0) use larger ef for better candidates
-            let jump_ef = if level >= self.max_level / 2 {
-                // Top half layers: use ef=1 for fast jumping
-                1
-            } else {
-                // Bottom half layers: use ef=min(ef, 4) for better candidates
-                ef.min(4)
-            };
-
-            let results = self.search_layer(query, curr_ep, level, jump_ef);
-
-            // Find the best valid result for jumping
-            let mut best_valid_id = curr_ep;
-            let mut best_valid_dist = f32::MAX;
-
-            for (id, dist) in results {
-                if filter_fn(id) {
-                    best_valid_id = id;
-                    best_valid_dist = dist;
-                    break;
-                }
-            }
-
-            // Only jump if we found a valid better candidate
-            if best_valid_id != curr_ep {
-                curr_ep = best_valid_id;
+            let results = self.search_layer(query, curr_ep, level, 1);
+            if !results.is_empty() && filter_fn(results[0].0) {
+                curr_ep = results[0].0;
             }
         }
-
-        // Final search at layer 0 with full ef
+        
+        // Final search at layer 0 with ef
         let results = self.search_layer(query, curr_ep, 0, ef);
-
+        
         // Apply filter and return top k
         let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
         for (id, dist) in results {
@@ -689,7 +633,7 @@ impl HnswIndex {
                 }
             }
         }
-
+        
         final_results
     }
 
