@@ -27,6 +27,8 @@ pub enum IndexType {
     IvfRabitq,
     /// IVF-FLAT-CC (Concurrent Version)
     IvfFlatCc,
+    /// IVF-SQ-CC (Concurrent Version with Scalar Quantization)
+    IvfSqCc,
 }
 
 impl Default for IndexType {
@@ -49,6 +51,7 @@ impl IndexType {
             "hnsw_prq" | "hnsw-prq" => Some(IndexType::HnswPrq),
             "ivf_rabitq" | "ivf-rabitq" | "rabitq" => Some(IndexType::IvfRabitq),
             "ivf_flat_cc" | "ivf-flat-cc" | "ivfcc" => Some(IndexType::IvfFlatCc),
+            "ivf_sq_cc" | "ivf-sq-cc" | "ivfsqcc" => Some(IndexType::IvfSqCc),
             _ => None,
         }
     }

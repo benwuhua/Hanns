@@ -51,7 +51,7 @@ pub use interrupt::Interrupt;
 
 // Export all index types
 pub use faiss::{FaissIndex, MemIndex, HnswIndex, IvfPqIndex, IvfSq8Index, DiskAnnIndex, ScaNNIndex, ScaNNConfig};
-pub use faiss::{IvfRaBitqIndex, IvfRaBitqConfig};
+pub use faiss::{IvfRaBitqIndex, IvfRaBitqConfig, IvfSqCcIndex};
 
 use tracing::info;
 
