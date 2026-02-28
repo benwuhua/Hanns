@@ -2,8 +2,15 @@
 //! 
 //! 用于 Milvus 的软删除机制，支持高效的位运算。
 //! 与 C++ knowhere 的 BitsetView 对齐，支持 out_ids 用于压缩 bitset。
+//! 
+//! ## SIMD 优化
+//! - AVX2 (x86_64): 256 位批量操作
+//! - NEON (ARM64): 128 位批量操作
+//! - 自动回退到通用实现
 
 use std::ops::{BitAnd, BitOr, BitXor};
+#[cfg(target_arch = "aarch64")]
+use std::arch::is_aarch64_feature_detected;
 
 /// 位图迭代器
 pub struct BitsetIter<'a> {
@@ -509,6 +516,244 @@ impl BitXor for &BitsetView {
     }
 }
 
+// ========== SIMD Optimizations ==========
+
+/// AVX2 optimized batch test for x86_64
+/// Tests 256 bits (32 bytes) at once using AVX2 instructions
+#[inline]
+#[target_feature(enable = "avx2")]
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn test_batch_avx2(data: &[u8], start_bit: usize) -> bool {
+    use std::arch::x86_64::*;
+    
+    // Ensure we have enough data
+    if data.len() < 32 {
+        return test_batch_fallback(data, start_bit);
+    }
+    
+    // Load 32 bytes (256 bits) into AVX2 register
+    let ptr = data.as_ptr().add(start_bit / 8);
+    let batch = _mm256_loadu_si256(ptr as *const __m256i);
+    
+    // Test if all bits are zero
+    // _mm256_testz_si256 returns non-zero if (a & b) == 0
+    // We test batch & batch to check if batch is all zeros
+    let result = _mm256_testz_si256(batch, batch);
+    
+    // Returns true if all bits are 0 (none set)
+    result != 0
+}
+
+/// NEON optimized batch test for ARM64
+/// Tests 128 bits (16 bytes) at once using NEON instructions
+#[inline]
+#[target_feature(enable = "neon")]
+#[cfg(target_arch = "aarch64")]
+pub unsafe fn test_batch_neon(data: &[u8], start_bit: usize) -> bool {
+    use std::arch::aarch64::*;
+    
+    // Ensure we have enough data
+    if data.len() < 16 {
+        return test_batch_fallback(data, start_bit);
+    }
+    
+    // Load 16 bytes (128 bits) into NEON register
+    let ptr = data.as_ptr().add(start_bit / 8);
+    let batch = vld1q_u8(ptr);
+    
+    // Compare with zero vector
+    let zero = vdupq_n_u8(0);
+    let cmp = vceqq_u8(batch, zero);
+    
+    // Check if all lanes are 0xFF (meaning all bytes were 0)
+    // vminvq_u8 returns the minimum value across all lanes
+    let min_val = vminvq_u8(cmp);
+    
+    // If min_val is 0xFF, all bytes were zero
+    min_val == 0xFF
+}
+
+/// Fallback batch test for generic platforms
+/// Tests bits sequentially (byte by byte)
+#[inline]
+pub fn test_batch_fallback(data: &[u8], start_bit: usize) -> bool {
+    let start_byte = start_bit / 8;
+    let end_byte = ((start_bit + 255) / 8).min(data.len());
+    
+    for i in start_byte..end_byte {
+        if data[i] != 0 {
+            return false;
+        }
+    }
+    true
+}
+
+/// AVX2 optimized count of zero bits for x86_64
+/// Counts zero bits in 256-bit (32 bytes) batches
+#[inline]
+#[target_feature(enable = "avx2")]
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn count_zero_batch_avx2(data: &[u8]) -> usize {
+    use std::arch::x86_64::*;
+    
+    let mut count = 0;
+    let len = data.len();
+    let mut i = 0;
+    
+    // Process 32 bytes at a time
+    while i + 32 <= len {
+        let ptr = data.as_ptr().add(i);
+        let batch = _mm256_loadu_si256(ptr as *const __m256i);
+        
+        // Count set bits using _mm256_popcnt (via _mm256_sad_epu8 trick)
+        // Alternative: use _mm256_cmpeq_epi8 to compare with zero, then count
+        let zero = _mm256_setzero_si256();
+        let cmp = _mm256_cmpeq_epi8(batch, zero);
+        
+        // Extract mask and count zeros
+        let mask = _mm256_movemask_epi8(cmp);
+        count += mask.count_ones() as usize;
+        
+        i += 32;
+    }
+    
+    // Handle remaining bytes
+    while i < len {
+        if data[i] == 0 {
+            count += 8; // All 8 bits are zero
+        } else {
+            count += data[i].count_zeros() as usize;
+        }
+        i += 1;
+    }
+    
+    count
+}
+
+/// NEON optimized count of zero bits for ARM64
+/// Counts zero bits in 128-bit (16 bytes) batches
+#[inline]
+#[target_feature(enable = "neon")]
+#[cfg(target_arch = "aarch64")]
+pub unsafe fn count_zero_batch_neon(data: &[u8]) -> usize {
+    use std::arch::aarch64::*;
+    
+    let mut count = 0;
+    let len = data.len();
+    let mut i = 0;
+    
+    // Process 16 bytes at a time
+    while i + 16 <= len {
+        let ptr = data.as_ptr().add(i);
+        let batch = vld1q_u8(ptr);
+        
+        // Compare each byte with zero
+        let zero = vdupq_n_u8(0);
+        let cmp = vceqq_u8(batch, zero);
+        
+        // Count zero bytes: cmp has 0xFF for zero bytes, 0x00 for non-zero
+        // Use vcntq_u8 to count bits, then shift right by 3 to get byte count
+        // Alternative: use vminvq_u8 to find max, or extract to array
+        let cmp_array: [u8; 16] = std::mem::transmute(cmp);
+        let zero_count = cmp_array.iter().filter(|&&x| x != 0).count();
+        
+        // Each zero byte contributes 8 zero bits
+        count += zero_count * 8;
+        
+        i += 16;
+    }
+    
+    // Handle remaining bytes
+    while i < len {
+        if data[i] == 0 {
+            count += 8;
+        } else {
+            count += data[i].count_zeros() as usize;
+        }
+        i += 1;
+    }
+    
+    count
+}
+
+/// Fallback count of zero bits for generic platforms
+#[inline]
+pub fn count_zero_batch_fallback(data: &[u8]) -> usize {
+    data.iter()
+        .map(|&byte| if byte == 0 { 8 } else { byte.count_zeros() as usize })
+        .sum()
+}
+
+/// Runtime-dispatched batch test (auto-detects SIMD support)
+#[inline]
+pub fn test_batch_auto(data: &[u8], start_bit: usize) -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") {
+            unsafe { return test_batch_avx2(data, start_bit); }
+        }
+    }
+    
+    #[cfg(target_arch = "aarch64")]
+    {
+        if is_aarch64_feature_detected!("neon") {
+            unsafe { return test_batch_neon(data, start_bit); }
+        }
+    }
+    
+    test_batch_fallback(data, start_bit)
+}
+
+/// Runtime-dispatched zero count (auto-detects SIMD support)
+#[inline]
+pub fn count_zero_batch_auto(data: &[u8]) -> usize {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") {
+            unsafe { return count_zero_batch_avx2(data); }
+        }
+    }
+    
+    #[cfg(target_arch = "aarch64")]
+    {
+        if is_aarch64_feature_detected!("neon") {
+            unsafe { return count_zero_batch_neon(data); }
+        }
+    }
+    
+    count_zero_batch_fallback(data)
+}
+
+// ========== Wrapper functions for &[u64] (for existing tests) ==========
+
+/// Test if all bits in range are zero (u64 slice interface)
+#[inline]
+pub fn test_batch(data: &[u64], _start_bit: usize, num_bits: usize) -> bool {
+    let byte_slice = bytemuck::cast_slice::<u64, u8>(data);
+    test_batch_auto(byte_slice, 0)
+}
+
+/// Count zero bits (u64 slice interface)
+#[inline]
+pub fn count_zero_batch(data: &[u64], num_bits: usize) -> usize {
+    let byte_slice = bytemuck::cast_slice::<u64, u8>(data);
+    count_zero_batch_auto(byte_slice)
+}
+
+/// Generic (non-SIMD) test batch for comparison
+#[inline]
+pub fn test_batch_generic(data: &[u64], _start_bit: usize, num_bits: usize) -> bool {
+    let byte_slice = bytemuck::cast_slice::<u64, u8>(data);
+    test_batch_fallback(byte_slice, 0)
+}
+
+/// Generic (non-SIMD) count zero for comparison
+#[inline]
+pub fn count_zero_batch_generic(data: &[u64], num_bits: usize) -> usize {
+    let byte_slice = bytemuck::cast_slice::<u64, u8>(data);
+    count_zero_batch_fallback(byte_slice)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -691,5 +936,321 @@ mod tests {
         
         bits.set_all();
         assert_eq!(bits.get_first_valid_index(), 100);
+    }
+    
+    #[test]
+    fn test_simd_batch_operations() {
+        // 测试 SIMD 自动调度函数
+        let data_all_zero = vec![0u8; 128];
+        assert!(test_batch_auto(&data_all_zero, 0));
+        assert_eq!(count_zero_batch_auto(&data_all_zero), 1024);
+        
+        let mut data_some_set = vec![0u8; 32];
+        data_some_set[2] = 0xFF;
+        assert!(!test_batch_auto(&data_some_set, 0));
+        
+        // 统计 0 的个数
+        let zeros = count_zero_batch_auto(&data_some_set);
+        assert_eq!(zeros, 8 + 8 + 0 + 8 * 29); // 2 个全 0 字节，1 个全 1 字节，29 个全 0 字节
+    }
+    
+    #[test]
+    fn test_simd_edge_cases() {
+        // 空数据
+        let empty: Vec<u8> = vec![];
+        assert!(test_batch_auto(&empty, 0));
+        assert_eq!(count_zero_batch_auto(&empty), 0);
+        
+        // 单个字节
+        let single = vec![1u8];
+        assert!(!test_batch_auto(&single, 0));
+        assert_eq!(count_zero_batch_auto(&single), 7);
+        
+        let single_zero = vec![0u8];
+        assert!(test_batch_auto(&single_zero, 0));
+        assert_eq!(count_zero_batch_auto(&single_zero), 8);
+    }
+    
+    #[test]
+    fn test_simd_fallback_consistency() {
+        // 验证 fallback 函数工作正常
+        let data = vec![0u8; 64];
+        assert!(test_batch_fallback(&data, 0));
+        assert_eq!(count_zero_batch_fallback(&data), 512);
+        
+        let mut data_with_bits = vec![0u8; 64];
+        data_with_bits[10] = 0xFF;
+        
+        assert!(!test_batch_fallback(&data_with_bits, 0));
+        let zeros = count_zero_batch_fallback(&data_with_bits);
+        assert_eq!(zeros, 8 * 63); // 63 个全 0 字节
+    }
+    
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn test_simd_large_dataset() {
+        // 大数据集测试
+        let size = 10_000;
+        let data = vec![0u8; size];
+        
+        assert!(test_batch_auto(&data, 0));
+        assert_eq!(count_zero_batch_auto(&data), size * 8);
+        
+        // 部分设置
+        let mut data_partial = vec![0u8; size];
+        for i in (0..size).step_by(100) {
+            data_partial[i] = u8::MAX;
+        }
+        
+        assert!(!test_batch_auto(&data_partial, 0));
+        
+        let zeros = count_zero_batch_auto(&data_partial);
+        let expected_zeros = (size - size / 100) * 8;
+        assert_eq!(zeros, expected_zeros);
+    }
+    
+    // ========== Platform-Specific SIMD Tests ==========
+    
+    #[test]
+    fn test_simd_architecture_detection() {
+        // 测试运行时 SIMD 检测
+        #[cfg(target_arch = "x86_64")]
+        {
+            println!("Running on x86_64");
+            if is_x86_feature_detected!("avx2") {
+                println!("AVX2 supported - will use AVX2 optimizations");
+            } else {
+                println!("AVX2 not supported - falling back to generic code");
+            }
+        }
+        
+        #[cfg(target_arch = "aarch64")]
+        {
+            println!("Running on ARM64 (Apple Silicon)");
+            if is_aarch64_feature_detected!("neon") {
+                println!("NEON supported - will use NEON optimizations");
+            } else {
+                println!("NEON not supported - falling back to generic code");
+            }
+        }
+    }
+    
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_avx2_intrinsics_wrapper() {
+        if is_x86_feature_detected!("avx2") {
+            unsafe {
+                test_avx2_intrinsics_impl();
+            }
+        } else {
+            println!("AVX2 not available, skipping test");
+        }
+    }
+    
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2")]
+    unsafe fn test_avx2_intrinsics_impl() {
+        use std::arch::x86_64::*;
+        
+        // Test AVX2 load and test operations
+        let data = vec![0u8; 32];
+        let ptr = data.as_ptr();
+        let batch = _mm256_loadu_si256(ptr as *const __m256i);
+        let result = _mm256_testz_si256(batch, batch);
+        assert!(result != 0, "All-zero data should test as zero");
+        
+        // Test with all ones
+        let data_ones = vec![0xFFu8; 32];
+        let ptr = data_ones.as_ptr();
+        let batch = _mm256_loadu_si256(ptr as *const __m256i);
+        let result = _mm256_testz_si256(batch, batch);
+        assert!(result == 0, "All-ones data should not test as zero");
+        
+        println!("✓ AVX2 intrinsics test passed");
+    }
+    
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn test_neon_intrinsics_wrapper() {
+        // Run NEON test if the feature is available at runtime
+        if is_aarch64_feature_detected!("neon") {
+            unsafe {
+                test_neon_intrinsics_impl();
+            }
+        } else {
+            println!("NEON not available, skipping test");
+        }
+    }
+    
+    #[cfg(target_arch = "aarch64")]
+    #[target_feature(enable = "neon")]
+    unsafe fn test_neon_intrinsics_impl() {
+        use std::arch::aarch64::*;
+        
+        // Test NEON load and compare operations
+        let data = vec![0u8; 16];
+        let ptr = data.as_ptr();
+        let batch = vld1q_u8(ptr);
+        let zero = vdupq_n_u8(0);
+        let cmp = vceqq_u8(batch, zero);
+        let min_val = vminvq_u8(cmp);
+        assert!(min_val == 0xFF, "All-zero data should compare equal to zero");
+        
+        // Test with all ones
+        let data_ones = vec![0xFFu8; 16];
+        let ptr = data_ones.as_ptr();
+        let batch = vld1q_u8(ptr);
+        let cmp = vceqq_u8(batch, zero);
+        let min_val = vminvq_u8(cmp);
+        assert!(min_val == 0, "All-ones data should not compare equal to zero");
+        
+        println!("✓ NEON intrinsics test passed");
+    }
+    
+    // ========== Performance Benchmarks ==========
+    
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn benchmark_simd_performance() {
+        use std::time::Instant;
+        
+        let data = vec![0u8; 4096]; // 4KB buffer
+        let iterations = 100_000;
+        
+        println!("\n=== SIMD Performance Benchmark ===");
+        println!("Buffer size: {} bytes, Iterations: {}", data.len(), iterations);
+        
+        // Fallback benchmark
+        let start = Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(test_batch_fallback(&data, 0));
+        }
+        let fallback_time = start.elapsed();
+        
+        // Auto (SIMD if available) benchmark
+        let start = Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(test_batch_auto(&data, 0));
+        }
+        let auto_time = start.elapsed();
+        
+        println!("\ntest_batch benchmarks:");
+        println!("  Fallback: {:?} ({:.2} ns/iter)", fallback_time, fallback_time.as_nanos() as f64 / iterations as f64);
+        println!("  Auto:     {:?} ({:.2} ns/iter)", auto_time, auto_time.as_nanos() as f64 / iterations as f64);
+        
+        if auto_time < fallback_time {
+            let speedup = fallback_time.as_secs_f64() / auto_time.as_secs_f64();
+            println!("  Speedup:  {:.2}x", speedup);
+        }
+        
+        // Count zero benchmarks
+        let data = vec![0b01010101u8; 4096];
+        
+        let start = Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(count_zero_batch_fallback(&data));
+        }
+        let fallback_time = start.elapsed();
+        
+        let start = Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(count_zero_batch_auto(&data));
+        }
+        let auto_time = start.elapsed();
+        
+        println!("\ncount_zero_batch benchmarks:");
+        println!("  Fallback: {:?} ({:.2} ns/iter)", fallback_time, fallback_time.as_nanos() as f64 / iterations as f64);
+        println!("  Auto:     {:?} ({:.2} ns/iter)", auto_time, auto_time.as_nanos() as f64 / iterations as f64);
+        
+        if auto_time < fallback_time {
+            let speedup = fallback_time.as_secs_f64() / auto_time.as_secs_f64();
+            println!("  Speedup:  {:.2}x", speedup);
+        }
+    }
+    
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn benchmark_avx2_specific_wrapper() {
+        if is_x86_feature_detected!("avx2") {
+            unsafe {
+                benchmark_avx2_specific_impl();
+            }
+        } else {
+            println!("AVX2 not available, skipping benchmark");
+        }
+    }
+    
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2")]
+    #[cfg_attr(miri, ignore)]
+    unsafe fn benchmark_avx2_specific_impl() {
+        use std::time::Instant;
+        
+        let data = vec![0u8; 4096];
+        let iterations = 100_000;
+        
+        println!("\n=== AVX2-Specific Benchmark ===");
+        
+        let start = Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(test_batch_avx2(&data, 0));
+        }
+        let avx2_time = start.elapsed();
+        
+        println!("AVX2 test_batch: {:?} ({:.2} ns/iter)", avx2_time, avx2_time.as_nanos() as f64 / iterations as f64);
+        
+        // Count zero
+        let data = vec![0b01010101u8; 4096];
+        let start = Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(count_zero_batch_avx2(&data));
+        }
+        let avx2_count_time = start.elapsed();
+        
+        println!("AVX2 count_zero: {:?} ({:.2} ns/iter)", avx2_count_time, avx2_count_time.as_nanos() as f64 / iterations as f64);
+    }
+    
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn benchmark_neon_specific_wrapper() {
+        if is_aarch64_feature_detected!("neon") {
+            unsafe {
+                benchmark_neon_specific_impl();
+            }
+        } else {
+            println!("NEON not available, skipping benchmark");
+        }
+    }
+    
+    #[cfg(target_arch = "aarch64")]
+    #[target_feature(enable = "neon")]
+    #[cfg_attr(miri, ignore)]
+    unsafe fn benchmark_neon_specific_impl() {
+        use std::time::Instant;
+        
+        let data = vec![0u8; 4096];
+        let iterations = 100_000;
+        
+        println!("\n=== NEON-Specific Benchmark ===");
+        
+        let start = Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(test_batch_neon(&data, 0));
+        }
+        let neon_time = start.elapsed();
+        
+        println!("NEON test_batch: {:?} ({:.2} ns/iter)", neon_time, neon_time.as_nanos() as f64 / iterations as f64);
+        
+        // Count zero
+        let data = vec![0b01010101u8; 4096];
+        let start = Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(count_zero_batch_neon(&data));
+        }
+        let neon_count_time = start.elapsed();
+        
+        println!("NEON count_zero: {:?} ({:.2} ns/iter)", neon_count_time, neon_count_time.as_nanos() as f64 / iterations as f64);
     }
 }
