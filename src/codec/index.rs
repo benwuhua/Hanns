@@ -26,14 +26,17 @@ impl IndexCodec {
             IndexType::DiskAnn => 4,
             IndexType::Annoy => 5,
             IndexType::HnswPrq => 7,
+            IndexType::HnswPq => 16,
             IndexType::IvfRabitq => 8,
             IndexType::IvfFlatCc => 9,
             IndexType::IvfSqCc => 10,
             IndexType::SparseInverted => 11,
+            IndexType::SparseInvertedCc => 17,
             IndexType::BinaryHnsw => 12,
             IndexType::BinFlat => 13,
             IndexType::HnswSq => 14,
             IndexType::Aisaq => 15,
+            IndexType::HnswPq => 16,
         };
         writer.write_all(&idx_type.to_le_bytes())?;
         
@@ -82,14 +85,17 @@ impl IndexCodec {
             4 => IndexType::DiskAnn,
             5 => IndexType::Annoy,
             7 => IndexType::HnswPrq,
+            16 => IndexType::HnswPq,
             8 => IndexType::IvfRabitq,
             9 => IndexType::IvfFlatCc,
             10 => IndexType::IvfSqCc,
             11 => IndexType::SparseInverted,
+            17 => IndexType::SparseInvertedCc,
             12 => IndexType::BinaryHnsw,
             13 => IndexType::BinFlat,
             14 => IndexType::HnswSq,
             15 => IndexType::Aisaq,
+            16 => IndexType::HnswPq,
             _ => return Err(KnowhereError::Codec(format!("unknown index type: {}", idx_type))),
         };
         

@@ -31,6 +31,8 @@ pub mod sparse_inverted;
 pub mod binary_hnsw;
 pub mod bin_flat;
 pub mod aisaq;
+pub mod hnsw_pq;
+pub mod sparse_inverted_cc;
 
 pub use index::FaissIndex;
 pub use mem_index::MemIndex;
@@ -54,6 +56,8 @@ pub use binary_hnsw::BinaryHnswIndex;
 pub use bin_flat::BinFlatIndex;
 pub use hnsw_quantized::{HnswSqIndex, HnswQuantizeConfig};
 pub use aisaq::{AisaqIndex, AisaqConfig, AisaqStats};
+pub use hnsw_pq::{HnswPqIndex, HnswPqConfig};
+pub use sparse_inverted_cc::{SparseInvertedIndexCC, SparseMetricType as SparseMetricTypeCC};
 
 #[cfg(feature = "ffi")]
 pub mod rabitq_ffi;

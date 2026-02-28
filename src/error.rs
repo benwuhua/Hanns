@@ -27,6 +27,8 @@ pub enum KnowhereError {
     InternalError(String),
     /// Invalid argument
     InvalidArg(String),
+    /// Index not trained
+    IndexNotTrained(String),
 }
 
 impl KnowhereError {
@@ -48,6 +50,7 @@ impl KnowhereError {
             Self::Interrupted | Self::InterruptedWithMessage(_) => ErrorCode::INTERRUPTED,
             Self::InternalError(_) => ErrorCode::IO_ERROR,
             Self::InvalidArg(_) => ErrorCode::INVALID_ARG,
+            Self::IndexNotTrained(_) => ErrorCode::NOT_IMPLEMENTED,
         }
     }
     
@@ -58,6 +61,7 @@ impl KnowhereError {
             Self::InterruptedWithMessage(msg) => msg,
             Self::InternalError(msg) => msg,
             Self::InvalidArg(msg) => msg,
+            Self::IndexNotTrained(msg) => msg,
         }
     }
 }

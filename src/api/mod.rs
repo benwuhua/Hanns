@@ -32,6 +32,9 @@ pub enum KnowhereError {
     
     #[error("Internal error: {0}")]
     InternalError(String),
+    
+    #[error("Index not trained: {0}")]
+    IndexNotTrained(String),
 }
 
 pub type Result<T> = std::result::Result<T, KnowhereError>;

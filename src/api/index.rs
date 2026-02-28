@@ -23,6 +23,8 @@ pub enum IndexType {
     Scann,
     /// HNSW-PRQ (Progressive Residual Quantization)
     HnswPrq,
+    /// HNSW-PQ (HNSW with Product Quantization)
+    HnswPq,
     /// IVF-RaBitQ (Rotated Adaptive Bit Quantization)
     IvfRabitq,
     /// IVF-FLAT-CC (Concurrent Version)
@@ -39,6 +41,8 @@ pub enum IndexType {
     HnswSq,
     /// AISAQ (Adaptive Iterative Scalar Adaptive Quantization) - DiskANN-based with PQ
     Aisaq,
+    /// Sparse Inverted Index CC (Concurrent Version) - 并发稀疏倒排索引
+    SparseInvertedCc,
 }
 
 impl Default for IndexType {
@@ -59,6 +63,7 @@ impl IndexType {
             #[cfg(feature = "scann")]
             "scann" => Some(IndexType::Scann),
             "hnsw_prq" | "hnsw-prq" => Some(IndexType::HnswPrq),
+            "hnsw_pq" | "hnsw-pq" => Some(IndexType::HnswPq),
             "ivf_rabitq" | "ivf-rabitq" | "rabitq" => Some(IndexType::IvfRabitq),
             "ivf_flat_cc" | "ivf-flat-cc" | "ivfcc" => Some(IndexType::IvfFlatCc),
             "ivf_sq_cc" | "ivf-sq-cc" | "ivfsqcc" => Some(IndexType::IvfSqCc),
@@ -67,6 +72,7 @@ impl IndexType {
             "bin_flat" | "bin-flat" | "binflat" | "binary_flat" | "binary-flat" => Some(IndexType::BinFlat),
             "hnsw_sq" | "hnsw-sq" | "hnswsq" => Some(IndexType::HnswSq),
             "aisaq" | "a_isaq" | "a-saq" => Some(IndexType::Aisaq),
+            "sparse_inverted_cc" | "sparse-inverted-cc" | "sparsecc" => Some(IndexType::SparseInvertedCc),
             _ => None,
         }
     }
@@ -209,6 +215,16 @@ impl IndexParams {
             ef_construction: Some(ef_construction),
             ef_search: Some(ef_search),
             ml: Some(ml),
+            ..Default::default()
+        }
+    }
+
+    pub fn hnsw_pq(ef_construction: usize, ef_search: usize, m: usize, nbits: usize) -> Self {
+        Self {
+            ef_construction: Some(ef_construction),
+            ef_search: Some(ef_search),
+            m: Some(m),
+            nbits_per_idx: Some(nbits),
             ..Default::default()
         }
     }
