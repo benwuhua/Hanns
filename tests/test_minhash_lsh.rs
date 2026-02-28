@@ -1,7 +1,8 @@
 //! MinHash-LSH Integration Tests
 
-use knowhere_rs::index::minhash_lsh::{MinHashLSHIndex, MinHashLSHResultHandler, BloomFilter, KVPair};
+use knowhere_rs::index::minhash_lsh::{MinHashLSHIndex, MinHashLSHResultHandler, KVPair};
 use knowhere_rs::bitset::BitsetView;
+use knowhere_rs::comp::bloomfilter::BloomFilter;
 
 #[test]
 fn test_minhash_lsh_build_and_save() {
@@ -257,30 +258,30 @@ fn test_minhash_lsh_empty_search() {
 
 #[test]
 fn test_bloom_filter_basic() {
-    let mut bf = BloomFilter::new(1000, 0.01);
+    let mut bf = BloomFilter::<u64>::new(1000, 0.01);
     
     // Add some keys
-    bf.add(42);
-    bf.add(100);
-    bf.add(1000);
+    bf.add(&42);
+    bf.add(&100);
+    bf.add(&1000);
     
     // Should contain added keys
-    assert!(bf.contains(42));
-    assert!(bf.contains(100));
-    assert!(bf.contains(1000));
+    assert!(bf.contains(&42));
+    assert!(bf.contains(&100));
+    assert!(bf.contains(&1000));
     
     // May or may not contain other keys (false positives possible)
     // But with high probability should not contain very different keys
-    assert!(!bf.contains(999999));
+    assert!(!bf.contains(&999999));
 }
 
 #[test]
 fn test_bloom_filter_false_positive_rate() {
-    let mut bf = BloomFilter::new(100, 0.01);
+    let mut bf = BloomFilter::<u64>::new(100, 0.01);
     
     // Add 100 items
     for i in 0..100 {
-        bf.add(i * 1000);
+        bf.add(&(i * 1000));
     }
     
     // Check false positive rate
@@ -289,7 +290,7 @@ fn test_bloom_filter_false_positive_rate() {
     let test_end = 2000u64;
     
     for i in test_start..test_end {
-        if bf.contains(i) {
+        if bf.contains(&i) {
             false_positives += 1;
         }
     }

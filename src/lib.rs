@@ -21,6 +21,7 @@ pub mod benchmark;
 pub mod memory;
 pub mod integration;
 pub mod bloom;
+pub mod comp;  // components (bloomfilter, etc.)
 pub mod layout;
 pub mod stats;
 pub mod skiplist;
@@ -48,6 +49,7 @@ pub use metrics::{Distance, get_distance_calculator, L2Distance, InnerProductDis
 pub use half::{Fp16, Bf16, f32_to_fp16, fp16_to_f32, f32_to_bf16, bf16_to_f32, fp16_l2, bf16_l2};
 pub use index::{Index, IndexError, SearchResult as IndexSearchResult};
 pub use interrupt::Interrupt;
+pub use comp::BloomFilter;
 
 // Export all index types
 pub use faiss::{FaissIndex, MemIndex, HnswIndex, IvfPqIndex, IvfSq8Index, DiskAnnIndex, ScaNNIndex, ScaNNConfig};

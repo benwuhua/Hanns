@@ -9,6 +9,7 @@ use std::cmp::{min, max};
 use crate::error::KnowhereError;
 use crate::bitset::BitsetView;
 use crate::interrupt::Interrupt;
+use crate::comp::bloomfilter::BloomFilter;
 
 type Result<T> = std::result::Result<T, KnowhereError>;
 
@@ -39,6 +40,10 @@ pub struct MinHashBandIndex {
     blocks_num: usize,
     /// Block data (keys and values)
     data: Vec<u8>,
+    /// Bloom filter for fast key existence check
+    bloom_filter: Option<BloomFilter<KeyType>>,
+    /// Whether to use shared bloom filter across bands
+    use_shared_bloom: bool,
 }
 
 impl MinHashBandIndex {
@@ -51,7 +56,17 @@ impl MinHashBandIndex {
             block_size: 8192,
             blocks_num: 0,
             data: Vec::new(),
+            bloom_filter: None,
+            use_shared_bloom: false,
         }
+    }
+
+    /// Create a new band index with Bloom Filter support
+    pub fn with_bloom_filter(expected_elements: usize, false_positive_prob: f64, use_shared: bool) -> Self {
+        let mut this = Self::new();
+        this.bloom_filter = Some(BloomFilter::new(expected_elements, false_positive_prob));
+        this.use_shared_bloom = use_shared;
+        this
     }
 
     /// Build the band index from sorted KV pairs
@@ -71,6 +86,11 @@ impl MinHashBandIndex {
         
         let mut data_buf = Vec::new();
         
+        // Initialize Bloom Filter if not already present
+        if self.bloom_filter.is_none() {
+            self.bloom_filter = Some(BloomFilter::new(sorted_kv.len().max(1000), 0.01));
+        }
+        
         for i in 0..self.blocks_num {
             // Check interrupt periodically (every 100 blocks)
             if i % 100 == 0 && interrupt.is_interrupted() {
@@ -88,6 +108,10 @@ impl MinHashBandIndex {
             // Write keys
             for j in beg..end {
                 data_buf.extend_from_slice(&sorted_kv[j].key.to_le_bytes());
+                // Add to Bloom Filter
+                if let Some(ref mut bf) = self.bloom_filter {
+                    bf.add(&sorted_kv[j].key);
+                }
             }
             // Write values
             for j in beg..end {
@@ -101,6 +125,14 @@ impl MinHashBandIndex {
 
     /// Search for a key in the band index
     pub fn search(&self, key: KeyType, res: &mut MinHashLSHResultHandler, id_selector: Option<&BitsetView>) {
+        // Fast path: check Bloom Filter first
+        if let Some(ref bf) = self.bloom_filter {
+            if !bf.contains(&key) {
+                // Key definitely not in the index
+                return;
+            }
+        }
+
         // Binary search for the block
         let block_id = match self.maxs.binary_search(&key) {
             Ok(id) | Err(id) => {
@@ -314,6 +346,33 @@ impl MinHashLSHResultHandler {
     }
 }
 
+/// MinHash-LSH Index configuration
+#[derive(Clone, Debug)]
+pub struct MinHashLSHConfig {
+    /// Number of bands
+    pub bands: usize,
+    /// Size of each band
+    pub band_size: usize,
+    /// Whether to use shared Bloom Filter across bands
+    pub use_shared_bloom: bool,
+    /// Bloom Filter false positive probability
+    pub bloom_false_positive_prob: f64,
+    /// Expected number of elements (for Bloom Filter sizing)
+    pub expected_elements: usize,
+}
+
+impl Default for MinHashLSHConfig {
+    fn default() -> Self {
+        Self {
+            bands: 8,
+            band_size: 0,  // Will be calculated from mh_vec_length
+            use_shared_bloom: true,
+            bloom_false_positive_prob: 0.01,
+            expected_elements: 10000,
+        }
+    }
+}
+
 /// MinHash-LSH Index
 #[derive(Debug)]
 pub struct MinHashLSHIndex {
@@ -331,41 +390,10 @@ pub struct MinHashLSHIndex {
     raw_data: Vec<u8>,
     /// Band indexes
     band_indexes: Vec<MinHashBandIndex>,
-    /// Bloom filters for each band
-    bloom_filters: Vec<BloomFilter>,
+    /// Shared Bloom Filter (when use_shared_bloom is true)
+    shared_bloom_filter: Option<BloomFilter<KeyType>>,
     /// Total number of vectors
     ntotal: usize,
-}
-
-/// Simple Bloom filter implementation
-#[derive(Debug)]
-pub struct BloomFilter {
-    bits: Vec<bool>,
-    size: usize,
-}
-
-impl BloomFilter {
-    pub fn new(expected_items: usize, false_positive_prob: f32) -> Self {
-        // Simple sizing: 10 bits per item
-        let size = expected_items * 10;
-        Self {
-            bits: vec![false; size],
-            size,
-        }
-    }
-
-    pub fn add(&mut self, key: KeyType) {
-        let h1 = key as usize % self.size;
-        let h2 = (key >> 32) as usize % self.size;
-        self.bits[h1] = true;
-        self.bits[h2] = true;
-    }
-
-    pub fn contains(&self, key: KeyType) -> bool {
-        let h1 = key as usize % self.size;
-        let h2 = (key >> 32) as usize % self.size;
-        self.bits[h1] && self.bits[h2]
-    }
 }
 
 impl MinHashLSHIndex {
@@ -379,7 +407,28 @@ impl MinHashLSHIndex {
             with_raw_data: false,
             raw_data: Vec::new(),
             band_indexes: Vec::new(),
-            bloom_filters: Vec::new(),
+            shared_bloom_filter: None,
+            ntotal: 0,
+        }
+    }
+
+    /// Create a new MinHash-LSH index with configuration
+    pub fn with_config(config: &MinHashLSHConfig) -> Self {
+        let shared_bloom = if config.use_shared_bloom {
+            Some(BloomFilter::new(config.expected_elements, config.bloom_false_positive_prob))
+        } else {
+            None
+        };
+
+        Self {
+            bands: config.bands,
+            band_size: config.band_size,
+            mh_vec_length: 0,
+            mh_vec_element_size: 0,
+            with_raw_data: false,
+            raw_data: Vec::new(),
+            band_indexes: Vec::new(),
+            shared_bloom_filter: shared_bloom,
             ntotal: 0,
         }
     }
@@ -499,13 +548,7 @@ impl MinHashLSHIndex {
             self.raw_data = data.to_vec();
         }
 
-        // Create bloom filters
-        self.bloom_filters.clear();
-        for _ in 0..band_num {
-            self.bloom_filters.push(BloomFilter::new(self.ntotal.max(1), 0.01));
-        }
-
-        // Build band indexes
+        // Build band indexes with Bloom Filters
         self.band_indexes.clear();
         
         if self.ntotal == 0 {
@@ -531,13 +574,21 @@ impl MinHashLSHIndex {
             let mut band_kv = all_kv[band_start..band_end].to_vec();
             Self::sort_hash_kv(&mut band_kv);
 
-            // Add to bloom filter
-            for kv in &band_kv {
-                self.bloom_filters[band_i].add(kv.key);
-            }
-
-            let mut band_index = MinHashBandIndex::new();
+            // Create band index with Bloom Filter
+            let mut band_index = MinHashBandIndex::with_bloom_filter(
+                self.ntotal.max(1),
+                0.01,
+                self.shared_bloom_filter.is_some(),
+            );
             band_index.build_with_interrupt(&band_kv, 8192, interrupt)?;
+            
+            // Add keys to shared bloom filter if enabled
+            if let Some(ref mut shared_bf) = self.shared_bloom_filter {
+                for kv in &band_kv {
+                    shared_bf.add(&kv.key);
+                }
+            }
+            
             self.band_indexes.push(band_index);
         }
 
@@ -572,7 +623,15 @@ impl MinHashLSHIndex {
             
             let hash = Self::get_hash_key(query, self.bands, band_i);
             
-            if self.bloom_filters[band_i].contains(hash) {
+            // Check shared bloom filter first (if enabled)
+            let should_search = if let Some(ref shared_bf) = self.shared_bloom_filter {
+                shared_bf.contains(&hash)
+            } else {
+                true  // No shared filter, always search
+            };
+            
+            if should_search {
+                // Band index has its own bloom filter for additional filtering
                 self.band_indexes[band_i].search(hash, &mut res, id_selector);
             }
 
@@ -756,16 +815,42 @@ impl MinHashLSHIndex {
 
         // Load band indexes
         self.band_indexes.clear();
-        self.bloom_filters.clear();
         
         for _ in 0..self.bands {
             let mut band_index = MinHashBandIndex::new();
             band_index.load(&mut reader)?;
             self.band_indexes.push(band_index);
-            self.bloom_filters.push(BloomFilter::new(self.ntotal, 0.01));
         }
 
+        // Load shared bloom filter if present
+        self.shared_bloom_filter = None;
+        // Note: Bloom Filter is not persisted, will be rebuilt on next build()
+
         Ok(())
+    }
+
+    /// Get memory usage in bytes
+    pub fn memory_usage(&self) -> usize {
+        let mut size = 0;
+        
+        // Band indexes
+        for band in &self.band_indexes {
+            size += std::mem::size_of::<MinHashBandIndex>();
+            size += band.data.len();
+            if let Some(ref bf) = band.bloom_filter {
+                size += bf.memory_usage();
+            }
+        }
+        
+        // Shared bloom filter
+        if let Some(ref bf) = self.shared_bloom_filter {
+            size += bf.memory_usage();
+        }
+        
+        // Raw data
+        size += self.raw_data.len();
+        
+        size
     }
 }
 
@@ -840,14 +925,14 @@ mod tests {
 
     #[test]
     fn test_bloom_filter() {
-        let mut bf = BloomFilter::new(100, 0.01);
+        let mut bf = BloomFilter::<u64>::new(100, 0.01);
         
-        bf.add(42);
-        bf.add(100);
+        bf.add(&42);
+        bf.add(&100);
         
-        assert!(bf.contains(42));
-        assert!(bf.contains(100));
-        assert!(!bf.contains(999));
+        assert!(bf.contains(&42));
+        assert!(bf.contains(&100));
+        assert!(!bf.contains(&999));
     }
 
     #[test]
