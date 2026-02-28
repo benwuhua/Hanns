@@ -485,7 +485,6 @@ impl IndexTrait for BinaryHnswIndex {
         // TODO: Implement bitset filtering for BinaryHNSW
         self.search(query, top_k)
     }
-*/
 
     fn save(&self, _path: &str) -> std::result::Result<(), IndexError> {
         Err(IndexError::Unsupported("save not implemented for BinaryHNSW".into()))
@@ -499,6 +498,7 @@ impl IndexTrait for BinaryHnswIndex {
         true
     }
 }
+*/
 
 #[cfg(test)]
 mod tests {
