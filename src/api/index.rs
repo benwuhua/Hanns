@@ -29,6 +29,8 @@ pub enum IndexType {
     IvfFlatCc,
     /// IVF-SQ-CC (Concurrent Version with Scalar Quantization)
     IvfSqCc,
+    /// Sparse Inverted Index (稀疏倒排索引)
+    SparseInverted,
 }
 
 impl Default for IndexType {
@@ -52,6 +54,7 @@ impl IndexType {
             "ivf_rabitq" | "ivf-rabitq" | "rabitq" => Some(IndexType::IvfRabitq),
             "ivf_flat_cc" | "ivf-flat-cc" | "ivfcc" => Some(IndexType::IvfFlatCc),
             "ivf_sq_cc" | "ivf-sq-cc" | "ivfsqcc" => Some(IndexType::IvfSqCc),
+            "sparse_inverted" | "sparse-inverted" | "sparse" => Some(IndexType::SparseInverted),
             _ => None,
         }
     }
