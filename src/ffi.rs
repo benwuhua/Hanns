@@ -53,7 +53,7 @@ pub use interrupt_ffi::{
 use std::path::Path;
 use crate::api::{IndexConfig, IndexType, MetricType, IndexParams, SearchRequest, SearchResult as ApiSearchResult, Result as ApiResult};
 use crate::dataset::Dataset;
-use crate::faiss::{MemIndex, HnswIndex, ScaNNIndex, ScaNNConfig};
+use crate::faiss::{MemIndex, HnswIndex, ScaNNIndex, ScaNNConfig, SparseMetricType};
 use crate::index::Index;
 
 /// C API 错误码
@@ -87,6 +87,7 @@ pub enum CIndexType {
     SparseInverted = 12,
     SparseWand = 13,
     BinIvfFlat = 14,
+    SparseWandCc = 15,
 }
 
 /// Metric 类型枚举
@@ -198,7 +199,7 @@ pub struct CGetVectorResult {
     pub ids: *mut i64,
 }
 
-/// 包装索引对象 - 支持 Flat, HNSW, ScaNN, HNSW-PRQ, IVF-RaBitQ, HNSW-SQ, HNSW-PQ, BinFlat, BinaryHnsw, IVF-SQ8, BinIvfFlat
+/// 包装索引对象 - 支持 Flat, HNSW, ScaNN, HNSW-PRQ, IVF-RaBitQ, HNSW-SQ, HNSW-PQ, BinFlat, BinaryHnsw, IVF-SQ8, BinIvfFlat, SparseWand, SparseWandCC
 struct IndexWrapper {
     flat: Option<MemIndex>,
     hnsw: Option<HnswIndex>,
@@ -211,6 +212,8 @@ struct IndexWrapper {
     binary_hnsw: Option<crate::faiss::BinaryHnswIndex>,
     ivf_sq8: Option<crate::faiss::IvfSq8Index>,
     bin_ivf_flat: Option<crate::faiss::BinIvfFlatIndex>,
+    sparse_wand: Option<crate::faiss::SparseWandIndex>,
+    sparse_wand_cc: Option<crate::faiss::SparseWandIndexCC>,
     dim: usize,
 }
 
@@ -237,7 +240,7 @@ impl IndexWrapper {
                     params: IndexParams::default(),
                 };
                 let flat = MemIndex::new(&index_config).ok()?;
-                Some(Self { flat: Some(flat), hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, dim })
+                Some(Self { flat: Some(flat), hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim })
             }
             CIndexType::Hnsw => {
                 let mut index_config = IndexConfig {
@@ -253,7 +256,7 @@ impl IndexWrapper {
                     index_config.params.ef_search = Some(config.ef_search);
                 }
                 let hnsw = HnswIndex::new(&index_config).ok()?;
-                Some(Self { flat: None, hnsw: Some(hnsw), scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, dim })
+                Some(Self { flat: None, hnsw: Some(hnsw), scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim })
             }
             CIndexType::Scann => {
                 let num_partitions = if config.num_partitions > 0 {
@@ -273,7 +276,7 @@ impl IndexWrapper {
                 };
                 let scann_config = ScaNNConfig::new(num_partitions, num_centroids, reorder_k);
                 let scann = ScaNNIndex::new(dim, scann_config).ok()?;
-                Some(Self { flat: None, hnsw: None, scann: Some(scann), hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, dim })
+                Some(Self { flat: None, hnsw: None, scann: Some(scann), hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim })
             }
             CIndexType::HnswPrq => {
                 let mut index_config = IndexConfig {
@@ -303,7 +306,7 @@ impl IndexWrapper {
                     .with_metric_type(metric);
                 
                 let hnsw_prq = crate::faiss::HnswPrqIndex::new(hnsw_prq_config).ok()?;
-                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: Some(hnsw_prq), ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, dim })
+                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: Some(hnsw_prq), ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim })
             }
             CIndexType::IvfRabitq => {
                 let nlist = if config.num_clusters > 0 { config.num_clusters } else { 256 };
@@ -314,7 +317,7 @@ impl IndexWrapper {
                     .with_metric(metric);
                 
                 let ivf_rabitq = crate::faiss::IvfRaBitqIndex::new(ivf_rabitq_config);
-                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: Some(ivf_rabitq), hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, dim })
+                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: Some(ivf_rabitq), hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim })
             }
             CIndexType::HnswSq => {
                 let ef_construction = if config.ef_construction > 0 { config.ef_construction } else { 200 };
@@ -330,7 +333,7 @@ impl IndexWrapper {
                 hnsw_config.sq_bit = sq_bit;
                 
                 // Store config in index (simplified - HnswSqIndex needs config support)
-                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: Some(hnsw_sq), hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, dim })
+                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: Some(hnsw_sq), hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim })
             }
             CIndexType::HnswPq => {
                 let pq_m = if config.prq_nsplits > 0 { config.prq_nsplits } else { 8 };
@@ -344,7 +347,7 @@ impl IndexWrapper {
                     .with_metric_type(metric);
                 
                 let hnsw_pq = crate::faiss::HnswPqIndex::new(hnsw_pq_config).ok()?;
-                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: Some(hnsw_pq), bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, dim })
+                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: Some(hnsw_pq), bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim })
             }
             CIndexType::IvfSq8 => {
                 // IVF-SQ8 index with scalar quantization
@@ -362,7 +365,7 @@ impl IndexWrapper {
                 Some(Self { 
                     flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
                     hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, 
-                    ivf_sq8: Some(ivf_sq8), bin_ivf_flat: None, dim 
+                    ivf_sq8: Some(ivf_sq8), bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim 
                 })
             }
             CIndexType::BinFlat => {
@@ -370,7 +373,7 @@ impl IndexWrapper {
                 let bin_flat = crate::faiss::BinFlatIndex::new(dim, metric);
                 Some(Self { 
                     flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
-                    hnsw_sq: None, hnsw_pq: None, bin_flat: Some(bin_flat), binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, dim 
+                    hnsw_sq: None, hnsw_pq: None, bin_flat: Some(bin_flat), binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim 
                 })
             }
             CIndexType::BinaryHnsw => {
@@ -390,7 +393,7 @@ impl IndexWrapper {
                 if let Ok(hnsw) = crate::faiss::BinaryHnswIndex::new(&index_config) {
                     Some(Self { 
                         flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
-                        hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: Some(hnsw), ivf_sq8: None, bin_ivf_flat: None, dim 
+                        hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: Some(hnsw), ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim 
                     })
                 } else {
                     None
@@ -406,7 +409,39 @@ impl IndexWrapper {
                 Some(Self { 
                     flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
                     hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, 
-                    bin_ivf_flat: Some(bin_ivf_flat), dim 
+                    bin_ivf_flat: Some(bin_ivf_flat), dim,
+                    sparse_wand: None, sparse_wand_cc: None,
+                })
+            }
+            CIndexType::SparseWand => {
+                // Sparse WAND index for efficient sparse vector search
+                use crate::faiss::sparse_inverted::SparseMetricType;
+                let sparse_metric = match metric {
+                    MetricType::Ip => SparseMetricType::Ip,
+                    _ => SparseMetricType::Ip,
+                };
+                let sparse_wand = crate::faiss::SparseWandIndex::new(sparse_metric);
+                Some(Self { 
+                    flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
+                    hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, 
+                    bin_ivf_flat: None, dim,
+                    sparse_wand: Some(sparse_wand), sparse_wand_cc: None,
+                })
+            }
+            CIndexType::SparseWandCc => {
+                // Sparse WAND CC (Concurrent) index
+                use crate::faiss::sparse_inverted::SparseMetricType;
+                let sparse_metric = match metric {
+                    MetricType::Ip => SparseMetricType::Ip,
+                    _ => SparseMetricType::Ip,
+                };
+                let ssize = if config.num_partitions > 0 { config.num_partitions } else { 1000 };
+                let sparse_wand_cc = crate::faiss::SparseWandIndexCC::new(sparse_metric, ssize);
+                Some(Self { 
+                    flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
+                    hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, 
+                    bin_ivf_flat: None, dim,
+                    sparse_wand: None, sparse_wand_cc: Some(sparse_wand_cc),
                 })
             }
             _ => None,
@@ -431,6 +466,30 @@ impl IndexWrapper {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
         } else if let Some(ref mut idx) = self.ivf_sq8 {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
+        } else if let Some(ref mut idx) = self.sparse_wand {
+            // Sparse WAND: interpret vectors as sparse (dim, value) pairs
+            // For simplicity, treat each vector as a sparse vector with non-zero elements
+            let dim = self.dim;
+            let n_vectors = vectors.len() / dim;
+            let ids_vec: Vec<i64> = if let Some(ids) = ids {
+                ids.to_vec()
+            } else {
+                (0..n_vectors as i64).collect()
+            };
+            
+            for (i, chunk) in vectors.chunks_exact(dim).enumerate() {
+                let elements: Vec<crate::faiss::sparse_inverted::SparseVecElement> = chunk.iter()
+                    .enumerate()
+                    .filter(|(_, &v)| v != 0.0)
+                    .map(|(j, &v)| crate::faiss::sparse_inverted::SparseVecElement { dim: j as u32, val: v })
+                    .collect();
+                let sparse_vec = crate::faiss::sparse_inverted::SparseVector { elements };
+                let doc_id = ids_vec.get(i).copied().unwrap_or(i as i64);
+                if let Err(_) = idx.add(&sparse_vec, doc_id) {
+                    return Err(CError::Internal);
+                }
+            }
+            Ok(n_vectors)
         } else {
             Err(CError::InvalidArg)
         }
@@ -539,6 +598,22 @@ impl IndexWrapper {
             let results = idx.search(query, &req).map_err(|_| CError::Internal)?;
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
             Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
+        } else if let Some(ref idx) = self.sparse_wand {
+            // Sparse WAND search: convert query to sparse vector
+            let dim = self.dim;
+            let elements: Vec<crate::faiss::sparse_inverted::SparseVecElement> = query.iter()
+                .enumerate()
+                .filter(|(_, &v)| v != 0.0)
+                .map(|(j, &v)| crate::faiss::sparse_inverted::SparseVecElement { dim: j as u32, val: v })
+                .collect();
+            let sparse_query = crate::faiss::sparse_inverted::SparseVector { elements };
+            
+            let start = std::time::Instant::now();
+            let results = idx.search(&sparse_query, top_k, None);
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            
+            let (ids, distances): (Vec<i64>, Vec<f32>) = results.into_iter().unzip();
+            Ok(ApiSearchResult::new(ids, distances, elapsed_ms))
         } else {
             Err(CError::InvalidArg)
         }
@@ -635,6 +710,10 @@ impl IndexWrapper {
             idx.count()
         } else if let Some(ref idx) = self.ivf_sq8 {
             idx.ntotal()
+        } else if let Some(ref idx) = self.sparse_wand {
+            idx.n_rows()
+        } else if let Some(ref idx) = self.sparse_wand_cc {
+            idx.n_rows()
         } else {
             0
         }
@@ -664,6 +743,10 @@ impl IndexWrapper {
             // IvfSq8Index doesn't have size() method yet, estimate based on stored data
             // Use config.dim instead of private field
             idx.ntotal() * 8 // SQ8 uses 8 bits per dimension
+        } else if let Some(ref idx) = self.sparse_wand {
+            idx.size()
+        } else if let Some(ref idx) = self.sparse_wand_cc {
+            idx.size()
         } else {
             0
         }
