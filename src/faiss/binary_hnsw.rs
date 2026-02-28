@@ -557,9 +557,9 @@ mod tests {
         let query = vec![0u8; 8];
         let result = index.search(&query, 5);
         
-        assert_eq!(result.labels.len(), 5);
+        assert_eq!(result.ids.len(), 5);
         assert_eq!(result.distances.len(), 5);
-        assert!(result.labels[0] >= 0); // Found at least one result
+        assert!(result.ids[0] >= 0); // Found at least one result
     }
 
     #[test]

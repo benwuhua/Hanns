@@ -225,6 +225,23 @@ impl HnswSqIndex {
             .sum::<f32>()
             .sqrt()
     }
+    
+    /// Get the number of vectors in the index
+    pub fn count(&self) -> usize {
+        self.ids.len()
+    }
+    
+    /// Get the memory size of the index in bytes
+    pub fn size(&self) -> usize {
+        // Approximate size: vectors + quantized_vectors + graph + ids
+        let vectors_size = self.vectors.len() * std::mem::size_of::<f32>();
+        let quantized_size = self.quantized_vectors.len() * std::mem::size_of::<u8>();
+        let graph_size = self.graph.len() * std::mem::size_of::<Vec<(i64, f32)>>();
+        let ids_size = self.ids.len() * std::mem::size_of::<i64>();
+        let centroids_size = self.centroids.len() * std::mem::size_of::<f32>();
+        
+        vectors_size + quantized_size + graph_size + ids_size + centroids_size
+    }
 }
 
 /// HNSW-PQ 索引 (HNSW + Product Quantization)

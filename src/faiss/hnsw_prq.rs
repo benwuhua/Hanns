@@ -544,6 +544,18 @@ impl HnswPrqIndex {
         self.config.dim
     }
 
+    /// Get the memory size of the index in bytes
+    pub fn size(&self) -> usize {
+        let node_info_size = self.node_info.len() * std::mem::size_of::<NodeInfo>();
+        let ids_size = self.ids.len() * std::mem::size_of::<i64>();
+        let id_to_idx_size = self.id_to_idx.len() * (std::mem::size_of::<i64>() + std::mem::size_of::<usize>());
+        
+        // Approximate PRQ size
+        let prq_size = self.prq.size();
+        
+        node_info_size + ids_size + id_to_idx_size + prq_size
+    }
+
     /// Check if trained
     pub fn is_trained(&self) -> bool {
         self.trained

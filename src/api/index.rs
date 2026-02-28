@@ -33,6 +33,10 @@ pub enum IndexType {
     SparseInverted,
     /// Binary HNSW - HNSW for binary vectors with Hamming distance
     BinaryHnsw,
+    /// Binary Flat - Exhaustive search for binary vectors (IDMAP)
+    BinFlat,
+    /// HNSW-SQ (HNSW with Scalar Quantization)
+    HnswSq,
 }
 
 impl Default for IndexType {
@@ -58,6 +62,8 @@ impl IndexType {
             "ivf_sq_cc" | "ivf-sq-cc" | "ivfsqcc" => Some(IndexType::IvfSqCc),
             "sparse_inverted" | "sparse-inverted" | "sparse" => Some(IndexType::SparseInverted),
             "binary_hnsw" | "binary-hnsw" | "binaryhnsw" => Some(IndexType::BinaryHnsw),
+            "bin_flat" | "bin-flat" | "binflat" | "binary_flat" | "binary-flat" => Some(IndexType::BinFlat),
+            "hnsw_sq" | "hnsw-sq" | "hnswsq" => Some(IndexType::HnswSq),
             _ => None,
         }
     }
@@ -217,6 +223,12 @@ impl IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),
             ssize: Some(ssize),
+            ..Default::default()
+        }
+    }
+
+    pub fn bin_flat() -> Self {
+        Self {
             ..Default::default()
         }
     }

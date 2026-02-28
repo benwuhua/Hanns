@@ -236,6 +236,19 @@ impl ProductResidualQuantizer {
     pub fn bits_per_subvector(&self) -> usize {
         self.config.nbits
     }
+    
+    /// Get the approximate memory size in bytes
+    pub fn size(&self) -> usize {
+        let config_size = std::mem::size_of::<PRQConfig>();
+        let quantizers_size = self.quantizers.len() * std::mem::size_of::<ResidualQuantizer>();
+        
+        // Approximate: each RQ has codebooks
+        let codebook_size = self.quantizers.iter()
+            .map(|q| q.codebooks.len() * std::mem::size_of::<f32>())
+            .sum::<usize>();
+        
+        config_size + quantizers_size + codebook_size
+    }
 }
 
 #[cfg(test)]

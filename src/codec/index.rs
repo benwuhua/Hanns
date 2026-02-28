@@ -31,6 +31,8 @@ impl IndexCodec {
             IndexType::IvfSqCc => 10,
             IndexType::SparseInverted => 11,
             IndexType::BinaryHnsw => 12,
+            IndexType::BinFlat => 13,
+            IndexType::HnswSq => 14,
         };
         writer.write_all(&idx_type.to_le_bytes())?;
         
@@ -83,6 +85,9 @@ impl IndexCodec {
             9 => IndexType::IvfFlatCc,
             10 => IndexType::IvfSqCc,
             11 => IndexType::SparseInverted,
+            12 => IndexType::BinaryHnsw,
+            13 => IndexType::BinFlat,
+            14 => IndexType::HnswSq,
             _ => return Err(KnowhereError::Codec(format!("unknown index type: {}", idx_type))),
         };
         
