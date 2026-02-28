@@ -51,6 +51,8 @@ pub enum IndexType {
     SparseWand,
     /// Sparse WAND Index CC (Concurrent Version) - 并发 WAND 稀疏索引
     SparseWandCc,
+    /// MinHash-LSH - Locality Sensitive Hashing for Jaccard similarity
+    MinHashLsh,
 }
 
 impl Default for IndexType {
@@ -85,6 +87,7 @@ impl IndexType {
             "sparse_inverted_cc" | "sparse-inverted-cc" | "sparsecc" => Some(IndexType::SparseInvertedCc),
             "sparse_wand" | "sparse-wand" | "sparsewand" | "wand" => Some(IndexType::SparseWand),
             "sparse_wand_cc" | "sparse-wand-cc" | "sparsewandcc" | "wandcc" => Some(IndexType::SparseWandCc),
+            "minhash_lsh" | "minhash-lsh" | "minhashlsh" => Some(IndexType::MinHashLsh),
             _ => None,
         }
     }
@@ -211,6 +214,24 @@ pub struct IndexParams {
     /// For IVF: use Elkan algorithm for k-means
     #[serde(default)]
     pub use_elkan: Option<bool>,
+    /// For MinHash-LSH: number of bits for hash
+    #[serde(default)]
+    pub num_bit: Option<usize>,
+    /// For MinHash-LSH: number of bands
+    #[serde(default)]
+    pub num_band: Option<usize>,
+    /// For MinHash-LSH: block size in bytes
+    #[serde(default)]
+    pub block_size: Option<usize>,
+    /// For MinHash-LSH: whether to store raw data
+    #[serde(default)]
+    pub with_raw_data: Option<bool>,
+    /// For MinHash-LSH: whether to use Bloom filter
+    #[serde(default)]
+    pub use_bloom: Option<bool>,
+    /// For MinHash-LSH: Bloom filter false positive rate
+    #[serde(default)]
+    pub bloom_fp_rate: Option<f64>,
 }
 
 impl IndexParams {
@@ -289,6 +310,18 @@ impl IndexParams {
     pub fn sparse_wand_cc(ssize: Option<usize>) -> Self {
         Self {
             ssize,
+            ..Default::default()
+        }
+    }
+
+    pub fn minhash_lsh(num_bit: usize, num_band: usize, block_size: usize) -> Self {
+        Self {
+            num_bit: Some(num_bit),
+            num_band: Some(num_band),
+            block_size: Some(block_size),
+            with_raw_data: Some(true),
+            use_bloom: Some(true),
+            bloom_fp_rate: Some(0.01),
             ..Default::default()
         }
     }

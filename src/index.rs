@@ -3,6 +3,7 @@
 //! 统一的索引接口
 
 pub mod minhash_lsh;
+pub use minhash_lsh::MinHashLSHIndex;
 
 use crate::api::KnowhereError;
 use crate::dataset::Dataset;

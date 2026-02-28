@@ -41,6 +41,7 @@ impl IndexCodec {
             IndexType::HnswSq => 14,
             IndexType::Aisaq => 15,
             IndexType::HnswPq => 16,
+            IndexType::MinHashLsh => 21,
         };
         writer.write_all(&idx_type.to_le_bytes())?;
         
@@ -104,6 +105,7 @@ impl IndexCodec {
             14 => IndexType::HnswSq,
             15 => IndexType::Aisaq,
             16 => IndexType::HnswPq,
+            21 => IndexType::MinHashLsh,
             _ => return Err(KnowhereError::Codec(format!("unknown index type: {}", idx_type))),
         };
         

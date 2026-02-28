@@ -88,6 +88,7 @@ pub enum CIndexType {
     SparseWand = 13,
     BinIvfFlat = 14,
     SparseWandCc = 15,
+    MinHashLsh = 16,
 }
 
 /// Metric 类型枚举
@@ -199,7 +200,7 @@ pub struct CGetVectorResult {
     pub ids: *mut i64,
 }
 
-/// 包装索引对象 - 支持 Flat, HNSW, ScaNN, HNSW-PRQ, IVF-RaBitQ, HNSW-SQ, HNSW-PQ, BinFlat, BinaryHnsw, IVF-SQ8, BinIvfFlat, SparseWand, SparseWandCC
+/// 包装索引对象 - 支持 Flat, HNSW, ScaNN, HNSW-PRQ, IVF-RaBitQ, HNSW-SQ, HNSW-PQ, BinFlat, BinaryHnsw, IVF-SQ8, BinIvfFlat, SparseWand, SparseWandCC, MinHashLSH
 struct IndexWrapper {
     flat: Option<MemIndex>,
     hnsw: Option<HnswIndex>,
@@ -214,6 +215,7 @@ struct IndexWrapper {
     bin_ivf_flat: Option<crate::faiss::BinIvfFlatIndex>,
     sparse_wand: Option<crate::faiss::SparseWandIndex>,
     sparse_wand_cc: Option<crate::faiss::SparseWandIndexCC>,
+    minhash_lsh: Option<crate::index::MinHashLSHIndex>,
     dim: usize,
 }
 
@@ -240,7 +242,7 @@ impl IndexWrapper {
                     params: IndexParams::default(),
                 };
                 let flat = MemIndex::new(&index_config).ok()?;
-                Some(Self { flat: Some(flat), hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim })
+                Some(Self { flat: Some(flat), hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim })
             }
             CIndexType::Hnsw => {
                 let mut index_config = IndexConfig {
@@ -256,7 +258,7 @@ impl IndexWrapper {
                     index_config.params.ef_search = Some(config.ef_search);
                 }
                 let hnsw = HnswIndex::new(&index_config).ok()?;
-                Some(Self { flat: None, hnsw: Some(hnsw), scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim })
+                Some(Self { flat: None, hnsw: Some(hnsw), scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim })
             }
             CIndexType::Scann => {
                 let num_partitions = if config.num_partitions > 0 {
@@ -276,7 +278,7 @@ impl IndexWrapper {
                 };
                 let scann_config = ScaNNConfig::new(num_partitions, num_centroids, reorder_k);
                 let scann = ScaNNIndex::new(dim, scann_config).ok()?;
-                Some(Self { flat: None, hnsw: None, scann: Some(scann), hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim })
+                Some(Self { flat: None, hnsw: None, scann: Some(scann), hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim })
             }
             CIndexType::HnswPrq => {
                 let mut index_config = IndexConfig {
@@ -306,7 +308,7 @@ impl IndexWrapper {
                     .with_metric_type(metric);
                 
                 let hnsw_prq = crate::faiss::HnswPrqIndex::new(hnsw_prq_config).ok()?;
-                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: Some(hnsw_prq), ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim })
+                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: Some(hnsw_prq), ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim })
             }
             CIndexType::IvfRabitq => {
                 let nlist = if config.num_clusters > 0 { config.num_clusters } else { 256 };
@@ -317,7 +319,7 @@ impl IndexWrapper {
                     .with_metric(metric);
                 
                 let ivf_rabitq = crate::faiss::IvfRaBitqIndex::new(ivf_rabitq_config);
-                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: Some(ivf_rabitq), hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim })
+                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: Some(ivf_rabitq), hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim })
             }
             CIndexType::HnswSq => {
                 let ef_construction = if config.ef_construction > 0 { config.ef_construction } else { 200 };
@@ -333,7 +335,7 @@ impl IndexWrapper {
                 hnsw_config.sq_bit = sq_bit;
                 
                 // Store config in index (simplified - HnswSqIndex needs config support)
-                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: Some(hnsw_sq), hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim })
+                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: Some(hnsw_sq), hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim })
             }
             CIndexType::HnswPq => {
                 let pq_m = if config.prq_nsplits > 0 { config.prq_nsplits } else { 8 };
@@ -347,7 +349,7 @@ impl IndexWrapper {
                     .with_metric_type(metric);
                 
                 let hnsw_pq = crate::faiss::HnswPqIndex::new(hnsw_pq_config).ok()?;
-                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: Some(hnsw_pq), bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim })
+                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: Some(hnsw_pq), bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim })
             }
             CIndexType::IvfSq8 => {
                 // IVF-SQ8 index with scalar quantization
@@ -365,7 +367,7 @@ impl IndexWrapper {
                 Some(Self { 
                     flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
                     hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, 
-                    ivf_sq8: Some(ivf_sq8), bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim 
+                    ivf_sq8: Some(ivf_sq8), bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim 
                 })
             }
             CIndexType::BinFlat => {
@@ -373,7 +375,7 @@ impl IndexWrapper {
                 let bin_flat = crate::faiss::BinFlatIndex::new(dim, metric);
                 Some(Self { 
                     flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
-                    hnsw_sq: None, hnsw_pq: None, bin_flat: Some(bin_flat), binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim 
+                    hnsw_sq: None, hnsw_pq: None, bin_flat: Some(bin_flat), binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim 
                 })
             }
             CIndexType::BinaryHnsw => {
@@ -393,7 +395,7 @@ impl IndexWrapper {
                 if let Ok(hnsw) = crate::faiss::BinaryHnswIndex::new(&index_config) {
                     Some(Self { 
                         flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
-                        hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: Some(hnsw), ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, dim 
+                        hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: Some(hnsw), ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim 
                     })
                 } else {
                     None
@@ -410,7 +412,7 @@ impl IndexWrapper {
                     flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
                     hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, 
                     bin_ivf_flat: Some(bin_ivf_flat), dim,
-                    sparse_wand: None, sparse_wand_cc: None,
+                    sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None,
                 })
             }
             CIndexType::SparseWand => {
@@ -425,7 +427,7 @@ impl IndexWrapper {
                     flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
                     hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, 
                     bin_ivf_flat: None, dim,
-                    sparse_wand: Some(sparse_wand), sparse_wand_cc: None,
+                    sparse_wand: Some(sparse_wand), sparse_wand_cc: None, minhash_lsh: None,
                 })
             }
             CIndexType::SparseWandCc => {
@@ -441,7 +443,17 @@ impl IndexWrapper {
                     flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
                     hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, 
                     bin_ivf_flat: None, dim,
-                    sparse_wand: None, sparse_wand_cc: Some(sparse_wand_cc),
+                    sparse_wand: None, sparse_wand_cc: Some(sparse_wand_cc), minhash_lsh: None,
+                })
+            }
+            CIndexType::MinHashLsh => {
+                // MinHash-LSH index for Jaccard similarity
+                let minhash_lsh = crate::index::MinHashLSHIndex::new();
+                Some(Self { 
+                    flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
+                    hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, 
+                    bin_ivf_flat: None, dim,
+                    sparse_wand: None, sparse_wand_cc: None, minhash_lsh: Some(minhash_lsh),
                 })
             }
             _ => None,
@@ -495,7 +507,7 @@ impl IndexWrapper {
         }
     }
     
-    /// Add binary vectors (for BinFlat, BinaryHnsw, and BinIvfFlat)
+    /// Add binary vectors (for BinFlat, BinaryHnsw, BinIvfFlat, and MinHashLSH)
     fn add_binary(&mut self, vectors: &[u8], ids: Option<&[i64]>) -> Result<usize, CError> {
         if let Some(ref mut idx) = self.bin_flat {
             let dim_bytes = (idx.dim() + 7) / 8;
@@ -510,6 +522,17 @@ impl IndexWrapper {
             let n = vectors.len() / dim_bytes;
             idx.add(n as u32, vectors, ids).map_err(|_| CError::Internal)?;
             Ok(n)
+        } else if let Some(ref mut idx) = self.minhash_lsh {
+            // MinHashLSH: build index from binary data
+            // Assume mh_vec_length = dim / 8 (each element is u64 = 8 bytes)
+            // For simplicity, use default parameters
+            let mh_vec_length = 8; // Default: 8 elements per vector
+            let mh_vec_element_size = 8; // u64
+            let bands = 4;
+            let with_raw_data = true;
+            idx.build(vectors, mh_vec_length, mh_vec_element_size, bands, with_raw_data)
+                .map_err(|_| CError::Internal)?;
+            Ok(idx.count())
         } else {
             Err(CError::InvalidArg)
         }
@@ -619,7 +642,7 @@ impl IndexWrapper {
         }
     }
     
-    /// Search binary vectors (for BinFlat, BinaryHnsw, and BinIvfFlat)
+    /// Search binary vectors (for BinFlat, BinaryHnsw, BinIvfFlat, and MinHashLSH)
     /// Returns distances as f32 (converted from usize Hamming distance)
     fn search_binary(&self, query: &[u8], top_k: usize) -> Result<ApiSearchResult, CError> {
         if let Some(ref idx) = self.bin_flat {
@@ -643,6 +666,13 @@ impl IndexWrapper {
                 .map_err(|_| CError::Internal)?;
             
             Ok(ApiSearchResult::new(ids, dists, 0.0))
+        } else if let Some(ref idx) = self.minhash_lsh {
+            // MinHashLSH search
+            let start = std::time::Instant::now();
+            let (ids, distances) = idx.search(query, top_k, None)
+                .map_err(|_| CError::Internal)?;
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            Ok(ApiSearchResult::new(ids, distances, elapsed_ms))
         } else {
             Err(CError::InvalidArg)
         }
@@ -714,6 +744,8 @@ impl IndexWrapper {
             idx.n_rows()
         } else if let Some(ref idx) = self.sparse_wand_cc {
             idx.n_rows()
+        } else if let Some(ref idx) = self.minhash_lsh {
+            idx.count()
         } else {
             0
         }
@@ -747,6 +779,8 @@ impl IndexWrapper {
             idx.size()
         } else if let Some(ref idx) = self.sparse_wand_cc {
             idx.size()
+        } else if let Some(ref idx) = self.minhash_lsh {
+            idx.memory_usage()
         } else {
             0
         }
@@ -760,6 +794,8 @@ impl IndexWrapper {
             "HNSW"
         } else if self.scann.is_some() {
             "ScaNN"
+        } else if self.minhash_lsh.is_some() {
+            "MinHashLSH"
         } else {
             "Unknown"
         }
@@ -808,6 +844,21 @@ impl IndexWrapper {
                 Ok(vectors) => {
                     let num_found = vectors.len() / self.dim;
                     Ok((vectors, num_found))
+                }
+                Err(_) => Err(CError::NotFound),
+            }
+        } else if let Some(ref idx) = self.minhash_lsh {
+            // MinHashLSH: get vectors by IDs (returns byte data)
+            match idx.get_vector_by_ids(ids) {
+                Ok(vectors) => {
+                    // Convert byte data to f32 for compatibility
+                    let num_found = vectors.len() / std::mem::size_of::<f32>();
+                    let mut f32_vectors = Vec::with_capacity(num_found);
+                    for chunk in vectors.chunks_exact(std::mem::size_of::<f32>()) {
+                        let val = f32::from_le_bytes(chunk.try_into().unwrap_or([0; 4]));
+                        f32_vectors.push(val);
+                    }
+                    Ok((f32_vectors, num_found))
                 }
                 Err(_) => Err(CError::NotFound),
             }
@@ -863,6 +914,8 @@ impl IndexWrapper {
             Err(CError::NotImplemented)
         } else if let Some(ref idx) = self.hnsw_prq {
             idx.save(path.to_str().unwrap()).map_err(|_| CError::Internal)
+        } else if let Some(ref idx) = self.minhash_lsh {
+            idx.save(path.to_str().unwrap()).map_err(|_| CError::Internal)
         } else {
             Err(CError::InvalidArg)
         }
@@ -881,6 +934,8 @@ impl IndexWrapper {
         } else if let Some(ref _idx) = self.scann {
             Err(CError::NotImplemented)
         } else if let Some(ref mut idx) = self.hnsw_prq {
+            idx.load(path.to_str().unwrap()).map_err(|_| CError::Internal)
+        } else if let Some(ref mut idx) = self.minhash_lsh {
             idx.load(path.to_str().unwrap()).map_err(|_| CError::Internal)
         } else {
             Err(CError::InvalidArg)
@@ -1558,6 +1613,11 @@ pub extern "C" fn knowhere_has_raw_data(index: *const std::ffi::c_void) -> i32 {
         }
         if let Some(ref scann) = wrapper.scann {
             if scann.has_raw_data() {
+                return 1;
+            }
+        }
+        if let Some(ref minhash_lsh) = wrapper.minhash_lsh {
+            if minhash_lsh.has_raw_data() {
                 return 1;
             }
         }
