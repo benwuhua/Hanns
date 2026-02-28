@@ -551,8 +551,8 @@ mod tests {
             let index_clone = Arc::clone(&index);
             let handle = thread::spawn(move || {
                 for j in 0..10 {
-                    let vec = SparseVector::from_pairs(&[(i, 1.0), (j, 2.0)]);
-                    index_clone.add(&vec, i * 10 + j).unwrap();
+                    let vec = SparseVector::from_pairs(&[(i as u32, 1.0), (j as u32, 2.0)]);
+                    index_clone.add(&vec, (i * 10 + j) as i64).unwrap();
                 }
             });
             handles.push(handle);
@@ -574,7 +574,7 @@ mod tests {
         // 先添加一些数据
         for i in 0..100 {
             let vec = SparseVector::from_pairs(&[(i % 10, 1.0), (((i + 5) % 10), 2.0)]);
-            index.add(&vec, i).unwrap();
+            index.add(&vec, i as i64).unwrap();
         }
         
         // 并发搜索
@@ -602,7 +602,7 @@ mod tests {
         let mut vectors = Vec::new();
         for i in 0..100 {
             let vec = SparseVector::from_pairs(&[(i % 10, 1.0)]);
-            vectors.push((i, vec));
+            vectors.push((i as i64, vec));
         }
         
         index.add_batch(&vectors).unwrap();

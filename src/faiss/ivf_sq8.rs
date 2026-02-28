@@ -482,23 +482,24 @@ mod tests {
     #[test]
     fn test_ivf_sq8_new() {
         let config = IndexConfig {
-            index_type: IndexType::IvfFlat,
+            index_type: IndexType::IvfSq8,
             metric_type: MetricType::L2,
             dim: 4,
             params: IndexParams::default(),
         };
         
         let index = IvfSq8Index::new(&config).unwrap();
-        assert_eq!(index.dim, 4);
+        assert_eq!(index.ntotal(), 0);
+        assert!(!index.trained);
     }
     
     #[test]
     fn test_ivf_sq8_train_add_search() {
         let config = IndexConfig {
-            index_type: IndexType::IvfFlat,
+            index_type: IndexType::IvfSq8,
             metric_type: MetricType::L2,
             dim: 4,
-            params: IndexParams::default(),
+            params: IndexParams::ivf_sq8(4, 2),
         };
         
         let mut index = IvfSq8Index::new(&config).unwrap();
@@ -511,10 +512,13 @@ mod tests {
             10.1, 10.1, 10.1, 10.1,
         ];
         
-        index.train(&vectors).unwrap();
+        let trained_count = index.train(&vectors).unwrap();
+        assert_eq!(trained_count, 4);
         
         // Add vectors
-        index.add(&vectors, None).unwrap();
+        let add_count = index.add(&vectors, None).unwrap();
+        assert_eq!(add_count, 4);
+        assert_eq!(index.ntotal(), 4);
         
         // Search
         let query = vec![0.05, 0.05, 0.05, 0.05];
@@ -528,5 +532,29 @@ mod tests {
         
         let result = index.search(&query, &req).unwrap();
         assert_eq!(result.ids.len(), 2);
+        // Should find the closest vectors (ids 0 and 1)
+        assert!(result.ids[0] == 0 || result.ids[0] == 1);
+    }
+    
+    #[test]
+    fn test_ivf_sq8_index_type() {
+        let config = IndexConfig {
+            index_type: IndexType::IvfSq8,
+            metric_type: MetricType::L2,
+            dim: 8,
+            params: IndexParams::ivf_sq8(10, 3),
+        };
+        
+        assert_eq!(config.index_type, IndexType::IvfSq8);
+        assert_eq!(config.params.nlist, Some(10));
+        assert_eq!(config.params.nprobe, Some(3));
+    }
+    
+    #[test]
+    fn test_ivf_sq8_from_str() {
+        assert_eq!(IndexType::from_str("ivf_sq8"), Some(IndexType::IvfSq8));
+        assert_eq!(IndexType::from_str("ivf-sq8"), Some(IndexType::IvfSq8));
+        assert_eq!(IndexType::from_str("ivfsq8"), Some(IndexType::IvfSq8));
+        assert_eq!(IndexType::from_str("IVF_SQ8"), Some(IndexType::IvfSq8));
     }
 }

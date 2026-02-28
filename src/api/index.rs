@@ -29,6 +29,8 @@ pub enum IndexType {
     IvfRabitq,
     /// IVF-FLAT-CC (Concurrent Version)
     IvfFlatCc,
+    /// IVF-SQ8 (Scalar Quantization 8-bit)
+    IvfSq8,
     /// IVF-SQ-CC (Concurrent Version with Scalar Quantization)
     IvfSqCc,
     /// Sparse Inverted Index (稀疏倒排索引)
@@ -37,6 +39,8 @@ pub enum IndexType {
     BinaryHnsw,
     /// Binary Flat - Exhaustive search for binary vectors (IDMAP)
     BinFlat,
+    /// Binary IVF Flat - IVF clustering for binary vectors with Hamming distance
+    BinIvfFlat,
     /// HNSW-SQ (HNSW with Scalar Quantization)
     HnswSq,
     /// AISAQ (Adaptive Iterative Scalar Adaptive Quantization) - DiskANN-based with PQ
@@ -70,10 +74,12 @@ impl IndexType {
             "hnsw_pq" | "hnsw-pq" => Some(IndexType::HnswPq),
             "ivf_rabitq" | "ivf-rabitq" | "rabitq" => Some(IndexType::IvfRabitq),
             "ivf_flat_cc" | "ivf-flat-cc" | "ivfcc" => Some(IndexType::IvfFlatCc),
+            "ivf_sq8" | "ivf-sq8" | "ivfsq8" => Some(IndexType::IvfSq8),
             "ivf_sq_cc" | "ivf-sq-cc" | "ivfsqcc" => Some(IndexType::IvfSqCc),
             "sparse_inverted" | "sparse-inverted" | "sparse" => Some(IndexType::SparseInverted),
             "binary_hnsw" | "binary-hnsw" | "binaryhnsw" => Some(IndexType::BinaryHnsw),
             "bin_flat" | "bin-flat" | "binflat" | "binary_flat" | "binary-flat" => Some(IndexType::BinFlat),
+            "bin_ivf_flat" | "bin-ivf-flat" | "binivfflat" | "binary_ivf_flat" | "binary-ivf-flat" => Some(IndexType::BinIvfFlat),
             "hnsw_sq" | "hnsw-sq" | "hnswsq" => Some(IndexType::HnswSq),
             "aisaq" | "a_isaq" | "a-saq" => Some(IndexType::Aisaq),
             "sparse_inverted_cc" | "sparse-inverted-cc" | "sparsecc" => Some(IndexType::SparseInvertedCc),
@@ -243,6 +249,14 @@ impl IndexParams {
         }
     }
     
+    pub fn ivf_sq8(nlist: usize, nprobe: usize) -> Self {
+        Self {
+            nlist: Some(nlist),
+            nprobe: Some(nprobe),
+            ..Default::default()
+        }
+    }
+
     pub fn ivf_cc(nlist: usize, nprobe: usize, ssize: usize) -> Self {
         Self {
             nlist: Some(nlist),
@@ -258,6 +272,14 @@ impl IndexParams {
         }
     }
     
+    pub fn bin_ivf_flat(nlist: usize, nprobe: usize) -> Self {
+        Self {
+            nlist: Some(nlist),
+            nprobe: Some(nprobe),
+            ..Default::default()
+        }
+    }
+    
     pub fn sparse_wand() -> Self {
         Self {
             ..Default::default()
@@ -269,5 +291,41 @@ impl IndexParams {
             ssize,
             ..Default::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_index_type_ivf_sq8() {
+        // Test enum variant exists
+        let index_type = IndexType::IvfSq8;
+        assert_eq!(index_type, IndexType::IvfSq8);
+    }
+
+    #[test]
+    fn test_index_type_from_str_ivf_sq8() {
+        assert_eq!(IndexType::from_str("ivf_sq8"), Some(IndexType::IvfSq8));
+        assert_eq!(IndexType::from_str("ivf-sq8"), Some(IndexType::IvfSq8));
+        assert_eq!(IndexType::from_str("ivfsq8"), Some(IndexType::IvfSq8));
+        assert_eq!(IndexType::from_str("IVF_SQ8"), Some(IndexType::IvfSq8));
+        assert_eq!(IndexType::from_str("IvfSq8"), Some(IndexType::IvfSq8));
+    }
+
+    #[test]
+    fn test_index_params_ivf_sq8() {
+        let params = IndexParams::ivf_sq8(256, 8);
+        assert_eq!(params.nlist, Some(256));
+        assert_eq!(params.nprobe, Some(8));
+    }
+
+    #[test]
+    fn test_index_config_ivf_sq8() {
+        let config = IndexConfig::new(IndexType::IvfSq8, MetricType::L2, 128);
+        assert_eq!(config.index_type, IndexType::IvfSq8);
+        assert_eq!(config.metric_type, MetricType::L2);
+        assert_eq!(config.dim, 128);
     }
 }
