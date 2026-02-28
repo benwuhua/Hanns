@@ -33,6 +33,7 @@ impl IndexCodec {
             IndexType::BinaryHnsw => 12,
             IndexType::BinFlat => 13,
             IndexType::HnswSq => 14,
+            IndexType::Aisaq => 15,
         };
         writer.write_all(&idx_type.to_le_bytes())?;
         
@@ -88,6 +89,7 @@ impl IndexCodec {
             12 => IndexType::BinaryHnsw,
             13 => IndexType::BinFlat,
             14 => IndexType::HnswSq,
+            15 => IndexType::Aisaq,
             _ => return Err(KnowhereError::Codec(format!("unknown index type: {}", idx_type))),
         };
         

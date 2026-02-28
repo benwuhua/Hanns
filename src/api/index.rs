@@ -37,6 +37,8 @@ pub enum IndexType {
     BinFlat,
     /// HNSW-SQ (HNSW with Scalar Quantization)
     HnswSq,
+    /// AISAQ (Adaptive Iterative Scalar Adaptive Quantization) - DiskANN-based with PQ
+    Aisaq,
 }
 
 impl Default for IndexType {
@@ -64,6 +66,7 @@ impl IndexType {
             "binary_hnsw" | "binary-hnsw" | "binaryhnsw" => Some(IndexType::BinaryHnsw),
             "bin_flat" | "bin-flat" | "binflat" | "binary_flat" | "binary-flat" => Some(IndexType::BinFlat),
             "hnsw_sq" | "hnsw-sq" | "hnswsq" => Some(IndexType::HnswSq),
+            "aisaq" | "a_isaq" | "a-saq" => Some(IndexType::Aisaq),
             _ => None,
         }
     }
