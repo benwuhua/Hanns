@@ -86,6 +86,7 @@ pub enum CIndexType {
     IvfSqCc = 11,
     SparseInverted = 12,
     SparseWand = 13,
+    BinIvfFlat = 14,
 }
 
 /// Metric 类型枚举
@@ -197,7 +198,7 @@ pub struct CGetVectorResult {
     pub ids: *mut i64,
 }
 
-/// 包装索引对象 - 支持 Flat, HNSW, ScaNN, HNSW-PRQ, IVF-RaBitQ, HNSW-SQ, HNSW-PQ, BinFlat, BinaryHnsw, IVF-SQ8
+/// 包装索引对象 - 支持 Flat, HNSW, ScaNN, HNSW-PRQ, IVF-RaBitQ, HNSW-SQ, HNSW-PQ, BinFlat, BinaryHnsw, IVF-SQ8, BinIvfFlat
 struct IndexWrapper {
     flat: Option<MemIndex>,
     hnsw: Option<HnswIndex>,
@@ -209,6 +210,7 @@ struct IndexWrapper {
     bin_flat: Option<crate::faiss::BinFlatIndex>,
     binary_hnsw: Option<crate::faiss::BinaryHnswIndex>,
     ivf_sq8: Option<crate::faiss::IvfSq8Index>,
+    bin_ivf_flat: Option<crate::faiss::BinIvfFlatIndex>,
     dim: usize,
 }
 
@@ -235,7 +237,7 @@ impl IndexWrapper {
                     params: IndexParams::default(),
                 };
                 let flat = MemIndex::new(&index_config).ok()?;
-                Some(Self { flat: Some(flat), hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, dim })
+                Some(Self { flat: Some(flat), hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, dim })
             }
             CIndexType::Hnsw => {
                 let mut index_config = IndexConfig {
@@ -251,7 +253,7 @@ impl IndexWrapper {
                     index_config.params.ef_search = Some(config.ef_search);
                 }
                 let hnsw = HnswIndex::new(&index_config).ok()?;
-                Some(Self { flat: None, hnsw: Some(hnsw), scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, dim })
+                Some(Self { flat: None, hnsw: Some(hnsw), scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, dim })
             }
             CIndexType::Scann => {
                 let num_partitions = if config.num_partitions > 0 {
@@ -271,7 +273,7 @@ impl IndexWrapper {
                 };
                 let scann_config = ScaNNConfig::new(num_partitions, num_centroids, reorder_k);
                 let scann = ScaNNIndex::new(dim, scann_config).ok()?;
-                Some(Self { flat: None, hnsw: None, scann: Some(scann), hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, dim })
+                Some(Self { flat: None, hnsw: None, scann: Some(scann), hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, dim })
             }
             CIndexType::HnswPrq => {
                 let mut index_config = IndexConfig {
@@ -301,7 +303,7 @@ impl IndexWrapper {
                     .with_metric_type(metric);
                 
                 let hnsw_prq = crate::faiss::HnswPrqIndex::new(hnsw_prq_config).ok()?;
-                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: Some(hnsw_prq), ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, dim })
+                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: Some(hnsw_prq), ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, dim })
             }
             CIndexType::IvfRabitq => {
                 let nlist = if config.num_clusters > 0 { config.num_clusters } else { 256 };
@@ -312,7 +314,7 @@ impl IndexWrapper {
                     .with_metric(metric);
                 
                 let ivf_rabitq = crate::faiss::IvfRaBitqIndex::new(ivf_rabitq_config);
-                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: Some(ivf_rabitq), hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, dim })
+                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: Some(ivf_rabitq), hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, dim })
             }
             CIndexType::HnswSq => {
                 let ef_construction = if config.ef_construction > 0 { config.ef_construction } else { 200 };
@@ -328,7 +330,7 @@ impl IndexWrapper {
                 hnsw_config.sq_bit = sq_bit;
                 
                 // Store config in index (simplified - HnswSqIndex needs config support)
-                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: Some(hnsw_sq), hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, dim })
+                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: Some(hnsw_sq), hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, dim })
             }
             CIndexType::HnswPq => {
                 let pq_m = if config.prq_nsplits > 0 { config.prq_nsplits } else { 8 };
@@ -342,7 +344,7 @@ impl IndexWrapper {
                     .with_metric_type(metric);
                 
                 let hnsw_pq = crate::faiss::HnswPqIndex::new(hnsw_pq_config).ok()?;
-                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: Some(hnsw_pq), bin_flat: None, binary_hnsw: None, ivf_sq8: None, dim })
+                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: Some(hnsw_pq), bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, dim })
             }
             CIndexType::IvfSq8 => {
                 // IVF-SQ8 index with scalar quantization
@@ -360,7 +362,7 @@ impl IndexWrapper {
                 Some(Self { 
                     flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
                     hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, 
-                    ivf_sq8: Some(ivf_sq8), dim 
+                    ivf_sq8: Some(ivf_sq8), bin_ivf_flat: None, dim 
                 })
             }
             CIndexType::BinFlat => {
@@ -368,7 +370,7 @@ impl IndexWrapper {
                 let bin_flat = crate::faiss::BinFlatIndex::new(dim, metric);
                 Some(Self { 
                     flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
-                    hnsw_sq: None, hnsw_pq: None, bin_flat: Some(bin_flat), binary_hnsw: None, ivf_sq8: None, dim 
+                    hnsw_sq: None, hnsw_pq: None, bin_flat: Some(bin_flat), binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, dim 
                 })
             }
             CIndexType::BinaryHnsw => {
@@ -388,11 +390,24 @@ impl IndexWrapper {
                 if let Ok(hnsw) = crate::faiss::BinaryHnswIndex::new(&index_config) {
                     Some(Self { 
                         flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
-                        hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: Some(hnsw), ivf_sq8: None, dim 
+                        hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: Some(hnsw), ivf_sq8: None, bin_ivf_flat: None, dim 
                     })
                 } else {
                     None
                 }
+            }
+            CIndexType::BinIvfFlat => {
+                // Binary IVF Flat index for binary vectors with Hamming distance
+                let nlist = if config.num_clusters > 0 { config.num_clusters } else { 256 };
+                let mut bin_ivf_flat = crate::faiss::BinIvfFlatIndex::new(dim, nlist, metric);
+                if config.nprobe > 0 {
+                    bin_ivf_flat.set_nprobe(config.nprobe);
+                }
+                Some(Self { 
+                    flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
+                    hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, 
+                    bin_ivf_flat: Some(bin_ivf_flat), dim 
+                })
             }
             _ => None,
         }
@@ -421,7 +436,7 @@ impl IndexWrapper {
         }
     }
     
-    /// Add binary vectors (for BinFlat and BinaryHnsw)
+    /// Add binary vectors (for BinFlat, BinaryHnsw, and BinIvfFlat)
     fn add_binary(&mut self, vectors: &[u8], ids: Option<&[i64]>) -> Result<usize, CError> {
         if let Some(ref mut idx) = self.bin_flat {
             let dim_bytes = (idx.dim() + 7) / 8;
@@ -431,6 +446,11 @@ impl IndexWrapper {
         } else if let Some(ref mut idx) = self.binary_hnsw {
             // BinaryHnswIndex::add returns the number of vectors added
             idx.add(vectors, ids).map_err(|_| CError::Internal)
+        } else if let Some(ref mut idx) = self.bin_ivf_flat {
+            let dim_bytes = (idx.dim() + 7) / 8;
+            let n = vectors.len() / dim_bytes;
+            idx.add(n as u32, vectors, ids).map_err(|_| CError::Internal)?;
+            Ok(n)
         } else {
             Err(CError::InvalidArg)
         }
@@ -524,7 +544,7 @@ impl IndexWrapper {
         }
     }
     
-    /// Search binary vectors (for BinFlat and BinaryHnsw)
+    /// Search binary vectors (for BinFlat, BinaryHnsw, and BinIvfFlat)
     /// Returns distances as f32 (converted from usize Hamming distance)
     fn search_binary(&self, query: &[u8], top_k: usize) -> Result<ApiSearchResult, CError> {
         if let Some(ref idx) = self.bin_flat {
@@ -539,6 +559,15 @@ impl IndexWrapper {
         } else if let Some(ref idx) = self.binary_hnsw {
             // BinaryHnswIndex has a different search API that returns ApiSearchResult directly
             Ok(idx.search(query, top_k))
+        } else if let Some(ref idx) = self.bin_ivf_flat {
+            let nq = 1; // Single query for now
+            let mut dists = vec![0.0f32; top_k];
+            let mut ids = vec![0i64; top_k];
+            
+            idx.search(nq as u32, query, top_k as i32, &mut dists, &mut ids)
+                .map_err(|_| CError::Internal)?;
+            
+            Ok(ApiSearchResult::new(ids, dists, 0.0))
         } else {
             Err(CError::InvalidArg)
         }
