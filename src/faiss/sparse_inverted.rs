@@ -264,6 +264,10 @@ impl MaxMinHeap {
         self.data.len() >= self.capacity
     }
     
+    pub fn min(&self) -> Option<f32> {
+        self.data.first().map(|(_, score)| *score)
+    }
+    
     pub fn top(&self) -> Option<(i64, f32)> {
         self.data.first().copied()
     }
@@ -573,6 +577,38 @@ impl SparseInvertedIndex {
         
         size
     }
+    
+    /// Get internal dimension ID from original dimension
+    pub fn get_inner_dim_id(&self, dim: u32) -> Option<u32> {
+        self.dim_map.get(&dim).copied()
+    }
+    
+    /// Get max score for a dimension
+    pub fn max_score_in_dim(&self, dim_idx: usize) -> f32 {
+        self.max_score_in_dim.get(dim_idx).copied().unwrap_or(0.0)
+    }
+    
+    /// Get posting list length for a dimension
+    pub fn get_posting_len(&self, term_idx: usize) -> usize {
+        if term_idx >= self.inverted_index_ids.len() {
+            return 0;
+        }
+        self.inverted_index_ids[term_idx].len()
+    }
+    
+    /// Get doc_id from posting list at cursor
+    pub fn get_posting_doc(&self, term_idx: usize, cursor: usize) -> Option<i64> {
+        self.inverted_index_ids.get(term_idx).and_then(|list| list.get(cursor).copied())
+    }
+    
+    /// Get (doc_id, value) entry from posting list at cursor
+    pub fn get_posting_entry(&self, term_idx: usize, cursor: usize) -> Option<(i64, f32)> {
+        let ids = self.inverted_index_ids.get(term_idx)?;
+        let vals = self.inverted_index_vals.get(term_idx)?;
+        let doc_id = ids.get(cursor).copied()?;
+        let val = vals.get(cursor).copied()?;
+        Some((doc_id, val))
+    }
 }
 
 /// 带 WAND 支持的搜索器
@@ -601,17 +637,134 @@ impl<'a> SparseInvertedSearcher<'a> {
     }
     
     /// WAND 搜索 (Document-At-A-Time)
+    /// 
+    /// WAND (Weak AND) algorithm for efficient sparse vector search.
+    /// Key idea: maintain cursors in posting lists, compute upper bounds, skip unpromising docs.
     fn search_wand(&self, query: &SparseVector, k: usize, bitset: Option<&[bool]>) -> Vec<(i64, f32)> {
-        // 简化版 WAND 实现
-        // 完整实现需要维护游标和上界计算
+        if query.elements.is_empty() || self.index.n_rows() == 0 {
+            return Vec::new();
+        }
         
-        // 对于稀疏向量，WAND 的核心思想是:
-        // 1. 对查询维度按最大分数排序
-        // 2. 维护每个 posting list 的游标
-        // 3. 计算上界，如果上界 < 当前阈值则跳过
+        // Sort query terms by max_score descending (optimization)
+        let mut query_terms: Vec<(u32, f32, f32)> = query.elements.iter()
+            .filter_map(|elem| {
+                self.index.get_inner_dim_id(elem.dim).map(|inner_id| {
+                    let max_score = self.index.max_score_in_dim(inner_id as usize);
+                    (inner_id, elem.val, max_score)
+                })
+            })
+            .collect();
+        query_terms.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
         
-        // 这里使用简化实现，实际生产环境需要完整 WAND
-        self.index.search(query, k, bitset)
+        // Initialize cursors for each posting list
+        let mut cursors: Vec<usize> = vec![0; query_terms.len()];
+        
+        // Min-heap for top-k results (capacity k)
+        let mut heap = crate::faiss::sparse_inverted::MaxMinHeap::new(k);
+        let mut threshold = 0.0f32;
+        
+        loop {
+            // Calculate upper bound for current cursor positions
+            let mut upper_bound = 0.0f32;
+            let mut pivot = None;
+            
+            for (i, &(_, qval, max_score)) in query_terms.iter().enumerate() {
+                let cursor = cursors[i];
+                let posting_len = self.index.get_posting_len(i);
+                if cursor >= posting_len {
+                    continue;
+                }
+                upper_bound += qval * max_score;
+                if upper_bound >= threshold && pivot.is_none() {
+                    pivot = Some(i);
+                }
+            }
+            
+            // If upper bound < threshold, advance cursors
+            if upper_bound < threshold || pivot.is_none() {
+                // Find the doc_id with minimum value across all cursors
+                let mut min_doc_id = i64::MAX;
+                let mut min_cursor_idx = 0;
+                
+                for (i, &(_, _, _)) in query_terms.iter().enumerate() {
+                    let cursor = cursors[i];
+                    let posting_len = self.index.get_posting_len(i);
+                    if cursor < posting_len {
+                        if let Some(doc_id) = self.index.get_posting_doc(i, cursor) {
+                            if doc_id < min_doc_id {
+                                min_doc_id = doc_id;
+                                min_cursor_idx = i;
+                            }
+                        }
+                    }
+                }
+                
+                if min_doc_id == i64::MAX {
+                    break; // All cursors exhausted
+                }
+                
+                // Advance cursors to skip to min_doc_id
+                for (i, cursor) in cursors.iter_mut().enumerate() {
+                    let posting_len = self.index.get_posting_len(i);
+                    while *cursor < posting_len {
+                        if let Some(doc_id) = self.index.get_posting_doc(i, *cursor) {
+                            if doc_id >= min_doc_id {
+                                break;
+                            }
+                        }
+                        *cursor += 1;
+                    }
+                }
+                continue;
+            }
+            
+            // Pivot found - fully evaluate the pivot document
+            let pivot_idx = pivot.unwrap();
+            let cursor = cursors[pivot_idx];
+            let posting_len = self.index.get_posting_len(pivot_idx);
+            if cursor >= posting_len {
+                break;
+            }
+            
+            let pivot_doc_id = match self.index.get_posting_doc(pivot_idx, cursor) {
+                Some(id) => id,
+                None => break,
+            };
+            
+            // Check bitset filter
+            if let Some(bs) = bitset {
+                if (pivot_doc_id as usize) < bs.len() && bs.get(pivot_doc_id as usize).copied().unwrap_or(false) {
+                    // This doc is filtered out, advance cursor
+                    cursors[pivot_idx] += 1;
+                    continue;
+                }
+            }
+            
+            // Compute actual score for pivot doc
+            let mut score = 0.0f32;
+            for (i, &(_, qval, _)) in query_terms.iter().enumerate() {
+                let cursor = cursors[i];
+                let posting_len = self.index.get_posting_len(i);
+                if cursor < posting_len {
+                    if let Some((doc_id, val)) = self.index.get_posting_entry(i, cursor) {
+                        if doc_id == pivot_doc_id {
+                            score += qval * val;
+                        }
+                    }
+                }
+            }
+            
+            // Add to heap if score > threshold
+            if score > threshold {
+                heap.push(pivot_doc_id, score);
+                threshold = heap.min().unwrap_or(0.0);
+            }
+            
+            // Advance pivot cursor
+            cursors[pivot_idx] += 1;
+        }
+        
+        heap.into_sorted_vec()
     }
     
     /// MaxScore 搜索
@@ -749,5 +902,29 @@ mod tests {
         
         let size = index.size();
         assert!(size > 0);
+    }
+    
+    #[test]
+    fn test_wand_search_basic() {
+        let mut index = SparseInvertedIndex::new(SparseMetricType::Ip);
+        
+        // Add vectors with different patterns
+        index.add(&SparseVector::from_pairs(&[(0, 1.0), (1, 1.0)]), 0).unwrap();
+        index.add(&SparseVector::from_pairs(&[(1, 1.0), (2, 1.0)]), 1).unwrap();
+        index.add(&SparseVector::from_pairs(&[(0, 1.0), (2, 1.0)]), 2).unwrap();
+        index.add(&SparseVector::from_pairs(&[(0, 1.0), (1, 1.0), (2, 1.0)]), 3).unwrap();
+        
+        // Create searcher with WAND algorithm
+        let searcher = SparseInvertedSearcher::new(&index, InvertedIndexAlgo::DaatWand);
+        
+        // Search
+        let query = SparseVector::from_pairs(&[(0, 1.0), (1, 1.0), (2, 1.0)]);
+        let results = searcher.search(&query, 2, None);
+        
+        assert!(!results.is_empty());
+        assert!(results.len() <= 2);
+        
+        // Doc 3 should be the best match (has all query terms)
+        assert_eq!(results[0].0, 3);
     }
 }

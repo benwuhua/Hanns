@@ -43,6 +43,10 @@ pub enum IndexType {
     Aisaq,
     /// Sparse Inverted Index CC (Concurrent Version) - 并发稀疏倒排索引
     SparseInvertedCc,
+    /// Sparse WAND Index - WAND (Weak AND) algorithm for sparse vectors
+    SparseWand,
+    /// Sparse WAND Index CC (Concurrent Version) - 并发 WAND 稀疏索引
+    SparseWandCc,
 }
 
 impl Default for IndexType {
@@ -73,6 +77,8 @@ impl IndexType {
             "hnsw_sq" | "hnsw-sq" | "hnswsq" => Some(IndexType::HnswSq),
             "aisaq" | "a_isaq" | "a-saq" => Some(IndexType::Aisaq),
             "sparse_inverted_cc" | "sparse-inverted-cc" | "sparsecc" => Some(IndexType::SparseInvertedCc),
+            "sparse_wand" | "sparse-wand" | "sparsewand" | "wand" => Some(IndexType::SparseWand),
+            "sparse_wand_cc" | "sparse-wand-cc" | "sparsewandcc" | "wandcc" => Some(IndexType::SparseWandCc),
             _ => None,
         }
     }
@@ -248,6 +254,19 @@ impl IndexParams {
 
     pub fn bin_flat() -> Self {
         Self {
+            ..Default::default()
+        }
+    }
+    
+    pub fn sparse_wand() -> Self {
+        Self {
+            ..Default::default()
+        }
+    }
+    
+    pub fn sparse_wand_cc(ssize: Option<usize>) -> Self {
+        Self {
+            ssize,
             ..Default::default()
         }
     }
