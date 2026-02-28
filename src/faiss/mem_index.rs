@@ -5,6 +5,19 @@ use std::path::Path;
 use crate::api::{IndexConfig, IndexType, MetricType, Result, SearchRequest, SearchResult};
 use crate::executor::l2_distance;
 
+/// Compute Hamming distance between two binary vectors (stored as f32 for compatibility)
+fn hamming_distance_binary(a: &[f32], b: &[f32]) -> u32 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(&x, &y)| {
+            // Convert f32 to u8 (assuming binary values 0.0 or 1.0, or raw bytes)
+            let x_byte = x as u8;
+            let y_byte = y as u8;
+            (x_byte ^ y_byte).count_ones()
+        })
+        .sum()
+}
+
 /// In-memory vector index (pure Rust implementation)
 #[derive(Clone)]
 pub struct MemIndex {
@@ -105,6 +118,7 @@ impl MemIndex {
                         MetricType::L2 => l2_distance(query_vec, v),
                         MetricType::Ip => -inner_product(query_vec, v), // Negative because we want max
                         MetricType::Cosine => -cosine_similarity(query_vec, v),
+                        MetricType::Hamming => hamming_distance_binary(query_vec, v) as f32,
                     };
                     (self.ids[i], dist)
                 })
@@ -209,6 +223,7 @@ impl MemIndex {
                             let cos = inner_product(v1, v2);
                             1.0 - cos
                         }
+                        MetricType::Hamming => l2_distance(v1, v2), // Fallback for float vectors
                     };
                     distances.push(dist);
                 }

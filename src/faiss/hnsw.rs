@@ -547,6 +547,10 @@ impl HnswIndex {
                 }
                 -sum
             }
+            MetricType::Hamming => {
+                // Hamming distance not supported for float HNSW - use BinaryHnswIndex instead
+                panic!("Hamming distance not supported for HNSW - use BinaryHnswIndex");
+            }
             MetricType::Cosine => {
                 let mut ip = 0.0f32;
                 let mut q_norm = 0.0f32;

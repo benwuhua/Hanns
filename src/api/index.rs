@@ -31,6 +31,8 @@ pub enum IndexType {
     IvfSqCc,
     /// Sparse Inverted Index (稀疏倒排索引)
     SparseInverted,
+    /// Binary HNSW - HNSW for binary vectors with Hamming distance
+    BinaryHnsw,
 }
 
 impl Default for IndexType {
@@ -55,6 +57,7 @@ impl IndexType {
             "ivf_flat_cc" | "ivf-flat-cc" | "ivfcc" => Some(IndexType::IvfFlatCc),
             "ivf_sq_cc" | "ivf-sq-cc" | "ivfsqcc" => Some(IndexType::IvfSqCc),
             "sparse_inverted" | "sparse-inverted" | "sparse" => Some(IndexType::SparseInverted),
+            "binary_hnsw" | "binary-hnsw" | "binaryhnsw" => Some(IndexType::BinaryHnsw),
             _ => None,
         }
     }
@@ -70,6 +73,8 @@ pub enum MetricType {
     Ip,
     /// Cosine similarity
     Cosine,
+    /// Hamming distance (for binary vectors)
+    Hamming,
 }
 
 impl Default for MetricType {
@@ -84,6 +89,7 @@ impl MetricType {
             "l2" | "l2_distance" => Some(MetricType::L2),
             "ip" | "inner_product" => Some(MetricType::Ip),
             "cosine" | "cos" => Some(MetricType::Cosine),
+            "hamming" => Some(MetricType::Hamming),
             _ => None,
         }
     }
@@ -93,6 +99,7 @@ impl MetricType {
             0 => MetricType::L2,
             1 => MetricType::Ip,
             2 => MetricType::Cosine,
+            3 => MetricType::Hamming,
             _ => MetricType::L2,
         }
     }

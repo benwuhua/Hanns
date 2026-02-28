@@ -28,6 +28,7 @@ pub mod ivf_rabitq;
 pub mod ivf_flat_cc;
 pub mod ivf_sq_cc;
 pub mod sparse_inverted;
+pub mod binary_hnsw;
 
 pub use index::FaissIndex;
 pub use mem_index::MemIndex;
@@ -47,6 +48,7 @@ pub use sparse::{SparseIndex, SparseVector};
 pub use hnsw_prq::{HnswPrqIndex, HnswPrqConfig};
 pub use ivf_rabitq::{IvfRaBitqIndex, IvfRaBitqConfig};
 pub use sparse_inverted::{SparseInvertedIndex, SparseInvertedSearcher, SparseMetricType, InvertedIndexAlgo, ApproxSearchParams};
+pub use binary_hnsw::BinaryHnswIndex;
 
 #[cfg(feature = "ffi")]
 pub mod rabitq_ffi;
