@@ -442,6 +442,11 @@ impl BinaryHnswIndex {
     }
 }
 
+// TODO: IndexTrait impl for BinaryHnswIndex needs Dataset to support binary vectors (&[u8])
+// Currently Dataset only supports float vectors (&[f32])
+// Proper fix: Either make Dataset generic or create IndexBinary trait
+// For now, BinaryHnswIndex works standalone without IndexTrait
+/*
 impl IndexTrait for BinaryHnswIndex {
     fn index_type(&self) -> &str {
         "BinaryHNSW"
@@ -472,16 +477,15 @@ impl IndexTrait for BinaryHnswIndex {
 
     fn search(&self, query: &Dataset, top_k: usize) -> std::result::Result<IndexSearchResult, IndexError> {
         let vectors = query.vectors();
-        // For binary vectors, we expect one query at a time
-        let api_result = self.search(&vectors, top_k);
-        Ok(IndexSearchResult::new(api_result.ids, api_result.distances, api_result.elapsed_ms))
+        self.search(&vectors, top_k)
+            .map(|r| IndexSearchResult::new(r.ids, r.distances, r.elapsed_ms))
     }
 
     fn search_with_bitset(&self, query: &Dataset, top_k: usize, _bitset: &BitsetView) -> std::result::Result<IndexSearchResult, IndexError> {
         // TODO: Implement bitset filtering for BinaryHNSW
-        // For now, fall back to regular search
         self.search(query, top_k)
     }
+*/
 
     fn save(&self, _path: &str) -> std::result::Result<(), IndexError> {
         Err(IndexError::Unsupported("save not implemented for BinaryHNSW".into()))
