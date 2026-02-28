@@ -30,6 +30,7 @@ impl IndexCodec {
             IndexType::IvfFlatCc => 9,
             IndexType::IvfSqCc => 10,
             IndexType::SparseInverted => 11,
+            IndexType::BinaryHnsw => 12,
         };
         writer.write_all(&idx_type.to_le_bytes())?;
         
@@ -38,6 +39,7 @@ impl IndexCodec {
             MetricType::L2 => 0,
             MetricType::Ip => 1,
             MetricType::Cosine => 2,
+            MetricType::Hamming => 3,
         };
         writer.write_all(&metric.to_le_bytes())?;
         

@@ -464,13 +464,13 @@ impl IndexWrapper {
             match idx.metric_type() {
                 MetricType::L2 => "L2",
                 MetricType::Ip => "IP",
-                MetricType::Cosine => "Cosine",
+                MetricType::Cosine | MetricType::Hamming => "Cosine", // Hamming fallback
             }
         } else if let Some(ref idx) = self.hnsw {
             match idx.metric_type() {
                 MetricType::L2 => "L2",
                 MetricType::Ip => "IP",
-                MetricType::Cosine => "Cosine",
+                MetricType::Cosine | MetricType::Hamming => "Cosine",
             }
         } else if let Some(ref idx) = self.scann {
             // ScaNN doesn't expose metric_type directly, assume L2

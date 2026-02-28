@@ -117,7 +117,7 @@ impl MemIndex {
                     let dist = match self.config.metric_type {
                         MetricType::L2 => l2_distance(query_vec, v),
                         MetricType::Ip => -inner_product(query_vec, v), // Negative because we want max
-                        MetricType::Cosine => -cosine_similarity(query_vec, v),
+                        MetricType::Cosine | MetricType::Hamming => -cosine_similarity(query_vec, v), // Hamming fallback
                         MetricType::Hamming => hamming_distance_binary(query_vec, v) as f32,
                     };
                     (self.ids[i], dist)
@@ -267,7 +267,7 @@ impl MemIndex {
                 let dist = match self.config.metric_type {
                     MetricType::L2 => l2_distance(query_vec, v),
                     MetricType::Ip => -inner_product(query_vec, v), // Negative because IP is max
-                    MetricType::Cosine => -cosine_similarity(query_vec, v),
+                    MetricType::Cosine | MetricType::Hamming => -cosine_similarity(query_vec, v),
                 };
 
                 // For L2: dist <= radius; for IP/Cosine: -dist >= radius (since we negated)
@@ -339,7 +339,7 @@ impl MemIndex {
                     let dist = match self.config.metric_type {
                         MetricType::L2 => l2_distance(query_vec, v),
                         MetricType::Ip => -inner_product(query_vec, v),
-                        MetricType::Cosine => -cosine_similarity(query_vec, v),
+                        MetricType::Cosine | MetricType::Hamming => -cosine_similarity(query_vec, v),
                     };
                     Some((self.ids[i], dist))
                 })
@@ -399,7 +399,7 @@ impl MemIndex {
                 let dist = match self.config.metric_type {
                     MetricType::L2 => l2_distance(query_vec, v),
                     MetricType::Ip => -inner_product(query_vec, v),
-                    MetricType::Cosine => -cosine_similarity(query_vec, v),
+                    MetricType::Cosine | MetricType::Hamming => -cosine_similarity(query_vec, v),
                 };
 
                 let within_radius = if self.config.metric_type == MetricType::L2 {

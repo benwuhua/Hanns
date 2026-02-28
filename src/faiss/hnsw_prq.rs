@@ -237,6 +237,13 @@ impl HnswPrqIndex {
                     .map(|(x, y)| x * y)
                     .sum::<f32>()
             }
+            MetricType::Hamming | MetricType::Cosine => {
+                // Fallback to L2 for unsupported metrics
+                a.iter()
+                    .zip(b.iter())
+                    .map(|(x, y)| (x - y).powi(2))
+                    .sum::<f32>()
+            }
             MetricType::Cosine => {
                 let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
                 let norm_a: f32 = a.iter().map(|x| x.powi(2)).sum::<f32>().sqrt();
