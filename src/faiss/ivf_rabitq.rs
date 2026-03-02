@@ -41,11 +41,19 @@ impl IvfRaBitqConfig {
     }
 }
 
+/// IVF-RaBitQ 索引条目
+/// 存储：(id, binary_code, centroid_dist, inner_product, sum_xb)
+/// - binary_code: 二进制编码
+/// - centroid_dist: ||or - c|| (残差的 L2 范数)
+/// - inner_product: dp_multiplier 校正因子
+/// - sum_xb: 二进制位之和（C++ FactorsData.sum_xb）
+pub type IvfRaBitqEntry = (i64, Vec<u8>, f32, f32, f32);
+
 /// IVF-RaBitQ 索引
 pub struct IvfRaBitqIndex {
     config: IvfRaBitqConfig,
     centroids: Vec<f32>,
-    inverted_lists: Arc<RwLock<HashMap<usize, Vec<(i64, Vec<u8>)>>>>,
+    inverted_lists: Arc<RwLock<HashMap<usize, Vec<IvfRaBitqEntry>>>>,
     encoder: RaBitQEncoder,
     trained: bool,
     ntotal: usize,
@@ -110,15 +118,15 @@ impl IvfRaBitqIndex {
             // 找到最近的质心
             let cluster = self.find_nearest_centroid(vector);
             
-            // 使用质心进行残差编码
+            // 使用质心进行残差编码 (返回 code, centroid_dist, ip)
             let centroid = &self.centroids[cluster * self.config.dim..(cluster + 1) * self.config.dim];
-            let code = self.encoder.encode_with_centroid(vector, centroid);
+            let (code, centroid_dist, ip, sum_xb) = self.encoder.encode_with_centroid(vector, centroid);
             
             let id = ids.map(|ids| ids[i]).unwrap_or((self.ntotal + i) as i64);
             
             lists.entry(cluster)
                 .or_insert_with(Vec::new)
-                .push((id, code));
+                .push((id, code, centroid_dist, ip, sum_xb));
         }
         
         self.ntotal += n;
@@ -176,21 +184,52 @@ impl IvfRaBitqIndex {
         
         let lists = self.inverted_lists.read();
         
+        let use_q8 = self.encoder.qb == 8;
+
         for &cluster in &clusters {
             if let Some(list) = lists.get(&cluster) {
                 let centroid = &self.centroids[cluster * self.config.dim..(cluster + 1) * self.config.dim];
-                let distance_table = self.encoder.build_distance_table_with_centroid(query, centroid);
-                
-                for &(id, ref code) in list {
-                    // 应用过滤器
-                    if let Some(f) = filter {
-                        if !f.evaluate(id) {
-                            continue;
+
+                if use_q8 {
+                    // qb=8 模式：量化查询到 8-bit
+                    let qq = self.encoder.build_distance_table_q8_with_centroid(query, centroid);
+
+                    for &(id, ref code, data_centroid_dist, data_ip, data_sum_xb) in list {
+                        if let Some(f) = filter {
+                            if !f.evaluate(id) {
+                                continue;
+                            }
                         }
+                        let dist = self.encoder.compute_distance_q8(
+                            &qq,
+                            code,
+                            data_centroid_dist,
+                            data_ip,
+                            data_sum_xb,
+                        );
+                        candidates.push((id, dist));
                     }
-                    
-                    let dist = self.encoder.compute_distance(&distance_table, code);
-                    candidates.push((id, dist));
+                } else {
+                    // qb=0 模式：不量化查询
+                    let (query_rotated, _, query_residual_norm, _) =
+                        self.encoder.build_distance_table_with_centroid(query, centroid);
+
+                    for &(id, ref code, data_centroid_dist, data_ip, data_sum_xb) in list {
+                        if let Some(f) = filter {
+                            if !f.evaluate(id) {
+                                continue;
+                            }
+                        }
+                        let dist = self.encoder.compute_distance(
+                            &query_rotated,
+                            query_residual_norm,
+                            code,
+                            data_centroid_dist,
+                            data_ip,
+                            data_sum_xb,
+                        );
+                        candidates.push((id, dist));
+                    }
                 }
             }
         }
@@ -258,13 +297,17 @@ impl IvfRaBitqIndex {
         
         let lists = self.inverted_lists.read();
         let codes_size: usize = lists.values()
-            .flat_map(|list| list.iter().map(|(_, code)| code.len()))
+            .flat_map(|list| list.iter().map(|(_, code, _, _, _)| code.len()))
             .sum();
         let ids_size: usize = lists.values()
             .flat_map(|list| list.iter().map(|_| std::mem::size_of::<i64>()))
             .sum();
+        // 校正因子：每个向量 2 个 f32
+        let factors_size: usize = lists.values()
+            .flat_map(|list| list.iter().map(|_| 2 * std::mem::size_of::<f32>()))
+            .sum();
         
-        encoder_size + centroids_size + codes_size + ids_size
+        encoder_size + centroids_size + codes_size + ids_size + factors_size
     }
     
     /// 保存索引
@@ -294,14 +337,10 @@ impl IvfRaBitqIndex {
                 ?;
         }
         
-        // 写入 encoder 码书
-        let codebook = self.encoder.codebook();
-        writer.write_all(&(codebook.len() as u32).to_le_bytes())
+        // RaBitQ 不再使用旋转矩阵（与 C++ Faiss 对齐）
+        // 写入 0 表示没有旋转矩阵
+        writer.write_all(&0u32.to_le_bytes())
             ?;
-        for &c in codebook {
-            writer.write_all(&c.to_le_bytes())
-                ?;
-        }
         
         // 写入倒排列表
         let lists = self.inverted_lists.read();
@@ -312,12 +351,16 @@ impl IvfRaBitqIndex {
                 ?;
             writer.write_all(&(list.len() as u32).to_le_bytes())
                 ?;
-            for (id, code) in list {
+            for (id, code, centroid_dist, ip, sum_xb) in list {
                 writer.write_all(&id.to_le_bytes())
                     ?;
                 writer.write_all(&(code.len() as u32).to_le_bytes())
                     ?;
                 writer.write_all(code)
+                    ?;
+                writer.write_all(&centroid_dist.to_le_bytes())
+                    ?;
+                writer.write_all(&ip.to_le_bytes())
                     ?;
             }
         }
@@ -371,23 +414,27 @@ impl IvfRaBitqIndex {
             *c = f32::from_le_bytes(buf4);
         }
         
-        // 读取 encoder 码书
+        // 读取 encoder 旋转矩阵长度（兼容旧格式）
         reader.read_exact(&mut buf4)
             ?;
-        let codebook_len = u32::from_le_bytes(buf4) as usize;
-        let mut codebook = vec![0.0f32; codebook_len];
-        for c in &mut codebook {
-            reader.read_exact(&mut buf4)
-                ?;
-            *c = f32::from_le_bytes(buf4);
+        let rotation_len = u32::from_le_bytes(buf4) as usize;
+        
+        // 跳过旋转矩阵数据（如果有）
+        if rotation_len > 0 {
+            let mut _rotation_matrix = vec![0.0f32; rotation_len];
+            for c in &mut _rotation_matrix {
+                reader.read_exact(&mut buf4)
+                    ?;
+                *c = f32::from_le_bytes(buf4);
+            }
         }
         
-        // 创建 encoder
+        // 创建 encoder（无需旋转矩阵，直接标记为已训练）
         let mut encoder = RaBitQEncoder::new(dim);
-        encoder.set_codebook(codebook);
+        encoder.train(&[]); // RaBitQ 无需训练数据
         
         // 读取倒排列表
-        let mut inverted_lists: HashMap<usize, Vec<(i64, Vec<u8>)>> = HashMap::new();
+        let mut inverted_lists: HashMap<usize, Vec<IvfRaBitqEntry>> = HashMap::new();
         
         reader.read_exact(&mut buf4)
             ?;
@@ -417,7 +464,18 @@ impl IvfRaBitqIndex {
                 reader.read_exact(&mut code)
                     ?;
                 
-                list.push((id, code));
+                reader.read_exact(&mut buf4)
+                    ?;
+                let centroid_dist = f32::from_le_bytes(buf4);
+                
+                reader.read_exact(&mut buf4)
+                    ?;
+                let ip = f32::from_le_bytes(buf4);
+                
+                // 计算二进制位之和（向后兼容：从 code 中计算）
+                let sum_xb = code.iter().map(|b| b.count_ones() as f32).sum();
+                
+                list.push((id, code, centroid_dist, ip, sum_xb));
             }
             
             inverted_lists.insert(cluster, list);
