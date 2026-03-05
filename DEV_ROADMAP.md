@@ -1,60 +1,66 @@
-# knowhere-rs 开发生与审查报告 [21:04: Wednesday, March 4th, 2026]
+# Knowhere-RS Development Roadmap (Non-GPU)
 
-## 状态诊断
+Last updated: 2026-03-05
 
-- **P0**: 0 待办 / P1: X 待办 | P2 待办
+## Goal
 
-**阶段升级**: 否（已完成)
-**P1**: 2 待办 / FEAT-013 待实现
+Deliver production-grade non-GPU parity with C++ knowhere while maintaining measurable performance advantage under valid recall constraints.
 
-**完成**: FEAT-012: Refine 重排功能 ✅ **已完成**
+## Phase Plan
 
-- 来源: C++ knowhere/src/index/refine (175 行)
-- 用途: 提升量化索引召回率
-- 功能:
-  - RefineType 枚举 (4 种类型):
-    - DataView (原始数据) / Float16 /FP16) / BF16
-  - RefineIndex 结构:
-    - 存储 refine 向向量(根据 Refine 类型)
-    - 提供 refine_distance() 方法
-    - 支持批量重排(batch refinement)
-  - pick_refine_index() 函数
-    - 支持 IVF-Rabitq 集两阶段搜索
+## Phase 1: Contract Closure (P0)
 
-- 验证: 5/5 测试通过， 改动: `src/quantization/refine.rs` (+513 行)
-  - 改动: `src/faiss/ivf_rabitq.rs` (+112 行)
-  - `src/lib.rs` (+2行)
-  - `src/quantization/mod.rs` (+2行)
-- - 测试: `tests/test_refine.rs` (+172行)
+Objective:
 
-  随后更新 TASK队列和文档。
+- Close lifecycle/interface contract gaps across core indexes and FFI.
 
-### 完成任务
-- **FEAT-012**: Refine 重排功能 ✅ **已完成**
-  - 来源: C++ knowhere/src/index/refine (175 行)
-    - 用途: 提升量化索引召回率
-    - 功能
-      - RefineType 枚举 (4 种类型)
-        - DataView (原始数据) / Float16/FP16) /BF16
-      - RefineIndex 结构
-        - 存储 refine 向向量(根据 Refine类型)
-        - 提供 refine_distance() 方法
-        - 支持批量重排(batch refinement)
-      - pick_refine_index()函数
-        - 根据配置选择 refine 类型
-        - 从原始数据构建 refine 存储
-    - 两阶段搜索:
-        - 粗排(量化索引返回候选集)
-        - 精排(refine 重排候选集)
-    - 验证: 5/5 测试通过
-    - 改动:
- `src/quantization/refine.rs` (+513 行)
-  - `src/faiss/ivf_rabitq.rs` (+112行)
-  - `src/lib.rs` (+2行)
-    - `src/quantization/mod.rs` (+2行)
-    - 测试: `tests/test_refine.rs` (+172 行)
+Milestones:
 
-  - 随后更新任务队列和文档
-- </param>
-</in_code>
-</template>
+1. Unified interface behavior for Build/Train/Add/Search/RangeSearch/AnnIterator/GetVectorByIds/Serialize/Deserialize.
+2. FFI capability matrix aligned with actual runtime behavior.
+3. Deterministic error handling for unsupported paths.
+
+Exit criteria:
+
+- No open P0 contract mismatch in `docs/PARITY_AUDIT.md`.
+
+## Phase 2: Behavioral Parity (P1)
+
+Objective:
+
+- Align non-GPU behavior with C++ semantics for HNSW/IVF/DiskANN/AISAQ/Sparse/MinHash.
+
+Milestones:
+
+1. HNSW advanced path parity (range/iterator/vector retrieval/serialization behavior).
+2. IVF and quantization path consistency (training/add/search edge cases).
+3. DiskANN/AISAQ lifecycle and configuration parity.
+4. Centralized legality matrix for index/datatype/metric combinations.
+
+Exit criteria:
+
+- No open P1 parity tasks in `TASK_QUEUE.md`.
+
+## Phase 3: Validation and Performance Hardening (P2)
+
+Objective:
+
+- Standardize benchmarks and guardrails for trusted performance reporting.
+
+Milestones:
+
+1. Ground-truth-backed benchmark templates.
+2. Recall-gated performance interpretation (R@10 policy).
+3. Expanded regression and stability coverage.
+
+Exit criteria:
+
+- Bench reports include recall credibility tags and reproducibility metadata.
+
+## Governance Rules
+
+- Task execution source: `TASK_QUEUE.md`
+- Parity source: `docs/PARITY_AUDIT.md`
+- Gap source: `GAP_ANALYSIS.md`
+
+Any claimed completion must update all three files coherently.
