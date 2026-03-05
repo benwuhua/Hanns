@@ -1250,6 +1250,29 @@ impl IndexWrapper {
             Err(CError::InvalidArg)
         }
     }
+
+    /// 创建 ANN 迭代器 (AnnIterator)
+    ///
+    /// 用于流式返回最近邻结果，支持更灵活的搜索控制。
+    /// 目前只支持实现了 Index trait 的索引（HNSW, ScaNN, HNSW-PQ）。
+    fn create_ann_iterator(
+        &self,
+        query: &crate::dataset::Dataset,
+        bitset: Option<&crate::bitset::BitsetView>,
+    ) -> Result<Box<dyn crate::index::AnnIterator>, CError> {
+        if let Some(ref idx) = self.hnsw {
+            idx.create_ann_iterator(query, bitset)
+                .map_err(|_| CError::NotImplemented)
+        } else if let Some(ref idx) = self.scann {
+            idx.create_ann_iterator(query, bitset)
+                .map_err(|_| CError::NotImplemented)
+        } else if let Some(ref idx) = self.hnsw_pq {
+            idx.create_ann_iterator(query, bitset)
+                .map_err(|_| CError::NotImplemented)
+        } else {
+            Err(CError::NotImplemented)
+        }
+    }
 }
 
 /// 创建索引
@@ -2123,6 +2146,170 @@ pub extern "C" fn knowhere_free_get_vector_result(result: *mut CGetVectorResult)
             }
             // 释放结果结构体本身
             let _ = Box::from_raw(result);
+        }
+    }
+}
+
+// ========== AnnIterator C API ==========
+
+/// ANN 迭代器句柄
+///
+/// 用于流式返回最近邻结果，支持更灵活的搜索控制。
+/// 对应 C++ knowhere 的 AnnIterator 接口。
+#[repr(C)]
+pub struct CAnnIterator {
+    /// 内部迭代器指针（类型擦除）
+    inner: *mut std::ffi::c_void,
+}
+
+/// 创建 ANN 迭代器
+///
+/// 用于流式返回最近邻结果，支持更灵活的搜索控制。
+///
+/// # Arguments
+/// * `index` - 索引指针 (由 knowhere_create_index 创建)
+/// * `query` - 查询向量数组 (n * dim)
+/// * `n` - 查询向量数量
+/// * `dim` - 向量维度
+/// * `bitset` - 可选的 Bitset 指针 (用于过滤向量，可为 NULL)
+///
+/// # Returns
+/// 返回 CAnnIterator 指针，失败返回 NULL
+///
+/// # Safety
+/// 调用者需确保：
+/// - index 指针有效
+/// - query 指向有效的内存，长度为 n * dim
+/// - 使用 knowhere_free_ann_iterator() 释放返回的迭代器
+///
+/// # Example
+/// ```c
+/// CIndex* index = knowhere_create_index(config);
+/// float query[] = { ... };  // 1 * 128 dim
+/// CAnnIterator* iter = knowhere_create_ann_iterator(index, query, 1, 128, NULL);
+///
+/// int64_t id;
+/// float dist;
+/// while (knowhere_ann_iterator_next(iter, &id, &dist)) {
+///     printf("id=%ld, dist=%f\n", id, dist);
+/// }
+///
+/// knowhere_free_ann_iterator(iter);
+/// ```
+#[no_mangle]
+pub extern "C" fn knowhere_create_ann_iterator(
+    index: *const std::ffi::c_void,
+    query: *const f32,
+    n: usize,
+    dim: usize,
+    bitset: *const CBitset,
+) -> *mut CAnnIterator {
+    if index.is_null() || query.is_null() || n == 0 || dim == 0 {
+        return std::ptr::null_mut();
+    }
+
+    unsafe {
+        let index_wrapper = &*(index as *const IndexWrapper);
+
+        // 验证维度匹配
+        if index_wrapper.dim() != dim {
+            return std::ptr::null_mut();
+        }
+
+        let query_vec = std::slice::from_raw_parts(query, n * dim).to_vec();
+        let dataset = crate::dataset::Dataset::from_vectors(query_vec, dim);
+
+        // 准备 bitset（如果提供）
+        let bitset_ref = if bitset.is_null() {
+            None
+        } else {
+            Some(&*(bitset as *const crate::bitset::BitsetView))
+        };
+
+        // 尝试创建迭代器（目前只支持实现了 Index trait 的索引）
+        let iter_result = index_wrapper.create_ann_iterator(&dataset, bitset_ref);
+
+        match iter_result {
+            Ok(iter) => {
+                // 将迭代器装箱并转换为原始指针
+                let boxed = Box::new(iter);
+                let raw = Box::into_raw(boxed);
+
+                let result = CAnnIterator {
+                    inner: raw as *mut std::ffi::c_void,
+                };
+
+                Box::into_raw(Box::new(result))
+            }
+            Err(_) => std::ptr::null_mut(),
+        }
+    }
+}
+
+/// 获取下一个 ANN 结果
+///
+/// 从迭代器中获取下一个最近邻结果。
+///
+/// # Arguments
+/// * `iter` - CAnnIterator 指针 (由 knowhere_create_ann_iterator 创建)
+/// * `out_id` - 输出参数，用于存储返回的向量 ID
+/// * `out_distance` - 输出参数，用于存储返回的距离
+///
+/// # Returns
+/// 1 表示成功获取下一个结果，0 表示已到达末尾或出错
+///
+/// # Safety
+/// 调用者需确保 iter 指针有效，out_id 和 out_distance 指向有效的内存
+#[no_mangle]
+pub extern "C" fn knowhere_ann_iterator_next(
+    iter: *mut CAnnIterator,
+    out_id: *mut i64,
+    out_distance: *mut f32,
+) -> i32 {
+    if iter.is_null() || out_id.is_null() || out_distance.is_null() {
+        return 0;
+    }
+
+    unsafe {
+        let c_iter = &mut *iter;
+        if c_iter.inner.is_null() {
+            return 0;
+        }
+
+        // 将原始指针转换回 trait object
+        let iter_trait = &mut *(c_iter.inner as *mut Box<dyn crate::index::AnnIterator>);
+
+        match iter_trait.next() {
+            Some((id, dist)) => {
+                *out_id = id;
+                *out_distance = dist;
+                1
+            }
+            None => 0,
+        }
+    }
+}
+
+/// 释放 ANN 迭代器
+///
+/// 释放由 knowhere_create_ann_iterator 返回的 CAnnIterator 及其所有关联内存。
+///
+/// # Arguments
+/// * `iter` - CAnnIterator 指针 (由 knowhere_create_ann_iterator 返回)
+///
+/// # Safety
+/// 调用后 iter 指针不再有效，不应再被使用
+#[no_mangle]
+pub extern "C" fn knowhere_free_ann_iterator(iter: *mut CAnnIterator) {
+    if !iter.is_null() {
+        unsafe {
+            let c_iter = &mut *iter;
+            if !c_iter.inner.is_null() {
+                // 释放内部迭代器
+                let _ = Box::from_raw(c_iter.inner as *mut Box<dyn crate::index::AnnIterator>);
+            }
+            // 释放 CAnnIterator 结构体
+            let _ = Box::from_raw(iter);
         }
     }
 }

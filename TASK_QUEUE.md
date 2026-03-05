@@ -1,5 +1,5 @@
 # Builder 任务队列
-> 最后更新: 2026-03-06 00:35 | 优先级: BUG > PARITY > OPT > BENCH
+> 最后更新: 2026-03-06 01:35 | 优先级: BUG > PARITY > OPT > BENCH
 
 ## 待办 (TODO)
 
@@ -8,8 +8,10 @@
 - [x] **BUG-P0-002**: 修复 `diskann_complete` 批量 add 路径维度切片错误 (2026-03-05)
 - [x] **BUG-P0-003**: 修复 `ivf_sq_cc` 系列并发/检索路径的维度不一致 (2026-03-05)
 - [ ] **PARITY-P0-001**: 统一核心索引契约行为（Build/Train/Add/Search/RangeSearch/AnnIterator/GetVectorByIds/Serialize/Deserialize）
+  - 进展: ✅ AnnIterator FFI 接口已实现 (2026-03-06 01:35)
   - 验收: 非 GPU 核心索引在契约层行为一致，`docs/PARITY_AUDIT.md` 的相关项变更为 Done。
-- [ ] **PARITY-P0-002**: 修复 FFI 能力声明与运行时不一致问题
+- [x] **PARITY-P0-002**: 修复 FFI 能力声明与运行时不一致问题 (2026-03-06)
+  - 进展: ✅ 添加 FFI AnnIterator 接口 (`knowhere_create_ann_iterator`/`knowhere_ann_iterator_next`/`knowhere_free_ann_iterator`)
   - 验收: `src/ffi.rs` 索引能力矩阵与实际构造/调用路径一致；无"声明支持但运行时 NotImplemented"错位。
 
 ### P1 (重要)
