@@ -1,9 +1,26 @@
 # Builder 任务队列
-> 最后更新: 2026-03-05 17:45 | 优先级: BUG > PARITY > OPT > BENCH
+> 最后更新: 2026-03-05 18:15 | 优先级: BUG > PARITY > OPT > BENCH
 
 ## 待办 (TODO)
 
 ### P0 (紧急)
+- [ ] **BUG-P0-001**: 修复 `mini_batch_kmeans` SIMD 长度不匹配导致的测试失败
+  - 失败用例: `clustering::mini_batch_kmeans::tests::test_mini_batch_kmeans_large_dataset`
+  - 现象: `src/simd.rs` 中 `l2_distance`/`l2_distance_sq` 长度断言触发
+  - 验收: 相关 mini-batch-kmeans 测试通过，且不引入其他聚类回归
+- [ ] **BUG-P0-002**: 修复 `diskann_complete` 批量 add 路径维度切片错误
+  - 失败用例: `faiss::diskann_complete::tests::test_diskann_add_batch`
+  - 现象: `src/simd.rs` 长度断言触发（8 vs 16）
+  - 验收: `diskann_complete` 全量单测通过
+- [ ] **BUG-P0-003**: 修复 `ivf_sq_cc` 系列并发/检索路径的维度不一致
+  - 失败用例:
+    - `faiss::ivf_sq_cc::tests::test_ivf_sq_cc_concurrent_add`
+    - `faiss::ivf_sq_cc::tests::test_ivf_sq_cc_concurrent_mixed`
+    - `faiss::ivf_sq_cc::tests::test_ivf_sq_cc_get_vectors`
+    - `faiss::ivf_sq_cc::tests::test_ivf_sq_cc_concurrent_search`
+    - `faiss::ivf_sq_cc::tests::test_ivf_sq_cc_train_add_search`
+  - 现象: `src/simd.rs` 长度断言触发（4 vs 8 等）
+  - 验收: `ivf_sq_cc` 相关测试全部通过，`cargo test --lib` 不新增失败
 - [ ] **PARITY-P0-001**: 统一核心索引契约行为（Build/Train/Add/Search/RangeSearch/AnnIterator/GetVectorByIds/Serialize/Deserialize）
   - 验收: 非 GPU 核心索引在契约层行为一致，`docs/PARITY_AUDIT.md` 的相关项变更为 Done。
 - [ ] **PARITY-P0-002**: 修复 FFI 能力声明与运行时不一致问题
