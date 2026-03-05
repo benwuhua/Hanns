@@ -1,9 +1,14 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-06 04:35
-Sync baseline: 988d2f7157a622d495fbfeee6408aba5ffeacab9 from origin/main
+Last updated: 2026-03-06 05:35
+Sync baseline: 5d73721 from origin/main
 
 ## 轮次记录
+- 2026-03-06 05:35: **IVF 系列架构缺口诊断** - 发现 IVF-SQ8/IVF-RaBitQ 未实现 Index trait，仅通过 FFI IndexWrapper enum dispatch 访问。这意味着：
+  1. IVF 系列无法通过统一 Index trait 调用高级接口（AnnIterator/get_vector_by_ids）
+  2. FFI 层需要为每种 IVF 类型重复实现调用逻辑
+  3. 参数校验和错误处理可能不一致
+  行动：将 PARITY-P1-002 升级为关键架构任务，需要为 IVF 系列实现 Index trait wrapper。
 - 2026-03-06 04:35: **HNSW 高级路径测试** - 创建 `tests/test_hnsw_advanced_paths.rs`，覆盖 get_vector_by_ids、AnnIterator、serialize/deserialize、range_search（Unsupported）。5 个测试全部通过。PARITY-P1-001 完成，HNSW 模块状态升级为 Partial → Done（高级路径）。
 - 2026-03-06 03:35: **核心契约一致性验证** - 验证所有索引对未实现方法的错误处理一致：Index trait 提供默认 Unsupported 实现；FFI 层 19 处 NotImplemented 返回；所有非 GPU 索引行为一致。核心契约状态从 Partial 升级为 Done（P0 降级）。
 - 2026-03-06 01:35: **实现 FFI AnnIterator 接口** - 添加 `knowhere_create_ann_iterator`/`knowhere_ann_iterator_next`/`knowhere_free_ann_iterator` 三个 FFI 函数，支持 HNSW/ScaNN/HNSW-PQ 索引

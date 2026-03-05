@@ -1,5 +1,5 @@
 # Builder 任务队列
-> 最后更新: 2026-03-06 04:35 | 优先级: BUG > PARITY > OPT > BENCH
+> 最后更新: 2026-03-06 05:35 | 优先级: BUG > PARITY > OPT > BENCH
 
 ## 待办 (TODO)
 
@@ -31,7 +31,16 @@
   - 测试: `tests/test_hnsw_advanced_paths.rs` - 5 个测试全部通过
   - 验收: ✅ 对齐 C++ 行为并补齐对应测试 (2026-03-06 04:35)
 - [ ] **PARITY-P1-002**: IVF 系列参数与边界行为对齐（含 IVFPQ/IVFSQ/RaBitQ）
-  - 验收: 参数校验、错误路径和搜索结果语义与审计表一致。
+  - **架构缺口** (2026-03-06 05:35):
+    - IVF-SQ8 (`src/faiss/ivf_sq8.rs`) 和 IVF-RaBitQ (`src/faiss/ivf_rabitq.rs`) 未实现 `Index` trait
+    - 仅通过 FFI `IndexWrapper` enum dispatch 访问，无法使用统一 Index trait 高级接口
+    - FFI 层需要为每种 IVF 类型重复实现调用逻辑
+  - **子任务**:
+    - [ ] 为 IvfSq8Index 实现 Index trait wrapper
+    - [ ] 为 IvfRaBitqIndex 实现 Index trait wrapper
+    - [ ] 统一 IVF 系列参数校验和错误路径
+    - [ ] 补充 IVF 系列高级接口测试（get_vector_by_ids/AnnIterator）
+  - 验收: 参数校验、错误路径和搜索结果语义与审计表一致；所有 IVF 索引实现 Index trait。
 - [ ] **PARITY-P1-003**: DiskANN/AISAQ 生命周期与参数语义对齐
   - 验收: 明确并实现与 C++一致或有文档化差异的行为；补充回归测试。
 - [ ] **PARITY-P1-004**: 建立 index × datatype × metric 合法性统一校验层
