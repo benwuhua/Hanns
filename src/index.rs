@@ -34,6 +34,23 @@ impl std::fmt::Display for IndexError {
 
 impl std::error::Error for IndexError {}
 
+/// ANN 迭代器 trait (AnnIterator)
+///
+/// 用于流式返回最近邻结果，支持更灵活的搜索控制。
+/// 类似于 C++ knowhere 中的 iterator 接口。
+pub trait AnnIterator {
+    /// 获取下一个结果
+    ///
+    /// # Returns
+    /// Some((id, distance)) 如果有下一个结果，None 如果已到达末尾
+    fn next(&mut self) -> Option<(i64, f32)>;
+
+    /// 获取当前缓冲区大小（如果有）
+    fn buffer_size(&self) -> usize {
+        0
+    }
+}
+
 /// 二进制索引 trait（用于二进制向量）
 ///
 /// BinaryIndex trait 专门用于二进制向量（每个 bit 是一个维度），
@@ -194,6 +211,26 @@ pub trait Index: Send + Sync {
     fn deserialize_from_memory(&mut self, _data: &[u8]) -> Result<(), IndexError> {
         Err(IndexError::Unsupported(
             "deserialize_from_memory not implemented".into(),
+        ))
+    }
+
+    /// 创建 ANN 迭代器 (AnnIterator)
+    ///
+    /// 用于流式返回最近邻结果，支持更灵活的搜索控制。
+    ///
+    /// # Arguments
+    /// * `query` - 查询向量
+    /// * `bitset` - 可选的 BitsetView，用于过滤向量
+    ///
+    /// # Returns
+    /// 返回 AnnIterator 实例，如果不支持则返回 Unsupported 错误
+    fn create_ann_iterator(
+        &self,
+        _query: &Dataset,
+        _bitset: Option<&crate::bitset::BitsetView>,
+    ) -> Result<Box<dyn AnnIterator>, IndexError> {
+        Err(IndexError::Unsupported(
+            "create_ann_iterator not implemented".into(),
         ))
     }
 

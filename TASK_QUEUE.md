@@ -1,5 +1,5 @@
 # Builder 任务队列
-> 最后更新: 2026-03-05 19:32 | 优先级: BUG > PARITY > OPT > BENCH
+> 最后更新: 2026-03-05 20:35 | 优先级: BUG > PARITY > OPT > BENCH
 
 ## 待办 (TODO)
 
@@ -14,22 +14,26 @@
   - 现象: `src/simd.rs` 长度断言触发（8 vs 16）
   - 修复: 在 `add_batch` 中修正切片长度为 dim
   - 验收: 所有 diskann_complete 测试通过 (5/5)
-- [ ] **BUG-P0-003**: 修复 `ivf_sq_cc` 系列并发/检索路径的维度不一致
+- [x] **BUG-P0-003**: 修复 `ivf_sq_cc` 系列并发/检索路径的维度不一致 (2026-03-05)
   - 失败用例:
     - `faiss::ivf_sq_cc::tests::test_ivf_sq_cc_concurrent_add` ✅ 已修复
     - `faiss::ivf_sq_cc::tests::test_ivf_sq_cc_concurrent_mixed` ✅ 已修复
     - `faiss::ivf_sq_cc::tests::test_ivf_sq_cc_get_vectors` ✅ 已修复
-    - `faiss::ivf_sq_cc::tests::test_ivf_sq_cc_concurrent_search` ⚠️ 预存问题（数据不足导致结果数量断言失败）
+    - `faiss::ivf_sq_cc::tests::test_ivf_sq_cc_concurrent_search` ✅ 已修复
     - `faiss::ivf_sq_cc::tests::test_ivf_sq_cc_train_add_search` ✅ 已修复
   - 现象: `src/simd.rs` 长度断言触发（4 vs 8 等）
   - 修复: 在 `find_nearest_cluster` 和 `search` 中修正 centroids 切片长度为 dim
-  - 验收: SIMD 相关测试全部通过 (5/6)，concurrent_search 有预存非 SIMD 问题需单独处理
+  - 验收: SIMD 相关测试全部通过 (6/6)
 - [ ] **PARITY-P0-001**: 统一核心索引契约行为（Build/Train/Add/Search/RangeSearch/AnnIterator/GetVectorByIds/Serialize/Deserialize）
   - 验收: 非 GPU 核心索引在契约层行为一致，`docs/PARITY_AUDIT.md` 的相关项变更为 Done。
 - [ ] **PARITY-P0-002**: 修复 FFI 能力声明与运行时不一致问题
   - 验收: `src/ffi.rs` 索引能力矩阵与实际构造/调用路径一致；无“声明支持但运行时 NotImplemented”错位。
 
 ### P1 (重要)
+- [ ] **PARITY-P1-000**: 为核心索引实现 AnnIterator 接口（HNSW/IVF/Flat）
+  - 在 `src/index.rs` 中已添加 AnnIterator trait 定义
+  - 需要在具体索引类型中实现 `create_ann_iterator` 方法
+  - 验收: 至少 3 个核心索引实现 AnnIterator，测试通过
 - [ ] **PARITY-P1-001**: HNSW 高级路径对齐（range/iterator/get-by-id/serialize 语义）
   - 验收: 对齐 C++ 行为并补齐对应测试。
 - [ ] **PARITY-P1-002**: IVF 系列参数与边界行为对齐（含 IVFPQ/IVFSQ/RaBitQ）
@@ -48,4 +52,6 @@
   - 验收: 报告包含差距、可信度和重验标记。
 
 ## 归档
+- [x] **DOCS-BASELINE-002**: 创建 FFI 能力矩阵文档 `docs/FFI_CAPABILITY_MATRIX.md` (2026-03-05)
+- [x] **PARITY-P0-003**: 添加 AnnIterator trait 定义到 `src/index.rs` (2026-03-05)
 - [x] **DOCS-BASELINE-001**: 重建 GAP/ROADMAP/TASK_QUEUE/PARITY_AUDIT 文档基线（2026-03-05）
