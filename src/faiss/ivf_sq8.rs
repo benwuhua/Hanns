@@ -6,8 +6,11 @@
 use std::collections::HashMap;
 
 use crate::api::{IndexConfig, Result, SearchRequest, SearchResult};
+use crate::dataset::Dataset;
 use crate::executor::l2_distance;
+use crate::index::{Index as IndexTrait, IndexError, AnnIterator, SearchResult as IndexSearchResult};
 use crate::quantization::ScalarQuantizer;
+use crate::bitset::BitsetView;
 
 /// IVF-SQ8 Index
 #[allow(dead_code)]
@@ -496,6 +499,216 @@ impl IvfSq8Index {
         file.write_all(&vec_bytes)?;
 
         Ok(())
+    }
+}
+
+/// Index trait implementation for IvfSq8Index
+///
+/// This wrapper enables IvfSq8Index to be used through the unified Index trait interface,
+/// allowing consistent access to advanced features (AnnIterator, get_vector_by_ids, etc.)
+/// across all index types.
+impl IndexTrait for IvfSq8Index {
+    fn index_type(&self) -> &str {
+        "IVF-SQ8"
+    }
+
+    fn dim(&self) -> usize {
+        self.dim
+    }
+
+    fn count(&self) -> usize {
+        self.ntotal()
+    }
+
+    fn is_trained(&self) -> bool {
+        self.trained
+    }
+
+    fn train(&mut self, dataset: &Dataset) -> std::result::Result<(), IndexError> {
+        let vectors = dataset.vectors();
+        self.train(vectors)
+            .map(|_| ())
+            .map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn add(&mut self, dataset: &Dataset) -> std::result::Result<usize, IndexError> {
+        let vectors = dataset.vectors();
+        let ids = dataset.ids();
+        self.add(vectors, ids)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn search(
+        &self,
+        query: &Dataset,
+        top_k: usize,
+    ) -> std::result::Result<IndexSearchResult, IndexError> {
+        let vectors = query.vectors();
+        let req = SearchRequest {
+            top_k,
+            nprobe: self.nprobe,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let api_result = self
+            .search(vectors, &req)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        Ok(IndexSearchResult::new(
+            api_result.ids,
+            api_result.distances,
+            api_result.elapsed_ms,
+        ))
+    }
+
+    fn search_with_bitset(
+        &self,
+        query: &Dataset,
+        top_k: usize,
+        bitset: &BitsetView,
+    ) -> std::result::Result<IndexSearchResult, IndexError> {
+        // IVF-SQ8 doesn't have native bitset support, use default implementation
+        let vectors = query.vectors();
+        let req = SearchRequest {
+            top_k,
+            nprobe: self.nprobe,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+
+        let api_result = self
+            .search(vectors, &req)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+
+        // Filter out bitset-marked vectors
+        let mut filtered_ids = Vec::new();
+        let mut filtered_distances = Vec::new();
+
+        for (id, dist) in api_result.ids.iter().zip(api_result.distances.iter()) {
+            let idx = *id as usize;
+            if idx >= bitset.len() || !bitset.get(idx) {
+                filtered_ids.push(*id);
+                filtered_distances.push(*dist);
+            }
+        }
+
+        Ok(IndexSearchResult::new(
+            filtered_ids,
+            filtered_distances,
+            api_result.elapsed_ms,
+        ))
+    }
+
+    fn save(&self, path: &str) -> std::result::Result<(), IndexError> {
+        let path = std::path::Path::new(path);
+        self.save(path)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn load(&mut self, _path: &str) -> std::result::Result<(), IndexError> {
+        // IVF-SQ8 uses save/load pair, but load is not implemented as instance method
+        // For now, return Unsupported
+        Err(IndexError::Unsupported(
+            "load not implemented for IVF-SQ8, use deserialize_from_memory".into(),
+        ))
+    }
+
+    fn has_raw_data(&self) -> bool {
+        true // IVF-SQ8 stores raw vectors
+    }
+
+    fn get_vector_by_ids(&self, ids: &[i64]) -> std::result::Result<Vec<f32>, IndexError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut result = Vec::with_capacity(ids.len() * self.dim);
+        for &id in ids {
+            // Find position in self.ids
+            let idx = self.ids.iter().position(|&x| x == id).ok_or_else(|| {
+                IndexError::Unsupported(format!("ID {} not found in index", id))
+            })?;
+
+            if idx >= self.ids.len() {
+                return Err(IndexError::Unsupported(format!(
+                    "ID {} out of range (max {})",
+                    id,
+                    self.ids.len()
+                )));
+            }
+
+            let start = idx * self.dim;
+            let end = start + self.dim;
+            if end > self.vectors.len() {
+                return Err(IndexError::Unsupported(format!(
+                    "Vector data corrupted for ID {}",
+                    id
+                )));
+            }
+            result.extend_from_slice(&self.vectors[start..end]);
+        }
+        Ok(result)
+    }
+
+    fn create_ann_iterator(
+        &self,
+        query: &Dataset,
+        _bitset: Option<&BitsetView>,
+    ) -> std::result::Result<Box<dyn AnnIterator>, IndexError> {
+        // IVF-SQ8 doesn't support native iterator, fallback to search
+        // Use a large top_k to get all potential results
+        let top_k = self.ids.len().max(1000);
+        let vectors = query.vectors();
+
+        let req = SearchRequest {
+            top_k,
+            nprobe: self.nprobe,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+
+        let api_result = self
+            .search(vectors, &req)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+
+        // Create simple iterator from search results
+        // Note: This is not a true streaming iterator, but provides compatibility
+        let results: Vec<(i64, f32)> = api_result
+            .ids
+            .into_iter()
+            .zip(api_result.distances.into_iter())
+            .collect();
+
+        Ok(Box::new(IvfSq8AnnIterator::new(results)))
+    }
+}
+
+/// Simple ANN iterator for IVF-SQ8 (fallback implementation)
+pub struct IvfSq8AnnIterator {
+    results: Vec<(i64, f32)>,
+    pos: usize,
+}
+
+impl IvfSq8AnnIterator {
+    pub fn new(results: Vec<(i64, f32)>) -> Self {
+        Self { results, pos: 0 }
+    }
+}
+
+impl AnnIterator for IvfSq8AnnIterator {
+    fn next(&mut self) -> Option<(i64, f32)> {
+        if self.pos >= self.results.len() {
+            return None;
+        }
+        let result = self.results[self.pos];
+        self.pos += 1;
+        Some(result)
+    }
+
+    fn buffer_size(&self) -> usize {
+        self.results.len() - self.pos
     }
 }
 

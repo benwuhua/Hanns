@@ -9,6 +9,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::api::{KnowhereError, MetricType, Result, SearchRequest, SearchResult};
+use crate::dataset::Dataset;
+use crate::index::{Index as IndexTrait, IndexError, AnnIterator, SearchResult as IndexSearchResult};
+use crate::bitset::BitsetView;
 use crate::quantization::{pick_refine_index, KMeans, RaBitQEncoder, RefineIndex, RefineType};
 
 /// IVF-RaBitQ 索引配置
@@ -587,6 +590,187 @@ impl IvfRaBitqIndex {
 
     pub fn config(&self) -> &IvfRaBitqConfig {
         &self.config
+    }
+}
+
+/// Index trait implementation for IvfRaBitqIndex
+///
+/// This wrapper enables IvfRaBitqIndex to be used through the unified Index trait interface,
+/// allowing consistent access to advanced features (AnnIterator, get_vector_by_ids, etc.)
+/// across all index types.
+impl IndexTrait for IvfRaBitqIndex {
+    fn index_type(&self) -> &str {
+        "IVF-RaBitQ"
+    }
+
+    fn dim(&self) -> usize {
+        self.config.dim
+    }
+
+    fn count(&self) -> usize {
+        self.ntotal
+    }
+
+    fn is_trained(&self) -> bool {
+        self.trained
+    }
+
+    fn train(&mut self, dataset: &Dataset) -> std::result::Result<(), IndexError> {
+        let vectors = dataset.vectors();
+        self.train(vectors)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn add(&mut self, dataset: &Dataset) -> std::result::Result<usize, IndexError> {
+        let vectors = dataset.vectors();
+        let ids = dataset.ids();
+        self.add(vectors, ids)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn search(
+        &self,
+        query: &Dataset,
+        top_k: usize,
+    ) -> std::result::Result<IndexSearchResult, IndexError> {
+        let vectors = query.vectors();
+        let req = SearchRequest {
+            top_k,
+            nprobe: self.config.nprobe,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let api_result = self
+            .search(vectors, &req)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        Ok(IndexSearchResult::new(
+            api_result.ids,
+            api_result.distances,
+            api_result.elapsed_ms,
+        ))
+    }
+
+    fn search_with_bitset(
+        &self,
+        query: &Dataset,
+        top_k: usize,
+        bitset: &BitsetView,
+    ) -> std::result::Result<IndexSearchResult, IndexError> {
+        // IVF-RaBitQ doesn't have native bitset support, use default implementation
+        let vectors = query.vectors();
+        let req = SearchRequest {
+            top_k,
+            nprobe: self.config.nprobe,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+
+        let api_result = self
+            .search(vectors, &req)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+
+        // Filter out bitset-marked vectors
+        let mut filtered_ids = Vec::new();
+        let mut filtered_distances = Vec::new();
+
+        for (id, dist) in api_result.ids.iter().zip(api_result.distances.iter()) {
+            let idx = *id as usize;
+            if idx >= bitset.len() || !bitset.get(idx) {
+                filtered_ids.push(*id);
+                filtered_distances.push(*dist);
+            }
+        }
+
+        Ok(IndexSearchResult::new(
+            filtered_ids,
+            filtered_distances,
+            api_result.elapsed_ms,
+        ))
+    }
+
+    fn save(&self, path: &str) -> std::result::Result<(), IndexError> {
+        let path = std::path::Path::new(path);
+        self.save(path)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn load(&mut self, path: &str) -> std::result::Result<(), IndexError> {
+        let path = std::path::Path::new(path);
+        let loaded = Self::load(path)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        *self = loaded;
+        Ok(())
+    }
+
+    fn has_raw_data(&self) -> bool {
+        self.has_raw_data()
+    }
+
+    fn get_vector_by_ids(&self, _ids: &[i64]) -> std::result::Result<Vec<f32>, IndexError> {
+        // RaBitQ is a lossy compression, doesn't store raw vectors
+        Err(IndexError::Unsupported(
+            "get_vector_by_ids not supported for RaBitQ (lossy compression)".into(),
+        ))
+    }
+
+    fn create_ann_iterator(
+        &self,
+        query: &Dataset,
+        _bitset: Option<&BitsetView>,
+    ) -> std::result::Result<Box<dyn AnnIterator>, IndexError> {
+        // IVF-RaBitQ doesn't support native iterator, fallback to search
+        let top_k = self.ntotal.max(1000);
+        let vectors = query.vectors();
+
+        let req = SearchRequest {
+            top_k,
+            nprobe: self.config.nprobe,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+
+        let api_result = self
+            .search(vectors, &req)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+
+        // Create simple iterator from search results
+        let results: Vec<(i64, f32)> = api_result
+            .ids
+            .into_iter()
+            .zip(api_result.distances.into_iter())
+            .collect();
+
+        Ok(Box::new(IvfRaBitqAnnIterator::new(results)))
+    }
+}
+
+/// Simple ANN iterator for IVF-RaBitQ (fallback implementation)
+pub struct IvfRaBitqAnnIterator {
+    results: Vec<(i64, f32)>,
+    pos: usize,
+}
+
+impl IvfRaBitqAnnIterator {
+    pub fn new(results: Vec<(i64, f32)>) -> Self {
+        Self { results, pos: 0 }
+    }
+}
+
+impl AnnIterator for IvfRaBitqAnnIterator {
+    fn next(&mut self) -> Option<(i64, f32)> {
+        if self.pos >= self.results.len() {
+            return None;
+        }
+        let result = self.results[self.pos];
+        self.pos += 1;
+        Some(result)
+    }
+
+    fn buffer_size(&self) -> usize {
+        self.results.len() - self.pos
     }
 }
 

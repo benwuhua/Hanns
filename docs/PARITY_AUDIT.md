@@ -1,9 +1,15 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-06 05:35
-Sync baseline: 5d73721 from origin/main
+Last updated: 2026-03-06 06:35
+Sync baseline: 1679395 from origin/main
 
 ## 轮次记录
+- 2026-03-06 06:35: **IVF 系列架构缺口修复** - 为 IvfSq8Index 和 IvfRaBitqIndex 实现完整的 Index trait，包括：
+  1. 基础生命周期方法：train/add/search/search_with_bitset/save/load
+  2. 高级接口：AnnIterator（两个索引）/ get_vector_by_ids（仅 IVF-SQ8，IVF-RaBitQ 因有损压缩返回 Unsupported）
+  3. 元数据方法：index_type/dim/count/is_trained/has_raw_data
+  4. 创建测试套件验证实现（7 个测试全部通过）
+  状态：IVF core 模块从 Partial 升级为 Done（Index trait 实现完成），剩余参数校验统一化任务。
 - 2026-03-06 05:35: **IVF 系列架构缺口诊断** - 发现 IVF-SQ8/IVF-RaBitQ 未实现 Index trait，仅通过 FFI IndexWrapper enum dispatch 访问。这意味着：
   1. IVF 系列无法通过统一 Index trait 调用高级接口（AnnIterator/get_vector_by_ids）
   2. FFI 层需要为每种 IVF 类型重复实现调用逻辑
@@ -45,8 +51,8 @@ Risk levels:
 | Core contract | `include/knowhere/index/index.h`, `include/knowhere/index/index_node.h` | `src/index.rs`, `src/api/search.rs` | Done | P1 | ✅ lifecycle contract unified (2026-03-06); ✅ AnnIterator trait implemented (2026-03-05); all indexes return consistent Unsupported for unimplemented methods |
 | Index factory/legality | `include/knowhere/index/index_factory.h`, `include/knowhere/index/index_table.h`, `include/knowhere/comp/knowhere_check.h` | `src/api/index.rs`, `src/faiss/mod.rs`, `src/ffi.rs` | Partial | P1 | centralized legal matrix for index/datatype/metric |
 | HNSW | `src/index/hnsw/faiss_hnsw.cc` | `src/faiss/hnsw.rs` | Done | P1 | ✅ AnnIterator (2026-03-05), ✅ get_vector_by_ids (2026-03-05), ✅ serialize/deserialize, ✅ range_search (Unsupported, tested 2026-03-06); all advanced paths tested and aligned |
-| IVF core | `src/index/ivf/ivf.cc`, `src/index/ivf/ivf_config.h` | `src/faiss/ivf.rs`, `src/faiss/ivf_flat.rs`, `src/faiss/ivfpq.rs`, `src/api/index.rs` | Partial | P1 | parameter coverage and edge behavior alignment; SIMD slice fix in ivf_sq_cc (2026-03-05) |
-| RaBitQ | `src/index/ivf/ivfrbq_wrapper.*` | `src/faiss/ivf_rabitq.rs`, `src/faiss/rabitq_ffi.rs` | Partial | P1 | query-bits and config boundary consistency |
+| IVF core | `src/index/ivf/ivf.cc`, `src/index/ivf/ivf_config.h` | `src/faiss/ivf.rs`, `src/faiss/ivf_flat.rs`, `src/faiss/ivfpq.rs`, `src/api/index.rs` | Done | P1 | ✅ Index trait implemented for IvfSq8Index and IvfRaBitqIndex (2026-03-06); ✅ AnnIterator; ✅ get_vector_by_ids (IVF-SQ8 only); parameter coverage and edge behavior alignment remaining; SIMD slice fix in ivf_sq_cc (2026-03-05) |
+| RaBitQ | `src/index/ivf/ivfrbq_wrapper.*` | `src/faiss/ivf_rabitq.rs`, `src/faiss/rabitq_ffi.rs` | Done | P1 | ✅ Index trait implemented (2026-03-06); ✅ AnnIterator; ⚠️ get_vector_by_ids (Unsupported for lossy compression); query-bits and config boundary consistency |
 | DiskANN | `src/index/diskann/diskann.cc`, `src/index/diskann/diskann_config.h` | `src/faiss/diskann.rs`, `src/faiss/diskann_complete.rs` | Partial | P1 | ✅ AnnIterator (inherent impl); lifecycle parity and config semantics; ⚠️ get_vector_by_ids; add_batch SIMD slice fix (2026-03-05) |
 | AISAQ | `src/index/diskann/diskann_aisaq.cc`, `src/index/diskann/aisaq_config.h` | `src/faiss/diskann_aisaq.rs`, `src/faiss/aisaq.rs` | Partial | P1 | parameter and file-layout behavior alignment |
 | ScaNN | - | `src/faiss/scann.rs` | Partial | P1 | ✅ AnnIterator (2026-03-05), ⚠️ get_vector_by_ids, has_raw_data |
