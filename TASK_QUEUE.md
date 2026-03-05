@@ -1,5 +1,5 @@
 # Builder 任务队列
-> 最后更新: 2026-03-06 03:35 | 优先级: BUG > PARITY > OPT > BENCH
+> 最后更新: 2026-03-06 04:35 | 优先级: BUG > PARITY > OPT > BENCH
 
 ## 待办 (TODO)
 
@@ -22,9 +22,14 @@
     - ✅ HNSW-PQ: `src/faiss/hnsw_pq.rs:719-757` - HnswPqAnnIterator
     - ✅ DiskANN: 已有实现 `src/faiss/diskann.rs:961-1000` - DiskAnnIterator
   - 验收标准: 至少 3 个核心索引实现 AnnIterator ✅ (实际 4 个)
-- [ ] **PARITY-P1-001**: HNSW 高级路径对齐（range/iterator/get-by-id/serialize 语义）
-  - 进展: ✅ get_vector_by_ids 实现 (hnsw.rs:2402-2431)
-  - 验收: 对齐 C++ 行为并补齐对应测试。
+- [x] **PARITY-P1-001**: HNSW 高级路径对齐（range/iterator/get-by-id/serialize 语义）
+  - 进展:
+    - ✅ get_vector_by_ids 实现 (hnsw.rs:2402-2431)
+    - ✅ AnnIterator 实现 (hnsw.rs:2470-2502)
+    - ✅ serialize/deserialize (save/load) 已有实现
+    - ✅ range_search 默认返回 Unsupported
+  - 测试: `tests/test_hnsw_advanced_paths.rs` - 5 个测试全部通过
+  - 验收: ✅ 对齐 C++ 行为并补齐对应测试 (2026-03-06 04:35)
 - [ ] **PARITY-P1-002**: IVF 系列参数与边界行为对齐（含 IVFPQ/IVFSQ/RaBitQ）
   - 验收: 参数校验、错误路径和搜索结果语义与审计表一致。
 - [ ] **PARITY-P1-003**: DiskANN/AISAQ 生命周期与参数语义对齐

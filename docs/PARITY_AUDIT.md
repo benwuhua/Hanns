@@ -1,9 +1,10 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-06 03:35
-Sync baseline: 54b69c17fbc4d3c38ed8ba7d70248399a91e102b from origin/main
+Last updated: 2026-03-06 04:35
+Sync baseline: 988d2f7157a622d495fbfeee6408aba5ffeacab9 from origin/main
 
 ## 轮次记录
+- 2026-03-06 04:35: **HNSW 高级路径测试** - 创建 `tests/test_hnsw_advanced_paths.rs`，覆盖 get_vector_by_ids、AnnIterator、serialize/deserialize、range_search（Unsupported）。5 个测试全部通过。PARITY-P1-001 完成，HNSW 模块状态升级为 Partial → Done（高级路径）。
 - 2026-03-06 03:35: **核心契约一致性验证** - 验证所有索引对未实现方法的错误处理一致：Index trait 提供默认 Unsupported 实现；FFI 层 19 处 NotImplemented 返回；所有非 GPU 索引行为一致。核心契约状态从 Partial 升级为 Done（P0 降级）。
 - 2026-03-06 01:35: **实现 FFI AnnIterator 接口** - 添加 `knowhere_create_ann_iterator`/`knowhere_ann_iterator_next`/`knowhere_free_ann_iterator` 三个 FFI 函数，支持 HNSW/ScaNN/HNSW-PQ 索引
 - 2026-03-06 00:35: **更新 FFI 能力矩阵** - 标记 HNSW/ScaNN/HNSW-PQ/DiskANN 的 AnnIterator 为 ✅；HNSW GetByID ✅；ScaNN GetByID ⚠️；DiskANN GetByID ⚠️
@@ -38,7 +39,7 @@ Risk levels:
 |---|---|---|---|---|---|
 | Core contract | `include/knowhere/index/index.h`, `include/knowhere/index/index_node.h` | `src/index.rs`, `src/api/search.rs` | Done | P1 | ✅ lifecycle contract unified (2026-03-06); ✅ AnnIterator trait implemented (2026-03-05); all indexes return consistent Unsupported for unimplemented methods |
 | Index factory/legality | `include/knowhere/index/index_factory.h`, `include/knowhere/index/index_table.h`, `include/knowhere/comp/knowhere_check.h` | `src/api/index.rs`, `src/faiss/mod.rs`, `src/ffi.rs` | Partial | P1 | centralized legal matrix for index/datatype/metric |
-| HNSW | `src/index/hnsw/faiss_hnsw.cc` | `src/faiss/hnsw.rs` | Partial | P1 | ✅ AnnIterator (2026-03-05), ✅ get_vector_by_ids (2026-03-05); range search parity remaining |
+| HNSW | `src/index/hnsw/faiss_hnsw.cc` | `src/faiss/hnsw.rs` | Done | P1 | ✅ AnnIterator (2026-03-05), ✅ get_vector_by_ids (2026-03-05), ✅ serialize/deserialize, ✅ range_search (Unsupported, tested 2026-03-06); all advanced paths tested and aligned |
 | IVF core | `src/index/ivf/ivf.cc`, `src/index/ivf/ivf_config.h` | `src/faiss/ivf.rs`, `src/faiss/ivf_flat.rs`, `src/faiss/ivfpq.rs`, `src/api/index.rs` | Partial | P1 | parameter coverage and edge behavior alignment; SIMD slice fix in ivf_sq_cc (2026-03-05) |
 | RaBitQ | `src/index/ivf/ivfrbq_wrapper.*` | `src/faiss/ivf_rabitq.rs`, `src/faiss/rabitq_ffi.rs` | Partial | P1 | query-bits and config boundary consistency |
 | DiskANN | `src/index/diskann/diskann.cc`, `src/index/diskann/diskann_config.h` | `src/faiss/diskann.rs`, `src/faiss/diskann_complete.rs` | Partial | P1 | ✅ AnnIterator (inherent impl); lifecycle parity and config semantics; ⚠️ get_vector_by_ids; add_batch SIMD slice fix (2026-03-05) |
