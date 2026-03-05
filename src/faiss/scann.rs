@@ -1000,6 +1000,54 @@ impl crate::index::Index for ScaNNIndex {
     fn has_raw_data(&self) -> bool {
         self.has_raw_data()
     }
+
+    /// Create ANN iterator for streaming search results (PARITY-P1-000)
+    fn create_ann_iterator(
+        &self,
+        query: &crate::dataset::Dataset,
+        bitset: Option<&crate::bitset::BitsetView>,
+    ) -> Result<Box<dyn crate::index::AnnIterator>, crate::index::IndexError> {
+        let vectors = query.vectors();
+        let top_k = self.count().max(1000);
+
+        let results = if let Some(bs) = bitset {
+            self.search_with_bitset(vectors, top_k, bs)
+        } else {
+            self.search(vectors, top_k)
+        };
+
+        // Convert to iterator format: Vec<(id, distance)>
+        let iter_results: Vec<(i64, f32)> = results.into_iter().collect();
+
+        Ok(Box::new(ScannAnnIterator::new(iter_results)))
+    }
+}
+
+/// ScaNN ANN Iterator implementation (PARITY-P1-000)
+pub struct ScannAnnIterator {
+    results: Vec<(i64, f32)>,
+    pos: usize,
+}
+
+impl ScannAnnIterator {
+    pub fn new(results: Vec<(i64, f32)>) -> Self {
+        Self { results, pos: 0 }
+    }
+}
+
+impl crate::index::AnnIterator for ScannAnnIterator {
+    fn next(&mut self) -> Option<(i64, f32)> {
+        if self.pos >= self.results.len() {
+            return None;
+        }
+        let result = self.results[self.pos];
+        self.pos += 1;
+        Some(result)
+    }
+
+    fn buffer_size(&self) -> usize {
+        self.results.len() - self.pos
+    }
 }
 
 #[cfg(test)]

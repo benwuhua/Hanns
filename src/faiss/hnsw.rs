@@ -2420,6 +2420,115 @@ impl IndexTrait for HnswIndex {
     fn has_raw_data(&self) -> bool {
         true
     }
+
+    /// Get vectors by IDs (PARITY-P1-000: AnnIterator contract)
+    ///
+    /// Returns the raw vectors for the given IDs.
+    /// Returns flatten vector data: [vec0_dim0, vec0_dim1, ..., vec1_dim0, vec1_dim1, ...]
+    fn get_vector_by_ids(&self, ids: &[i64]) -> std::result::Result<Vec<f32>, IndexError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut result = Vec::with_capacity(ids.len() * self.dim);
+        for &id in ids {
+            // For sequential IDs, idx == id
+            // For custom IDs, find position in self.ids
+            let idx = if self.use_sequential_ids {
+                id as usize
+            } else {
+                self.ids.iter().position(|&x| x == id).ok_or_else(|| {
+                    IndexError::Unsupported(format!("ID {} not found in index", id))
+                })?
+            };
+
+            if idx >= self.ids.len() {
+                return Err(IndexError::Unsupported(format!(
+                    "ID {} out of range (max {})",
+                    id,
+                    self.ids.len()
+                )));
+            }
+
+            let start = idx * self.dim;
+            let end = start + self.dim;
+            if end > self.vectors.len() {
+                return Err(IndexError::Unsupported(format!(
+                    "Vector data corrupted for ID {}",
+                    id
+                )));
+            }
+            result.extend_from_slice(&self.vectors[start..end]);
+        }
+        Ok(result)
+    }
+
+    /// Create ANN iterator for streaming search results (PARITY-P1-000)
+    ///
+    /// Creates an iterator that streams search results one at a time.
+    /// Internally performs a search and returns results via the iterator.
+    fn create_ann_iterator(
+        &self,
+        query: &Dataset,
+        bitset: Option<&BitsetView>,
+    ) -> std::result::Result<Box<dyn crate::index::AnnIterator>, IndexError> {
+        // Use a large top_k to get all potential results
+        let top_k = self.ids.len().max(1000);
+        let vectors = query.vectors();
+
+        let req = SearchRequest {
+            top_k,
+            nprobe: 10,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+
+        let api_result = if let Some(bs) = bitset {
+            self.search_with_bitset(vectors, &req, bs)
+        } else {
+            self.search(vectors, &req)
+        }
+        .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+
+        // Convert to iterator format: Vec<(id, distance)>
+        let results: Vec<(i64, f32)> = api_result
+            .ids
+            .into_iter()
+            .zip(api_result.distances.into_iter())
+            .collect();
+
+        Ok(Box::new(HnswAnnIterator::new(results)))
+    }
+}
+
+/// HNSW ANN Iterator implementation
+///
+/// Provides streaming access to HNSW search results.
+pub struct HnswAnnIterator {
+    results: Vec<(i64, f32)>,
+    pos: usize,
+}
+
+impl HnswAnnIterator {
+    pub fn new(results: Vec<(i64, f32)>) -> Self {
+        Self { results, pos: 0 }
+    }
+}
+
+impl crate::index::AnnIterator for HnswAnnIterator {
+    fn next(&mut self) -> Option<(i64, f32)> {
+        if self.pos >= self.results.len() {
+            return None;
+        }
+        let result = self.results[self.pos];
+        self.pos += 1;
+        Some(result)
+    }
+
+    fn buffer_size(&self) -> usize {
+        self.results.len() - self.pos
+    }
 }
 
 /// Generate a random level for a new node using exponential distribution.

@@ -719,6 +719,61 @@ impl Index for HnswPqIndex {
             "deserialization not implemented".into(),
         ))
     }
+
+    fn has_raw_data(&self) -> bool {
+        // PQ is lossy compression, original data is not preserved
+        false
+    }
+
+    /// Create ANN iterator for streaming search results (PARITY-P1-000)
+    fn create_ann_iterator(
+        &self,
+        query: &Dataset,
+        bitset: Option<&BitsetView>,
+    ) -> Result<Box<dyn crate::index::AnnIterator>, IndexError> {
+        let vectors = query.vectors();
+        if vectors.is_empty() {
+            return Err(IndexError::Empty);
+        }
+        let top_k = self.ids.len().max(1000);
+        let results = self.search(&vectors[0..self.config.dim], top_k, bitset)?;
+
+        // Convert to iterator format: Vec<(id, distance)>
+        let iter_results: Vec<(i64, f32)> = results
+            .ids
+            .into_iter()
+            .zip(results.distances.into_iter())
+            .collect();
+
+        Ok(Box::new(HnswPqAnnIterator::new(iter_results)))
+    }
+}
+
+/// HNSW-PQ ANN Iterator implementation (PARITY-P1-000)
+pub struct HnswPqAnnIterator {
+    results: Vec<(i64, f32)>,
+    pos: usize,
+}
+
+impl HnswPqAnnIterator {
+    pub fn new(results: Vec<(i64, f32)>) -> Self {
+        Self { results, pos: 0 }
+    }
+}
+
+impl crate::index::AnnIterator for HnswPqAnnIterator {
+    fn next(&mut self) -> Option<(i64, f32)> {
+        if self.pos >= self.results.len() {
+            return None;
+        }
+        let result = self.results[self.pos];
+        self.pos += 1;
+        Some(result)
+    }
+
+    fn buffer_size(&self) -> usize {
+        self.results.len() - self.pos
+    }
 }
 
 #[cfg(test)]

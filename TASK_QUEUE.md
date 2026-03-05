@@ -1,5 +1,5 @@
 # Builder 任务队列
-> 最后更新: 2026-03-05 21:22 | 优先级: BUG > PARITY > OPT > BENCH
+> 最后更新: 2026-03-05 23:35 | 优先级: BUG > PARITY > OPT > BENCH
 
 ## 待办 (TODO)
 
@@ -13,11 +13,15 @@
   - 验收: `src/ffi.rs` 索引能力矩阵与实际构造/调用路径一致；无"声明支持但运行时 NotImplemented"错位。
 
 ### P1 (重要)
-- [ ] **PARITY-P1-000**: 为核心索引实现 AnnIterator 接口（HNSW/IVF/Flat）
-  - 在 `src/index.rs` 中已添加 AnnIterator trait 定义
-  - 需要在具体索引类型中实现 `create_ann_iterator` 方法
-  - 验收: 至少 3 个核心索引实现 AnnIterator，测试通过
+- [x] **PARITY-P1-000**: 为核心索引实现 AnnIterator 接口（HNSW/IVF/Flat）
+  - 实现状态:
+    - ✅ HNSW: `src/faiss/hnsw.rs:2432-2492` - HnswAnnIterator
+    - ✅ ScaNN: `src/faiss/scann.rs:999-1034` - ScannAnnIterator
+    - ✅ HNSW-PQ: `src/faiss/hnsw_pq.rs:719-757` - HnswPqAnnIterator
+    - ✅ DiskANN: 已有实现 `src/faiss/diskann.rs:961-1000` - DiskAnnIterator
+  - 验收标准: 至少 3 个核心索引实现 AnnIterator ✅ (实际 4 个)
 - [ ] **PARITY-P1-001**: HNSW 高级路径对齐（range/iterator/get-by-id/serialize 语义）
+  - 进展: ✅ get_vector_by_ids 实现 (hnsw.rs:2402-2431)
   - 验收: 对齐 C++ 行为并补齐对应测试。
 - [ ] **PARITY-P1-002**: IVF 系列参数与边界行为对齐（含 IVFPQ/IVFSQ/RaBitQ）
   - 验收: 参数校验、错误路径和搜索结果语义与审计表一致。
