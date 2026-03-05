@@ -4,6 +4,7 @@ Last updated: 2026-03-05 20:35
 Sync baseline: 1c6a1c5 from origin/main
 
 ## 轮次记录
+- 2026-03-05 21:22: 扫描 C++/Rust 接口对齐状态，确认 AnnIterator 未实现但已定义，HNSW 实现核心接口
 - 2026-03-05 20:40: 添加 AnnIterator 接口定义，创建 FFI 能力矩阵文档
 - 2026-03-05 20:35: 确认 ivf_sq_cc 所有测试通过 (6/6)，BUG-P0-003 完成
 - 2026-03-05 19:35: 修复 3 个 P0 BUG (mini_batch_kmeans/diskann_complete/ivf_sq_cc SIMD 切片长度问题)
@@ -54,5 +55,12 @@ Risk levels:
   - R@10 < 50% => recheck required
 
 ## 5. Audit Changelog
+
+- 2026-03-05 21:22: Scanned interface alignment between C++ and Rust.
+  - C++ Index class methods: Build/Train/Add/Search/AnnIterator/RangeSearch/GetVectorByIds/HasRawData/Serialize/Deserialize/DeserializeFromFile
+  - Rust Index trait methods: train/add/search/range_search/create_ann_iterator/get_vector_by_ids/has_raw_data/serialize_to_memory/deserialize_from_memory/save/load
+  - Gap: AnnIterator defined but not implemented in any index; DeserializeFromFile missing in Rust
+  - HNSW implements core methods (train/add/search/range_search/get_vector_by_ids/save/load)
+  - Next: Verify all core indexes implement or reject unsupported methods consistently
 
 - 2026-03-05: Initialized parity audit baseline with module/file mapping and risk triage.
