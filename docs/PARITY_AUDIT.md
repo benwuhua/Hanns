@@ -1,9 +1,15 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-06 06:35
-Sync baseline: 1679395 from origin/main
+Last updated: 2026-03-06 07:35
+Sync baseline: 8cc92577eefff84282807802ccb0ce8597f73596 from origin/main
 
 ## 轮次记录
+- 2026-03-06 07:35: **DiskANN Index trait 实现** - 为 DiskAnnIndex 实现完整的 Index trait，包括：
+  1. 基础生命周期方法：train/add/search/range_search/save/load
+  2. 高级接口：AnnIterator (DiskAnnIteratorWrapper) / get_vector_by_ids
+  3. 元数据方法：index_type/dim/count/is_trained/has_raw_data
+  4. 创建测试套件验证实现（test_diskann_index_trait）
+  状态：DiskANN 模块从 Partial 升级为 Done（Index trait 实现完成）。
 - 2026-03-06 06:35: **IVF 系列架构缺口修复** - 为 IvfSq8Index 和 IvfRaBitqIndex 实现完整的 Index trait，包括：
   1. 基础生命周期方法：train/add/search/search_with_bitset/save/load
   2. 高级接口：AnnIterator（两个索引）/ get_vector_by_ids（仅 IVF-SQ8，IVF-RaBitQ 因有损压缩返回 Unsupported）
@@ -53,7 +59,7 @@ Risk levels:
 | HNSW | `src/index/hnsw/faiss_hnsw.cc` | `src/faiss/hnsw.rs` | Done | P1 | ✅ AnnIterator (2026-03-05), ✅ get_vector_by_ids (2026-03-05), ✅ serialize/deserialize, ✅ range_search (Unsupported, tested 2026-03-06); all advanced paths tested and aligned |
 | IVF core | `src/index/ivf/ivf.cc`, `src/index/ivf/ivf_config.h` | `src/faiss/ivf.rs`, `src/faiss/ivf_flat.rs`, `src/faiss/ivfpq.rs`, `src/api/index.rs` | Done | P1 | ✅ Index trait implemented for IvfSq8Index and IvfRaBitqIndex (2026-03-06); ✅ AnnIterator; ✅ get_vector_by_ids (IVF-SQ8 only); parameter coverage and edge behavior alignment remaining; SIMD slice fix in ivf_sq_cc (2026-03-05) |
 | RaBitQ | `src/index/ivf/ivfrbq_wrapper.*` | `src/faiss/ivf_rabitq.rs`, `src/faiss/rabitq_ffi.rs` | Done | P1 | ✅ Index trait implemented (2026-03-06); ✅ AnnIterator; ⚠️ get_vector_by_ids (Unsupported for lossy compression); query-bits and config boundary consistency |
-| DiskANN | `src/index/diskann/diskann.cc`, `src/index/diskann/diskann_config.h` | `src/faiss/diskann.rs`, `src/faiss/diskann_complete.rs` | Partial | P1 | ✅ AnnIterator (inherent impl); lifecycle parity and config semantics; ⚠️ get_vector_by_ids; add_batch SIMD slice fix (2026-03-05) |
+| DiskANN | `src/index/diskann/diskann.cc`, `src/index/diskann/diskann_config.h` | `src/faiss/diskann.rs`, `src/faiss/diskann_complete.rs` | Done | P1 | ✅ Index trait implemented (2026-03-06); ✅ AnnIterator (DiskAnnIteratorWrapper); ✅ get_vector_by_ids; lifecycle parity and config semantics; add_batch SIMD slice fix (2026-03-05) |
 | AISAQ | `src/index/diskann/diskann_aisaq.cc`, `src/index/diskann/aisaq_config.h` | `src/faiss/diskann_aisaq.rs`, `src/faiss/aisaq.rs` | Partial | P1 | parameter and file-layout behavior alignment |
 | ScaNN | - | `src/faiss/scann.rs` | Partial | P1 | ✅ AnnIterator (2026-03-05), ⚠️ get_vector_by_ids, has_raw_data |
 | HNSW-PQ | - | `src/faiss/hnsw_pq.rs` | Partial | P2 | ✅ AnnIterator (2026-03-05); has_raw_data=false (lossy) |

@@ -1167,4 +1167,209 @@ mod tests {
         assert_eq!(index.dann_config.search_list_size, 200);
         assert_eq!(index.dann_config.beamwidth, 16);
     }
+
+    #[test]
+    fn test_diskann_index_trait() {
+        use crate::dataset::Dataset;
+        use crate::index::Index;
+
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            params: crate::api::IndexParams::default(),
+        };
+
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+
+        // Test Index trait methods
+        assert_eq!(Index::index_type(&index), "DiskAnn");
+        assert_eq!(Index::dim(&index), 4);
+        assert_eq!(Index::count(&index), 0);
+        assert!(!Index::is_trained(&index));
+
+        // Train
+        let vectors = vec![
+            0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+        ];
+        let dataset = Dataset::from_vectors(vectors.clone(), 4);
+        Index::train(&mut index, &dataset).unwrap();
+
+        assert!(Index::is_trained(&index));
+        assert_eq!(Index::count(&index), 4);
+        assert!(Index::has_raw_data(&index));
+
+        // Search
+        let query = Dataset::from_vectors(vec![0.1, 0.1, 0.1, 0.1], 4);
+        let result = Index::search(&index, &query, 2).unwrap();
+        assert_eq!(result.ids.len(), 2);
+        assert_eq!(result.distances.len(), 2);
+
+        // Get vector by IDs
+        let vectors = Index::get_vector_by_ids(&index, &[0, 1]).unwrap();
+        assert_eq!(vectors.len(), 8); // 2 vectors * 4 dim
+    }
+}
+
+// ============================================================================
+// Index trait implementation for DiskAnnIndex (PARITY-P1-003)
+// ============================================================================
+
+use crate::dataset::Dataset;
+use crate::index::{AnnIterator, Index, IndexError};
+use std::time::Instant;
+
+/// Wrapper to adapt DiskAnnIterator to the AnnIterator trait
+pub struct DiskAnnIteratorWrapper {
+    results: Vec<(i64, f32)>,
+    current: usize,
+}
+
+impl DiskAnnIteratorWrapper {
+    pub fn new(results: Vec<(i64, f32)>) -> Self {
+        Self {
+            results,
+            current: 0,
+        }
+    }
+}
+
+impl AnnIterator for DiskAnnIteratorWrapper {
+    fn next(&mut self) -> Option<(i64, f32)> {
+        if self.current < self.results.len() {
+            let result = self.results[self.current];
+            self.current += 1;
+            Some(result)
+        } else {
+            None
+        }
+    }
+
+    fn buffer_size(&self) -> usize {
+        self.results.len() - self.current
+    }
+}
+
+impl Index for DiskAnnIndex {
+    fn index_type(&self) -> &str {
+        "DiskAnn"
+    }
+
+    fn dim(&self) -> usize {
+        self.dim
+    }
+
+    fn count(&self) -> usize {
+        self.ntotal()
+    }
+
+    fn is_trained(&self) -> bool {
+        self.trained
+    }
+
+    fn train(&mut self, dataset: &Dataset) -> std::result::Result<(), IndexError> {
+        let vectors = dataset.vectors().to_vec();
+        DiskAnnIndex::train(self, &vectors).map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn add(&mut self, dataset: &Dataset) -> std::result::Result<usize, IndexError> {
+        let vectors = dataset.vectors().to_vec();
+        DiskAnnIndex::add(self, &vectors, None)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn search(
+        &self,
+        query: &Dataset,
+        top_k: usize,
+    ) -> std::result::Result<crate::index::SearchResult, IndexError> {
+        let query_vec = query.vectors().to_vec();
+        let req = SearchRequest {
+            top_k,
+            nprobe: self.dann_config.beamwidth,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+
+        let start = Instant::now();
+        let result = DiskAnnIndex::search(self, &query_vec, &req)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+
+        Ok(crate::index::SearchResult::new(
+            result.ids,
+            result.distances,
+            start.elapsed().as_secs_f64() * 1000.0,
+        ))
+    }
+
+    fn range_search(
+        &self,
+        query: &Dataset,
+        radius: f32,
+    ) -> std::result::Result<crate::index::SearchResult, IndexError> {
+        let query_vec = query.vectors().to_vec();
+
+        let start = Instant::now();
+        let results = DiskAnnIndex::range_search(self, &query_vec, radius, self.dann_config.max_k)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+
+        let ids: Vec<i64> = results.iter().map(|(id, _)| *id).collect();
+        let distances: Vec<f32> = results.iter().map(|(_, dist)| *dist).collect();
+
+        Ok(crate::index::SearchResult::new(
+            ids,
+            distances,
+            start.elapsed().as_secs_f64() * 1000.0,
+        ))
+    }
+
+    fn get_vector_by_ids(&self, ids: &[i64]) -> std::result::Result<Vec<f32>, IndexError> {
+        let mut result = Vec::with_capacity(ids.len() * self.dim);
+
+        for &id in ids {
+            // Find the index for this ID
+            let idx = self.ids.iter().position(|&x| x == id);
+            if let Some(i) = idx {
+                let start = i * self.dim;
+                let end = start + self.dim;
+                if end <= self.vectors.len() {
+                    result.extend_from_slice(&self.vectors[start..end]);
+                } else {
+                    // ID exists but vector data is invalid
+                    result.extend(std::iter::repeat(0.0f32).take(self.dim));
+                }
+            } else {
+                // ID not found, return zeros
+                result.extend(std::iter::repeat(0.0f32).take(self.dim));
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn has_raw_data(&self) -> bool {
+        // DiskANN stores raw vectors in memory (self.vectors)
+        !self.vectors.is_empty()
+    }
+
+    fn create_ann_iterator(
+        &self,
+        query: &Dataset,
+        _bitset: Option<&crate::bitset::BitsetView>,
+    ) -> std::result::Result<Box<dyn AnnIterator>, IndexError> {
+        let query_vec = query.vectors().to_vec();
+        let results = self.beam_search(&query_vec, self.dann_config.search_list_size);
+        Ok(Box::new(DiskAnnIteratorWrapper::new(results)))
+    }
+
+    fn save(&self, path: &str) -> std::result::Result<(), IndexError> {
+        DiskAnnIndex::save(self, std::path::Path::new(path))
+            .map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn load(&mut self, path: &str) -> std::result::Result<(), IndexError> {
+        DiskAnnIndex::load(self, std::path::Path::new(path))
+            .map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
 }
