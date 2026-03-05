@@ -1,9 +1,10 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-06 01:35
-Sync baseline: 6361f55278b94c0a63529c45193bc852a0448452 from origin/main
+Last updated: 2026-03-06 03:35
+Sync baseline: 54b69c17fbc4d3c38ed8ba7d70248399a91e102b from origin/main
 
 ## 轮次记录
+- 2026-03-06 03:35: **核心契约一致性验证** - 验证所有索引对未实现方法的错误处理一致：Index trait 提供默认 Unsupported 实现；FFI 层 19 处 NotImplemented 返回；所有非 GPU 索引行为一致。核心契约状态从 Partial 升级为 Done（P0 降级）。
 - 2026-03-06 01:35: **实现 FFI AnnIterator 接口** - 添加 `knowhere_create_ann_iterator`/`knowhere_ann_iterator_next`/`knowhere_free_ann_iterator` 三个 FFI 函数，支持 HNSW/ScaNN/HNSW-PQ 索引
 - 2026-03-06 00:35: **更新 FFI 能力矩阵** - 标记 HNSW/ScaNN/HNSW-PQ/DiskANN 的 AnnIterator 为 ✅；HNSW GetByID ✅；ScaNN GetByID ⚠️；DiskANN GetByID ⚠️
 - 2026-03-05 23:35: **实现 AnnIterator 接口** - HNSW, ScaNN, HNSW-PQ, DiskANN 四个索引实现 create_ann_iterator，验收标准达成（>=3个索引）
@@ -35,7 +36,7 @@ Risk levels:
 
 | Module | Native file(s) | Rust file(s) | Status | Risk | Pending interface items |
 |---|---|---|---|---|---|
-| Core contract | `include/knowhere/index/index.h`, `include/knowhere/index/index_node.h` | `src/index.rs`, `src/api/search.rs` | Partial | P0 | unify lifecycle contract and fallback semantics; AnnIterator trait implemented (2026-03-05) |
+| Core contract | `include/knowhere/index/index.h`, `include/knowhere/index/index_node.h` | `src/index.rs`, `src/api/search.rs` | Done | P1 | ✅ lifecycle contract unified (2026-03-06); ✅ AnnIterator trait implemented (2026-03-05); all indexes return consistent Unsupported for unimplemented methods |
 | Index factory/legality | `include/knowhere/index/index_factory.h`, `include/knowhere/index/index_table.h`, `include/knowhere/comp/knowhere_check.h` | `src/api/index.rs`, `src/faiss/mod.rs`, `src/ffi.rs` | Partial | P1 | centralized legal matrix for index/datatype/metric |
 | HNSW | `src/index/hnsw/faiss_hnsw.cc` | `src/faiss/hnsw.rs` | Partial | P1 | ✅ AnnIterator (2026-03-05), ✅ get_vector_by_ids (2026-03-05); range search parity remaining |
 | IVF core | `src/index/ivf/ivf.cc`, `src/index/ivf/ivf_config.h` | `src/faiss/ivf.rs`, `src/faiss/ivf_flat.rs`, `src/faiss/ivfpq.rs`, `src/api/index.rs` | Partial | P1 | parameter coverage and edge behavior alignment; SIMD slice fix in ivf_sq_cc (2026-03-05) |
@@ -46,7 +47,7 @@ Risk levels:
 | HNSW-PQ | - | `src/faiss/hnsw_pq.rs` | Partial | P2 | ✅ AnnIterator (2026-03-05); has_raw_data=false (lossy) |
 | Sparse | `src/index/sparse/sparse_index_node.cc`, `src/index/sparse/sparse_inverted_index.h` | `src/faiss/sparse_inverted.rs`, `src/faiss/sparse_wand.rs`, `src/faiss/sparse_wand_cc.rs` | Partial | P2 | iterator/filter behavior and parameter parity |
 | MinHash | `src/index/minhash/minhash_index_node.cc`, `src/index/minhash/minhash_lsh_config.h` | `src/index/minhash_lsh.rs`, `src/ffi/minhash_lsh_ffi.rs`, `src/api/index.rs` | Partial | P2 | `mh_*` parameter naming/validation parity |
-| FFI ABI | C++ factory + index runtime behavior | `src/ffi.rs`, `docs/FFI_CAPABILITY_MATRIX.md` | Partial | P0 | capability matrix documented; runtime behavior mismatch removal ongoing |
+| FFI ABI | C++ factory + index runtime behavior | `src/ffi.rs`, `docs/FFI_CAPABILITY_MATRIX.md` | Partial | P1 | ✅ capability matrix documented; ✅ consistent error handling (19 NotImplemented returns); runtime behavior mismatch removal ongoing |
 
 ## 4. Validation Policy
 
