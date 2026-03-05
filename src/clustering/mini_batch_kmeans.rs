@@ -151,8 +151,8 @@ impl MiniBatchKMeans {
                 let mut min_dist = f32::MAX;
                 for selected_c in 0..c {
                     let dist = l2_distance_sq(
-                        &vectors[i * self.dim..],
-                        &self.centroids[selected_c * self.dim..],
+                        &vectors[i * self.dim..(i + 1) * self.dim],
+                        &self.centroids[selected_c * self.dim..(selected_c + 1) * self.dim],
                     );
                     if dist < min_dist {
                         min_dist = dist;
@@ -211,7 +211,7 @@ impl MiniBatchKMeans {
         let assignments: Vec<usize> = batch_indices
             .iter()
             .map(|&i| {
-                let vec = &vectors[i * self.dim..];
+                let vec = &vectors[i * self.dim..(i + 1) * self.dim];
                 self.find_nearest_centroid(vec)
             })
             .collect();
@@ -249,7 +249,7 @@ impl MiniBatchKMeans {
         let mut best = 0;
 
         for c in 0..self.k {
-            let dist = l2_distance_sq(vector, &self.centroids[c * self.dim..]);
+            let dist = l2_distance_sq(vector, &self.centroids[c * self.dim..(c + 1) * self.dim]);
             if dist < min_dist {
                 min_dist = dist;
                 best = c;
