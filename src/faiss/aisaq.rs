@@ -10,11 +10,10 @@
 //! - Cache-aware search
 //! - L2 and IP (inner product) distance
 
-use std::collections::{BinaryHeap, HashSet};
 use std::cmp::Ordering;
-use std::sync::{Arc, RwLock};
+use std::collections::{BinaryHeap, HashSet};
 
-use crate::api::{IndexConfig, MetricType, Result, KnowhereError, SearchResult};
+use crate::api::{IndexConfig, KnowhereError, MetricType, Result, SearchResult};
 use crate::faiss::pq::PqEncoder;
 
 /// AISAQ configuration parameters
@@ -105,6 +104,7 @@ pub struct AisaqStats {
 
 /// Node in the Vamana graph
 #[derive(Clone)]
+#[allow(dead_code)]
 struct GraphNode {
     /// Vector data
     data: Vec<f32>,
@@ -128,6 +128,7 @@ impl GraphNode {
 }
 
 /// AISAQ Index (Adaptive Iterative Scalar Adaptive Quantization)
+#[allow(dead_code)]
 pub struct AisaqIndex {
     config: AisaqConfig,
     metric_type: MetricType,
@@ -193,9 +194,9 @@ impl AisaqIndex {
         for i in 0..num_vectors {
             let offset = i * self.dim;
             let vec = data[offset..offset + self.dim].to_vec();
-            
+
             let mut node = GraphNode::new(vec, 0);
-            
+
             // Encode with PQ if available
             if let Some(ref pq_encoder) = self.pq_encoder {
                 let pq_code = pq_encoder.encode(&node.data);
@@ -220,13 +221,17 @@ impl AisaqIndex {
     /// Search for k nearest neighbors
     pub fn search(&self, query: &[f32], k: usize) -> Result<SearchResult> {
         if !self.is_trained || self.nodes.is_empty() {
-            return Err(KnowhereError::InternalError("AISAQ index not trained".to_string()));
+            return Err(KnowhereError::InternalError(
+                "AISAQ index not trained".to_string(),
+            ));
         }
 
         if query.len() != self.dim {
-            return Err(KnowhereError::InvalidArg(
-                format!("Query dimension {} != index dimension {}", query.len(), self.dim)
-            ));
+            return Err(KnowhereError::InvalidArg(format!(
+                "Query dimension {} != index dimension {}",
+                query.len(),
+                self.dim
+            )));
         }
 
         let k = k.min(self.nodes.len());
@@ -256,7 +261,10 @@ impl AisaqIndex {
         for &entry_point in &self.entry_points {
             if entry_point < self.nodes.len() {
                 let dist = self.compute_distance(query, &self.nodes[entry_point].data);
-                candidates.push(Candidate { id: entry_point, dist });
+                candidates.push(Candidate {
+                    id: entry_point,
+                    dist,
+                });
                 visited.insert(entry_point);
             }
         }
@@ -292,10 +300,8 @@ impl AisaqIndex {
         }
 
         // Extract results
-        let mut result_vec: Vec<(usize, f32)> = results
-            .into_iter()
-            .map(|c| (c.id, c.dist))
-            .collect();
+        let mut result_vec: Vec<(usize, f32)> =
+            results.into_iter().map(|c| (c.id, c.dist)).collect();
         result_vec.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
         result_vec.truncate(k);
 
@@ -304,12 +310,13 @@ impl AisaqIndex {
 
     /// Find nearest nodes for a new vector
     fn find_nearest_nodes(&self, data: &[f32], k: usize) -> Vec<usize> {
-        let mut distances: Vec<(usize, f32)> = self.nodes
+        let mut distances: Vec<(usize, f32)> = self
+            .nodes
             .iter()
             .enumerate()
             .map(|(id, node)| (id, self.compute_distance(data, &node.data)))
             .collect();
-        
+
         distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
         distances.truncate(k.min(self.nodes.len()));
         distances.iter().map(|(id, _)| *id).collect()
@@ -323,14 +330,13 @@ impl AisaqIndex {
             if node_id >= self.nodes.len() {
                 continue;
             }
-            
+
             let neighbors: Vec<usize> = self.nodes[node_id].neighbors.clone();
             for &neighbor in &neighbors {
-                if neighbor < self.nodes.len() {
-                    if !self.nodes[neighbor].neighbors.contains(&node_id) {
+                if neighbor < self.nodes.len()
+                    && !self.nodes[neighbor].neighbors.contains(&node_id) {
                         self.nodes[neighbor].neighbors.push(node_id);
                     }
-                }
             }
         }
     }
@@ -348,15 +354,13 @@ impl AisaqIndex {
     /// Compute distance based on metric type
     fn compute_distance(&self, a: &[f32], b: &[f32]) -> f32 {
         match self.metric_type {
-            MetricType::L2 => {
-                a.iter().zip(b.iter())
-                    .map(|(x, y)| (x - y).powi(2))
-                    .sum::<f32>()
-                    .sqrt()
-            }
-            MetricType::Ip => {
-                -a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>()
-            }
+            MetricType::L2 => a
+                .iter()
+                .zip(b.iter())
+                .map(|(x, y)| (x - y).powi(2))
+                .sum::<f32>()
+                .sqrt(),
+            MetricType::Ip => -a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>(),
             MetricType::Cosine => {
                 let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
                 let norm_a: f32 = a.iter().map(|x| x.powi(2)).sum::<f32>().sqrt();
@@ -379,9 +383,10 @@ impl AisaqIndex {
         let mut vectors = Vec::with_capacity(ids.len());
         for &id in ids {
             if id < 0 || id as usize >= self.nodes.len() {
-                return Err(KnowhereError::InvalidArg(
-                    format!("Invalid vector ID: {}", id)
-                ));
+                return Err(KnowhereError::InvalidArg(format!(
+                    "Invalid vector ID: {}",
+                    id
+                )));
             }
             vectors.push(self.nodes[id as usize].data.clone());
         }
@@ -403,11 +408,15 @@ impl AisaqIndex {
         let num_nodes = self.nodes.len();
         let num_edges: usize = self.nodes.iter().map(|n| n.neighbors.len()).sum();
         let degrees: Vec<usize> = self.nodes.iter().map(|n| n.neighbors.len()).collect();
-        
+
         AisaqStats {
             num_nodes,
             num_edges,
-            avg_degree: if num_nodes > 0 { num_edges as f32 / num_nodes as f32 } else { 0.0 },
+            avg_degree: if num_nodes > 0 {
+                num_edges as f32 / num_nodes as f32
+            } else {
+                0.0
+            },
             max_degree: degrees.iter().copied().max().unwrap_or(0),
             min_degree: degrees.iter().copied().min().unwrap_or(0),
             is_trained: self.is_trained,
@@ -429,7 +438,10 @@ impl Eq for Candidate {}
 impl Ord for Candidate {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reverse ordering for max-heap (we want smallest distance first)
-        other.dist.partial_cmp(&self.dist).unwrap_or(Ordering::Equal)
+        other
+            .dist
+            .partial_cmp(&self.dist)
+            .unwrap_or(Ordering::Equal)
     }
 }
 
@@ -447,7 +459,7 @@ mod tests {
     fn test_aisaq_new() {
         let config = AisaqConfig::default();
         let index = AisaqIndex::new(config, MetricType::L2, 128);
-        
+
         assert_eq!(index.count(), 0);
         assert_eq!(index.dim(), 128);
         assert!(!index.stats().is_trained);
@@ -461,17 +473,17 @@ mod tests {
             ..Default::default()
         };
         let mut index = AisaqIndex::new(config, MetricType::L2, 4);
-        
+
         // Generate test data
         let data: Vec<f32> = (0..100).map(|i| i as f32).collect();
-        
+
         // Train and add
         index.add(&data).expect("Failed to add data");
-        
+
         // Search
         let query = vec![1.0, 2.0, 3.0, 4.0];
         let results = index.search(&query, 5).expect("Search failed");
-        
+
         assert_eq!(results.ids.len(), 5);
         assert_eq!(results.distances.len(), 5);
     }
@@ -483,14 +495,14 @@ mod tests {
             ..Default::default()
         };
         let mut index = AisaqIndex::new(config, MetricType::L2, 8);
-        
+
         // Add some data
         let data: Vec<f32> = (0..64).map(|i| i as f32).collect();
         index.add(&data).expect("Failed to add data");
-        
+
         // Search with different beamwidths
         let query = vec![1.0; 8];
-        
+
         let results_bw4 = index.search(&query, 3).expect("Search failed");
         assert_eq!(results_bw4.ids.len(), 3);
     }
@@ -499,11 +511,13 @@ mod tests {
     fn test_aisaq_get_vectors() {
         let config = AisaqConfig::default();
         let mut index = AisaqIndex::new(config, MetricType::L2, 3);
-        
+
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         index.add(&data).expect("Failed to add data");
-        
-        let vectors = index.get_vector_by_ids(&[0, 1]).expect("Get vectors failed");
+
+        let vectors = index
+            .get_vector_by_ids(&[0, 1])
+            .expect("Get vectors failed");
         assert_eq!(vectors.len(), 2);
         assert_eq!(vectors[0], vec![1.0, 2.0, 3.0]);
         assert_eq!(vectors[1], vec![4.0, 5.0, 6.0]);

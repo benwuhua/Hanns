@@ -1,6 +1,6 @@
 //! Index serialization codec
 
-use std::io::{Read, Write, Seek};
+use std::io::{Read, Seek, Write};
 
 use crate::api::{IndexConfig, IndexType, KnowhereError, MetricType, Result};
 
@@ -12,11 +12,11 @@ impl IndexCodec {
     pub fn write_config<W: Write + Seek>(config: &IndexConfig, writer: &mut W) -> Result<()> {
         // Magic number
         writer.write_all(b"KWIX")?; // KnowHere Index
-        
+
         // Version
         let version: u32 = 1;
         writer.write_all(&version.to_le_bytes())?;
-        
+
         // Index type
         let idx_type: u32 = match config.index_type {
             IndexType::Flat => 0,
@@ -40,11 +40,10 @@ impl IndexCodec {
             IndexType::BinIvfFlat => 20,
             IndexType::HnswSq => 14,
             IndexType::Aisaq => 15,
-            IndexType::HnswPq => 16,
             IndexType::MinHashLsh => 21,
         };
         writer.write_all(&idx_type.to_le_bytes())?;
-        
+
         // Metric type
         let metric: u32 = match config.metric_type {
             MetricType::L2 => 0,
@@ -53,11 +52,11 @@ impl IndexCodec {
             MetricType::Hamming => 3,
         };
         writer.write_all(&metric.to_le_bytes())?;
-        
+
         // Dimension
         let dim: u32 = config.dim as u32;
         writer.write_all(&dim.to_le_bytes())?;
-        
+
         Ok(())
     }
 
@@ -69,15 +68,18 @@ impl IndexCodec {
         if &magic != b"KWIX" {
             return Err(KnowhereError::Codec("invalid magic number".to_string()));
         }
-        
+
         // Version
         let mut version = [0u8; 4];
         reader.read_exact(&mut version)?;
         let version = u32::from_le_bytes(version);
         if version != 1 {
-            return Err(KnowhereError::Codec(format!("unsupported version: {}", version)));
+            return Err(KnowhereError::Codec(format!(
+                "unsupported version: {}",
+                version
+            )));
         }
-        
+
         // Index type
         let mut idx_type_bytes = [0u8; 4];
         reader.read_exact(&mut idx_type_bytes)?;
@@ -104,11 +106,15 @@ impl IndexCodec {
             20 => IndexType::BinIvfFlat,
             14 => IndexType::HnswSq,
             15 => IndexType::Aisaq,
-            16 => IndexType::HnswPq,
             21 => IndexType::MinHashLsh,
-            _ => return Err(KnowhereError::Codec(format!("unknown index type: {}", idx_type))),
+            _ => {
+                return Err(KnowhereError::Codec(format!(
+                    "unknown index type: {}",
+                    idx_type
+                )))
+            }
         };
-        
+
         // Metric type
         let mut metric_bytes = [0u8; 4];
         reader.read_exact(&mut metric_bytes)?;
@@ -117,33 +123,38 @@ impl IndexCodec {
             0 => MetricType::L2,
             1 => MetricType::Ip,
             2 => MetricType::Cosine,
-            _ => return Err(KnowhereError::Codec(format!("unknown metric type: {}", metric))),
+            _ => {
+                return Err(KnowhereError::Codec(format!(
+                    "unknown metric type: {}",
+                    metric
+                )))
+            }
         };
-        
+
         // Dimension
         let mut dim_bytes = [0u8; 4];
         reader.read_exact(&mut dim_bytes)?;
         let dim = u32::from_le_bytes(dim_bytes) as usize;
-        
+
         Ok(IndexConfig::new(index_type, metric_type, dim))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn test_codec_roundtrip() {
         let config = IndexConfig::new(IndexType::Hnsw, MetricType::L2, 128);
-        
+
         let mut buffer = Cursor::new(Vec::new());
         IndexCodec::write_config(&config, &mut buffer).unwrap();
-        
+
         buffer.set_position(0);
         let loaded = IndexCodec::read_config(&mut buffer).unwrap();
-        
+
         assert_eq!(config.index_type, loaded.index_type);
         assert_eq!(config.metric_type, loaded.metric_type);
         assert_eq!(config.dim, loaded.dim);

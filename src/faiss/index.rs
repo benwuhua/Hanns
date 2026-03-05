@@ -2,7 +2,9 @@
 
 use std::path::Path;
 
-use crate::api::{IndexConfig, IndexType, KnowhereError, MetricType, Result, SearchRequest, SearchResult};
+use crate::api::{
+    IndexConfig, IndexType, KnowhereError, MetricType, Result, SearchRequest, SearchResult,
+};
 
 /// Faiss index wrapper
 pub struct FaissIndex {
@@ -27,7 +29,9 @@ impl FaissIndex {
     pub fn new(config: &IndexConfig) -> Result<Self> {
         // Validate config
         if config.dim == 0 {
-            return Err(KnowhereError::InvalidArg("dimension must be > 0".to_string()));
+            return Err(KnowhereError::InvalidArg(
+                "dimension must be > 0".to_string(),
+            ));
         }
 
         let raw = FaissIndexRaw {
@@ -61,12 +65,12 @@ impl FaissIndex {
     pub fn train(&mut self, vectors: &[f32]) -> Result<()> {
         let expected_len = vectors.len();
         let expected_dim = expected_len / self.config.dim;
-        
+
         if expected_dim * self.config.dim != expected_len {
-            return Err(KnowhereError::InvalidArg(
-                format!("vector count {} * dim {} != total {}", 
-                    expected_dim, self.config.dim, expected_len)
-            ));
+            return Err(KnowhereError::InvalidArg(format!(
+                "vector count {} * dim {} != total {}",
+                expected_dim, self.config.dim, expected_len
+            )));
         }
 
         // In real implementation, call Faiss training here
@@ -76,18 +80,18 @@ impl FaissIndex {
     }
 
     /// Add vectors to the index
-    pub fn add(&mut self, vectors: &[f32], ids: Option<&[i64]>) -> Result<usize> {
+    pub fn add(&mut self, vectors: &[f32], _ids: Option<&[i64]>) -> Result<usize> {
         if !self.is_trained && self.config.index_type != IndexType::Flat {
             return Err(KnowhereError::InvalidArg(
-                "index must be trained before adding vectors".to_string()
+                "index must be trained before adding vectors".to_string(),
             ));
         }
 
         let n = vectors.len() / self.config.dim;
-        
+
         // In real implementation, call Faiss add here
         self.is_empty = false;
-        
+
         tracing::debug!("Added {} vectors to index", n);
         Ok(n)
     }
@@ -101,44 +105,37 @@ impl FaissIndex {
         let n = query.len() / self.config.dim;
         if n * self.config.dim != query.len() {
             return Err(KnowhereError::InvalidArg(
-                "query vector dimension mismatch".to_string()
+                "query vector dimension mismatch".to_string(),
             ));
         }
 
         let k = req.top_k;
-        
+
         // Placeholder results - in real implementation, call Faiss search
         let ids: Vec<i64> = (0..n * k).map(|i| i as i64).collect();
         let distances: Vec<f32> = (0..n * k).map(|_| 0.0).collect();
 
         tracing::debug!("Search completed: n={}, k={}", n, k);
-        
+
         Ok(SearchResult::new(ids, distances, 0.0))
     }
 
     /// Search with filters
-    pub fn search_with_filter(
-        &self,
-        query: &[f32],
-        req: &SearchRequest,
-    ) -> Result<SearchResult> {
+    pub fn search_with_filter(&self, query: &[f32], req: &SearchRequest) -> Result<SearchResult> {
         // First do normal search
         let mut result = self.search(query, req)?;
-        
+
         // Apply filter if present
         if let Some(ref filter) = req.filter {
-            let filtered_ids: Vec<i64> = result.ids
+            let filtered_ids: Vec<i64> = result
+                .ids
                 .chunks(req.top_k)
-                .flat_map(|chunk| {
-                    chunk.iter()
-                        .filter(|&&id| filter.evaluate(id))
-                        .cloned()
-                })
+                .flat_map(|chunk| chunk.iter().filter(|&&id| filter.evaluate(id)).cloned())
                 .collect();
-            
+
             result.ids = filtered_ids;
         }
-        
+
         Ok(result)
     }
 
@@ -192,11 +189,11 @@ mod tests {
     fn test_search() {
         let config = IndexConfig::new(IndexType::Flat, MetricType::L2, 4);
         let mut index = FaissIndex::new(&config).unwrap();
-        
+
         // 添加向量
         let vectors = vec![1.0, 2.0, 3.0, 4.0];
         index.add(&vectors, None).unwrap();
-        
+
         let query = vec![1.0, 2.0, 3.0, 4.0];
         let req = SearchRequest {
             top_k: 10,
@@ -205,7 +202,7 @@ mod tests {
             params: None,
             radius: None,
         };
-        
+
         let result = index.search(&query, &req).unwrap();
         assert_eq!(result.ids.len(), 10);
     }

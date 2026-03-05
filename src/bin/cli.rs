@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use clap::{Parser, Subcommand};
-use once_cell::sync::Lazy;
-use knowhere_rs::faiss::MemIndex;
 use knowhere_rs::api::{IndexConfig, IndexType, MetricType, SearchRequest};
+use knowhere_rs::faiss::MemIndex;
+use once_cell::sync::Lazy;
 
 #[derive(Parser)]
 #[command(name = "knowhere")]
@@ -72,20 +72,28 @@ static INDICES: Lazy<Mutex<HashMap<String, MemIndex>>> = Lazy::new(|| Mutex::new
 
 fn main() {
     let cli = Cli::parse();
-    
+
     match cli.command {
-        Commands::Create { name, dim, index_type, metric } => {
+        Commands::Create {
+            name,
+            dim,
+            index_type,
+            metric,
+        } => {
             let idx_type = IndexType::from_str(&index_type).unwrap_or(IndexType::Flat);
             let met = MetricType::from_str(&metric).unwrap_or(MetricType::L2);
-            
+
             let config = IndexConfig::new(idx_type, met, dim);
             let index = MemIndex::new(&config).expect("Failed to create index");
-            
+
             let mut indices = INDICES.lock().unwrap();
             indices.insert(name.clone(), index);
-            println!("Created index '{}' (dim={}, type={}, metric={})", name, dim, index_type, metric);
+            println!(
+                "Created index '{}' (dim={}, type={}, metric={})",
+                name, dim, index_type, metric
+            );
         }
-        
+
         Commands::Add { name, vectors_file } => {
             // Read binary vectors
             let data = std::fs::read(&vectors_file).expect("Failed to read vectors file");
@@ -93,7 +101,7 @@ fn main() {
                 .chunks(4)
                 .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
                 .collect();
-            
+
             let mut indices = INDICES.lock().unwrap();
             if let Some(index) = indices.get_mut(&name) {
                 let n = index.add(&vectors, None).expect("Failed to add vectors");
@@ -102,13 +110,13 @@ fn main() {
                 eprintln!("Index '{}' not found", name);
             }
         }
-        
+
         Commands::Search { name, query, top_k } => {
             let query_vec: Vec<f32> = query
                 .split(',')
                 .map(|s| s.trim().parse::<f32>().expect("Invalid query"))
                 .collect();
-            
+
             let indices = INDICES.lock().unwrap();
             if let Some(index) = indices.get(&name) {
                 let req = SearchRequest {
@@ -116,20 +124,23 @@ fn main() {
                     nprobe: 1,
                     filter: None,
                     params: None,
-            radius: None,
+                    radius: None,
                 };
-                
+
                 let result = index.search(&query_vec, &req).expect("Search failed");
-                
+
                 println!("Search results ({}ms):", result.elapsed_ms);
                 for i in 0..result.ids.len() {
-                    println!("  id={}, distance={:.4}", result.ids[i], result.distances[i]);
+                    println!(
+                        "  id={}, distance={:.4}",
+                        result.ids[i], result.distances[i]
+                    );
                 }
             } else {
                 eprintln!("Index '{}' not found", name);
             }
         }
-        
+
         Commands::Save { name, path } => {
             let indices = INDICES.lock().unwrap();
             if let Some(index) = indices.get(&name) {
@@ -139,12 +150,12 @@ fn main() {
                 eprintln!("Index '{}' not found", name);
             }
         }
-        
+
         Commands::Load { name, path, dim } => {
             let mut index = MemIndex::new(&IndexConfig::new(IndexType::Flat, MetricType::L2, dim))
                 .expect("Failed to create index");
             index.load(&path).expect("Failed to load index");
-            
+
             let mut indices = INDICES.lock().unwrap();
             indices.insert(name.clone(), index);
             println!("Loaded index '{}' from {:?} (dim={})", name, path, dim);

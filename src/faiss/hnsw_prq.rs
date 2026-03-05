@@ -1,16 +1,16 @@
 //! HNSW-PRQ Index Implementation
-//! 
+//!
 //! HNSW index with Product Residual Quantization for storage compression.
 //! Combines HNSW graph structure with PRQ for efficient vector storage and search.
 
-use std::collections::{HashMap, HashSet};
 use rand::Rng;
+use std::collections::{HashMap, HashSet};
 
 use crate::api::{MetricType, Result as ApiResult};
+use crate::bitset::BitsetView;
 use crate::dataset::Dataset;
 use crate::index::{Index, IndexError, SearchResult};
-use crate::bitset::BitsetView;
-use crate::quantization::prq::{ProductResidualQuantizer, PRQConfig};
+use crate::quantization::prq::{PRQConfig, ProductResidualQuantizer};
 
 /// Maximum number of layers in the HNSW graph
 const MAX_LAYERS: usize = 16;
@@ -99,6 +99,7 @@ pub struct LayerNeighbors {
 }
 
 impl LayerNeighbors {
+    #[allow(dead_code)]
     fn new() -> Self {
         Self {
             neighbors: Vec::new(),
@@ -185,7 +186,7 @@ impl HnswPrqIndex {
             max_beam_size: 5,
         };
         let prq = ProductResidualQuantizer::new(prq_config)?;
-        let code_size = prq.code_size();
+        let _code_size = prq.code_size();
 
         // Calculate level multiplier: m_l = 1 / ln(M)
         let level_multiplier = 1.0 / (config.m as f32).ln().max(1.0);
@@ -223,36 +224,21 @@ impl HnswPrqIndex {
     }
 
     /// Compute distance between two vectors
+    #[allow(dead_code)]
     fn compute_distance(&self, a: &[f32], b: &[f32]) -> f32 {
         match self.config.metric_type {
-            MetricType::L2 => {
-                a.iter()
-                    .zip(b.iter())
-                    .map(|(x, y)| (x - y).powi(2))
-                    .sum::<f32>()
-            }
-            MetricType::Ip => {
-                -a.iter()
-                    .zip(b.iter())
-                    .map(|(x, y)| x * y)
-                    .sum::<f32>()
-            }
+            MetricType::L2 => a
+                .iter()
+                .zip(b.iter())
+                .map(|(x, y)| (x - y).powi(2))
+                .sum::<f32>(),
+            MetricType::Ip => -a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>(),
             MetricType::Hamming | MetricType::Cosine => {
                 // Fallback to L2 for unsupported metrics
                 a.iter()
                     .zip(b.iter())
                     .map(|(x, y)| (x - y).powi(2))
                     .sum::<f32>()
-            }
-            MetricType::Cosine => {
-                let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-                let norm_a: f32 = a.iter().map(|x| x.powi(2)).sum::<f32>().sqrt();
-                let norm_b: f32 = b.iter().map(|x| x.powi(2)).sum::<f32>().sqrt();
-                if norm_a > 0.0 && norm_b > 0.0 {
-                    1.0 - dot / (norm_a * norm_b)
-                } else {
-                    0.0
-                }
             }
         }
     }
@@ -270,7 +256,9 @@ impl HnswPrqIndex {
         }
 
         // Train PRQ - note: prq.train returns ApiResult, need to convert
-        self.prq.train(vectors).map_err(|_| IndexError::Unsupported("PRQ train failed".into()))?;
+        self.prq
+            .train(vectors)
+            .map_err(|_| IndexError::Unsupported("PRQ train failed".into()))?;
         self.trained = true;
         Ok(())
     }
@@ -304,7 +292,9 @@ impl HnswPrqIndex {
 
             // Encode vector with PRQ
             let mut code = vec![0u8; code_size];
-            self.prq.encode(vec, &mut code).map_err(|_| IndexError::Unsupported("PRQ encode failed".into()))?;
+            self.prq
+                .encode(vec, &mut code)
+                .map_err(|_| IndexError::Unsupported("PRQ encode failed".into()))?;
 
             // Create node info
             let node_info = NodeInfo::new(node_level, self.config.m, code_size);
@@ -343,22 +333,17 @@ impl HnswPrqIndex {
 
     /// Insert a node into the HNSW graph
     fn insert_node(&mut self, idx: usize, vector: &[f32], node_level: usize) {
-        let mut entry_point = self.entry_point.unwrap();
+        let entry_point = self.entry_point.unwrap();
         let mut entry_point_idx = self.id_to_idx[&entry_point];
 
         // Search for entry point at each level from max_level down to node_level + 1
         for layer in (node_level + 1..=self.max_level).rev() {
             let ef = 1; // Greedy search at upper levels
-            let candidates = self.search_at_layer(
-                vector,
-                entry_point_idx,
-                layer,
-                ef,
-            );
+            let candidates = self.search_at_layer(vector, entry_point_idx, layer, ef);
 
             if let Some(&(best_idx, _)) = candidates.first() {
                 entry_point_idx = best_idx;
-                entry_point = self.ids[best_idx];
+                let _ = self.ids[best_idx];
             }
         }
 
@@ -370,12 +355,7 @@ impl HnswPrqIndex {
                 1
             };
 
-            let candidates = self.search_at_layer(
-                vector,
-                entry_point_idx,
-                layer,
-                ef,
-            );
+            let candidates = self.search_at_layer(vector, entry_point_idx, layer, ef);
 
             // Select neighbors using heuristics
             let neighbors = self.select_neighbors(candidates, layer);
@@ -394,7 +374,8 @@ impl HnswPrqIndex {
             for &(n_idx, dist) in &neighbors {
                 // Only connect if the neighbor exists at this layer
                 if layer <= self.node_info[n_idx].max_layer {
-                    let neighbors_list = &mut self.node_info[n_idx].layer_neighbors[layer].neighbors;
+                    let neighbors_list =
+                        &mut self.node_info[n_idx].layer_neighbors[layer].neighbors;
                     if neighbors_list.len() < max_m {
                         neighbors_list.push((self.ids[idx], dist));
                     } else {
@@ -429,7 +410,8 @@ impl HnswPrqIndex {
         let mut results: Vec<(usize, f32)> = Vec::new(); // (idx, distance)
 
         // Initialize with entry point
-        let entry_dist = self.compute_distance_to_code(query, &self.node_info[entry_point_idx].code);
+        let entry_dist =
+            self.compute_distance_to_code(query, &self.node_info[entry_point_idx].code);
         candidates.push((entry_dist, entry_point_idx));
         visited.insert(entry_point_idx);
 
@@ -451,8 +433,10 @@ impl HnswPrqIndex {
                     if let Some(&neighbor_idx) = self.id_to_idx.get(&neighbor_id) {
                         if !visited.contains(&neighbor_idx) {
                             visited.insert(neighbor_idx);
-                            let neighbor_dist =
-                                self.compute_distance_to_code(query, &self.node_info[neighbor_idx].code);
+                            let neighbor_dist = self.compute_distance_to_code(
+                                query,
+                                &self.node_info[neighbor_idx].code,
+                            );
                             candidates.push((neighbor_dist, neighbor_idx));
                             candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
                         }
@@ -474,7 +458,12 @@ impl HnswPrqIndex {
     }
 
     /// Search for nearest neighbors
-    pub fn search(&self, query: &[f32], top_k: usize, bitset: Option<&BitsetView>) -> Result<SearchResult, IndexError> {
+    pub fn search(
+        &self,
+        query: &[f32],
+        top_k: usize,
+        bitset: Option<&BitsetView>,
+    ) -> Result<SearchResult, IndexError> {
         if !self.trained || self.ids.is_empty() {
             return Err(IndexError::NotTrained);
         }
@@ -505,12 +494,7 @@ impl HnswPrqIndex {
 
         // Final search at layer 0 with ef_search
         let ef = self.config.ef_search.max(top_k);
-        let candidates = self.search_at_layer(
-            query,
-            current_idx,
-            0,
-            ef,
-        );
+        let candidates = self.search_at_layer(query, current_idx, 0, ef);
 
         // Apply bitset filter and collect results
         let mut results: Vec<(i64, f32)> = Vec::new();
@@ -548,11 +532,12 @@ impl HnswPrqIndex {
     pub fn size(&self) -> usize {
         let node_info_size = self.node_info.len() * std::mem::size_of::<NodeInfo>();
         let ids_size = self.ids.len() * std::mem::size_of::<i64>();
-        let id_to_idx_size = self.id_to_idx.len() * (std::mem::size_of::<i64>() + std::mem::size_of::<usize>());
-        
+        let id_to_idx_size =
+            self.id_to_idx.len() * (std::mem::size_of::<i64>() + std::mem::size_of::<usize>());
+
         // Approximate PRQ size
         let prq_size = self.prq.size();
-        
+
         node_info_size + ids_size + id_to_idx_size + prq_size
     }
 
@@ -612,11 +597,15 @@ impl Index for HnswPrqIndex {
     }
 
     fn save(&self, _path: &str) -> Result<(), IndexError> {
-        Err(IndexError::Unsupported("serialization not implemented".into()))
+        Err(IndexError::Unsupported(
+            "serialization not implemented".into(),
+        ))
     }
 
     fn load(&mut self, _path: &str) -> Result<(), IndexError> {
-        Err(IndexError::Unsupported("deserialization not implemented".into()))
+        Err(IndexError::Unsupported(
+            "deserialization not implemented".into(),
+        ))
     }
 }
 
@@ -644,7 +633,7 @@ mod tests {
             .with_m(8)
             .with_ef_construction(100)
             .with_ef_search(32)
-            .with_prq_params(2, 4, 6);  // Reduced nbits from 8 to 6 (64 codebooks)
+            .with_prq_params(2, 4, 6); // Reduced nbits from 8 to 6 (64 codebooks)
 
         let mut index = HnswPrqIndex::new(config).unwrap();
 

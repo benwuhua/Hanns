@@ -1,9 +1,7 @@
 //! Raw Faiss FFI bindings
-//! 
+//!
 //! This module provides unsafe FFI bindings to Faiss C API.
 //! In production, use `cxx` or `rust-cpp` for safer bindings.
-
-use std::ffi::c_char;
 
 /// Faiss return codes
 pub const FAISS_SUCCESS: i32 = 0;
@@ -55,11 +53,7 @@ extern "C" {
 /// Add vectors to the index
 #[cfg(feature = "ffi")]
 extern "C" {
-    pub fn faiss_index_add(
-        index: *mut FaissIndex,
-        x: *const f32,
-        n: i64,
-    ) -> i32;
+    pub fn faiss_index_add(index: *mut FaissIndex, x: *const f32, n: i64) -> i32;
 }
 
 /// Search the index
@@ -77,11 +71,7 @@ extern "C" {
 /// Train the index
 #[cfg(feature = "ffi")]
 extern "C" {
-    pub fn faiss_index_train(
-        index: *mut FaissIndex,
-        x: *const f32,
-        n: i64,
-    ) -> i32;
+    pub fn faiss_index_train(index: *mut FaissIndex, x: *const f32, n: i64) -> i32;
 }
 
 /// Reset the index (remove all vectors)
@@ -93,18 +83,13 @@ extern "C" {
 /// Write index to file
 #[cfg(feature = "ffi")]
 extern "C" {
-    pub fn faiss_index_write(
-        index: *mut FaissIndex,
-        path: *const c_char,
-    ) -> i32;
+    pub fn faiss_index_write(index: *mut FaissIndex, path: *const c_char) -> i32;
 }
 
 /// Read index from file
 #[cfg(feature = "ffi")]
 extern "C" {
-    pub fn faiss_index_read(
-        path: *const c_char,
-    ) -> *mut FaissIndex;
+    pub fn faiss_index_read(path: *const c_char) -> *mut FaissIndex;
 }
 
 /// Check if index is trained

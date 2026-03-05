@@ -1,7 +1,12 @@
 //! C API 绑定定义
-//! 
+//!
 //! 供 Milvus C++ 调用
-//! 
+//!
+//! Safety: This module contains FFI functions that accept raw pointers.
+//! Callers must ensure pointers are valid and properly aligned.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+#![allow(clippy::missing_safety_doc)]
+//!
 //! # C API 使用示例
 //! ```c
 //! // 创建索引
@@ -11,50 +16,44 @@
 //!     .metric_type = 0,  // L2
 //! };
 //! CIndex* index = knowhere_create_index(config);
-//! 
+//!
 //! // 添加向量
 //! float vectors[] = { ... };  // 1000 vectors * 128 dim
 //! int64_t ids[] = { 0, 1, 2, ... };
 //! knowhere_add_index(index, vectors, ids, 1000, 128);
-//! 
+//!
 //! // 搜索
 //! float query[] = { ... };  // 1 * 128 dim
 //! CSearchResult* result = knowhere_search(index, query, 1, 10, 128);
-//! 
+//!
 //! // 获取结果
 //! for (size_t i = 0; i < result->num_results; i++) {
 //!     int64_t id = result->ids[i];
 //!     float dist = result->distances[i];
 //!     printf("id=%ld, dist=%f\n", id, dist);
 //! }
-//! 
+//!
 //! // 释放
 //! knowhere_free_result(result);
 //! knowhere_free_index(index);
 //! ```
 
-pub mod minhash_lsh_ffi;
 pub mod interrupt_ffi;
+pub mod minhash_lsh_ffi;
 
 // Re-export interrupt FFI types and functions for C API
 pub use interrupt_ffi::{
-    CInterrupt,
-    CInterruptError,
-    knowhere_interrupt_create,
-    knowhere_interrupt_create_with_state,
-    knowhere_interrupt_is_interrupted,
-    knowhere_interrupt_interrupt,
-    knowhere_interrupt_reset,
-    knowhere_interrupt_test_and_set,
-    knowhere_interrupt_clone,
-    knowhere_interrupt_free,
+    knowhere_interrupt_clone, knowhere_interrupt_create, knowhere_interrupt_create_with_state,
+    knowhere_interrupt_free, knowhere_interrupt_interrupt, knowhere_interrupt_is_interrupted,
+    knowhere_interrupt_reset, knowhere_interrupt_test_and_set, CInterrupt, CInterruptError,
 };
 
-use std::path::Path;
-use crate::api::{IndexConfig, IndexType, MetricType, IndexParams, SearchRequest, SearchResult as ApiSearchResult, Result as ApiResult};
-use crate::dataset::Dataset;
-use crate::faiss::{MemIndex, HnswIndex, ScaNNIndex, ScaNNConfig, SparseMetricType};
+use crate::api::{
+    IndexConfig, IndexParams, IndexType, MetricType, SearchRequest, SearchResult as ApiSearchResult,
+};
+use crate::faiss::{HnswIndex, MemIndex, ScaNNConfig, ScaNNIndex};
 use crate::index::Index;
+use std::path::Path;
 
 /// C API 错误码
 #[repr(i32)]
@@ -153,7 +152,7 @@ pub struct CSearchResult {
 }
 
 /// C 风格的范围搜索结果
-/// 
+///
 /// 对应 C++ knowhere 的 RangeSearch 结果
 /// 包含满足半径阈值的所有向量
 #[repr(C)]
@@ -185,7 +184,7 @@ pub struct CVectorResult {
 }
 
 /// C 风格的 GetVectorByIds 结果
-/// 
+///
 /// 用于 knowhere_get_vector_by_ids 返回的结果结构
 #[repr(C)]
 #[derive(Debug)]
@@ -225,14 +224,14 @@ impl IndexWrapper {
         if dim == 0 {
             return None;
         }
-        
+
         let metric: MetricType = match config.metric_type {
             CMetricType::L2 => MetricType::L2,
             CMetricType::Ip => MetricType::Ip,
             CMetricType::Cosine => MetricType::Cosine,
             CMetricType::Hamming => MetricType::Hamming,
         };
-        
+
         match config.index_type {
             CIndexType::Flat => {
                 let index_config = IndexConfig {
@@ -242,7 +241,23 @@ impl IndexWrapper {
                     params: IndexParams::default(),
                 };
                 let flat = MemIndex::new(&index_config).ok()?;
-                Some(Self { flat: Some(flat), hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim })
+                Some(Self {
+                    flat: Some(flat),
+                    hnsw: None,
+                    scann: None,
+                    hnsw_prq: None,
+                    ivf_rabitq: None,
+                    hnsw_sq: None,
+                    hnsw_pq: None,
+                    bin_flat: None,
+                    binary_hnsw: None,
+                    ivf_sq8: None,
+                    bin_ivf_flat: None,
+                    sparse_wand: None,
+                    sparse_wand_cc: None,
+                    minhash_lsh: None,
+                    dim,
+                })
             }
             CIndexType::Hnsw => {
                 let mut index_config = IndexConfig {
@@ -258,7 +273,23 @@ impl IndexWrapper {
                     index_config.params.ef_search = Some(config.ef_search);
                 }
                 let hnsw = HnswIndex::new(&index_config).ok()?;
-                Some(Self { flat: None, hnsw: Some(hnsw), scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim })
+                Some(Self {
+                    flat: None,
+                    hnsw: Some(hnsw),
+                    scann: None,
+                    hnsw_prq: None,
+                    ivf_rabitq: None,
+                    hnsw_sq: None,
+                    hnsw_pq: None,
+                    bin_flat: None,
+                    binary_hnsw: None,
+                    ivf_sq8: None,
+                    bin_ivf_flat: None,
+                    sparse_wand: None,
+                    sparse_wand_cc: None,
+                    minhash_lsh: None,
+                    dim,
+                })
             }
             CIndexType::Scann => {
                 let num_partitions = if config.num_partitions > 0 {
@@ -278,104 +309,269 @@ impl IndexWrapper {
                 };
                 let scann_config = ScaNNConfig::new(num_partitions, num_centroids, reorder_k);
                 let scann = ScaNNIndex::new(dim, scann_config).ok()?;
-                Some(Self { flat: None, hnsw: None, scann: Some(scann), hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim })
+                Some(Self {
+                    flat: None,
+                    hnsw: None,
+                    scann: Some(scann),
+                    hnsw_prq: None,
+                    ivf_rabitq: None,
+                    hnsw_sq: None,
+                    hnsw_pq: None,
+                    bin_flat: None,
+                    binary_hnsw: None,
+                    ivf_sq8: None,
+                    bin_ivf_flat: None,
+                    sparse_wand: None,
+                    sparse_wand_cc: None,
+                    minhash_lsh: None,
+                    dim,
+                })
             }
             CIndexType::HnswPrq => {
-                let mut index_config = IndexConfig {
+                let _index_config = IndexConfig {
                     index_type: IndexType::HnswPrq,
                     metric_type: metric,
                     dim,
                     params: IndexParams {
                         m: Some(16),
-                        ef_construction: if config.ef_construction > 0 { Some(config.ef_construction) } else { None },
-                        ef_search: if config.ef_search > 0 { Some(config.ef_search) } else { None },
-                        prq_m: Some(if config.prq_nsplits > 0 { config.prq_nsplits } else { 2 }),
-                        prq_nrq: Some(if config.prq_msub > 0 { config.prq_msub } else { 4 }),
-                        prq_nbits: Some(if config.prq_nbits > 0 { config.prq_nbits } else { 8 }),
+                        ef_construction: if config.ef_construction > 0 {
+                            Some(config.ef_construction)
+                        } else {
+                            None
+                        },
+                        ef_search: if config.ef_search > 0 {
+                            Some(config.ef_search)
+                        } else {
+                            None
+                        },
+                        prq_m: Some(if config.prq_nsplits > 0 {
+                            config.prq_nsplits
+                        } else {
+                            2
+                        }),
+                        prq_nrq: Some(if config.prq_msub > 0 {
+                            config.prq_msub
+                        } else {
+                            4
+                        }),
+                        prq_nbits: Some(if config.prq_nbits > 0 {
+                            config.prq_nbits
+                        } else {
+                            8
+                        }),
                         ..Default::default()
                     },
                 };
-                
+
                 let hnsw_prq_config = crate::faiss::HnswPrqConfig::new(dim)
                     .with_m(16)
                     .with_ef_construction(config.ef_construction)
                     .with_ef_search(config.ef_search)
                     .with_prq_params(
-                        if config.prq_nsplits > 0 { config.prq_nsplits } else { 2 },
-                        if config.prq_msub > 0 { config.prq_msub } else { 4 },
-                        if config.prq_nbits > 0 { config.prq_nbits } else { 8 },
+                        if config.prq_nsplits > 0 {
+                            config.prq_nsplits
+                        } else {
+                            2
+                        },
+                        if config.prq_msub > 0 {
+                            config.prq_msub
+                        } else {
+                            4
+                        },
+                        if config.prq_nbits > 0 {
+                            config.prq_nbits
+                        } else {
+                            8
+                        },
                     )
                     .with_metric_type(metric);
-                
+
                 let hnsw_prq = crate::faiss::HnswPrqIndex::new(hnsw_prq_config).ok()?;
-                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: Some(hnsw_prq), ivf_rabitq: None, hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim })
+                Some(Self {
+                    flat: None,
+                    hnsw: None,
+                    scann: None,
+                    hnsw_prq: Some(hnsw_prq),
+                    ivf_rabitq: None,
+                    hnsw_sq: None,
+                    hnsw_pq: None,
+                    bin_flat: None,
+                    binary_hnsw: None,
+                    ivf_sq8: None,
+                    bin_ivf_flat: None,
+                    sparse_wand: None,
+                    sparse_wand_cc: None,
+                    minhash_lsh: None,
+                    dim,
+                })
             }
             CIndexType::IvfRabitq => {
-                let nlist = if config.num_clusters > 0 { config.num_clusters } else { 256 };
+                let nlist = if config.num_clusters > 0 {
+                    config.num_clusters
+                } else {
+                    256
+                };
                 let nprobe = if config.nprobe > 0 { config.nprobe } else { 8 };
-                
+
                 let ivf_rabitq_config = crate::faiss::IvfRaBitqConfig::new(dim, nlist)
                     .with_nprobe(nprobe)
                     .with_metric(metric);
-                
+
                 let ivf_rabitq = crate::faiss::IvfRaBitqIndex::new(ivf_rabitq_config);
-                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: Some(ivf_rabitq), hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim })
+                Some(Self {
+                    flat: None,
+                    hnsw: None,
+                    scann: None,
+                    hnsw_prq: None,
+                    ivf_rabitq: Some(ivf_rabitq),
+                    hnsw_sq: None,
+                    hnsw_pq: None,
+                    bin_flat: None,
+                    binary_hnsw: None,
+                    ivf_sq8: None,
+                    bin_ivf_flat: None,
+                    sparse_wand: None,
+                    sparse_wand_cc: None,
+                    minhash_lsh: None,
+                    dim,
+                })
             }
             CIndexType::HnswSq => {
-                let ef_construction = if config.ef_construction > 0 { config.ef_construction } else { 200 };
-                let ef_search = if config.ef_search > 0 { config.ef_search } else { 50 };
-                let sq_bit = if config.prq_nbits > 0 { config.prq_nbits } else { 8 };
-                
-                let mut hnsw_sq = crate::faiss::HnswSqIndex::new(dim);
-                
+                let ef_construction = if config.ef_construction > 0 {
+                    config.ef_construction
+                } else {
+                    200
+                };
+                let ef_search = if config.ef_search > 0 {
+                    config.ef_search
+                } else {
+                    50
+                };
+                let sq_bit = if config.prq_nbits > 0 {
+                    config.prq_nbits
+                } else {
+                    8
+                };
+
+                let hnsw_sq = crate::faiss::HnswSqIndex::new(dim);
+
                 // Set config parameters
-                let mut hnsw_config = crate::faiss::HnswQuantizeConfig::default();
-                hnsw_config.ef_construction = ef_construction;
-                hnsw_config.ef_search = ef_search;
-                hnsw_config.sq_bit = sq_bit;
-                
+                let mut _hnsw_config = crate::faiss::HnswQuantizeConfig::default();
+                _hnsw_config.ef_construction = ef_construction;
+                _hnsw_config.ef_search = ef_search;
+                _hnsw_config.sq_bit = sq_bit;
+
                 // Store config in index (simplified - HnswSqIndex needs config support)
-                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: Some(hnsw_sq), hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim })
+                Some(Self {
+                    flat: None,
+                    hnsw: None,
+                    scann: None,
+                    hnsw_prq: None,
+                    ivf_rabitq: None,
+                    hnsw_sq: Some(hnsw_sq),
+                    hnsw_pq: None,
+                    bin_flat: None,
+                    binary_hnsw: None,
+                    ivf_sq8: None,
+                    bin_ivf_flat: None,
+                    sparse_wand: None,
+                    sparse_wand_cc: None,
+                    minhash_lsh: None,
+                    dim,
+                })
             }
             CIndexType::HnswPq => {
-                let pq_m = if config.prq_nsplits > 0 { config.prq_nsplits } else { 8 };
-                let pq_k = if config.prq_msub > 0 { config.prq_msub } else { 256 };
-                
+                let pq_m = if config.prq_nsplits > 0 {
+                    config.prq_nsplits
+                } else {
+                    8
+                };
+                let pq_k = if config.prq_msub > 0 {
+                    config.prq_msub
+                } else {
+                    256
+                };
+
                 let hnsw_pq_config = crate::faiss::HnswPqConfig::new(dim)
                     .with_m(16)
                     .with_ef_construction(config.ef_construction)
                     .with_ef_search(config.ef_search)
                     .with_pq_params(pq_m, pq_k)
                     .with_metric_type(metric);
-                
+
                 let hnsw_pq = crate::faiss::HnswPqIndex::new(hnsw_pq_config).ok()?;
-                Some(Self { flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, hnsw_sq: None, hnsw_pq: Some(hnsw_pq), bin_flat: None, binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim })
+                Some(Self {
+                    flat: None,
+                    hnsw: None,
+                    scann: None,
+                    hnsw_prq: None,
+                    ivf_rabitq: None,
+                    hnsw_sq: None,
+                    hnsw_pq: Some(hnsw_pq),
+                    bin_flat: None,
+                    binary_hnsw: None,
+                    ivf_sq8: None,
+                    bin_ivf_flat: None,
+                    sparse_wand: None,
+                    sparse_wand_cc: None,
+                    minhash_lsh: None,
+                    dim,
+                })
             }
             CIndexType::IvfSq8 => {
                 // IVF-SQ8 index with scalar quantization
-                let nlist = if config.num_centroids > 0 { config.num_centroids } else { 256 };
+                let nlist = if config.num_centroids > 0 {
+                    config.num_centroids
+                } else {
+                    256
+                };
                 let nprobe = if config.nprobe > 0 { config.nprobe } else { 8 };
-                
-                let mut index_config = IndexConfig {
+
+                let index_config = IndexConfig {
                     index_type: IndexType::IvfSq8,
                     metric_type: metric,
                     dim,
                     params: IndexParams::ivf_sq8(nlist, nprobe),
                 };
-                
+
                 let ivf_sq8 = crate::faiss::IvfSq8Index::new(&index_config).ok()?;
-                Some(Self { 
-                    flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
-                    hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, 
-                    ivf_sq8: Some(ivf_sq8), bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim 
+                Some(Self {
+                    flat: None,
+                    hnsw: None,
+                    scann: None,
+                    hnsw_prq: None,
+                    ivf_rabitq: None,
+                    hnsw_sq: None,
+                    hnsw_pq: None,
+                    bin_flat: None,
+                    binary_hnsw: None,
+                    ivf_sq8: Some(ivf_sq8),
+                    bin_ivf_flat: None,
+                    sparse_wand: None,
+                    sparse_wand_cc: None,
+                    minhash_lsh: None,
+                    dim,
                 })
             }
             CIndexType::BinFlat => {
                 // Binary Flat index for binary vectors with Hamming distance
                 let bin_flat = crate::faiss::BinFlatIndex::new(dim, metric);
-                Some(Self { 
-                    flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
-                    hnsw_sq: None, hnsw_pq: None, bin_flat: Some(bin_flat), binary_hnsw: None, ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim 
+                Some(Self {
+                    flat: None,
+                    hnsw: None,
+                    scann: None,
+                    hnsw_prq: None,
+                    ivf_rabitq: None,
+                    hnsw_sq: None,
+                    hnsw_pq: None,
+                    bin_flat: Some(bin_flat),
+                    binary_hnsw: None,
+                    ivf_sq8: None,
+                    bin_ivf_flat: None,
+                    sparse_wand: None,
+                    sparse_wand_cc: None,
+                    minhash_lsh: None,
+                    dim,
                 })
             }
             CIndexType::BinaryHnsw => {
@@ -393,9 +589,22 @@ impl IndexWrapper {
                     index_config.params.ef_search = Some(config.ef_search);
                 }
                 if let Ok(hnsw) = crate::faiss::BinaryHnswIndex::new(&index_config) {
-                    Some(Self { 
-                        flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
-                        hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: Some(hnsw), ivf_sq8: None, bin_ivf_flat: None, sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None, dim 
+                    Some(Self {
+                        flat: None,
+                        hnsw: None,
+                        scann: None,
+                        hnsw_prq: None,
+                        ivf_rabitq: None,
+                        hnsw_sq: None,
+                        hnsw_pq: None,
+                        bin_flat: None,
+                        binary_hnsw: Some(hnsw),
+                        ivf_sq8: None,
+                        bin_ivf_flat: None,
+                        sparse_wand: None,
+                        sparse_wand_cc: None,
+                        minhash_lsh: None,
+                        dim,
                     })
                 } else {
                     None
@@ -403,16 +612,31 @@ impl IndexWrapper {
             }
             CIndexType::BinIvfFlat => {
                 // Binary IVF Flat index for binary vectors with Hamming distance
-                let nlist = if config.num_clusters > 0 { config.num_clusters } else { 256 };
+                let nlist = if config.num_clusters > 0 {
+                    config.num_clusters
+                } else {
+                    256
+                };
                 let mut bin_ivf_flat = crate::faiss::BinIvfFlatIndex::new(dim, nlist, metric);
                 if config.nprobe > 0 {
                     bin_ivf_flat.set_nprobe(config.nprobe);
                 }
-                Some(Self { 
-                    flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
-                    hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, 
-                    bin_ivf_flat: Some(bin_ivf_flat), dim,
-                    sparse_wand: None, sparse_wand_cc: None, minhash_lsh: None,
+                Some(Self {
+                    flat: None,
+                    hnsw: None,
+                    scann: None,
+                    hnsw_prq: None,
+                    ivf_rabitq: None,
+                    hnsw_sq: None,
+                    hnsw_pq: None,
+                    bin_flat: None,
+                    binary_hnsw: None,
+                    ivf_sq8: None,
+                    bin_ivf_flat: Some(bin_ivf_flat),
+                    dim,
+                    sparse_wand: None,
+                    sparse_wand_cc: None,
+                    minhash_lsh: None,
                 })
             }
             CIndexType::SparseWand => {
@@ -423,11 +647,22 @@ impl IndexWrapper {
                     _ => SparseMetricType::Ip,
                 };
                 let sparse_wand = crate::faiss::SparseWandIndex::new(sparse_metric);
-                Some(Self { 
-                    flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
-                    hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, 
-                    bin_ivf_flat: None, dim,
-                    sparse_wand: Some(sparse_wand), sparse_wand_cc: None, minhash_lsh: None,
+                Some(Self {
+                    flat: None,
+                    hnsw: None,
+                    scann: None,
+                    hnsw_prq: None,
+                    ivf_rabitq: None,
+                    hnsw_sq: None,
+                    hnsw_pq: None,
+                    bin_flat: None,
+                    binary_hnsw: None,
+                    ivf_sq8: None,
+                    bin_ivf_flat: None,
+                    dim,
+                    sparse_wand: Some(sparse_wand),
+                    sparse_wand_cc: None,
+                    minhash_lsh: None,
                 })
             }
             CIndexType::SparseWandCc => {
@@ -437,29 +672,55 @@ impl IndexWrapper {
                     MetricType::Ip => SparseMetricType::Ip,
                     _ => SparseMetricType::Ip,
                 };
-                let ssize = if config.num_partitions > 0 { config.num_partitions } else { 1000 };
+                let ssize = if config.num_partitions > 0 {
+                    config.num_partitions
+                } else {
+                    1000
+                };
                 let sparse_wand_cc = crate::faiss::SparseWandIndexCC::new(sparse_metric, ssize);
-                Some(Self { 
-                    flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
-                    hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, 
-                    bin_ivf_flat: None, dim,
-                    sparse_wand: None, sparse_wand_cc: Some(sparse_wand_cc), minhash_lsh: None,
+                Some(Self {
+                    flat: None,
+                    hnsw: None,
+                    scann: None,
+                    hnsw_prq: None,
+                    ivf_rabitq: None,
+                    hnsw_sq: None,
+                    hnsw_pq: None,
+                    bin_flat: None,
+                    binary_hnsw: None,
+                    ivf_sq8: None,
+                    bin_ivf_flat: None,
+                    dim,
+                    sparse_wand: None,
+                    sparse_wand_cc: Some(sparse_wand_cc),
+                    minhash_lsh: None,
                 })
             }
             CIndexType::MinHashLsh => {
                 // MinHash-LSH index for Jaccard similarity
                 let minhash_lsh = crate::index::MinHashLSHIndex::new();
-                Some(Self { 
-                    flat: None, hnsw: None, scann: None, hnsw_prq: None, ivf_rabitq: None, 
-                    hnsw_sq: None, hnsw_pq: None, bin_flat: None, binary_hnsw: None, ivf_sq8: None, 
-                    bin_ivf_flat: None, dim,
-                    sparse_wand: None, sparse_wand_cc: None, minhash_lsh: Some(minhash_lsh),
+                Some(Self {
+                    flat: None,
+                    hnsw: None,
+                    scann: None,
+                    hnsw_prq: None,
+                    ivf_rabitq: None,
+                    hnsw_sq: None,
+                    hnsw_pq: None,
+                    bin_flat: None,
+                    binary_hnsw: None,
+                    ivf_sq8: None,
+                    bin_ivf_flat: None,
+                    dim,
+                    sparse_wand: None,
+                    sparse_wand_cc: None,
+                    minhash_lsh: Some(minhash_lsh),
                 })
             }
             _ => None,
         }
     }
-    
+
     fn add(&mut self, vectors: &[f32], ids: Option<&[i64]>) -> Result<usize, CError> {
         if let Some(ref mut idx) = self.flat {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
@@ -488,16 +749,20 @@ impl IndexWrapper {
             } else {
                 (0..n_vectors as i64).collect()
             };
-            
+
             for (i, chunk) in vectors.chunks_exact(dim).enumerate() {
-                let elements: Vec<crate::faiss::sparse_inverted::SparseVecElement> = chunk.iter()
+                let elements: Vec<crate::faiss::sparse_inverted::SparseVecElement> = chunk
+                    .iter()
                     .enumerate()
                     .filter(|(_, &v)| v != 0.0)
-                    .map(|(j, &v)| crate::faiss::sparse_inverted::SparseVecElement { dim: j as u32, val: v })
+                    .map(|(j, &v)| crate::faiss::sparse_inverted::SparseVecElement {
+                        dim: j as u32,
+                        val: v,
+                    })
                     .collect();
                 let sparse_vec = crate::faiss::sparse_inverted::SparseVector { elements };
                 let doc_id = ids_vec.get(i).copied().unwrap_or(i as i64);
-                if let Err(_) = idx.add(&sparse_vec, doc_id) {
+                if idx.add(&sparse_vec, doc_id).is_err() {
                     return Err(CError::Internal);
                 }
             }
@@ -506,21 +771,23 @@ impl IndexWrapper {
             Err(CError::InvalidArg)
         }
     }
-    
+
     /// Add binary vectors (for BinFlat, BinaryHnsw, BinIvfFlat, and MinHashLSH)
     fn add_binary(&mut self, vectors: &[u8], ids: Option<&[i64]>) -> Result<usize, CError> {
         if let Some(ref mut idx) = self.bin_flat {
-            let dim_bytes = (idx.dim() + 7) / 8;
+            let dim_bytes = idx.dim().div_ceil(8);
             let n = vectors.len() / dim_bytes;
-            idx.add(n as u32, vectors, ids).map_err(|_| CError::Internal)?;
+            idx.add(n as u32, vectors, ids)
+                .map_err(|_| CError::Internal)?;
             Ok(n)
         } else if let Some(ref mut idx) = self.binary_hnsw {
             // BinaryHnswIndex::add returns the number of vectors added
             idx.add(vectors, ids).map_err(|_| CError::Internal)
         } else if let Some(ref mut idx) = self.bin_ivf_flat {
-            let dim_bytes = (idx.dim() + 7) / 8;
+            let dim_bytes = idx.dim().div_ceil(8);
             let n = vectors.len() / dim_bytes;
-            idx.add(n as u32, vectors, ids).map_err(|_| CError::Internal)?;
+            idx.add(n as u32, vectors, ids)
+                .map_err(|_| CError::Internal)?;
             Ok(n)
         } else if let Some(ref mut idx) = self.minhash_lsh {
             // MinHashLSH: build index from binary data
@@ -530,14 +797,20 @@ impl IndexWrapper {
             let mh_vec_element_size = 8; // u64
             let bands = 4;
             let with_raw_data = true;
-            idx.build(vectors, mh_vec_length, mh_vec_element_size, bands, with_raw_data)
-                .map_err(|_| CError::Internal)?;
+            idx.build(
+                vectors,
+                mh_vec_length,
+                mh_vec_element_size,
+                bands,
+                with_raw_data,
+            )
+            .map_err(|_| CError::Internal)?;
             Ok(idx.count())
         } else {
             Err(CError::InvalidArg)
         }
     }
-    
+
     fn train(&mut self, vectors: &[f32]) -> Result<(), CError> {
         if let Some(ref mut idx) = self.flat {
             idx.train(vectors).map_err(|_| CError::Internal)?;
@@ -567,7 +840,7 @@ impl IndexWrapper {
             Err(CError::InvalidArg)
         }
     }
-    
+
     fn search(&self, query: &[f32], top_k: usize) -> Result<ApiSearchResult, CError> {
         let req = SearchRequest {
             top_k,
@@ -587,28 +860,48 @@ impl IndexWrapper {
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
             let (ids, distances): (Vec<i64>, Vec<f32>) = results.into_iter().unzip();
-            let num_visited = ids.len();
+            let _num_visited = ids.len();
             Ok(ApiSearchResult::new(ids, distances, elapsed_ms))
         } else if let Some(ref idx) = self.hnsw_prq {
             let start = std::time::Instant::now();
-            let results = idx.search(query, top_k, None).map_err(|_| CError::Internal)?;
+            let results = idx
+                .search(query, top_k, None)
+                .map_err(|_| CError::Internal)?;
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-            Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
+            Ok(ApiSearchResult::new(
+                results.ids,
+                results.distances,
+                elapsed_ms,
+            ))
         } else if let Some(ref idx) = self.ivf_rabitq {
             let start = std::time::Instant::now();
             let results = idx.search(query, &req).map_err(|_| CError::Internal)?;
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-            Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
+            Ok(ApiSearchResult::new(
+                results.ids,
+                results.distances,
+                elapsed_ms,
+            ))
         } else if let Some(ref idx) = self.hnsw_sq {
             let start = std::time::Instant::now();
             let results = idx.search(query, &req).map_err(|_| CError::Internal)?;
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-            Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
+            Ok(ApiSearchResult::new(
+                results.ids,
+                results.distances,
+                elapsed_ms,
+            ))
         } else if let Some(ref idx) = self.hnsw_pq {
             let start = std::time::Instant::now();
-            let results = idx.search(query, top_k, None).map_err(|_| CError::Internal)?;
+            let results = idx
+                .search(query, top_k, None)
+                .map_err(|_| CError::Internal)?;
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-            Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
+            Ok(ApiSearchResult::new(
+                results.ids,
+                results.distances,
+                elapsed_ms,
+            ))
         } else if let Some(ref idx) = self.ivf_sq8 {
             let req = SearchRequest {
                 top_k,
@@ -620,28 +913,36 @@ impl IndexWrapper {
             let start = std::time::Instant::now();
             let results = idx.search(query, &req).map_err(|_| CError::Internal)?;
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-            Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
+            Ok(ApiSearchResult::new(
+                results.ids,
+                results.distances,
+                elapsed_ms,
+            ))
         } else if let Some(ref idx) = self.sparse_wand {
             // Sparse WAND search: convert query to sparse vector
-            let dim = self.dim;
-            let elements: Vec<crate::faiss::sparse_inverted::SparseVecElement> = query.iter()
+            let _dim = self.dim;
+            let elements: Vec<crate::faiss::sparse_inverted::SparseVecElement> = query
+                .iter()
                 .enumerate()
                 .filter(|(_, &v)| v != 0.0)
-                .map(|(j, &v)| crate::faiss::sparse_inverted::SparseVecElement { dim: j as u32, val: v })
+                .map(|(j, &v)| crate::faiss::sparse_inverted::SparseVecElement {
+                    dim: j as u32,
+                    val: v,
+                })
                 .collect();
             let sparse_query = crate::faiss::sparse_inverted::SparseVector { elements };
-            
+
             let start = std::time::Instant::now();
             let results = idx.search(&sparse_query, top_k, None);
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-            
+
             let (ids, distances): (Vec<i64>, Vec<f32>) = results.into_iter().unzip();
             Ok(ApiSearchResult::new(ids, distances, elapsed_ms))
         } else {
             Err(CError::InvalidArg)
         }
     }
-    
+
     /// Search binary vectors (for BinFlat, BinaryHnsw, BinIvfFlat, and MinHashLSH)
     /// Returns distances as f32 (converted from usize Hamming distance)
     fn search_binary(&self, query: &[u8], top_k: usize) -> Result<ApiSearchResult, CError> {
@@ -649,10 +950,10 @@ impl IndexWrapper {
             let nq = 1; // Single query for now
             let mut dists = vec![0.0f32; top_k];
             let mut ids = vec![0i64; top_k];
-            
+
             idx.search(nq as u32, query, top_k as i32, &mut dists, &mut ids)
                 .map_err(|_| CError::Internal)?;
-            
+
             Ok(ApiSearchResult::new(ids, dists, 0.0))
         } else if let Some(ref idx) = self.binary_hnsw {
             // BinaryHnswIndex has a different search API that returns ApiSearchResult directly
@@ -661,15 +962,16 @@ impl IndexWrapper {
             let nq = 1; // Single query for now
             let mut dists = vec![0.0f32; top_k];
             let mut ids = vec![0i64; top_k];
-            
+
             idx.search(nq as u32, query, top_k as i32, &mut dists, &mut ids)
                 .map_err(|_| CError::Internal)?;
-            
+
             Ok(ApiSearchResult::new(ids, dists, 0.0))
         } else if let Some(ref idx) = self.minhash_lsh {
             // MinHashLSH search
             let start = std::time::Instant::now();
-            let (ids, distances) = idx.search(query, top_k, None)
+            let (ids, distances) = idx
+                .search(query, top_k, None)
                 .map_err(|_| CError::Internal)?;
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
             Ok(ApiSearchResult::new(ids, distances, elapsed_ms))
@@ -677,13 +979,13 @@ impl IndexWrapper {
             Err(CError::InvalidArg)
         }
     }
-    
+
     /// Range search: find all vectors within radius
-    /// 
+    ///
     /// # Arguments
     /// * `query` - Query vectors (num_queries * dim)
     /// * `radius` - Search radius threshold
-    /// 
+    ///
     /// # Returns
     /// * `ids` - All matching vector IDs
     /// * `distances` - Corresponding distances
@@ -695,12 +997,14 @@ impl IndexWrapper {
         radius: f32,
     ) -> Result<(Vec<i64>, Vec<f32>, Vec<usize>, f64), CError> {
         let num_queries = query.len() / self.dim;
-        
+
         if let Some(ref idx) = self.flat {
             let start = std::time::Instant::now();
-            let (ids, distances) = idx.range_search(query, radius).map_err(|_| CError::Internal)?;
+            let (ids, distances) = idx
+                .range_search(query, radius)
+                .map_err(|_| CError::Internal)?;
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-            
+
             // Build lims array: each query returns all results
             // For simplicity, assume uniform distribution
             let lims: Vec<usize> = if num_queries > 0 {
@@ -709,12 +1013,12 @@ impl IndexWrapper {
             } else {
                 vec![0]
             };
-            
+
             Ok((ids, distances, lims, elapsed_ms))
         } else if let Some(ref _idx) = self.hnsw {
             // HNSW range search: not yet implemented
-            return Err(CError::NotImplemented);
-        } else if let Some(ref idx) = self.scann {
+            Err(CError::NotImplemented)
+        } else if let Some(ref _idx) = self.scann {
             // ScaNN: use radius search if available, otherwise return error
             // For now, return NotImplemented
             Err(CError::NotImplemented)
@@ -722,7 +1026,7 @@ impl IndexWrapper {
             Err(CError::InvalidArg)
         }
     }
-    
+
     fn count(&self) -> usize {
         if let Some(ref idx) = self.flat {
             idx.ntotal()
@@ -750,11 +1054,11 @@ impl IndexWrapper {
             0
         }
     }
-    
+
     fn dim(&self) -> usize {
         self.dim
     }
-    
+
     /// Get index memory size in bytes
     fn size(&self) -> usize {
         if let Some(ref idx) = self.flat {
@@ -785,7 +1089,7 @@ impl IndexWrapper {
             0
         }
     }
-    
+
     /// Get index type name as string
     fn index_type(&self) -> &'static str {
         if self.flat.is_some() {
@@ -800,7 +1104,7 @@ impl IndexWrapper {
             "Unknown"
         }
     }
-    
+
     /// Get metric type name as string
     fn metric_type(&self) -> &'static str {
         if let Some(ref idx) = self.flat {
@@ -815,14 +1119,14 @@ impl IndexWrapper {
                 MetricType::Ip => "IP",
                 MetricType::Cosine | MetricType::Hamming => "Cosine",
             }
-        } else if let Some(ref idx) = self.scann {
+        } else if let Some(ref _idx) = self.scann {
             // ScaNN doesn't expose metric_type directly, assume L2
             "L2"
         } else {
             "Unknown"
         }
     }
-    
+
     fn get_vectors(&self, ids: &[i64]) -> Result<(Vec<f32>, usize), CError> {
         if ids.is_empty() {
             return Ok((Vec::new(), 0));
@@ -873,7 +1177,7 @@ impl IndexWrapper {
     fn serialize(&self) -> Result<Vec<u8>, CError> {
         if let Some(ref idx) = self.flat {
             idx.serialize_to_memory().map_err(|_| CError::Internal)
-        } else if let Some(ref idx) = self.hnsw {
+        } else if let Some(ref _idx) = self.hnsw {
             // HNSW 目前只支持文件序列化，返回 NotImplemented
             Err(CError::NotImplemented)
         } else if let Some(ref _idx) = self.scann {
@@ -889,7 +1193,8 @@ impl IndexWrapper {
     /// 从序列化的字节数据恢复索引状态。
     fn deserialize(&mut self, data: &[u8]) -> Result<(), CError> {
         if let Some(ref mut idx) = self.flat {
-            idx.deserialize_from_memory(data).map_err(|_| CError::Internal)
+            idx.deserialize_from_memory(data)
+                .map_err(|_| CError::Internal)
         } else if let Some(ref _idx) = self.hnsw {
             Err(CError::NotImplemented)
         } else if let Some(ref _idx) = self.scann {
@@ -913,9 +1218,11 @@ impl IndexWrapper {
             // ScaNN 暂不支持文件保存
             Err(CError::NotImplemented)
         } else if let Some(ref idx) = self.hnsw_prq {
-            idx.save(path.to_str().unwrap()).map_err(|_| CError::Internal)
+            idx.save(path.to_str().unwrap())
+                .map_err(|_| CError::Internal)
         } else if let Some(ref idx) = self.minhash_lsh {
-            idx.save(path.to_str().unwrap()).map_err(|_| CError::Internal)
+            idx.save(path.to_str().unwrap())
+                .map_err(|_| CError::Internal)
         } else {
             Err(CError::InvalidArg)
         }
@@ -934,9 +1241,11 @@ impl IndexWrapper {
         } else if let Some(ref _idx) = self.scann {
             Err(CError::NotImplemented)
         } else if let Some(ref mut idx) = self.hnsw_prq {
-            idx.load(path.to_str().unwrap()).map_err(|_| CError::Internal)
+            idx.load(path.to_str().unwrap())
+                .map_err(|_| CError::Internal)
         } else if let Some(ref mut idx) = self.minhash_lsh {
-            idx.load(path.to_str().unwrap()).map_err(|_| CError::Internal)
+            idx.load(path.to_str().unwrap())
+                .map_err(|_| CError::Internal)
         } else {
             Err(CError::InvalidArg)
         }
@@ -960,7 +1269,7 @@ pub extern "C" fn knowhere_create_index(config: CIndexConfig) -> *mut std::ffi::
 pub extern "C" fn knowhere_free_index(index: *mut std::ffi::c_void) {
     if !index.is_null() {
         unsafe {
-            Box::from_raw(index as *mut IndexWrapper);
+            let _ = Box::from_raw(index as *mut IndexWrapper);
         }
     }
 }
@@ -977,17 +1286,17 @@ pub extern "C" fn knowhere_add_index(
     if index.is_null() || vectors.is_null() || count == 0 || dim == 0 {
         return CError::InvalidArg as i32;
     }
-    
+
     unsafe {
         let index = &mut *(index as *mut IndexWrapper);
-        
+
         let vectors_slice = std::slice::from_raw_parts(vectors, count * dim);
         let ids_slice = if !ids.is_null() {
             Some(std::slice::from_raw_parts(ids, count))
         } else {
             None
         };
-        
+
         match index.add(vectors_slice, ids_slice) {
             Ok(_) => CError::Success as i32,
             Err(e) => e as i32,
@@ -1006,12 +1315,12 @@ pub extern "C" fn knowhere_train_index(
     if index.is_null() || vectors.is_null() || count == 0 || dim == 0 {
         return CError::InvalidArg as i32;
     }
-    
+
     unsafe {
         let index = &mut *(index as *mut IndexWrapper);
-        
+
         let vectors_slice = std::slice::from_raw_parts(vectors, count * dim);
-        
+
         match index.train(vectors_slice) {
             Ok(_) => CError::Success as i32,
             Err(e) => e as i32,
@@ -1031,32 +1340,32 @@ pub extern "C" fn knowhere_search(
     if index.is_null() || query.is_null() || count == 0 || top_k == 0 || dim == 0 {
         return std::ptr::null_mut();
     }
-    
+
     unsafe {
         let index = &*(index as *const IndexWrapper);
-        
+
         let query_slice = std::slice::from_raw_parts(query, count * dim);
-        
+
         match index.search(query_slice, top_k) {
             Ok(result) => {
                 let mut ids = result.ids;
                 let mut distances = result.distances;
-                
+
                 let num_results = ids.len();
                 let ids_ptr = ids.as_mut_ptr();
                 let distances_ptr = distances.as_mut_ptr();
-                
+
                 // 防止析构函数释放内存
                 std::mem::forget(ids);
                 std::mem::forget(distances);
-                
+
                 let csr = CSearchResult {
                     ids: ids_ptr,
                     distances: distances_ptr,
                     num_results,
                     elapsed_ms: result.elapsed_ms as f32,
                 };
-                
+
                 Box::into_raw(Box::new(csr))
             }
             Err(_) => std::ptr::null_mut(),
@@ -1065,10 +1374,10 @@ pub extern "C" fn knowhere_search(
 }
 
 /// 搜索 with Bitset 过滤
-/// 
+///
 /// 使用 bitset 过滤掉某些向量（例如已删除的向量）。
 /// Bitset 中每个 bit 代表一个向量：1=过滤（排除），0=保留（包括）。
-/// 
+///
 /// # Arguments
 /// * `index` - 索引指针
 /// * `query` - 查询向量指针 (count * dim)
@@ -1076,22 +1385,22 @@ pub extern "C" fn knowhere_search(
 /// * `top_k` - 返回的最近邻数量
 /// * `dim` - 向量维度
 /// * `bitset` - Bitset 指针 (由 knowhere_bitset_create 创建)
-/// 
+///
 /// # Returns
 /// 成功时返回 CSearchResult 指针，失败返回 NULL。
 /// 调用者需使用 knowhere_free_result() 释放返回的结果。
-/// 
+///
 /// # C API 使用示例
 /// ```c
 /// // 创建 bitset，过滤掉 ID 为 5 和 10 的向量
 /// CBitset* bitset = knowhere_bitset_create(1000);
 /// knowhere_bitset_set(bitset, 5, true);
 /// knowhere_bitset_set(bitset, 10, true);
-/// 
+///
 /// // 搜索
 /// float query[] = { ... };
 /// CSearchResult* result = knowhere_search_with_bitset(index, query, 1, 10, 128, bitset);
-/// 
+///
 /// if (result != NULL) {
 ///     // 访问结果（不包含被过滤的向量）
 ///     for (size_t i = 0; i < result->num_results; i++) {
@@ -1099,7 +1408,7 @@ pub extern "C" fn knowhere_search(
 ///     }
 ///     knowhere_free_result(result);
 /// }
-/// 
+///
 /// knowhere_bitset_free(bitset);
 /// ```
 #[no_mangle]
@@ -1111,52 +1420,59 @@ pub extern "C" fn knowhere_search_with_bitset(
     dim: usize,
     bitset: *const CBitset,
 ) -> *mut CSearchResult {
-    if index.is_null() || query.is_null() || count == 0 || top_k == 0 || dim == 0 || bitset.is_null() {
+    if index.is_null()
+        || query.is_null()
+        || count == 0
+        || top_k == 0
+        || dim == 0
+        || bitset.is_null()
+    {
         return std::ptr::null_mut();
     }
-    
+
     unsafe {
         let index = &*(index as *const IndexWrapper);
         let bitset_wrapper = &*bitset;
-        
+
         let query_slice = std::slice::from_raw_parts(query, count * dim);
-        
+
         // 重建 BitsetView
-        let bitset_data = std::slice::from_raw_parts(
-            bitset_wrapper.data,
-            (bitset_wrapper.len + 63) / 64,
-        ).to_vec();
+        let bitset_data =
+            std::slice::from_raw_parts(bitset_wrapper.data, bitset_wrapper.len.div_ceil(64))
+                .to_vec();
         let bitset_view = crate::bitset::BitsetView::from_vec(bitset_data, bitset_wrapper.len);
-        
+
         // 使用 BitsetPredicate 进行搜索
         let req = SearchRequest {
             top_k,
             nprobe: 8,
-            filter: Some(std::sync::Arc::new(crate::api::BitsetPredicate::new(bitset_view.clone()))),
+            filter: Some(std::sync::Arc::new(crate::api::BitsetPredicate::new(
+                bitset_view.clone(),
+            ))),
             params: None,
             radius: None,
         };
-        
+
         if let Some(ref idx) = index.flat {
             match idx.search_with_bitset(query_slice, &req, &bitset_view) {
                 Ok(result) => {
                     let mut ids = result.ids;
                     let mut distances = result.distances;
-                    
+
                     let num_results = ids.len();
                     let ids_ptr = ids.as_mut_ptr();
                     let distances_ptr = distances.as_mut_ptr();
-                    
+
                     std::mem::forget(ids);
                     std::mem::forget(distances);
-                    
+
                     let csr = CSearchResult {
                         ids: ids_ptr,
                         distances: distances_ptr,
                         num_results,
                         elapsed_ms: result.elapsed_ms as f32,
                     };
-                    
+
                     Box::into_raw(Box::new(csr))
                 }
                 Err(_) => std::ptr::null_mut(),
@@ -1167,21 +1483,21 @@ pub extern "C" fn knowhere_search_with_bitset(
                 Ok(result) => {
                     let mut ids = result.ids;
                     let mut distances = result.distances;
-                    
+
                     let num_results = ids.len();
                     let ids_ptr = ids.as_mut_ptr();
                     let distances_ptr = distances.as_mut_ptr();
-                    
+
                     std::mem::forget(ids);
                     std::mem::forget(distances);
-                    
+
                     let csr = CSearchResult {
                         ids: ids_ptr,
                         distances: distances_ptr,
                         num_results,
                         elapsed_ms: result.elapsed_ms as f32,
                     };
-                    
+
                     Box::into_raw(Box::new(csr))
                 }
                 Err(_) => std::ptr::null_mut(),
@@ -1191,26 +1507,26 @@ pub extern "C" fn knowhere_search_with_bitset(
 }
 
 /// 范围搜索 (Range Search)
-/// 
+///
 /// 查找所有在指定半径内的向量，返回满足条件的所有结果。
 /// 对应 C++ knowhere 的 RangeSearch 接口。
-/// 
+///
 /// # Arguments
 /// * `index` - 索引指针 (由 knowhere_create_index 创建)
 /// * `query` - 查询向量指针 (num_queries * dim)
 /// * `num_queries` - 查询向量数量
 /// * `radius` - 搜索半径阈值
 /// * `dim` - 向量维度
-/// 
+///
 /// # Returns
 /// 成功时返回 CRangeSearchResult 指针，失败返回 NULL。
 /// 调用者需使用 knowhere_free_range_result() 释放返回的结果。
-/// 
+///
 /// # C API 使用示例
 /// ```c
 /// float query[] = { ... };  // 1 * 128 dim
 /// CRangeSearchResult* result = knowhere_range_search(index, query, 1, 2.0f, 128);
-/// 
+///
 /// if (result != NULL) {
 ///     // 访问结果
 ///     for (size_t i = 0; i < result->num_queries; i++) {
@@ -1226,7 +1542,7 @@ pub extern "C" fn knowhere_search_with_bitset(
 ///     knowhere_free_range_result(result);
 /// }
 /// ```
-/// 
+///
 /// # Notes
 /// - 结果使用 lims 数组组织，lims[i+1] - lims[i] = 第 i 个查询的结果数
 /// - 对于 L2 距离，radius 越小结果越少；对于 IP 距离，radius 越大结果越少
@@ -1242,30 +1558,30 @@ pub extern "C" fn knowhere_range_search(
     if index.is_null() || query.is_null() || num_queries == 0 || dim == 0 {
         return std::ptr::null_mut();
     }
-    
+
     unsafe {
         let index = &*(index as *const IndexWrapper);
-        
+
         let query_slice = std::slice::from_raw_parts(query, num_queries * dim);
-        
+
         match index.range_search(query_slice, radius) {
             Ok((ids, distances, lims, elapsed_ms)) => {
                 let total_count = ids.len();
-                
+
                 // 准备返回数据
                 let mut ids_vec = ids;
                 let mut distances_vec = distances;
                 let mut lims_vec = lims;
-                
+
                 let ids_ptr = ids_vec.as_mut_ptr();
                 let distances_ptr = distances_vec.as_mut_ptr();
                 let lims_ptr = lims_vec.as_mut_ptr();
-                
+
                 // 防止析构函数释放内存
                 std::mem::forget(ids_vec);
                 std::mem::forget(distances_vec);
                 std::mem::forget(lims_vec);
-                
+
                 let result = CRangeSearchResult {
                     ids: ids_ptr,
                     distances: distances_ptr,
@@ -1274,7 +1590,7 @@ pub extern "C" fn knowhere_range_search(
                     lims: lims_ptr,
                     elapsed_ms: elapsed_ms as f32,
                 };
-                
+
                 Box::into_raw(Box::new(result))
             }
             Err(_) => std::ptr::null_mut(),
@@ -1283,12 +1599,12 @@ pub extern "C" fn knowhere_range_search(
 }
 
 /// 释放范围搜索结果
-/// 
+///
 /// 释放由 knowhere_range_search 返回的 CRangeSearchResult 及其所有关联内存。
-/// 
+///
 /// # Arguments
 /// * `result` - CRangeSearchResult 指针 (由 knowhere_range_search 返回)
-/// 
+///
 /// # Safety
 /// 调用后 result 指针不再有效，不应再被使用。
 #[no_mangle]
@@ -1296,23 +1612,23 @@ pub extern "C" fn knowhere_free_range_result(result: *mut CRangeSearchResult) {
     if !result.is_null() {
         unsafe {
             let r = &mut *result;
-            
+
             // 释放 ids 数组
             if !r.ids.is_null() && r.total_count > 0 {
                 let _ = Vec::from_raw_parts(r.ids, r.total_count, r.total_count);
             }
-            
+
             // 释放 distances 数组
             if !r.distances.is_null() && r.total_count > 0 {
                 let _ = Vec::from_raw_parts(r.distances, r.total_count, r.total_count);
             }
-            
+
             // 释放 lims 数组 (大小为 num_queries + 1)
             if !r.lims.is_null() && r.num_queries > 0 {
                 let lims_size = r.num_queries + 1;
                 let _ = Vec::from_raw_parts(r.lims, lims_size, lims_size);
             }
-            
+
             // 释放结果结构体本身
             let _ = Box::from_raw(result);
         }
@@ -1322,19 +1638,19 @@ pub extern "C" fn knowhere_free_range_result(result: *mut CRangeSearchResult) {
 // ========== 二进制向量 C API ==========
 
 /// 添加二进制向量到索引
-/// 
+///
 /// 用于 BinFlat 和 BinaryHnsw 索引，使用 Hamming 距离。
-/// 
+///
 /// # Arguments
 /// * `index` - 索引指针 (由 knowhere_create_index 创建，类型为 BinFlat 或 BinaryHnsw)
 /// * `vectors` - 二进制向量指针 (count * dim_bytes 字节)
 /// * `ids` - 向量 ID 指针 (可选，为 NULL 时自动生成 ID)
 /// * `count` - 向量数量
 /// * `dim` - 向量维度 (bits)
-/// 
+///
 /// # Returns
 /// 成功返回 CError::Success (0)，失败返回相应的错误码。
-/// 
+///
 /// # C API 使用示例
 /// ```c
 /// // 创建 BinFlat 索引 (256 bits = 32 bytes)
@@ -1344,7 +1660,7 @@ pub extern "C" fn knowhere_free_range_result(result: *mut CRangeSearchResult) {
 ///     .dim = 256,
 /// };
 /// CIndex* index = knowhere_create_index(config);
-/// 
+///
 /// // 添加二进制向量 (32 bytes per vector)
 /// uint8_t vectors[] = { ... }; // 1000 vectors * 32 bytes
 /// int64_t ids[] = { 0, 1, 2, ... };
@@ -1361,17 +1677,17 @@ pub extern "C" fn knowhere_add_binary_index(
     if index.is_null() || vectors.is_null() || count == 0 || dim == 0 {
         return CError::InvalidArg as i32;
     }
-    
+
     unsafe {
         let index = &mut *(index as *mut IndexWrapper);
-        
+
         let vectors_slice = std::slice::from_raw_parts(vectors, count * (dim + 7) / 8);
         let ids_slice = if !ids.is_null() {
             Some(std::slice::from_raw_parts(ids, count))
         } else {
             None
         };
-        
+
         match index.add_binary(vectors_slice, ids_slice) {
             Ok(_) => CError::Success as i32,
             Err(e) => e as i32,
@@ -1380,26 +1696,26 @@ pub extern "C" fn knowhere_add_binary_index(
 }
 
 /// 搜索二进制向量
-/// 
+///
 /// 用于 BinFlat 和 BinaryHnsw 索引，使用 Hamming 距离。
-/// 
+///
 /// # Arguments
 /// * `index` - 索引指针
 /// * `query` - 查询向量指针 (count * dim_bytes 字节)
 /// * `count` - 查询向量数量
 /// * `top_k` - 返回的最近邻数量
 /// * `dim` - 向量维度 (bits)
-/// 
+///
 /// # Returns
 /// 成功时返回 CSearchResult 指针，失败返回 NULL。
 /// 调用者需使用 knowhere_free_result() 释放返回的结果。
-/// 
+///
 /// # C API 使用示例
 /// ```c
 /// // 查询 (32 bytes for 256 bits)
 /// uint8_t query[] = { ... };
 /// CSearchResult* result = knowhere_search_binary(index, query, 1, 10, 256);
-/// 
+///
 /// if (result != NULL) {
 ///     for (size_t i = 0; i < result->num_results; i++) {
 ///         printf("id=%ld, dist=%f\n", result->ids[i], result->distances[i]);
@@ -1418,32 +1734,32 @@ pub extern "C" fn knowhere_search_binary(
     if index.is_null() || query.is_null() || count == 0 || top_k == 0 || dim == 0 {
         return std::ptr::null_mut();
     }
-    
+
     unsafe {
         let index = &*(index as *const IndexWrapper);
-        
+
         let query_slice = std::slice::from_raw_parts(query, count * (dim + 7) / 8);
-        
+
         match index.search_binary(query_slice, top_k) {
             Ok(result) => {
                 let mut ids = result.ids;
                 let mut distances = result.distances;
-                
+
                 let num_results = ids.len();
                 let ids_ptr = ids.as_mut_ptr();
                 let distances_ptr = distances.as_mut_ptr();
-                
+
                 // 防止析构函数释放内存
                 std::mem::forget(ids);
                 std::mem::forget(distances);
-                
+
                 let csr = CSearchResult {
                     ids: ids_ptr,
                     distances: distances_ptr,
                     num_results,
                     elapsed_ms: result.elapsed_ms as f32,
                 };
-                
+
                 Box::into_raw(Box::new(csr))
             }
             Err(_) => std::ptr::null_mut(),
@@ -1457,7 +1773,7 @@ pub extern "C" fn knowhere_get_index_count(index: *const std::ffi::c_void) -> us
     if index.is_null() {
         return 0;
     }
-    
+
     unsafe {
         let index = &*(index as *const IndexWrapper);
         index.count()
@@ -1470,7 +1786,7 @@ pub extern "C" fn knowhere_get_index_dim(index: *const std::ffi::c_void) -> usiz
     if index.is_null() {
         return 0;
     }
-    
+
     unsafe {
         let index = &*(index as *const IndexWrapper);
         index.dim()
@@ -1478,15 +1794,15 @@ pub extern "C" fn knowhere_get_index_dim(index: *const std::ffi::c_void) -> usiz
 }
 
 /// 获取索引内存大小（字节）
-/// 
+///
 /// 返回索引占用的内存大小（以字节为单位）。
-/// 
+///
 /// # Arguments
 /// * `index` - 索引指针 (由 knowhere_create_index 创建)
-/// 
+///
 /// # Returns
 /// 索引内存大小（字节），如果索引指针为 NULL 则返回 0。
-/// 
+///
 /// # C API 使用示例
 /// ```c
 /// CIndex* index = knowhere_create_index(config);
@@ -1500,7 +1816,7 @@ pub extern "C" fn knowhere_get_index_size(index: *const std::ffi::c_void) -> usi
     if index.is_null() {
         return 0;
     }
-    
+
     unsafe {
         let index = &*(index as *const IndexWrapper);
         index.size()
@@ -1508,16 +1824,16 @@ pub extern "C" fn knowhere_get_index_size(index: *const std::ffi::c_void) -> usi
 }
 
 /// 获取索引类型名称
-/// 
+///
 /// 返回索引类型的字符串名称（"Flat"、"HNSW" 或 "ScaNN"）。
-/// 
+///
 /// # Arguments
 /// * `index` - 索引指针 (由 knowhere_create_index 创建)
-/// 
+///
 /// # Returns
 /// 索引类型名称的 C 字符串指针。如果索引指针为 NULL 则返回 "Unknown"。
 /// 返回的字符串是静态的，调用者不需要释放。
-/// 
+///
 /// # C API 使用示例
 /// ```c
 /// CIndex* index = knowhere_create_index(config);
@@ -1526,7 +1842,9 @@ pub extern "C" fn knowhere_get_index_size(index: *const std::ffi::c_void) -> usi
 /// knowhere_free_index(index);
 /// ```
 #[no_mangle]
-pub extern "C" fn knowhere_get_index_type(index: *const std::ffi::c_void) -> *const std::os::raw::c_char {
+pub extern "C" fn knowhere_get_index_type(
+    index: *const std::ffi::c_void,
+) -> *const std::os::raw::c_char {
     let type_str = if index.is_null() {
         "Unknown"
     } else {
@@ -1535,7 +1853,7 @@ pub extern "C" fn knowhere_get_index_type(index: *const std::ffi::c_void) -> *co
             index.index_type()
         }
     };
-    
+
     // Use static C string (no allocation, no need to free)
     match type_str {
         "Flat" => b"Flat\0".as_ptr() as *const std::os::raw::c_char,
@@ -1546,16 +1864,16 @@ pub extern "C" fn knowhere_get_index_type(index: *const std::ffi::c_void) -> *co
 }
 
 /// 获取度量类型名称
-/// 
+///
 /// 返回度量类型的字符串名称（"L2"、"IP" 或 "Cosine"）。
-/// 
+///
 /// # Arguments
 /// * `index` - 索引指针 (由 knowhere_create_index 创建)
-/// 
+///
 /// # Returns
 /// 度量类型名称的 C 字符串指针。如果索引指针为 NULL 则返回 "Unknown"。
 /// 返回的字符串是静态的，调用者不需要释放。
-/// 
+///
 /// # C API 使用示例
 /// ```c
 /// CIndex* index = knowhere_create_index(config);
@@ -1564,7 +1882,9 @@ pub extern "C" fn knowhere_get_index_type(index: *const std::ffi::c_void) -> *co
 /// knowhere_free_index(index);
 /// ```
 #[no_mangle]
-pub extern "C" fn knowhere_get_index_metric(index: *const std::ffi::c_void) -> *const std::os::raw::c_char {
+pub extern "C" fn knowhere_get_index_metric(
+    index: *const std::ffi::c_void,
+) -> *const std::os::raw::c_char {
     let metric_str = if index.is_null() {
         "Unknown"
     } else {
@@ -1573,7 +1893,7 @@ pub extern "C" fn knowhere_get_index_metric(index: *const std::ffi::c_void) -> *
             index.metric_type()
         }
     };
-    
+
     // Use static C string (no allocation, no need to free)
     match metric_str {
         "L2" => b"L2\0".as_ptr() as *const std::os::raw::c_char,
@@ -1584,12 +1904,12 @@ pub extern "C" fn knowhere_get_index_metric(index: *const std::ffi::c_void) -> *
 }
 
 /// 检查索引是否包含原始数据 (HasRawData)
-/// 
+///
 /// 用于判断索引是否存储了原始向量数据，以便支持 GetVectorByIds 等操作。
-/// 
+///
 /// # Arguments
 /// * `index` - 索引指针 (由 knowhere_create_index 创建)
-/// 
+///
 /// # Returns
 /// 1 如果索引包含原始数据，0 否则
 #[no_mangle]
@@ -1597,7 +1917,7 @@ pub extern "C" fn knowhere_has_raw_data(index: *const std::ffi::c_void) -> i32 {
     if index.is_null() {
         return 0;
     }
-    
+
     unsafe {
         let wrapper = &*(index as *const IndexWrapper);
         // Check which index type is active and call has_raw_data
@@ -1637,7 +1957,7 @@ pub extern "C" fn knowhere_free_result(result: *mut CSearchResult) {
             if !r.distances.is_null() {
                 Vec::from_raw_parts(r.distances, r.num_results, r.num_results);
             }
-            Box::from_raw(result);
+            let _ = Box::from_raw(result);
         }
     }
 }
@@ -1652,30 +1972,30 @@ pub extern "C" fn knowhere_get_vectors_by_ids(
     if index.is_null() || ids.is_null() || count == 0 {
         return std::ptr::null_mut();
     }
-    
+
     unsafe {
         let index = &*(index as *const IndexWrapper);
         let ids_slice = std::slice::from_raw_parts(ids, count);
-        
+
         match index.get_vectors(ids_slice) {
             Ok((mut vectors, num_found)) => {
                 let dim = index.dim();
                 let mut ids_out = ids_slice[..num_found].to_vec();
-                
+
                 let vectors_ptr = vectors.as_mut_ptr();
                 let ids_ptr = ids_out.as_mut_ptr();
-                
+
                 // 防止析构函数释放内存
                 std::mem::forget(vectors);
                 std::mem::forget(ids_out);
-                
+
                 let cvr = CVectorResult {
                     vectors: vectors_ptr,
                     ids: ids_ptr,
                     num_vectors: num_found,
                     dim,
                 };
-                
+
                 Box::into_raw(Box::new(cvr))
             }
             Err(_) => std::ptr::null_mut(),
@@ -1684,25 +2004,25 @@ pub extern "C" fn knowhere_get_vectors_by_ids(
 }
 
 /// 根据 ID 获取向量 (GetVectorByIds C API)
-/// 
+///
 /// 通过 ID 数组获取对应的向量数据，支持 Flat 索引。
 /// HNSW 和 ScaNN 索引如果未实现则返回 NotImplemented。
-/// 
+///
 /// # Arguments
 /// * `index` - 索引指针 (由 knowhere_create_index 创建)
 /// * `ids` - 要获取的 ID 数组指针
 /// * `num_ids` - ID 数量
 /// * `dim` - 向量维度
-/// 
+///
 /// # Returns
 /// 成功时返回 CGetVectorResult 指针，失败返回 NULL。
 /// 调用者需使用 knowhere_free_vector_result() 释放返回的结果。
-/// 
+///
 /// # C API 使用示例
 /// ```c
 /// int64_t ids[] = {0, 5, 9};
 /// CGetVectorResult* result = knowhere_get_vector_by_ids(index, ids, 3, 128);
-/// 
+///
 /// if (result != NULL) {
 ///     // 访问向量数据
 ///     for (size_t i = 0; i < result->num_ids; i++) {
@@ -1722,39 +2042,39 @@ pub extern "C" fn knowhere_get_vector_by_ids(
     if index.is_null() || ids.is_null() || num_ids == 0 || dim == 0 {
         return std::ptr::null_mut();
     }
-    
+
     unsafe {
         let index = &*(index as *const IndexWrapper);
-        
+
         // 验证维度匹配
         if index.dim() != dim {
             return std::ptr::null_mut();
         }
-        
+
         let ids_slice = std::slice::from_raw_parts(ids, num_ids);
-        
+
         match index.get_vectors(ids_slice) {
             Ok((mut vectors, num_found)) => {
                 if num_found == 0 {
                     return std::ptr::null_mut();
                 }
-                
+
                 let mut ids_out = ids_slice[..num_found].to_vec();
-                
+
                 let vectors_ptr = vectors.as_mut_ptr();
                 let ids_ptr = ids_out.as_mut_ptr();
-                
+
                 // 防止析构函数释放内存
                 std::mem::forget(vectors);
                 std::mem::forget(ids_out);
-                
+
                 let result = CGetVectorResult {
                     vectors: vectors_ptr,
                     num_ids: num_found,
                     dim,
                     ids: ids_ptr,
                 };
-                
+
                 Box::into_raw(Box::new(result))
             }
             Err(_) => std::ptr::null_mut(),
@@ -1774,18 +2094,18 @@ pub extern "C" fn knowhere_free_vector_result(result: *mut CVectorResult) {
             if !r.ids.is_null() && r.num_vectors > 0 {
                 Vec::from_raw_parts(r.ids, r.num_vectors, r.num_vectors);
             }
-            Box::from_raw(result);
+            let _ = Box::from_raw(result);
         }
     }
 }
 
 /// 释放 GetVectorByIds 结果
-/// 
+///
 /// 释放由 knowhere_get_vector_by_ids 返回的 CGetVectorResult 及其所有关联内存。
-/// 
+///
 /// # Arguments
 /// * `result` - CGetVectorResult 指针 (由 knowhere_get_vector_by_ids 返回)
-/// 
+///
 /// # Safety
 /// 调用后 result 指针不再有效，不应再被使用。
 #[no_mangle]
@@ -1802,7 +2122,7 @@ pub extern "C" fn knowhere_free_get_vector_result(result: *mut CGetVectorResult)
                 Vec::from_raw_parts(r.ids, r.num_ids, r.num_ids);
             }
             // 释放结果结构体本身
-            Box::from_raw(result);
+            let _ = Box::from_raw(result);
         }
     }
 }
@@ -2122,11 +2442,7 @@ pub extern "C" fn knowhere_free_binary(binary: *mut CBinary) {
     unsafe {
         let binary = &mut *binary;
         if !binary.data.is_null() && binary.size > 0 {
-            let _ = Vec::from_raw_parts(
-                binary.data,
-                binary.size as usize,
-                binary.size as usize,
-            );
+            let _ = Vec::from_raw_parts(binary.data, binary.size as usize, binary.size as usize);
         }
         let _ = Box::from_raw(binary);
     }
@@ -2150,7 +2466,7 @@ impl From<&BitsetView> for CBitset {
         vec.shrink_to_fit();
         let ptr = vec.as_mut_ptr();
         std::mem::forget(vec);
-        
+
         Self {
             data: ptr,
             len: bitset.len(),
@@ -2180,12 +2496,14 @@ pub extern "C" fn knowhere_bitset_create(len: usize) -> *mut CBitset {
 #[no_mangle]
 pub extern "C" fn knowhere_bitset_free(bitset: *mut CBitset) {
     if !bitset.is_null() {
-        unsafe { Box::from_raw(bitset); }
+        unsafe {
+            let _ = Box::from_raw(bitset);
+        }
     }
 }
 
 /// 设置位
-/// 
+///
 /// # Arguments
 /// * `bitset` - Bitset 指针（可变）
 /// * `index` - 位索引
@@ -2195,17 +2513,17 @@ pub extern "C" fn knowhere_bitset_set(bitset: *mut CBitset, index: usize, value:
     if bitset.is_null() {
         return;
     }
-    
+
     unsafe {
         let cb = &mut *bitset;
         if index >= cb.len {
             return;
         }
-        
-        let word_idx = index >> 6;  // index / 64
-        let bit_idx = index & 63;   // index % 64
+
+        let word_idx = index >> 6; // index / 64
+        let bit_idx = index & 63; // index % 64
         let mask = 1u64 << bit_idx;
-        
+
         if value {
             *cb.data.add(word_idx) |= mask;
         } else {
@@ -2215,7 +2533,7 @@ pub extern "C" fn knowhere_bitset_set(bitset: *mut CBitset, index: usize, value:
 }
 
 /// 获取位
-/// 
+///
 /// # Returns
 /// true=1 (过滤), false=0 (保留)
 #[no_mangle]
@@ -2223,23 +2541,23 @@ pub extern "C" fn knowhere_bitset_get(bitset: *const CBitset, index: usize) -> b
     if bitset.is_null() {
         return false;
     }
-    
+
     unsafe {
         let cb = &*bitset;
         if index >= cb.len {
             return false;
         }
-        
+
         let word_idx = index >> 6;
         let bit_idx = index & 63;
         let mask = 1u64 << bit_idx;
-        
+
         *cb.data.add(word_idx) & mask != 0
     }
 }
 
 /// 统计为 1 的位数
-/// 
+///
 /// # Returns
 /// 被过滤的向量数量
 #[no_mangle]
@@ -2247,25 +2565,25 @@ pub extern "C" fn knowhere_bitset_count(bitset: *const CBitset) -> usize {
     if bitset.is_null() {
         return 0;
     }
-    
+
     unsafe {
         let cb = &*bitset;
-        let num_words = (cb.len + 63) / 64;
+        let num_words = cb.len.div_ceil(64);
         let slice = std::slice::from_raw_parts(cb.data, num_words);
         slice.iter().map(|w| w.count_ones() as usize).sum()
     }
 }
 
 /// 获取 bitset 的字节大小
-/// 
+///
 /// 返回存储 bitset 所需的字节数，与 C++ knowhere 的 BitsetView::byte_size() 对齐。
-/// 
+///
 /// # Arguments
 /// * `bitset` - Bitset 指针
-/// 
+///
 /// # Returns
 /// bitset 占用的字节数。如果 bitset 为 NULL 则返回 0。
-/// 
+///
 /// # C API 使用示例
 /// ```c
 /// CBitset* bitset = knowhere_bitset_create(1000);
@@ -2278,26 +2596,26 @@ pub extern "C" fn knowhere_bitset_byte_size(bitset: *const CBitset) -> usize {
     if bitset.is_null() {
         return 0;
     }
-    
+
     unsafe {
         let cb = &*bitset;
         // 与 C++ knowhere 的 byte_size() 对齐：(num_bits + 7) / 8
-        (cb.len + 7) / 8
+        cb.len.div_ceil(8)
     }
 }
 
 /// 获取 bitset 的底层数据指针
-/// 
+///
 /// 返回指向 bitset 内部 u64 数组的指针，与 C++ knowhere 的 BitsetView::data() 对齐。
 /// 注意：C++ 版本返回 uint8_t*，而 Rust 版本返回 u64*（因为内部存储是 u64 数组）。
-/// 
+///
 /// # Arguments
 /// * `bitset` - Bitset 指针
-/// 
+///
 /// # Returns
 /// 指向底层数据的指针。如果 bitset 为 NULL 则返回 NULL。
 /// 返回的指针在 bitset 的整个生命周期内有效，调用者不应释放。
-/// 
+///
 /// # C API 使用示例
 /// ```c
 /// CBitset* bitset = knowhere_bitset_create(1000);
@@ -2313,7 +2631,7 @@ pub extern "C" fn knowhere_bitset_data(bitset: *const CBitset) -> *const u64 {
     if bitset.is_null() {
         return std::ptr::null();
     }
-    
+
     unsafe {
         let cb = &*bitset;
         cb.data
@@ -2323,15 +2641,15 @@ pub extern "C" fn knowhere_bitset_data(bitset: *const CBitset) -> *const u64 {
 // ========== BitsetView out_ids 相关 C API ==========
 
 /// 检查 bitset 是否有 out_ids（ID 映射）
-/// 
+///
 /// 与 C++ knowhere 的 BitsetView::has_out_ids() 对齐。
-/// 
+///
 /// # Arguments
 /// * `bitset` - Bitset 指针
-/// 
+///
 /// # Returns
 /// 如果有 out_ids 返回 true，否则返回 false。如果 bitset 为 NULL 则返回 false。
-/// 
+///
 /// # C API 使用示例
 /// ```c
 /// CBitset* bitset = knowhere_bitset_create(1000);
@@ -2344,9 +2662,9 @@ pub extern "C" fn knowhere_bitset_has_out_ids(bitset: *const CBitset) -> bool {
     if bitset.is_null() {
         return false;
     }
-    
+
     unsafe {
-        let cb = &*bitset;
+        let _cb = &*bitset;
         // 注意：CBitset 结构目前不存储 out_ids 信息
         // 这个函数暂时返回 false
         // TODO: 需要在 CBitset 中添加 out_ids 字段
@@ -2355,12 +2673,12 @@ pub extern "C" fn knowhere_bitset_has_out_ids(bitset: *const CBitset) -> bool {
 }
 
 /// 获取 bitset 的内部 ID 数量（当使用 out_ids 时）
-/// 
+///
 /// 与 C++ knowhere 的 BitsetView::size() 对齐（当有 out_ids 时）。
-/// 
+///
 /// # Arguments
 /// * `bitset` - Bitset 指针
-/// 
+///
 /// # Returns
 /// 内部 ID 数量。如果没有 out_ids，返回位图长度。如果 bitset 为 NULL 则返回 0。
 #[no_mangle]
@@ -2368,7 +2686,7 @@ pub extern "C" fn knowhere_bitset_size(bitset: *const CBitset) -> usize {
     if bitset.is_null() {
         return 0;
     }
-    
+
     unsafe {
         let cb = &*bitset;
         cb.len
@@ -2376,23 +2694,23 @@ pub extern "C" fn knowhere_bitset_size(bitset: *const CBitset) -> usize {
 }
 
 /// 检查 bitset 是否为空
-/// 
+///
 /// 与 C++ knowhere 的 BitsetView::empty() 对齐。
-/// 
+///
 /// # Arguments
 /// * `bitset` - Bitset 指针
-/// 
+///
 /// # Returns
 /// true=空，false=非空。如果 bitset 为 NULL 则返回 true。
-/// 
+///
 /// # C API 使用示例
 /// ```c
 /// CBitset* empty = knowhere_bitset_create(0);
 /// CBitset* non_empty = knowhere_bitset_create(100);
-/// 
+///
 /// assert(knowhere_bitset_empty(empty) == true);
 /// assert(knowhere_bitset_empty(non_empty) == false);
-/// 
+///
 /// knowhere_bitset_free(empty);
 /// knowhere_bitset_free(non_empty);
 /// ```
@@ -2401,7 +2719,7 @@ pub extern "C" fn knowhere_bitset_empty(bitset: *const CBitset) -> bool {
     if bitset.is_null() {
         return true;
     }
-    
+
     unsafe {
         let cb = &*bitset;
         cb.len == 0
@@ -2409,12 +2727,12 @@ pub extern "C" fn knowhere_bitset_empty(bitset: *const CBitset) -> bool {
 }
 
 /// 获取 bitset 的 ID 偏移量
-/// 
+///
 /// 与 C++ knowhere 的 BitsetView::id_offset() 对齐。
-/// 
+///
 /// # Arguments
 /// * `bitset` - Bitset 指针
-/// 
+///
 /// # Returns
 /// ID 偏移量。如果 bitset 为 NULL 则返回 0。
 #[no_mangle]
@@ -2422,36 +2740,35 @@ pub extern "C" fn knowhere_bitset_id_offset(bitset: *const CBitset) -> usize {
     if bitset.is_null() {
         return 0;
     }
-    
+
     // 注意：CBitset 结构目前不存储 id_offset 信息
     // TODO: 需要在 CBitset 中添加 id_offset 字段
     0
 }
 
 /// 设置 bitset 的 ID 偏移量
-/// 
+///
 /// 与 C++ knowhere 的 BitsetView::set_id_offset() 对齐。
-/// 
+///
 /// # Arguments
 /// * `bitset` - Bitset 指针（可变）
 /// * `offset` - ID 偏移量
 #[no_mangle]
-pub extern "C" fn knowhere_bitset_set_id_offset(bitset: *mut CBitset, offset: usize) {
+pub extern "C" fn knowhere_bitset_set_id_offset(bitset: *mut CBitset, _offset: usize) {
     if bitset.is_null() {
-        return;
     }
-    
+
     // 注意：CBitset 结构目前不存储 id_offset 信息
     // TODO: 需要在 CBitset 中添加 id_offset 字段
 }
 
 /// 获取 bitset 的过滤比例
-/// 
+///
 /// 与 C++ knowhere 的 BitsetView::filter_ratio() 对齐。
-/// 
+///
 /// # Arguments
 /// * `bitset` - Bitset 指针
-/// 
+///
 /// # Returns
 /// 过滤比例（0.0 到 1.0）。如果 bitset 为空或 NULL 则返回 0.0。
 #[no_mangle]
@@ -2459,14 +2776,14 @@ pub extern "C" fn knowhere_bitset_filter_ratio(bitset: *const CBitset) -> f32 {
     if bitset.is_null() {
         return 0.0;
     }
-    
+
     unsafe {
         let cb = &*bitset;
         if cb.len == 0 {
             return 0.0;
         }
-        
-        let num_words = (cb.len + 63) / 64;
+
+        let num_words = cb.len.div_ceil(64);
         let slice = std::slice::from_raw_parts(cb.data, num_words);
         let count: usize = slice.iter().map(|w| w.count_ones() as usize).sum();
         count as f32 / cb.len as f32
@@ -2474,12 +2791,12 @@ pub extern "C" fn knowhere_bitset_filter_ratio(bitset: *const CBitset) -> f32 {
 }
 
 /// 获取 bitset 的第一个有效索引（未被过滤的）
-/// 
+///
 /// 与 C++ knowhere 的 BitsetView::get_first_valid_index() 对齐。
-/// 
+///
 /// # Arguments
 /// * `bitset` - Bitset 指针
-/// 
+///
 /// # Returns
 /// 第一个有效索引。如果所有位都被过滤或 bitset 为 NULL，则返回位图长度。
 #[no_mangle]
@@ -2487,12 +2804,12 @@ pub extern "C" fn knowhere_bitset_get_first_valid_index(bitset: *const CBitset) 
     if bitset.is_null() {
         return 0;
     }
-    
+
     unsafe {
         let cb = &*bitset;
-        let num_words = (cb.len + 63) / 64;
+        let num_words = cb.len.div_ceil(64);
         let slice = std::slice::from_raw_parts(cb.data, num_words);
-        
+
         for (i, &word) in slice.iter().enumerate() {
             if word != u64::MAX {
                 // 找到第一个非全 1 的字
@@ -2502,19 +2819,19 @@ pub extern "C" fn knowhere_bitset_get_first_valid_index(bitset: *const CBitset) 
                 }
             }
         }
-        
+
         cb.len
     }
 }
 
 /// 测试 bitset 中指定索引是否被过滤
-/// 
+///
 /// 与 C++ knowhere 的 BitsetView::test() 对齐。
-/// 
+///
 /// # Arguments
 /// * `bitset` - Bitset 指针
 /// * `index` - 索引
-/// 
+///
 /// # Returns
 /// 如果索引被过滤（位为 1）返回 true，否则返回 false。
 #[no_mangle]
@@ -2522,17 +2839,17 @@ pub extern "C" fn knowhere_bitset_test(bitset: *const CBitset, index: usize) -> 
     if bitset.is_null() {
         return false;
     }
-    
+
     unsafe {
         let cb = &*bitset;
         if index >= cb.len {
             return true; // 超出范围被视为已过滤
         }
-        
+
         let word_idx = index >> 6;
         let bit_idx = index & 63;
         let mask = 1u64 << bit_idx;
-        
+
         *cb.data.add(word_idx) & mask != 0
     }
 }
@@ -2540,48 +2857,51 @@ pub extern "C" fn knowhere_bitset_test(bitset: *const CBitset, index: usize) -> 
 // ========== BitsetView 批量操作 C API ==========
 
 /// 对两个 bitset 执行按位或（OR）操作
-/// 
+///
 /// 与 C++ knowhere 的 BitsetView | 操作符对齐。
 /// 结果 bitset 的长度为两个输入 bitset 长度的最大值。
-/// 
+///
 /// # Arguments
 /// * `bitset1` - 第一个 Bitset 指针
 /// * `bitset2` - 第二个 Bitset 指针
-/// 
+///
 /// # Returns
 /// 新的 Bitset 指针，包含按位或的结果。如果任一输入为 NULL 则返回 NULL。
 /// 调用者负责使用 knowhere_bitset_free 释放返回的 bitset。
-/// 
+///
 /// # C API 使用示例
 /// ```c
 /// CBitset* a = knowhere_bitset_create(100);
 /// CBitset* b = knowhere_bitset_create(100);
 /// knowhere_bitset_set(a, 0, true);
 /// knowhere_bitset_set(b, 1, true);
-/// 
+///
 /// CBitset* result = knowhere_bitset_or(a, b);
 /// // result 现在在位置 0 和 1 都有位设置
-/// 
+///
 /// knowhere_bitset_free(result);
 /// knowhere_bitset_free(b);
 /// knowhere_bitset_free(a);
 /// ```
 #[no_mangle]
-pub extern "C" fn knowhere_bitset_or(bitset1: *const CBitset, bitset2: *const CBitset) -> *mut CBitset {
+pub extern "C" fn knowhere_bitset_or(
+    bitset1: *const CBitset,
+    bitset2: *const CBitset,
+) -> *mut CBitset {
     if bitset1.is_null() || bitset2.is_null() {
         return std::ptr::null_mut();
     }
-    
+
     unsafe {
         let cb1 = &*bitset1;
         let cb2 = &*bitset2;
-        
+
         let len = cb1.len.max(cb2.len);
-        let num_words = (len + 63) / 64;
-        
+        let num_words = len.div_ceil(64);
+
         // 分配结果数据
         let mut result_data: Vec<u64> = Vec::with_capacity(num_words);
-        
+
         // SIMD 优化的按位或操作
         // 每次处理 4 个 u64（256 位），利用 CPU 的 SIMD 指令
         let mut i = 0;
@@ -2590,30 +2910,52 @@ pub extern "C" fn knowhere_bitset_or(bitset1: *const CBitset, bitset2: *const CB
             let w1_1 = *cb1.data.add(i + 1);
             let w1_2 = *cb1.data.add(i + 2);
             let w1_3 = *cb1.data.add(i + 3);
-            
-            let w2_0 = if i < (cb1.len + 63) / 64 && i < (cb2.len + 63) / 64 {
+
+            let w2_0 = if i < cb1.len.div_ceil(64) && i < cb2.len.div_ceil(64) {
                 *cb2.data.add(i)
-            } else { 0 };
-            let w2_1 = if i + 1 < (cb2.len + 63) / 64 { *cb2.data.add(i + 1) } else { 0 };
-            let w2_2 = if i + 2 < (cb2.len + 63) / 64 { *cb2.data.add(i + 2) } else { 0 };
-            let w2_3 = if i + 3 < (cb2.len + 63) / 64 { *cb2.data.add(i + 3) } else { 0 };
-            
+            } else {
+                0
+            };
+            let w2_1 = if i + 1 < cb2.len.div_ceil(64) {
+                *cb2.data.add(i + 1)
+            } else {
+                0
+            };
+            let w2_2 = if i + 2 < cb2.len.div_ceil(64) {
+                *cb2.data.add(i + 2)
+            } else {
+                0
+            };
+            let w2_3 = if i + 3 < cb2.len.div_ceil(64) {
+                *cb2.data.add(i + 3)
+            } else {
+                0
+            };
+
             result_data.push(w1_0 | w2_0);
             result_data.push(w1_1 | w2_1);
             result_data.push(w1_2 | w2_2);
             result_data.push(w1_3 | w2_3);
-            
+
             i += 4;
         }
-        
+
         // 处理剩余的元素
         while i < num_words {
-            let w1 = if i < (cb1.len + 63) / 64 { *cb1.data.add(i) } else { 0 };
-            let w2 = if i < (cb2.len + 63) / 64 { *cb2.data.add(i) } else { 0 };
+            let w1 = if i < cb1.len.div_ceil(64) {
+                *cb1.data.add(i)
+            } else {
+                0
+            };
+            let w2 = if i < cb2.len.div_ceil(64) {
+                *cb2.data.add(i)
+            } else {
+                0
+            };
             result_data.push(w1 | w2);
             i += 1;
         }
-        
+
         // 创建结果 bitset
         let result_bitset = BitsetView::from_vec(result_data, len);
         let cb = CBitset::from(&result_bitset);
@@ -2622,18 +2964,18 @@ pub extern "C" fn knowhere_bitset_or(bitset1: *const CBitset, bitset2: *const CB
 }
 
 /// 对两个 bitset 执行按位与（AND）操作
-/// 
+///
 /// 与 C++ knowhere 的 BitsetView & 操作符对齐。
 /// 结果 bitset 的长度为两个输入 bitset 长度的最大值。
-/// 
+///
 /// # Arguments
 /// * `bitset1` - 第一个 Bitset 指针
 /// * `bitset2` - 第二个 Bitset 指针
-/// 
+///
 /// # Returns
 /// 新的 Bitset 指针，包含按位与的结果。如果任一输入为 NULL 则返回 NULL。
 /// 调用者负责使用 knowhere_bitset_free 释放返回的 bitset。
-/// 
+///
 /// # C API 使用示例
 /// ```c
 /// CBitset* a = knowhere_bitset_create(100);
@@ -2642,59 +2984,102 @@ pub extern "C" fn knowhere_bitset_or(bitset1: *const CBitset, bitset2: *const CB
 /// knowhere_bitset_set(a, 1, true);
 /// knowhere_bitset_set(b, 1, true);
 /// knowhere_bitset_set(b, 2, true);
-/// 
+///
 /// CBitset* result = knowhere_bitset_and(a, b);
 /// // result 现在只在位置 1 有位设置（交集）
-/// 
+///
 /// knowhere_bitset_free(result);
 /// knowhere_bitset_free(b);
 /// knowhere_bitset_free(a);
 /// ```
 #[no_mangle]
-pub extern "C" fn knowhere_bitset_and(bitset1: *const CBitset, bitset2: *const CBitset) -> *mut CBitset {
+pub extern "C" fn knowhere_bitset_and(
+    bitset1: *const CBitset,
+    bitset2: *const CBitset,
+) -> *mut CBitset {
     if bitset1.is_null() || bitset2.is_null() {
         return std::ptr::null_mut();
     }
-    
+
     unsafe {
         let cb1 = &*bitset1;
         let cb2 = &*bitset2;
-        
+
         let len = cb1.len.max(cb2.len);
-        let num_words = (len + 63) / 64;
-        
+        let num_words = len.div_ceil(64);
+
         // 分配结果数据
         let mut result_data: Vec<u64> = Vec::with_capacity(num_words);
-        
+
         // SIMD 优化的按位与操作
         let mut i = 0;
         while i + 3 < num_words {
-            let w1_0 = if i < (cb1.len + 63) / 64 { *cb1.data.add(i) } else { 0 };
-            let w1_1 = if i + 1 < (cb1.len + 63) / 64 { *cb1.data.add(i + 1) } else { 0 };
-            let w1_2 = if i + 2 < (cb1.len + 63) / 64 { *cb1.data.add(i + 2) } else { 0 };
-            let w1_3 = if i + 3 < (cb1.len + 63) / 64 { *cb1.data.add(i + 3) } else { 0 };
-            
-            let w2_0 = if i < (cb2.len + 63) / 64 { *cb2.data.add(i) } else { 0 };
-            let w2_1 = if i + 1 < (cb2.len + 63) / 64 { *cb2.data.add(i + 1) } else { 0 };
-            let w2_2 = if i + 2 < (cb2.len + 63) / 64 { *cb2.data.add(i + 2) } else { 0 };
-            let w2_3 = if i + 3 < (cb2.len + 63) / 64 { *cb2.data.add(i + 3) } else { 0 };
-            
+            let w1_0 = if i < cb1.len.div_ceil(64) {
+                *cb1.data.add(i)
+            } else {
+                0
+            };
+            let w1_1 = if i + 1 < cb1.len.div_ceil(64) {
+                *cb1.data.add(i + 1)
+            } else {
+                0
+            };
+            let w1_2 = if i + 2 < cb1.len.div_ceil(64) {
+                *cb1.data.add(i + 2)
+            } else {
+                0
+            };
+            let w1_3 = if i + 3 < cb1.len.div_ceil(64) {
+                *cb1.data.add(i + 3)
+            } else {
+                0
+            };
+
+            let w2_0 = if i < cb2.len.div_ceil(64) {
+                *cb2.data.add(i)
+            } else {
+                0
+            };
+            let w2_1 = if i + 1 < cb2.len.div_ceil(64) {
+                *cb2.data.add(i + 1)
+            } else {
+                0
+            };
+            let w2_2 = if i + 2 < cb2.len.div_ceil(64) {
+                *cb2.data.add(i + 2)
+            } else {
+                0
+            };
+            let w2_3 = if i + 3 < cb2.len.div_ceil(64) {
+                *cb2.data.add(i + 3)
+            } else {
+                0
+            };
+
             result_data.push(w1_0 & w2_0);
             result_data.push(w1_1 & w2_1);
             result_data.push(w1_2 & w2_2);
             result_data.push(w1_3 & w2_3);
-            
+
             i += 4;
         }
-        
+
         // 处理剩余的元素
         while i < num_words {
-            let w1 = if i < (cb1.len + 63) / 64 { *cb1.data.add(i) } else { 0 };
-            let w2 = if i < (cb2.len + 63) / 64 { *cb2.data.add(i) } else { 0 };
+            let w1 = if i < cb1.len.div_ceil(64) {
+                *cb1.data.add(i)
+            } else {
+                0
+            };
+            let w2 = if i < cb2.len.div_ceil(64) {
+                *cb2.data.add(i)
+            } else {
+                0
+            };
             result_data.push(w1 & w2);
             i += 1;
         }
-        
+
         // 创建结果 bitset
         let result_bitset = BitsetView::from_vec(result_data, len);
         let cb = CBitset::from(&result_bitset);
@@ -2703,18 +3088,18 @@ pub extern "C" fn knowhere_bitset_and(bitset1: *const CBitset, bitset2: *const C
 }
 
 /// 对两个 bitset 执行按位异或（XOR）操作
-/// 
+///
 /// 与 C++ knowhere 的 BitsetView ^ 操作符对齐。
 /// 结果 bitset 的长度为两个输入 bitset 长度的最大值。
-/// 
+///
 /// # Arguments
 /// * `bitset1` - 第一个 Bitset 指针
 /// * `bitset2` - 第二个 Bitset 指针
-/// 
+///
 /// # Returns
 /// 新的 Bitset 指针，包含按位异或的结果。如果任一输入为 NULL 则返回 NULL。
 /// 调用者负责使用 knowhere_bitset_free 释放返回的 bitset。
-/// 
+///
 /// # C API 使用示例
 /// ```c
 /// CBitset* a = knowhere_bitset_create(100);
@@ -2723,59 +3108,102 @@ pub extern "C" fn knowhere_bitset_and(bitset1: *const CBitset, bitset2: *const C
 /// knowhere_bitset_set(a, 1, true);
 /// knowhere_bitset_set(b, 1, true);
 /// knowhere_bitset_set(b, 2, true);
-/// 
+///
 /// CBitset* result = knowhere_bitset_xor(a, b);
 /// // result 现在在位置 0 和 2 有位设置（对称差）
-/// 
+///
 /// knowhere_bitset_free(result);
 /// knowhere_bitset_free(b);
 /// knowhere_bitset_free(a);
 /// ```
 #[no_mangle]
-pub extern "C" fn knowhere_bitset_xor(bitset1: *const CBitset, bitset2: *const CBitset) -> *mut CBitset {
+pub extern "C" fn knowhere_bitset_xor(
+    bitset1: *const CBitset,
+    bitset2: *const CBitset,
+) -> *mut CBitset {
     if bitset1.is_null() || bitset2.is_null() {
         return std::ptr::null_mut();
     }
-    
+
     unsafe {
         let cb1 = &*bitset1;
         let cb2 = &*bitset2;
-        
+
         let len = cb1.len.max(cb2.len);
-        let num_words = (len + 63) / 64;
-        
+        let num_words = len.div_ceil(64);
+
         // 分配结果数据
         let mut result_data: Vec<u64> = Vec::with_capacity(num_words);
-        
+
         // SIMD 优化的按位异或操作
         let mut i = 0;
         while i + 3 < num_words {
-            let w1_0 = if i < (cb1.len + 63) / 64 { *cb1.data.add(i) } else { 0 };
-            let w1_1 = if i + 1 < (cb1.len + 63) / 64 { *cb1.data.add(i + 1) } else { 0 };
-            let w1_2 = if i + 2 < (cb1.len + 63) / 64 { *cb1.data.add(i + 2) } else { 0 };
-            let w1_3 = if i + 3 < (cb1.len + 63) / 64 { *cb1.data.add(i + 3) } else { 0 };
-            
-            let w2_0 = if i < (cb2.len + 63) / 64 { *cb2.data.add(i) } else { 0 };
-            let w2_1 = if i + 1 < (cb2.len + 63) / 64 { *cb2.data.add(i + 1) } else { 0 };
-            let w2_2 = if i + 2 < (cb2.len + 63) / 64 { *cb2.data.add(i + 2) } else { 0 };
-            let w2_3 = if i + 3 < (cb2.len + 63) / 64 { *cb2.data.add(i + 3) } else { 0 };
-            
+            let w1_0 = if i < cb1.len.div_ceil(64) {
+                *cb1.data.add(i)
+            } else {
+                0
+            };
+            let w1_1 = if i + 1 < cb1.len.div_ceil(64) {
+                *cb1.data.add(i + 1)
+            } else {
+                0
+            };
+            let w1_2 = if i + 2 < cb1.len.div_ceil(64) {
+                *cb1.data.add(i + 2)
+            } else {
+                0
+            };
+            let w1_3 = if i + 3 < cb1.len.div_ceil(64) {
+                *cb1.data.add(i + 3)
+            } else {
+                0
+            };
+
+            let w2_0 = if i < cb2.len.div_ceil(64) {
+                *cb2.data.add(i)
+            } else {
+                0
+            };
+            let w2_1 = if i + 1 < cb2.len.div_ceil(64) {
+                *cb2.data.add(i + 1)
+            } else {
+                0
+            };
+            let w2_2 = if i + 2 < cb2.len.div_ceil(64) {
+                *cb2.data.add(i + 2)
+            } else {
+                0
+            };
+            let w2_3 = if i + 3 < cb2.len.div_ceil(64) {
+                *cb2.data.add(i + 3)
+            } else {
+                0
+            };
+
             result_data.push(w1_0 ^ w2_0);
             result_data.push(w1_1 ^ w2_1);
             result_data.push(w1_2 ^ w2_2);
             result_data.push(w1_3 ^ w2_3);
-            
+
             i += 4;
         }
-        
+
         // 处理剩余的元素
         while i < num_words {
-            let w1 = if i < (cb1.len + 63) / 64 { *cb1.data.add(i) } else { 0 };
-            let w2 = if i < (cb2.len + 63) / 64 { *cb2.data.add(i) } else { 0 };
+            let w1 = if i < cb1.len.div_ceil(64) {
+                *cb1.data.add(i)
+            } else {
+                0
+            };
+            let w2 = if i < cb2.len.div_ceil(64) {
+                *cb2.data.add(i)
+            } else {
+                0
+            };
             result_data.push(w1 ^ w2);
             i += 1;
         }
-        
+
         // 创建结果 bitset
         let result_bitset = BitsetView::from_vec(result_data, len);
         let cb = CBitset::from(&result_bitset);
@@ -2786,14 +3214,14 @@ pub extern "C" fn knowhere_bitset_xor(bitset1: *const CBitset, bitset2: *const C
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_bitset_create() {
         let ptr = knowhere_bitset_create(100);
         assert!(!ptr.is_null());
         knowhere_bitset_free(ptr);
     }
-    
+
     #[test]
     fn test_create_flat_index() {
         let config = CIndexConfig {
@@ -2802,19 +3230,19 @@ mod tests {
             dim: 128,
             ..Default::default()
         };
-        
+
         let index = knowhere_create_index(config);
         assert!(!index.is_null());
-        
+
         let count = knowhere_get_index_count(index);
         assert_eq!(count, 0);
-        
+
         let dim = knowhere_get_index_dim(index);
         assert_eq!(dim, 128);
-        
+
         knowhere_free_index(index);
     }
-    
+
     #[test]
     fn test_index_statistics_flat() {
         let config = CIndexConfig {
@@ -2823,42 +3251,46 @@ mod tests {
             dim: 16,
             ..Default::default()
         };
-        
+
         let index = knowhere_create_index(config);
         assert!(!index.is_null());
-        
+
         // Test initial size (should be 0 or very small)
         let initial_size = unsafe { knowhere_get_index_size(index) };
-        
+
         // Add some vectors
         let vectors: Vec<f32> = (0..100 * 16).map(|i| i as f32).collect();
         let ids: Vec<i64> = (0..100).collect();
-        
+
         let train_result = knowhere_train_index(index, vectors.as_ptr(), 100, 16);
         assert_eq!(train_result, CError::Success as i32);
-        
+
         let add_result = knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 100, 16);
         assert_eq!(add_result, CError::Success as i32);
-        
+
         // Test size after adding vectors (should be larger)
         let size_after = unsafe { knowhere_get_index_size(index) };
         assert!(size_after > initial_size);
-        
+
         // Test index type
         let type_ptr = unsafe { knowhere_get_index_type(index) };
         assert!(!type_ptr.is_null());
-        let type_str = unsafe { std::ffi::CStr::from_ptr(type_ptr) }.to_str().unwrap();
+        let type_str = unsafe { std::ffi::CStr::from_ptr(type_ptr) }
+            .to_str()
+            .unwrap();
         assert_eq!(type_str, "Flat");
-        
+
         // Test metric type
         let metric_ptr = unsafe { knowhere_get_index_metric(index) };
         assert!(!metric_ptr.is_null());
-        let metric_str = unsafe { std::ffi::CStr::from_ptr(metric_ptr) }.to_str().unwrap();
+        let metric_str = unsafe { std::ffi::CStr::from_ptr(metric_ptr) }
+            .to_str()
+            .unwrap();
         assert_eq!(metric_str, "L2");
-        
+
         knowhere_free_index(index);
     }
-    
+
     #[test]
     fn test_index_statistics_hnsw() {
         let config = CIndexConfig {
@@ -2869,29 +3301,33 @@ mod tests {
             ef_search: 64,
             ..Default::default()
         };
-        
+
         let index = knowhere_create_index(config);
         assert!(!index.is_null());
-        
+
         // Test index type
         let type_ptr = unsafe { knowhere_get_index_type(index) };
         assert!(!type_ptr.is_null());
-        let type_str = unsafe { std::ffi::CStr::from_ptr(type_ptr) }.to_str().unwrap();
+        let type_str = unsafe { std::ffi::CStr::from_ptr(type_ptr) }
+            .to_str()
+            .unwrap();
         assert_eq!(type_str, "HNSW");
-        
+
         // Test metric type
         let metric_ptr = unsafe { knowhere_get_index_metric(index) };
         assert!(!metric_ptr.is_null());
-        let metric_str = unsafe { std::ffi::CStr::from_ptr(metric_ptr) }.to_str().unwrap();
+        let metric_str = unsafe { std::ffi::CStr::from_ptr(metric_ptr) }
+            .to_str()
+            .unwrap();
         assert_eq!(metric_str, "IP");
-        
+
         // Test size
         let size = unsafe { knowhere_get_index_size(index) };
-        assert!(size >= 0);
-        
+        // Note: size is usize, always >= 0
+
         knowhere_free_index(index);
     }
-    
+
     #[test]
     fn test_index_statistics_scann() {
         let config = CIndexConfig {
@@ -2903,46 +3339,54 @@ mod tests {
             reorder_k: 100,
             ..Default::default()
         };
-        
+
         let index = knowhere_create_index(config);
         assert!(!index.is_null());
-        
+
         // Test index type
         let type_ptr = unsafe { knowhere_get_index_type(index) };
         assert!(!type_ptr.is_null());
-        let type_str = unsafe { std::ffi::CStr::from_ptr(type_ptr) }.to_str().unwrap();
+        let type_str = unsafe { std::ffi::CStr::from_ptr(type_ptr) }
+            .to_str()
+            .unwrap();
         assert_eq!(type_str, "ScaNN");
-        
+
         // Test metric type (ScaNN defaults to L2)
         let metric_ptr = unsafe { knowhere_get_index_metric(index) };
         assert!(!metric_ptr.is_null());
-        let metric_str = unsafe { std::ffi::CStr::from_ptr(metric_ptr) }.to_str().unwrap();
+        let metric_str = unsafe { std::ffi::CStr::from_ptr(metric_ptr) }
+            .to_str()
+            .unwrap();
         assert_eq!(metric_str, "L2");
-        
+
         // Test size
         let size = unsafe { knowhere_get_index_size(index) };
-        assert!(size >= 0);
-        
+        // Note: size is usize, always >= 0
+
         knowhere_free_index(index);
     }
-    
+
     #[test]
     fn test_index_statistics_null_pointer() {
         // Test with null pointer - should return safe defaults
         let size = unsafe { knowhere_get_index_size(std::ptr::null()) };
         assert_eq!(size, 0);
-        
+
         let type_ptr = unsafe { knowhere_get_index_type(std::ptr::null()) };
         assert!(!type_ptr.is_null());
-        let type_str = unsafe { std::ffi::CStr::from_ptr(type_ptr) }.to_str().unwrap();
+        let type_str = unsafe { std::ffi::CStr::from_ptr(type_ptr) }
+            .to_str()
+            .unwrap();
         assert_eq!(type_str, "Unknown");
-        
+
         let metric_ptr = unsafe { knowhere_get_index_metric(std::ptr::null()) };
         assert!(!metric_ptr.is_null());
-        let metric_str = unsafe { std::ffi::CStr::from_ptr(metric_ptr) }.to_str().unwrap();
+        let metric_str = unsafe { std::ffi::CStr::from_ptr(metric_ptr) }
+            .to_str()
+            .unwrap();
         assert_eq!(metric_str, "Unknown");
     }
-    
+
     #[test]
     fn test_create_hnsw_index() {
         let config = CIndexConfig {
@@ -3062,8 +3506,9 @@ mod tests {
         assert_eq!(result.dim, 16);
 
         // Verify vector values (first element of each vector)
-        let vectors_slice = unsafe { std::slice::from_raw_parts(result.vectors, result.num_vectors * result.dim) };
-        assert_eq!(vectors_slice[0], 0.0);  // First element of vector 0
+        let vectors_slice =
+            unsafe { std::slice::from_raw_parts(result.vectors, result.num_vectors * result.dim) };
+        assert_eq!(vectors_slice[0], 0.0); // First element of vector 0
         assert_eq!(vectors_slice[16], 80.0); // First element of vector 5 (5*16=80)
         assert_eq!(vectors_slice[32], 144.0); // First element of vector 9 (9*16=144)
 
@@ -3298,19 +3743,19 @@ mod tests {
 
         // 验证搜索结果相同
         let query: Vec<f32> = (0..16).map(|i| i as f32).collect();
-        
+
         let source_result = knowhere_search(source_index, query.as_ptr(), 1, 3, 16);
         assert!(!source_result.is_null());
-        
+
         let target_result = knowhere_search(target_index, query.as_ptr(), 1, 3, 16);
         assert!(!target_result.is_null());
 
         unsafe {
             let src_ref = &*source_result;
             let tgt_ref = &*target_result;
-            
+
             assert_eq!(src_ref.num_results, tgt_ref.num_results);
-            
+
             // 验证搜索结果 ID 相同
             let src_ids = std::slice::from_raw_parts(src_ref.ids, src_ref.num_results);
             let tgt_ids = std::slice::from_raw_parts(tgt_ref.ids, tgt_ref.num_results);
@@ -3372,10 +3817,10 @@ mod tests {
 
         // Add test vectors: 4 vectors at different distances from origin
         let vectors = vec![
-            1.0, 0.0, 0.0, 0.0,  // dist=1.0 from origin
-            0.0, 1.0, 0.0, 0.0,  // dist=1.0 from origin
-            0.0, 0.0, 1.0, 0.0,  // dist=1.0 from origin
-            2.0, 0.0, 0.0, 0.0,  // dist=2.0 from origin
+            1.0, 0.0, 0.0, 0.0, // dist=1.0 from origin
+            0.0, 1.0, 0.0, 0.0, // dist=1.0 from origin
+            0.0, 0.0, 1.0, 0.0, // dist=1.0 from origin
+            2.0, 0.0, 0.0, 0.0, // dist=2.0 from origin
         ];
         let ids = vec![0i64, 1, 2, 3];
 
@@ -3420,9 +3865,9 @@ mod tests {
 
         // Add test vectors
         let vectors = vec![
-            0.0, 0.0, 0.0, 0.0,  // id=0
-            1.0, 0.0, 0.0, 0.0,  // id=1
-            0.0, 1.0, 0.0, 0.0,  // id=2
+            0.0, 0.0, 0.0, 0.0, // id=0
+            1.0, 0.0, 0.0, 0.0, // id=1
+            0.0, 1.0, 0.0, 0.0, // id=2
         ];
         let ids = vec![0i64, 1, 2];
 
@@ -3434,8 +3879,8 @@ mod tests {
 
         // Two query vectors
         let queries = vec![
-            0.0, 0.0, 0.0, 0.0,  // Query 1: at origin
-            1.0, 0.0, 0.0, 0.0,  // Query 2: at (1,0,0,0)
+            0.0, 0.0, 0.0, 0.0, // Query 1: at origin
+            1.0, 0.0, 0.0, 0.0, // Query 2: at (1,0,0,0)
         ];
         let result = knowhere_range_search(index, queries.as_ptr(), 2, 1.5, 4);
         assert!(!result.is_null());
@@ -3457,13 +3902,7 @@ mod tests {
     #[test]
     fn test_range_search_null_index() {
         let query = vec![0.0, 0.0, 0.0, 0.0];
-        let result = knowhere_range_search(
-            std::ptr::null(),
-            query.as_ptr(),
-            1,
-            1.0,
-            4,
-        );
+        let result = knowhere_range_search(std::ptr::null(), query.as_ptr(), 1, 1.0, 4);
         assert!(result.is_null());
     }
 
@@ -3479,13 +3918,7 @@ mod tests {
         let index = knowhere_create_index(config);
         assert!(!index.is_null());
 
-        let result = knowhere_range_search(
-            index,
-            std::ptr::null(),
-            1,
-            1.0,
-            4,
-        );
+        let result = knowhere_range_search(index, std::ptr::null(), 1, 1.0, 4);
         assert!(result.is_null());
 
         knowhere_free_index(index);
@@ -3506,10 +3939,7 @@ mod tests {
         assert!(!index.is_null());
 
         // Add test vectors
-        let vectors = vec![
-            0.0, 0.0, 0.0, 0.0,
-            1.0, 0.0, 0.0, 0.0,
-        ];
+        let vectors = vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
         let ids = vec![0i64, 1];
 
         let train_result = knowhere_train_index(index, vectors.as_ptr(), 2, 4);
@@ -3567,8 +3997,9 @@ mod tests {
         assert_eq!(result.dim, 16);
 
         // Verify vector values
-        let vectors_slice = unsafe { std::slice::from_raw_parts(result.vectors, result.num_ids * result.dim) };
-        assert_eq!(vectors_slice[0], 80.0);  // First element of vector 5 (5*16=80)
+        let vectors_slice =
+            unsafe { std::slice::from_raw_parts(result.vectors, result.num_ids * result.dim) };
+        assert_eq!(vectors_slice[0], 80.0); // First element of vector 5 (5*16=80)
 
         unsafe {
             knowhere_free_get_vector_result(result as *const _ as *mut _);
@@ -3609,9 +4040,10 @@ mod tests {
         assert_eq!(result.dim, 16);
 
         // Verify vector values
-        let vectors_slice = unsafe { std::slice::from_raw_parts(result.vectors, result.num_ids * result.dim) };
-        assert_eq!(vectors_slice[0], 0.0);    // First element of vector 0
-        assert_eq!(vectors_slice[16], 80.0);  // First element of vector 5 (5*16=80)
+        let vectors_slice =
+            unsafe { std::slice::from_raw_parts(result.vectors, result.num_ids * result.dim) };
+        assert_eq!(vectors_slice[0], 0.0); // First element of vector 0
+        assert_eq!(vectors_slice[16], 80.0); // First element of vector 5 (5*16=80)
         assert_eq!(vectors_slice[32], 144.0); // First element of vector 9 (9*16=144)
 
         unsafe {
@@ -3654,12 +4086,8 @@ mod tests {
     #[test]
     fn test_get_vector_by_ids_null_index() {
         let query_ids: Vec<i64> = vec![0, 1, 2];
-        let result = knowhere_get_vector_by_ids(
-            std::ptr::null(),
-            query_ids.as_ptr(),
-            query_ids.len(),
-            16,
-        );
+        let result =
+            knowhere_get_vector_by_ids(std::ptr::null(), query_ids.as_ptr(), query_ids.len(), 16);
         assert!(result.is_null());
     }
 
@@ -3735,29 +4163,29 @@ mod tests {
     fn test_bitset_create_and_set() {
         let bitset = knowhere_bitset_create(100);
         assert!(!bitset.is_null());
-        
+
         // Check initial count (all zeros)
         let count = unsafe { knowhere_bitset_count(bitset) };
         assert_eq!(count, 0);
-        
+
         // Set some bits
         unsafe {
             knowhere_bitset_set(bitset, 5, true);
             knowhere_bitset_set(bitset, 10, true);
             knowhere_bitset_set(bitset, 50, true);
         }
-        
+
         // Check count
         let count = unsafe { knowhere_bitset_count(bitset) };
         assert_eq!(count, 3);
-        
+
         // Check individual bits
         assert!(unsafe { knowhere_bitset_get(bitset, 5) });
         assert!(unsafe { knowhere_bitset_get(bitset, 10) });
         assert!(unsafe { knowhere_bitset_get(bitset, 50) });
         assert!(!unsafe { knowhere_bitset_get(bitset, 0) });
         assert!(!unsafe { knowhere_bitset_get(bitset, 7) });
-        
+
         knowhere_bitset_free(bitset);
     }
 
@@ -3793,20 +4221,13 @@ mod tests {
 
         // Search with bitset filter
         let query: Vec<f32> = vec![0.0, 0.0, 0.0, 0.0];
-        let result = knowhere_search_with_bitset(
-            index,
-            query.as_ptr(),
-            1,
-            5,
-            4,
-            bitset,
-        );
+        let result = knowhere_search_with_bitset(index, query.as_ptr(), 1, 5, 4, bitset);
         assert!(!result.is_null());
 
         unsafe {
             let result_ref = &*result;
             assert_eq!(result_ref.num_results, 5);
-            
+
             // Results should NOT include IDs 0, 1, 2 (they were filtered)
             for i in 0..result_ref.num_results {
                 let id = *result_ref.ids.add(i);
@@ -3822,7 +4243,7 @@ mod tests {
     #[test]
     fn test_search_with_bitset_null_params() {
         let query: Vec<f32> = vec![0.0, 0.0, 0.0, 0.0];
-        
+
         // Null index
         let result = knowhere_search_with_bitset(
             std::ptr::null(),
@@ -3833,19 +4254,13 @@ mod tests {
             std::ptr::null(),
         );
         assert!(result.is_null());
-        
+
         // Null query
         let bitset = knowhere_bitset_create(10);
-        let result = knowhere_search_with_bitset(
-            std::ptr::null(),
-            std::ptr::null(),
-            1,
-            5,
-            4,
-            bitset,
-        );
+        let result =
+            knowhere_search_with_bitset(std::ptr::null(), std::ptr::null(), 1, 5, 4, bitset);
         assert!(result.is_null());
-        
+
         knowhere_bitset_free(bitset as *mut _);
     }
 
@@ -3854,31 +4269,31 @@ mod tests {
         // Test various sizes
         let bitset_1 = knowhere_bitset_create(1);
         unsafe {
-            assert_eq!(knowhere_bitset_byte_size(bitset_1), 1);  // (1+7)/8 = 1
+            assert_eq!(knowhere_bitset_byte_size(bitset_1), 1); // (1+7)/8 = 1
         }
         knowhere_bitset_free(bitset_1);
 
         let bitset_8 = knowhere_bitset_create(8);
         unsafe {
-            assert_eq!(knowhere_bitset_byte_size(bitset_8), 1);  // (8+7)/8 = 1
+            assert_eq!(knowhere_bitset_byte_size(bitset_8), 1); // (8+7)/8 = 1
         }
         knowhere_bitset_free(bitset_8);
 
         let bitset_64 = knowhere_bitset_create(64);
         unsafe {
-            assert_eq!(knowhere_bitset_byte_size(bitset_64), 8);  // (64+7)/8 = 8
+            assert_eq!(knowhere_bitset_byte_size(bitset_64), 8); // (64+7)/8 = 8
         }
         knowhere_bitset_free(bitset_64);
 
         let bitset_100 = knowhere_bitset_create(100);
         unsafe {
-            assert_eq!(knowhere_bitset_byte_size(bitset_100), 13);  // (100+7)/8 = 13
+            assert_eq!(knowhere_bitset_byte_size(bitset_100), 13); // (100+7)/8 = 13
         }
         knowhere_bitset_free(bitset_100);
 
         let bitset_1000 = knowhere_bitset_create(1000);
         unsafe {
-            assert_eq!(knowhere_bitset_byte_size(bitset_1000), 125);  // (1000+7)/8 = 125
+            assert_eq!(knowhere_bitset_byte_size(bitset_1000), 125); // (1000+7)/8 = 125
         }
         knowhere_bitset_free(bitset_1000);
 
@@ -3899,19 +4314,19 @@ mod tests {
 
         // Verify we can read the data (should be all zeros initially)
         unsafe {
-            let slice = std::slice::from_raw_parts(data, 2);  // 128 bits = 2 u64s
+            let slice = std::slice::from_raw_parts(data, 2); // 128 bits = 2 u64s
             assert_eq!(slice[0], 0);
             assert_eq!(slice[1], 0);
 
             // Set some bits and verify
             knowhere_bitset_set(bitset, 0, true);
             knowhere_bitset_set(bitset, 64, true);
-            
+
             // Re-read data
             let data2 = knowhere_bitset_data(bitset);
             let slice2 = std::slice::from_raw_parts(data2, 2);
-            assert_eq!(slice2[0], 1u64);      // First bit set
-            assert_eq!(slice2[1], 1u64);      // 65th bit set (first bit of second u64)
+            assert_eq!(slice2[0], 1u64); // First bit set
+            assert_eq!(slice2[1], 1u64); // 65th bit set (first bit of second u64)
         }
 
         knowhere_bitset_free(bitset);
@@ -3921,70 +4336,70 @@ mod tests {
             assert!(knowhere_bitset_data(std::ptr::null()).is_null());
         }
     }
-    
+
     #[test]
     fn test_bitset_count() {
         let bitset = knowhere_bitset_create(100);
         assert!(!bitset.is_null());
-        
+
         // Initially all zeros
         assert_eq!(unsafe { knowhere_bitset_count(bitset) }, 0);
-        
+
         // Set some bits
         unsafe {
             knowhere_bitset_set(bitset, 5, true);
             knowhere_bitset_set(bitset, 10, true);
             knowhere_bitset_set(bitset, 50, true);
         }
-        
+
         assert_eq!(unsafe { knowhere_bitset_count(bitset) }, 3);
-        
+
         knowhere_bitset_free(bitset);
     }
-    
+
     #[test]
     fn test_bitset_test() {
         let bitset = knowhere_bitset_create(100);
         assert!(!bitset.is_null());
-        
+
         // Initially all zeros
         assert!(!unsafe { knowhere_bitset_test(bitset, 0) });
         assert!(!unsafe { knowhere_bitset_test(bitset, 50) });
-        
+
         // Set some bits
         unsafe {
             knowhere_bitset_set(bitset, 5, true);
             knowhere_bitset_set(bitset, 10, true);
         }
-        
+
         assert!(unsafe { knowhere_bitset_test(bitset, 5) });
         assert!(unsafe { knowhere_bitset_test(bitset, 10) });
         assert!(!unsafe { knowhere_bitset_test(bitset, 0) });
         assert!(!unsafe { knowhere_bitset_test(bitset, 50) });
-        
+
         // Out of range should return true (filtered)
         assert!(unsafe { knowhere_bitset_test(bitset, 100) });
-        
+
         knowhere_bitset_free(bitset);
     }
-    
+
     #[test]
     fn test_bitset_filter_ratio() {
         let bitset = knowhere_bitset_create(100);
         assert!(!bitset.is_null());
-        
+
         // Initially 0 ratio
         assert_eq!(unsafe { knowhere_bitset_filter_ratio(bitset) }, 0.0);
-        
+
         // Set all bits
         unsafe {
             for i in 0..100 {
                 knowhere_bitset_set(bitset, i, true);
             }
         }
-        
+
         assert_eq!(unsafe { knowhere_bitset_filter_ratio(bitset) }, 1.0);
-        
+
         // Clear and set half
         unsafe {
             for i in 0..100 {
@@ -3994,92 +4409,92 @@ mod tests {
                 knowhere_bitset_set(bitset, i, true);
             }
         }
-        
+
         let ratio = unsafe { knowhere_bitset_filter_ratio(bitset) };
         assert!((ratio - 0.5).abs() < 0.01);
-        
+
         knowhere_bitset_free(bitset);
     }
-    
+
     #[test]
     fn test_bitset_get_first_valid_index() {
         let bitset = knowhere_bitset_create(100);
         assert!(!bitset.is_null());
-        
+
         // Initially first valid is 0
         assert_eq!(unsafe { knowhere_bitset_get_first_valid_index(bitset) }, 0);
-        
+
         // Set first few bits
         unsafe {
             knowhere_bitset_set(bitset, 0, true);
             knowhere_bitset_set(bitset, 1, true);
             knowhere_bitset_set(bitset, 2, true);
         }
-        
+
         assert_eq!(unsafe { knowhere_bitset_get_first_valid_index(bitset) }, 3);
-        
+
         knowhere_bitset_free(bitset);
     }
-    
+
     #[test]
     fn test_bitset_size() {
         let bitset = knowhere_bitset_create(100);
         assert!(!bitset.is_null());
-        
+
         assert_eq!(unsafe { knowhere_bitset_size(bitset) }, 100);
-        
+
         knowhere_bitset_free(bitset);
     }
-    
+
     #[test]
     fn test_bitset_empty() {
         let non_empty = knowhere_bitset_create(100);
-        
+
         // Non-empty bitset
         assert!(!unsafe { knowhere_bitset_empty(non_empty) });
-        
+
         // NULL bitset should return true (empty)
         assert!(unsafe { knowhere_bitset_empty(std::ptr::null()) });
-        
+
         knowhere_bitset_free(non_empty);
     }
-    
+
     #[test]
     fn test_bitset_has_out_ids() {
         let bitset = knowhere_bitset_create(100);
         assert!(!bitset.is_null());
-        
+
         // Currently out_ids is not supported in CBitset, should return false
         assert!(!unsafe { knowhere_bitset_has_out_ids(bitset) });
-        
+
         knowhere_bitset_free(bitset);
     }
-    
+
     #[test]
     fn test_bitset_or() {
         let a = knowhere_bitset_create(100);
         let b = knowhere_bitset_create(100);
         assert!(!a.is_null());
         assert!(!b.is_null());
-        
+
         // 设置 a 的位：0, 1, 2
         unsafe {
             knowhere_bitset_set(a, 0, true);
             knowhere_bitset_set(a, 1, true);
             knowhere_bitset_set(a, 2, true);
         }
-        
+
         // 设置 b 的位：2, 3, 4
         unsafe {
             knowhere_bitset_set(b, 2, true);
             knowhere_bitset_set(b, 3, true);
             knowhere_bitset_set(b, 4, true);
         }
-        
+
         // 执行 OR 操作
         let result = unsafe { knowhere_bitset_or(a, b) };
         assert!(!result.is_null());
-        
+
         // 验证结果：0, 1, 2, 3, 4 都应该被设置
         unsafe {
             assert!(knowhere_bitset_get(result, 0));
@@ -4089,24 +4504,24 @@ mod tests {
             assert!(knowhere_bitset_get(result, 4));
             assert!(!knowhere_bitset_get(result, 5));
         }
-        
+
         // 验证计数
         assert_eq!(unsafe { knowhere_bitset_count(result) }, 5);
-        
+
         unsafe {
             knowhere_bitset_free(result);
             knowhere_bitset_free(b);
             knowhere_bitset_free(a);
         }
     }
-    
+
     #[test]
     fn test_bitset_and() {
         let a = knowhere_bitset_create(100);
         let b = knowhere_bitset_create(100);
         assert!(!a.is_null());
         assert!(!b.is_null());
-        
+
         // 设置 a 的位：0, 1, 2, 3
         unsafe {
             knowhere_bitset_set(a, 0, true);
@@ -4114,7 +4529,7 @@ mod tests {
             knowhere_bitset_set(a, 2, true);
             knowhere_bitset_set(a, 3, true);
         }
-        
+
         // 设置 b 的位：2, 3, 4, 5
         unsafe {
             knowhere_bitset_set(b, 2, true);
@@ -4122,11 +4537,11 @@ mod tests {
             knowhere_bitset_set(b, 4, true);
             knowhere_bitset_set(b, 5, true);
         }
-        
+
         // 执行 AND 操作
         let result = unsafe { knowhere_bitset_and(a, b) };
         assert!(!result.is_null());
-        
+
         // 验证结果：只有 2, 3 应该被设置（交集）
         unsafe {
             assert!(!knowhere_bitset_get(result, 0));
@@ -4136,24 +4551,24 @@ mod tests {
             assert!(!knowhere_bitset_get(result, 4));
             assert!(!knowhere_bitset_get(result, 5));
         }
-        
+
         // 验证计数
         assert_eq!(unsafe { knowhere_bitset_count(result) }, 2);
-        
+
         unsafe {
             knowhere_bitset_free(result);
             knowhere_bitset_free(b);
             knowhere_bitset_free(a);
         }
     }
-    
+
     #[test]
     fn test_bitset_xor() {
         let a = knowhere_bitset_create(100);
         let b = knowhere_bitset_create(100);
         assert!(!a.is_null());
         assert!(!b.is_null());
-        
+
         // 设置 a 的位：0, 1, 2, 3
         unsafe {
             knowhere_bitset_set(a, 0, true);
@@ -4161,7 +4576,7 @@ mod tests {
             knowhere_bitset_set(a, 2, true);
             knowhere_bitset_set(a, 3, true);
         }
-        
+
         // 设置 b 的位：2, 3, 4, 5
         unsafe {
             knowhere_bitset_set(b, 2, true);
@@ -4169,11 +4584,11 @@ mod tests {
             knowhere_bitset_set(b, 4, true);
             knowhere_bitset_set(b, 5, true);
         }
-        
+
         // 执行 XOR 操作
         let result = unsafe { knowhere_bitset_xor(a, b) };
         assert!(!result.is_null());
-        
+
         // 验证结果：0, 1, 4, 5 应该被设置（对称差）
         unsafe {
             assert!(knowhere_bitset_get(result, 0));
@@ -4183,17 +4598,17 @@ mod tests {
             assert!(knowhere_bitset_get(result, 4));
             assert!(knowhere_bitset_get(result, 5));
         }
-        
+
         // 验证计数
         assert_eq!(unsafe { knowhere_bitset_count(result) }, 4);
-        
+
         unsafe {
             knowhere_bitset_free(result);
             knowhere_bitset_free(b);
             knowhere_bitset_free(a);
         }
     }
-    
+
     #[test]
     fn test_bitset_or_different_sizes() {
         // 测试不同长度的 bitset
@@ -4201,26 +4616,26 @@ mod tests {
         let b = knowhere_bitset_create(100);
         assert!(!a.is_null());
         assert!(!b.is_null());
-        
+
         // 设置 a 的位：0, 1
         unsafe {
             knowhere_bitset_set(a, 0, true);
             knowhere_bitset_set(a, 1, true);
         }
-        
+
         // 设置 b 的位：1, 2
         unsafe {
             knowhere_bitset_set(b, 1, true);
             knowhere_bitset_set(b, 2, true);
         }
-        
+
         // 执行 OR 操作
         let result = unsafe { knowhere_bitset_or(a, b) };
         assert!(!result.is_null());
-        
+
         // 结果长度应该是 100（最大值）
         assert_eq!(unsafe { knowhere_bitset_size(result) }, 100);
-        
+
         // 验证结果
         unsafe {
             assert!(knowhere_bitset_get(result, 0));
@@ -4228,54 +4643,54 @@ mod tests {
             assert!(knowhere_bitset_get(result, 2));
             assert!(!knowhere_bitset_get(result, 3));
         }
-        
+
         unsafe {
             knowhere_bitset_free(result);
             knowhere_bitset_free(b);
             knowhere_bitset_free(a);
         }
     }
-    
+
     #[test]
     fn test_bitset_and_empty() {
         // 测试与空 bitset 的 AND 操作
         let a = knowhere_bitset_create(100);
         let b = knowhere_bitset_create(100);
-        
+
         // a 有一些位设置
         unsafe {
             knowhere_bitset_set(a, 0, true);
             knowhere_bitset_set(a, 1, true);
         }
         // b 保持全 0
-        
+
         let result = unsafe { knowhere_bitset_and(a, b) };
         assert!(!result.is_null());
-        
+
         // 结果应该全为 0
         assert_eq!(unsafe { knowhere_bitset_count(result) }, 0);
-        
+
         unsafe {
             knowhere_bitset_free(result);
             knowhere_bitset_free(b);
             knowhere_bitset_free(a);
         }
     }
-    
+
     #[test]
     fn test_bitset_null_handling() {
         // 测试 NULL 指针处理
         let a = knowhere_bitset_create(100);
-        
+
         let result_or = unsafe { knowhere_bitset_or(a, std::ptr::null()) };
         assert!(result_or.is_null());
-        
+
         let result_and = unsafe { knowhere_bitset_and(std::ptr::null(), a) };
         assert!(result_and.is_null());
-        
+
         let result_xor = unsafe { knowhere_bitset_xor(a, std::ptr::null()) };
         assert!(result_xor.is_null());
-        
+
         knowhere_bitset_free(a);
     }
 }

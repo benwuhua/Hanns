@@ -1,5 +1,5 @@
 //! Federation 信息结构
-//! 
+//!
 //! 用于返回搜索结果的详细信息
 
 use serde::{Deserialize, Serialize};
@@ -29,12 +29,12 @@ impl FederationInfo {
             fine_results: 0,
         }
     }
-    
+
     pub fn with_visited(mut self, n: usize) -> Self {
         self.num_visited = n;
         self
     }
-    
+
     pub fn with_filtered(mut self, n: usize) -> Self {
         self.num_filtered = n;
         self
@@ -80,17 +80,15 @@ impl Statistics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_federation_info() {
-        let info = FederationInfo::new()
-            .with_visited(100)
-            .with_filtered(50);
-        
+        let info = FederationInfo::new().with_visited(100).with_filtered(50);
+
         assert_eq!(info.num_visited, 100);
         assert_eq!(info.num_filtered, 50);
     }
-    
+
     #[test]
     fn test_statistics() {
         let stats = Statistics::new(1000, 128, "HNSW");

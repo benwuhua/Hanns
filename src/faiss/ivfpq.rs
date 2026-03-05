@@ -1,27 +1,42 @@
 //! IVF-PQ Index Implementation
-//! 
-//! Inverted File Index with Product Quantization
+//!
+//! Inverted File Index with Product Quantization.
+//! Uses coarse quantizer (IVF) + fine quantizer (PQ) for compressed storage
+//! and fast Asymmetric Distance Computation (ADC).
+//!
+//! OPT-003: 内存布局优化 - 使用 Vec 替代 HashMap
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use rand::distributions::Distribution;
+use rand::Rng;
 
-use crate::api::{IndexConfig, IndexType, MetricType, Result, SearchRequest, SearchResult};
+use crate::api::{IndexConfig, Result, SearchRequest, SearchResult};
 use crate::executor::l2_distance;
+use crate::quantization::pq::{PQConfig, ProductQuantizer};
+use crate::simd::l2_distance_sq;
 
 /// IVF-PQ Index
+///
+/// OPT-003: 内存布局优化 (HashMap → Vec)
+/// - 使用 Vec<Vec<i64>> 替代 HashMap 存储 ID 列表
+/// - 使用 Vec<Vec<u8>> 替代 HashMap 存储 PQ code 列表
+/// - 优势：O(1) 索引，无哈希开销，缓存友好
+#[allow(dead_code)]
 pub struct IvfPqIndex {
     config: IndexConfig,
     dim: usize,
-    nlist: usize,     // Number of clusters
-    nprobe: usize,    // Number of clusters to search
-    m: usize,         // Number of sub-quantizers
-    nbits_per_idx: usize,  // Bits per sub-vector
-    
-    /// Cluster centroids
+    nlist: usize,         // Number of clusters
+    nprobe: usize,        // Number of clusters to search
+    m: usize,             // Number of sub-quantizers
+    nbits_per_idx: usize, // Bits per sub-vector
+
+    /// Cluster centroids (coarse quantizer)
     centroids: Vec<f32>,
-    /// Inverted lists: cluster_id -> list of (vector_id, residual)
-    inverted_lists: HashMap<usize, Vec<(i64, Vec<f32>)>>,
-    /// All vectors
+    /// Product quantizer (fine quantizer on residuals)
+    pq: ProductQuantizer,
+    /// Inverted lists (Vec 替代 HashMap - 性能优化)
+    invlist_ids: Vec<Vec<i64>>, // [nlist] 个 ID 列表
+    invlist_codes: Vec<Vec<u8>>, // [nlist] 个 PQ code 列表 (连续存储)
+    /// All vectors (kept for save/load reconstruction)
     vectors: Vec<f32>,
     ids: Vec<i64>,
     next_id: i64,
@@ -41,6 +56,13 @@ impl IvfPqIndex {
         let m = config.params.m.unwrap_or(8);
         let nbits = config.params.nbits_per_idx.unwrap_or(8);
 
+        let pq_config = PQConfig::new(config.dim, m, nbits);
+        let pq = ProductQuantizer::new(pq_config);
+
+        // 预分配 Vec 容量（性能优化）
+        let invlist_ids = (0..nlist).map(|_| Vec::new()).collect();
+        let invlist_codes = (0..nlist).map(|_| Vec::new()).collect();
+
         Ok(Self {
             config: config.clone(),
             dim: config.dim,
@@ -49,7 +71,9 @@ impl IvfPqIndex {
             m,
             nbits_per_idx: nbits,
             centroids: Vec::new(),
-            inverted_lists: HashMap::new(),
+            pq,
+            invlist_ids,
+            invlist_codes,
             vectors: Vec::new(),
             ids: Vec::new(),
             next_id: 0,
@@ -57,7 +81,7 @@ impl IvfPqIndex {
         })
     }
 
-    /// Train: k-means clustering to find centroids
+    /// Train: k-means clustering for coarse quantizer + PQ training on residuals
     pub fn train(&mut self, vectors: &[f32]) -> Result<()> {
         let n = vectors.len() / self.dim;
         if n * self.dim != vectors.len() {
@@ -66,56 +90,131 @@ impl IvfPqIndex {
             ));
         }
 
-        // Simple k-means clustering
+        // Step 1: Train coarse quantizer (k-means for IVF centroids)
         self.centroids = self.kmeans(vectors, self.nlist);
-        
-        // Initialize inverted lists
-        self.inverted_lists.clear();
+
+        // Clear inverted lists (already initialized in new())
         for i in 0..self.nlist {
-            self.inverted_lists.insert(i, Vec::new());
+            self.invlist_ids[i].clear();
+            self.invlist_codes[i].clear();
         }
-        
+
+        // Step 2: Compute residuals for all training vectors
+        let mut residuals = Vec::with_capacity(vectors.len());
+        for i in 0..n {
+            let start = i * self.dim;
+            let vector = &vectors[start..start + self.dim];
+
+            // Find nearest centroid
+            let cluster = self.find_nearest_centroid(vector);
+
+            // Compute residual: vector - centroid
+            for (j, &value) in vector.iter().enumerate().take(self.dim) {
+                residuals.push(value - self.centroids[cluster * self.dim + j]);
+            }
+        }
+
+        // Step 3: Train PQ on residuals
+        self.pq.train(n, &residuals)?;
+
         self.trained = true;
-        tracing::info!("Trained IVF-PQ with {} clusters", self.nlist);
+        tracing::info!(
+            "Trained IVF-PQ with {} clusters, m={}, nbits={}",
+            self.nlist,
+            self.m,
+            self.nbits_per_idx
+        );
         Ok(())
     }
 
-    /// Simple k-means implementation
+    /// Simple k-means implementation with k-means++ initialization
     fn kmeans(&self, vectors: &[f32], k: usize) -> Vec<f32> {
         let n = vectors.len() / self.dim;
         let mut centroids = vec![0.0f32; k * self.dim];
-        
-        // Random initialization: pick k random vectors as centroids
-        let step = n / k;
-        for i in 0..k {
-            let idx = (i * step) * self.dim;
+        let mut rng = rand::thread_rng();
+
+        // K-means++ initialization for better cluster quality
+        // First centroid: random
+        let first_idx = rng.gen_range(0..n) * self.dim;
+        for j in 0..self.dim {
+            centroids[j] = vectors[first_idx + j];
+        }
+
+        // Remaining centroids: choose with probability proportional to D(x)^2
+        use rand::distributions::WeightedIndex;
+        let mut weights = vec![0.0f32; n];
+
+        for c in 1..k {
+            // Compute D(x)^2 for each point (distance to nearest existing centroid)
+            for i in 0..n {
+                let mut min_dist = f32::MAX;
+                for existing_c in 0..c {
+                    let dist = l2_distance_sq(
+                        &vectors[i * self.dim..(i + 1) * self.dim],
+                        &centroids[existing_c * self.dim..(existing_c + 1) * self.dim],
+                    );
+                    if dist < min_dist {
+                        min_dist = dist;
+                    }
+                }
+                weights[i] = min_dist.max(1e-10); // Avoid zero weights
+            }
+
+            // Normalize weights
+            let sum: f32 = weights.iter().sum();
+            for w in &mut weights {
+                *w /= sum;
+            }
+
+            // Sample next centroid
+            let dist = WeightedIndex::new(&weights).unwrap();
+            let next_idx = dist.sample(&mut rng) * self.dim;
             for j in 0..self.dim {
-                centroids[i * self.dim + j] = vectors[idx + j];
+                centroids[c * self.dim + j] = vectors[next_idx + j];
             }
         }
-        
-        // Iterative refinement (3 iterations for speed)
-        for _iter in 0..3 {
+
+        // Iterative refinement with adaptive iterations
+        // OPT-004: 动态调整迭代次数，避免小数据集训练过慢
+        // - n < 10K: 10 次迭代（快速训练）
+        // - 10K <= n < 100K: 25 次迭代
+        // - n >= 100K: 50 次迭代
+        let max_iter = if n < 10_000 {
+            10
+        } else if n < 100_000 {
+            25
+        } else {
+            50
+        };
+
+        // 早停机制：如果质心变化小于阈值则提前终止
+        let convergence_threshold = 1e-4;
+        let mut prev_centroids = centroids.clone();
+
+        for iter in 0..max_iter {
             // Assign vectors to nearest centroid
             let mut assignments = vec![0usize; n];
-            for i in 0..n {
+            for (i, assignment) in assignments.iter_mut().enumerate().take(n) {
                 let start = i * self.dim;
                 let mut min_dist = f32::MAX;
                 let mut min_idx = 0;
                 for c in 0..k {
-                    let dist = l2_distance(&vectors[start..start + self.dim], &centroids[c * self.dim..]);
+                    let dist = l2_distance_sq(
+                        &vectors[start..start + self.dim],
+                        &centroids[c * self.dim..(c + 1) * self.dim],
+                    );
                     if dist < min_dist {
                         min_dist = dist;
                         min_idx = c;
                     }
                 }
-                assignments[i] = min_idx;
+                *assignment = min_idx;
             }
-            
+
             // Update centroids
             let mut sums = vec![0.0f32; k * self.dim];
             let mut counts = vec![0usize; k];
-            
+
             for i in 0..n {
                 let c = assignments[i];
                 for j in 0..self.dim {
@@ -123,7 +222,7 @@ impl IvfPqIndex {
                 }
                 counts[c] += 1;
             }
-            
+
             for c in 0..k {
                 if counts[c] > 0 {
                     for j in 0..self.dim {
@@ -131,8 +230,31 @@ impl IvfPqIndex {
                     }
                 }
             }
+
+            // OPT-004: 早停机制 - 检查收敛
+            if iter > 0 {
+                let mut total_change = 0.0f32;
+                for c in 0..k {
+                    for j in 0..self.dim {
+                        let diff = centroids[c * self.dim + j] - prev_centroids[c * self.dim + j];
+                        total_change += diff * diff;
+                    }
+                }
+                let avg_change = total_change / (k * self.dim) as f32;
+
+                if avg_change < convergence_threshold {
+                    tracing::debug!(
+                        "IVF k-means converged at iteration {} (change={:.6})",
+                        iter,
+                        avg_change
+                    );
+                    break;
+                }
+            }
+
+            prev_centroids = centroids.clone();
         }
-        
+
         centroids
     }
 
@@ -145,36 +267,32 @@ impl IvfPqIndex {
         }
 
         let n = vectors.len() / self.dim;
-        
+
         for i in 0..n {
             let start = i * self.dim;
             let end = start + self.dim;
             let vector = &vectors[start..end];
-            
+
             // Find nearest centroid
-            let mut min_dist = f32::MAX;
-            let mut cluster = 0;
-            for c in 0..self.nlist {
-                let dist = l2_distance(vector, &self.centroids[c * self.dim..]);
-                if dist < min_dist {
-                    min_dist = dist;
-                    cluster = c;
-                }
-            }
-            
+            let cluster = self.find_nearest_centroid(vector);
+
             // Compute residual
             let mut residual = vec![0.0f32; self.dim];
             for j in 0..self.dim {
                 residual[j] = vector[j] - self.centroids[cluster * self.dim + j];
             }
-            
+
+            // PQ-encode the residual
+            let code = self.pq.encode(&residual)?;
+
             let id = ids.map(|ids| ids[i]).unwrap_or(self.next_id);
             self.next_id += 1;
-            
-            // Add to inverted list
-            self.inverted_lists.get_mut(&cluster).unwrap().push((id, residual));
-            
-            // Also store original
+
+            // Add to inverted lists (Vec optimization)
+            self.invlist_ids[cluster].push(id);
+            self.invlist_codes[cluster].extend_from_slice(&code);
+
+            // Store original vector for save/load
             self.ids.push(id);
             self.vectors.extend_from_slice(vector);
         }
@@ -185,9 +303,14 @@ impl IvfPqIndex {
 
     /// Add vectors in parallel (requires rayon)
     #[cfg(feature = "parallel")]
-    pub fn add_parallel(&mut self, vectors: &[f32], ids: Option<&[i64]>, _num_threads: usize) -> Result<usize> {
+    pub fn add_parallel(
+        &mut self,
+        vectors: &[f32],
+        ids: Option<&[i64]>,
+        _num_threads: usize,
+    ) -> Result<usize> {
         use rayon::prelude::*;
-        
+
         if !self.trained {
             return Err(crate::api::KnowhereError::InvalidArg(
                 "index must be trained first".to_string(),
@@ -198,14 +321,14 @@ impl IvfPqIndex {
         let dim = self.dim;
         let nlist = self.nlist;
         let centroids = self.centroids.clone();
-        
-        // Parallel: assign vectors to clusters (use rayon defaults)
-        let assignments: Vec<(usize, usize, Vec<f32>)> = (0..n)
+
+        // Parallel: assign vectors to clusters and PQ-encode residuals
+        let assignments: Vec<(usize, i64, Vec<u8>)> = (0..n)
             .into_par_iter()
             .map(|i| {
                 let start = i * dim;
                 let vector = &vectors[start..start + dim];
-                
+
                 // Find nearest centroid
                 let mut min_dist = f32::MAX;
                 let mut cluster = 0;
@@ -216,46 +339,110 @@ impl IvfPqIndex {
                         cluster = c;
                     }
                 }
-                
+
                 // Compute residual
                 let mut residual = vec![0.0f32; dim];
                 for j in 0..dim {
                     residual[j] = vector[j] - centroids[cluster * dim + j];
                 }
-                
+
+                // PQ-encode residual
+                let code = self.pq.encode(&residual).unwrap();
+
                 let id = ids.map(|ids| ids[i]).unwrap_or(i as i64);
-                (cluster, id as usize, residual)
+                (cluster, id, code)
             })
             .collect();
-        
-        // Collect by cluster
-        let mut cluster_data: HashMap<usize, Vec<(i64, Vec<f32>)>> = HashMap::new();
-        for (cluster, id, residual) in assignments {
-            cluster_data.entry(cluster).or_insert_with(Vec::new).push((id as i64, residual));
+
+        // Collect by cluster (using Vec for direct indexing)
+        let mut cluster_ids: Vec<Vec<i64>> = (0..nlist).map(|_| Vec::new()).collect();
+        let mut cluster_codes: Vec<Vec<u8>> = (0..nlist).map(|_| Vec::new()).collect();
+
+        for (cluster, id, code) in assignments {
+            cluster_ids[cluster].push(id);
+            cluster_codes[cluster].extend_from_slice(&code);
         }
-        
+
         // Merge into inverted lists
-        for (cluster, mut items) in cluster_data {
-            let list = self.inverted_lists.get_mut(&cluster).unwrap();
-            list.append(&mut items);
+        for cluster in 0..nlist {
+            self.invlist_ids[cluster].extend(&cluster_ids[cluster]);
+            self.invlist_codes[cluster].extend(&cluster_codes[cluster]);
         }
-        
+
         // Update ids and vectors
         for i in 0..n {
             let id = ids.map(|ids| ids[i]).unwrap_or(i as i64);
             self.ids.push(id);
             let start = i * self.dim;
-            self.vectors.extend_from_slice(&vectors[start..start + self.dim]);
+            self.vectors
+                .extend_from_slice(&vectors[start..start + self.dim]);
         }
         self.next_id = n as i64;
-        
+
         tracing::debug!("Added {} vectors to IVF-PQ (parallel)", n);
         Ok(n)
     }
 
-    /// Search
+    /// Precompute distance table for a query residual.
+    /// Returns table[sub_q][centroid_idx] = L2 distance between query sub-vector and PQ centroid.
+    fn precompute_distance_table(&self, query_residual: &[f32]) -> Vec<Vec<f32>> {
+        let sub_dim = self.pq.config().sub_dim();
+        let ksub = self.pq.config().ksub();
+        let m = self.pq.config().m;
+
+        let mut table = Vec::with_capacity(m);
+        for sub_q in 0..m {
+            let q_sub_offset = sub_q * sub_dim;
+            let query_sub = &query_residual[q_sub_offset..q_sub_offset + sub_dim];
+
+            let centroids = self.pq.get_centroids(sub_q).unwrap();
+            let mut dists = Vec::with_capacity(ksub);
+
+            for c in 0..ksub {
+                let centroid = &centroids[c * sub_dim..(c + 1) * sub_dim];
+                let mut dist = 0.0f32;
+                for d in 0..sub_dim {
+                    let diff = query_sub[d] - centroid[d];
+                    dist += diff * diff;
+                }
+                dists.push(dist);
+            }
+            table.push(dists);
+        }
+        table
+    }
+
+    /// Compute ADC distance using precomputed table
+    fn adc_distance(&self, table: &[Vec<f32>], code: &[u8]) -> f32 {
+        let m = self.pq.config().m;
+        let nbits = self.pq.config().nbits;
+        let mut total = 0.0f32;
+
+        for sub_q in 0..m {
+            let centroid_idx = if nbits == 8 {
+                code[sub_q] as usize
+            } else {
+                // Generic bit extraction
+                let byte_offset = sub_q * nbits / 8;
+                let bit_offset = (sub_q * nbits) % 8;
+                let mut idx = 0usize;
+                for bit in 0..nbits {
+                    let byte_idx = byte_offset + (bit_offset + bit) / 8;
+                    let bit_idx = (bit_offset + bit) % 8;
+                    if byte_idx < code.len() && (code[byte_idx] >> bit_idx) & 1 != 0 {
+                        idx |= 1 << bit;
+                    }
+                }
+                idx
+            };
+            total += table[sub_q][centroid_idx];
+        }
+        total
+    }
+
+    /// Search using Asymmetric Distance Computation (ADC) - 优化版：并行 nprobe
     pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<SearchResult> {
-        if self.vectors.is_empty() {
+        if self.ids.is_empty() {
             return Err(crate::api::KnowhereError::InvalidArg(
                 "index is empty".to_string(),
             ));
@@ -270,50 +457,121 @@ impl IvfPqIndex {
 
         let nprobe = req.nprobe.max(1).min(self.nlist);
         let k = req.top_k;
-        
+
         let mut all_ids = Vec::new();
         let mut all_dists = Vec::new();
-        
+
         for q_idx in 0..n_queries {
             let q_start = q_idx * self.dim;
             let query_vec = &query[q_start..q_start + self.dim];
-            
-            // Find nearest clusters
+
+            // Find nearest clusters (coarse quantizer)
             let mut cluster_dists: Vec<(usize, f32)> = (0..self.nlist)
                 .map(|c| {
-                    let dist = l2_distance(query_vec, &self.centroids[c * self.dim..]);
+                    let dist = l2_distance_sq(query_vec, &self.centroids[c * self.dim..(c + 1) * self.dim]);
                     (c, dist)
                 })
                 .collect();
             cluster_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-            
-            // Search top nprobe clusters
-            let mut candidates: Vec<(i64, f32)> = Vec::new();
-            
-            for (cluster, _) in cluster_dists.iter().take(nprobe) {
-                if let Some(list) = self.inverted_lists.get(cluster) {
-                    for (id, residual) in list {
-                        // Compute distance: query - centroid + residual
-                        let mut reconstructed = vec![0.0f32; self.dim];
-                        for j in 0..self.dim {
-                            reconstructed[j] = query_vec[j] - self.centroids[*cluster * self.dim + j] + residual[j];
+
+            #[cfg(feature = "parallel")]
+            {
+                // 并行搜索 nprobe 个簇
+                use rayon::prelude::*;
+
+                // PQ code size per vector
+                let code_size = self.pq.code_size();
+
+                let candidates: Vec<(i64, f32)> = cluster_dists
+                    .iter()
+                    .take(nprobe)
+                    .par_bridge()
+                    .filter_map(|(cluster, _)| {
+                        let ids = &self.invlist_ids[*cluster];
+                        let codes = &self.invlist_codes[*cluster];
+                        if ids.is_empty() {
+                            return None;
                         }
-                        let dist = l2_distance(query_vec, &reconstructed);
-                        candidates.push((*id, dist));
+
+                        // Compute query residual for this cluster
+                        let mut query_residual = vec![0.0f32; self.dim];
+                        for j in 0..self.dim {
+                            query_residual[j] =
+                                query_vec[j] - self.centroids[*cluster * self.dim + j];
+                        }
+
+                        // Precompute distance table
+                        let table = self.precompute_distance_table(&query_residual);
+
+                        // ADC search - iterate ids and codes together
+                        Some(
+                            ids.iter()
+                                .zip(codes.chunks(code_size))
+                                .map(|(id, code)| (*id, self.adc_distance(&table, code)))
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .flatten()
+                    .collect();
+
+                // Sort and take top k
+                let mut candidates = candidates;
+                candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+                for i in 0..k {
+                    if i < candidates.len() {
+                        all_ids.push(candidates[i].0);
+                        all_dists.push(candidates[i].1);
+                    } else {
+                        all_ids.push(-1);
+                        all_dists.push(f32::MAX);
                     }
                 }
             }
-            
-            // Sort and take top k
-            candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-            
-            for i in 0..k {
-                if i < candidates.len() {
-                    all_ids.push(candidates[i].0);
-                    all_dists.push(candidates[i].1);
-                } else {
-                    all_ids.push(-1);
-                    all_dists.push(f32::MAX);
+
+            #[cfg(not(feature = "parallel"))]
+            {
+                // 串行搜索（fallback）
+                let mut candidates: Vec<(i64, f32)> = Vec::new();
+
+                // PQ code size per vector
+                let code_size = self.pq.code_size();
+
+                for &(cluster, _) in cluster_dists.iter().take(nprobe) {
+                    let ids = &self.invlist_ids[cluster];
+                    let codes = &self.invlist_codes[cluster];
+
+                    if ids.is_empty() {
+                        continue;
+                    }
+
+                    // Compute query residual for this cluster
+                    let mut query_residual = vec![0.0f32; self.dim];
+                    for j in 0..self.dim {
+                        query_residual[j] = query_vec[j] - self.centroids[cluster * self.dim + j];
+                    }
+
+                    // Precompute distance table for this cluster's residual
+                    let table = self.precompute_distance_table(&query_residual);
+
+                    // ADC: look up distances from table for each PQ code
+                    for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
+                        let dist = self.adc_distance(&table, code);
+                        candidates.push((*id, dist));
+                    }
+                }
+
+                // Sort and take top k
+                candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+                for i in 0..k {
+                    if i < candidates.len() {
+                        all_ids.push(candidates[i].0);
+                        all_dists.push(candidates[i].1);
+                    } else {
+                        all_ids.push(-1);
+                        all_dists.push(f32::MAX);
+                    }
                 }
             }
         }
@@ -323,10 +581,15 @@ impl IvfPqIndex {
 
     /// Search multiple queries in parallel (requires rayon)
     #[cfg(feature = "parallel")]
-    pub fn search_parallel(&self, query: &[f32], req: &SearchRequest, _num_threads: usize) -> Result<SearchResult> {
+    pub fn search_parallel(
+        &self,
+        query: &[f32],
+        req: &SearchRequest,
+        _num_threads: usize,
+    ) -> Result<SearchResult> {
         use rayon::prelude::*;
-        
-        if self.vectors.is_empty() {
+
+        if self.ids.is_empty() {
             return Err(crate::api::KnowhereError::InvalidArg(
                 "index is empty".to_string(),
             ));
@@ -343,47 +606,56 @@ impl IvfPqIndex {
         let k = req.top_k;
         let dim = self.dim;
         let nlist = self.nlist;
-        let centroids = self.centroids.clone();
-        let inverted_lists: Vec<(usize, Vec<(i64, Vec<f32>)>)> = self.inverted_lists
-            .iter()
-            .map(|(k, v)| (*k, v.clone()))
-            .collect();
 
-        // Parallel search for each query (use rayon defaults)
+        // Parallel search for each query
         let results: Vec<(Vec<i64>, Vec<f32>)> = (0..n_queries)
             .into_par_iter()
             .map(|q_idx| {
                 let q_start = q_idx * dim;
                 let query_vec = &query[q_start..q_start + dim];
-                
+
                 // Find nearest clusters
                 let mut cluster_dists: Vec<(usize, f32)> = (0..nlist)
                     .map(|c| {
-                        let dist = l2_distance(query_vec, &centroids[c * dim..]);
+                        let dist = l2_distance(query_vec, &self.centroids[c * dim..]);
                         (c, dist)
                     })
                     .collect();
                 cluster_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-                
-                // Search top nprobe clusters
+
+                // Search top nprobe clusters using ADC
                 let mut candidates: Vec<(i64, f32)> = Vec::new();
-                
-                for (cluster, _) in cluster_dists.iter().take(nprobe) {
-                    if let Some(list) = inverted_lists.iter().find(|(c, _)| *c == *cluster) {
-                        for (id, residual) in &list.1 {
-                            let mut reconstructed = vec![0.0f32; dim];
-                            for j in 0..dim {
-                                reconstructed[j] = query_vec[j] - centroids[*cluster * dim + j] + residual[j];
-                            }
-                            let dist = l2_distance(query_vec, &reconstructed);
-                            candidates.push((*id, dist));
-                        }
+
+                // PQ code size per vector
+                let code_size = self.pq.code_size();
+
+                for &(cluster, _) in cluster_dists.iter().take(nprobe) {
+                    let ids = &self.invlist_ids[cluster];
+                    let codes = &self.invlist_codes[cluster];
+
+                    if ids.is_empty() {
+                        continue;
+                    }
+
+                    // Compute query residual
+                    let mut query_residual = vec![0.0f32; dim];
+                    for j in 0..dim {
+                        query_residual[j] = query_vec[j] - self.centroids[cluster * dim + j];
+                    }
+
+                    // Precompute distance table
+                    let table = self.precompute_distance_table(&query_residual);
+
+                    // ADC lookup
+                    for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
+                        let dist = self.adc_distance(&table, code);
+                        candidates.push((*id, dist));
                     }
                 }
-                
+
                 // Sort and take top k
                 candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-                
+
                 let mut ids = Vec::with_capacity(k);
                 let mut dists = Vec::with_capacity(k);
                 for i in 0..k {
@@ -395,7 +667,7 @@ impl IvfPqIndex {
                         dists.push(f32::MAX);
                     }
                 }
-                
+
                 (ids, dists)
             })
             .collect();
@@ -415,115 +687,162 @@ impl IvfPqIndex {
     }
 
     pub fn save(&self, path: &std::path::Path) -> Result<()> {
-        use std::fs::File;
         use std::io::Write;
-        
-        let mut file = File::create(path)?;
-        
+
+        let mut file = std::fs::File::create(path)?;
+
         file.write_all(b"IVFPQ")?;
-        file.write_all(&1u32.to_le_bytes())?;
+        file.write_all(&2u32.to_le_bytes())?; // version 2 for PQ format
         file.write_all(&(self.dim as u32).to_le_bytes())?;
         file.write_all(&(self.nlist as u32).to_le_bytes())?;
-        
+        file.write_all(&(self.m as u32).to_le_bytes())?;
+        file.write_all(&(self.nbits_per_idx as u32).to_le_bytes())?;
+
         // Centroids
-        let bytes: Vec<u8> = self.centroids.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let bytes: Vec<u8> = self
+            .centroids
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
         file.write_all(&bytes)?;
-        
+
         // IDs
         file.write_all(&(self.ids.len() as u64).to_le_bytes())?;
         for &id in &self.ids {
             file.write_all(&id.to_le_bytes())?;
         }
-        
-        // Vectors
+
+        // Vectors (for reconstruction)
         let vec_bytes: Vec<u8> = self.vectors.iter().flat_map(|f| f.to_le_bytes()).collect();
         file.write_all(&vec_bytes)?;
-        
-        // Inverted lists (simplified: just counts)
+
+        // Inverted lists with PQ codes
         for i in 0..self.nlist {
-            let list = self.inverted_lists.get(&i).unwrap();
-            file.write_all(&(list.len() as u32).to_le_bytes())?;
+            let count = self.invlist_ids[i].len() as u32;
+            file.write_all(&count.to_le_bytes())?;
         }
-        
+
+        // Write all PQ codes
+        for i in 0..self.nlist {
+            file.write_all(&self.invlist_codes[i])?;
+        }
+
         Ok(())
     }
 
     pub fn load(&mut self, path: &std::path::Path) -> Result<()> {
-        use std::fs::File;
         use std::io::Read;
-        
-        let mut file = File::open(path)?;
-        
+
+        let mut file = std::fs::File::open(path)?;
+
         let mut magic = [0u8; 5];
         file.read_exact(&mut magic)?;
         if &magic != b"IVFPQ" {
-            return Err(crate::api::KnowhereError::Codec("invalid magic".to_string()));
+            return Err(crate::api::KnowhereError::Codec(
+                "invalid magic".to_string(),
+            ));
         }
-        
+
         // Skip version
         let mut ver = [0u8; 4];
         file.read_exact(&mut ver)?;
-        
+
         let mut dim_bytes = [0u8; 4];
         file.read_exact(&mut dim_bytes)?;
         let dim = u32::from_le_bytes(dim_bytes) as usize;
-        
+
         let mut nlist_bytes = [0u8; 4];
         file.read_exact(&mut nlist_bytes)?;
         let nlist = u32::from_le_bytes(nlist_bytes) as usize;
-        
+
+        let mut m_bytes = [0u8; 4];
+        file.read_exact(&mut m_bytes)?;
+        let _m = u32::from_le_bytes(m_bytes) as usize;
+
+        let mut nbits_bytes = [0u8; 4];
+        file.read_exact(&mut nbits_bytes)?;
+        let _nbits = u32::from_le_bytes(nbits_bytes) as usize;
+
         // Load centroids
         let mut centroid_bytes = vec![0u8; nlist * dim * 4];
         file.read_exact(&mut centroid_bytes)?;
         self.centroids.clear();
         for chunk in centroid_bytes.chunks(4) {
-            self.centroids.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+            self.centroids
+                .push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
         }
-        
+
         // Load IDs
         let mut id_count_bytes = [0u8; 8];
         file.read_exact(&mut id_count_bytes)?;
         let id_count = u64::from_le_bytes(id_count_bytes) as usize;
-        
+
         self.ids.clear();
         for _ in 0..id_count {
             let mut id_bytes = [0u8; 8];
             file.read_exact(&mut id_bytes)?;
             self.ids.push(i64::from_le_bytes(id_bytes));
         }
-        
+
         // Load vectors
         let mut vec_bytes = vec![0u8; id_count * dim * 4];
         file.read_exact(&mut vec_bytes)?;
         self.vectors.clear();
         for chunk in vec_bytes.chunks(4) {
-            self.vectors.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+            self.vectors
+                .push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
         }
-        
-        // Load inverted lists (rebuild from vectors)
-        self.inverted_lists.clear();
-        for i in 0..nlist {
-            self.inverted_lists.insert(i, Vec::new());
+
+        // Retrain PQ from loaded vectors and rebuild inverted lists
+        if id_count > 0 {
+            // Compute all residuals
+            let mut residuals = Vec::with_capacity(id_count * dim);
+            let mut assignments = Vec::with_capacity(id_count);
+
+            for i in 0..id_count {
+                let vector = &self.vectors[i * dim..(i + 1) * dim];
+                let cluster = self.find_nearest_centroid(vector);
+                assignments.push(cluster);
+                for (j, &value) in vector.iter().enumerate().take(dim) {
+                    residuals.push(value - self.centroids[cluster * dim + j]);
+                }
+            }
+
+            // Train PQ on residuals
+            self.pq.train(id_count, &residuals)?;
+
+            // Rebuild inverted lists with PQ codes
+            for i in 0..self.nlist {
+                self.invlist_ids[i].clear();
+                self.invlist_codes[i].clear();
+            }
+
+            for i in 0..id_count {
+                let residual = &residuals[i * dim..(i + 1) * dim];
+                let code = self.pq.encode(residual)?;
+                let cluster = assignments[i];
+                self.invlist_ids[cluster].push(self.ids[i]);
+                self.invlist_codes[cluster].extend_from_slice(&code);
+            }
+        } else {
+            for i in 0..nlist {
+                self.invlist_ids[i].clear();
+                self.invlist_codes[i].clear();
+            }
         }
-        
-        for (i, &id) in self.ids.iter().enumerate() {
-            let vector = &self.vectors[i * dim..(i + 1) * dim];
-            let cluster = self.find_nearest_centroid(vector);
-            let residual = self.compute_residual(vector, cluster);
-            self.inverted_lists.get_mut(&cluster).unwrap().push((id, residual));
-        }
-        
+
         self.trained = true;
         self.next_id = self.ids.last().map(|&id| id + 1).unwrap_or(0);
         Ok(())
     }
-    
-    /// 查找最近的 centroid
+
+    /// Find nearest centroid
     fn find_nearest_centroid(&self, vector: &[f32]) -> usize {
         let mut min_dist = f32::MAX;
         let mut best = 0;
         for (i, centroid) in self.centroids.chunks(self.dim).enumerate() {
-            let dist = vector.iter()
+            let dist = vector
+                .iter()
                 .zip(centroid)
                 .map(|(a, b)| (a - b).powi(2))
                 .sum::<f32>();
@@ -534,51 +853,138 @@ impl IvfPqIndex {
         }
         best
     }
-    
-    /// 计算残差
-    fn compute_residual(&self, vector: &[f32], cluster: usize) -> Vec<f32> {
-        let centroid = &self.centroids[cluster * self.dim..(cluster + 1) * self.dim];
-        vector.iter()
-            .zip(centroid)
-            .map(|(a, b)| a - b)
-            .collect()
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+    use crate::api::{IndexType, MetricType};
+
     #[test]
-    fn test_ivfpq() {
+    fn test_ivfpq_basic() {
         let config = IndexConfig {
-            index_type: IndexType::IvfFlat,
+            index_type: IndexType::IvfPq,
             metric_type: MetricType::L2,
-            dim: 4,
-            params: crate::api::IndexParams::default(),
+            dim: 16,
+            params: crate::api::IndexParams {
+                nlist: Some(4),
+                nprobe: Some(4),
+                m: Some(4), // 4 sub-quantizers, each handles 4 dims
+                nbits_per_idx: Some(8),
+                ..Default::default()
+            },
         };
-        
+
         let mut index = IvfPqIndex::new(&config).unwrap();
-        
-        let vectors = vec![
-            0.0, 0.0, 0.0, 1.0,
-            0.0, 0.0, 1.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            1.0, 0.0, 0.0, 0.0,
-        ];
+
+        // Generate training/index vectors
+        let n = 200;
+        let dim = 16;
+        let mut vectors = Vec::with_capacity(n * dim);
+        for i in 0..n {
+            for j in 0..dim {
+                vectors.push(((i * 7 + j * 13) % 100) as f32 / 100.0);
+            }
+        }
+
         index.train(&vectors).unwrap();
         index.add(&vectors, None).unwrap();
-        
-        let query = vec![0.1, 0.1, 0.1, 0.1];
+
+        // Search for a vector that's in the index
+        let query = vectors[0..dim].to_vec();
         let req = SearchRequest {
-            top_k: 2,
-            nprobe: 2,
+            top_k: 5,
+            nprobe: 4,
             filter: None,
             params: None,
             radius: None,
         };
-        
+
         let result = index.search(&query, &req).unwrap();
-        assert_eq!(result.ids.len(), 2);
+        assert_eq!(result.ids.len(), 5);
+        // The closest result should be vector 0 itself
+        assert_eq!(result.ids[0], 0);
+    }
+
+    #[test]
+    fn test_ivfpq_recall() {
+        // Test recall with clustered data
+        let dim = 32;
+        let n = 2000;
+        let n_queries = 50;
+        let k = 10;
+
+        let config = IndexConfig {
+            index_type: IndexType::IvfPq,
+            metric_type: MetricType::L2,
+            dim,
+            params: crate::api::IndexParams {
+                nlist: Some(16),
+                nprobe: Some(8),
+                m: Some(8),
+                nbits_per_idx: Some(8),
+                ..Default::default()
+            },
+        };
+
+        let mut index = IvfPqIndex::new(&config).unwrap();
+
+        // Generate vectors with some structure
+        let mut vectors = Vec::with_capacity(n * dim);
+        for i in 0..n {
+            for j in 0..dim {
+                let base = (i % 16) as f32 * 10.0;
+                vectors.push(base + ((i * 7 + j * 13) % 100) as f32 / 10.0);
+            }
+        }
+
+        index.train(&vectors).unwrap();
+
+        let ids: Vec<i64> = (0..n as i64).collect();
+        index.add(&vectors, Some(&ids)).unwrap();
+
+        // Compute ground truth with brute force
+        let queries = &vectors[0..n_queries * dim];
+        let mut total_recall = 0.0;
+
+        for q in 0..n_queries {
+            let query = &queries[q * dim..(q + 1) * dim];
+
+            // Brute force ground truth
+            let mut gt: Vec<(i64, f32)> = (0..n)
+                .map(|i| {
+                    let v = &vectors[i * dim..(i + 1) * dim];
+                    let dist: f32 = query.iter().zip(v).map(|(a, b)| (a - b) * (a - b)).sum();
+                    (i as i64, dist)
+                })
+                .collect();
+            gt.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            let gt_ids: std::collections::HashSet<i64> = gt.iter().take(k).map(|x| x.0).collect();
+
+            // IVF-PQ search
+            let req = SearchRequest {
+                top_k: k,
+                nprobe: 8,
+                filter: None,
+                params: None,
+                radius: None,
+            };
+            let result = index.search(query, &req).unwrap();
+
+            let found: std::collections::HashSet<i64> =
+                result.ids.iter().filter(|&&id| id >= 0).copied().collect();
+
+            let recall = gt_ids.intersection(&found).count() as f32 / k as f32;
+            total_recall += recall;
+        }
+
+        let avg_recall = total_recall / n_queries as f32;
+        eprintln!("IVF-PQ R@{}: {:.1}%", k, avg_recall * 100.0);
+        assert!(
+            avg_recall > 0.80,
+            "R@{} = {:.1}% (expected > 80%)",
+            k,
+            avg_recall * 100.0
+        );
     }
 }

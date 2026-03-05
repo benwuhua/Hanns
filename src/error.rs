@@ -33,17 +33,20 @@ pub enum KnowhereError {
 
 impl KnowhereError {
     pub fn new(code: ErrorCode, msg: &str) -> Self {
-        Self::Standard { code, msg: msg.into() }
+        Self::Standard {
+            code,
+            msg: msg.into(),
+        }
     }
-    
+
     pub fn interrupted() -> Self {
         Self::Interrupted
     }
-    
+
     pub fn interrupted_with_message(msg: String) -> Self {
         Self::InterruptedWithMessage(msg)
     }
-    
+
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Standard { code, .. } => *code,
@@ -53,7 +56,7 @@ impl KnowhereError {
             Self::IndexNotTrained(_) => ErrorCode::NOT_IMPLEMENTED,
         }
     }
-    
+
     pub fn msg(&self) -> &str {
         match self {
             Self::Standard { msg, .. } => msg,
@@ -77,7 +80,7 @@ impl std::error::Error for KnowhereError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_error() {
         let e = KnowhereError::new(ErrorCode::NOT_FOUND, "vector not found");

@@ -1,14 +1,14 @@
 //! Interrupt/Cancellation support for long-running operations
-//! 
+//!
 //! This module provides a thread-safe interrupt mechanism that allows
 //! external cancellation of long-running search or training operations.
-//! 
+//!
 //! # Example
 //! ```rust
 //! use knowhere_rs::interrupt::Interrupt;
-//! 
+//!
 //! let interrupt = Interrupt::new();
-//! 
+//!
 //! // In a long-running operation
 //! for i in 0..1000 {
 //!     if interrupt.is_interrupted() {
@@ -17,7 +17,7 @@
 //!     }
 //!     // ... do work ...
 //! }
-//! 
+//!
 //! // From another thread, cancel the operation
 //! interrupt.interrupt();
 //! ```
@@ -87,7 +87,9 @@ macro_rules! check_interrupt {
     };
     ($interrupt:expr, $msg:expr) => {
         if $interrupt.is_interrupted() {
-            return Err($crate::error::KnowhereError::InterruptedWithMessage($msg.to_string()));
+            return Err($crate::error::KnowhereError::InterruptedWithMessage(
+                $msg.to_string(),
+            ));
         }
     };
 }

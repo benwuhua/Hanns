@@ -1,14 +1,12 @@
 //! RaBitQ (Randomized Bit Quantization)
-//! 
+//!
 //! 高效的二进制量化方法，支持 32x 压缩
 //! 参考：https://arxiv.org/abs/2405.12497
-//! 
+//!
 //! 核心思想（与 C++ Faiss 对齐）:
 //! 1. 计算向量与质心的残差
 //! 2. 直接对残差进行二值化 (residual[i] > 0 ? 1 : 0)
 //! 3. 存储校正因子用于无偏距离估计
-
-use std::collections::HashMap;
 
 /// 查询量化结果（qb=8 模式）
 ///
@@ -61,76 +59,78 @@ impl RaBitQEncoder {
         self.qb = qb;
         self
     }
-    
+
     /// 训练码书 - RaBitQ 无需训练
-    /// 
+    ///
     /// C++ Faiss 版本：train() does nothing
     pub fn train(&mut self, _data: &[f32]) {
         self.trained = true;
     }
-    
+
     /// 编码到二进制 (带校正因子)
-    /// 
+    ///
     /// 返回：(binary_code, centroid_dist, inner_product)
     /// - centroid_dist: ||vector|| (向量 L2 范数)
     /// - inner_product: <sign(vector), vector> / ||vector|| / sqrt(d)
     pub fn encode(&self, vector: &[f32]) -> (Vec<u8>, f32, f32) {
         if !self.trained {
-            return (vec![0u8; (self.dim + 7) / 8], 0.0, 0.0);
+            return (vec![0u8; self.dim.div_ceil(8)], 0.0, 0.0);
         }
-        
+
         // 计算向量范数
         let norm_l2sqr: f32 = vector.iter().map(|&x| x * x).sum();
         let norm_l2 = norm_l2sqr.sqrt().max(1e-10);
-        
+
         // 直接二值化（不旋转）
-        let total_bytes = (self.dim + 7) / 8;
+        let total_bytes = self.dim.div_ceil(8);
         let mut codes = vec![0u8; total_bytes];
         let sqrt_dim = (self.dim as f32).sqrt();
-        
-        for i in 0..self.dim {
-            if vector[i] > 0.0 {
+
+        for (i, &value) in vector.iter().enumerate().take(self.dim) {
+            if value > 0.0 {
                 codes[i / 8] |= 1 << (i % 8);
             }
         }
-        
+
         // 计算校正因子（与 C++ Faiss 一致）
-        // dp_oO = sum(sign(or_minus_c) * or_minus_c) / ||or_minus_c|| / sqrt(d)
-        let mut dp_oO = 0.0f32;
-        for i in 0..self.dim {
-            let sign_val = if vector[i] > 0.0 { 1.0 } else { -1.0 };
-            dp_oO += sign_val * vector[i];
+        // dp_o_o = sum(sign(or_minus_c) * or_minus_c) / ||or_minus_c|| / sqrt(d)
+        let mut dp_o_o = 0.0f32;
+        for &value in vector.iter().take(self.dim) {
+            let sign_val = if value > 0.0 { 1.0 } else { -1.0 };
+            dp_o_o += sign_val * value;
         }
-        dp_oO /= norm_l2 * sqrt_dim;
-        
-        (codes, norm_l2, dp_oO)
+        dp_o_o /= norm_l2 * sqrt_dim;
+
+        (codes, norm_l2, dp_o_o)
     }
-    
+
     /// 编码带质心的向量（用于 IVF 残差量化）
-    /// 
+    ///
     /// 返回：(binary_code, centroid_dist, inner_product, sum_xb)
     /// - centroid_dist: ||vector - centroid|| (残差的 L2 范数)
     /// - inner_product: dp_multiplier 校正因子
     /// - sum_xb: 二进制位之和（C++ FactorsData.sum_xb）
-    pub fn encode_with_centroid(&self, vector: &[f32], centroid: &[f32]) -> (Vec<u8>, f32, f32, f32) {
+    pub fn encode_with_centroid(
+        &self,
+        vector: &[f32],
+        centroid: &[f32],
+    ) -> (Vec<u8>, f32, f32, f32) {
         if !self.trained {
-            return (vec![0u8; (self.dim + 7) / 8], 0.0, 0.0, 0.0);
+            return (vec![0u8; self.dim.div_ceil(8)], 0.0, 0.0, 0.0);
         }
-        
+
         // 计算残差
-        let residual: Vec<f32> = (0..self.dim)
-            .map(|i| vector[i] - centroid[i])
-            .collect();
-        
+        let residual: Vec<f32> = (0..self.dim).map(|i| vector[i] - centroid[i]).collect();
+
         // 计算残差范数 (centroid_dist)
         let norm_l2sqr: f32 = residual.iter().map(|&x| x * x).sum();
         let norm_l2 = norm_l2sqr.sqrt().max(1e-10);
-        
+
         // 直接二值化（不旋转，与 C++ Faiss 一致）
-        let total_bytes = (self.dim + 7) / 8;
+        let total_bytes = self.dim.div_ceil(8);
         let mut codes = vec![0u8; total_bytes];
         let sqrt_dim = (self.dim as f32).sqrt();
-        
+
         // 统计二进制位之和（C++ FactorsData.sum_xb）
         let mut sum_xb = 0.0f32;
         for i in 0..self.dim {
@@ -139,78 +139,83 @@ impl RaBitQEncoder {
                 sum_xb += 1.0;
             }
         }
-        
+
         // 计算校正因子（与 C++ Faiss 一致）
-        // dp_oO = sum(sign(or_minus_c) * or_minus_c) / ||or_minus_c|| / sqrt(d)
-        let mut dp_oO = 0.0f32;
-        for i in 0..self.dim {
-            let sign_val = if residual[i] > 0.0 { 1.0 } else { -1.0 };
-            dp_oO += sign_val * residual[i];
+        // dp_o_o = sum(sign(or_minus_c) * or_minus_c) / ||or_minus_c|| / sqrt(d)
+        let mut dp_o_o = 0.0f32;
+        for &value in residual.iter().take(self.dim) {
+            let sign_val = if value > 0.0 { 1.0 } else { -1.0 };
+            dp_o_o += sign_val * value;
         }
-        dp_oO /= norm_l2 * sqrt_dim;
-        
-        (codes, norm_l2, dp_oO, sum_xb)
+        dp_o_o /= norm_l2 * sqrt_dim;
+
+        (codes, norm_l2, dp_o_o, sum_xb)
     }
-    
+
     /// 解码 (重建量化向量)
-    /// 
+    ///
     /// 返回单位球面上的量化向量（无旋转）
     pub fn decode(&self, codes: &[u8]) -> Vec<f32> {
         let sqrt_dim = (self.dim as f32).sqrt();
         (0..self.dim)
             .map(|i| {
                 let bit = (codes[i / 8] >> (i % 8)) & 1;
-                if bit == 0 { -1.0 / sqrt_dim } else { 1.0 / sqrt_dim }
+                if bit == 0 {
+                    -1.0 / sqrt_dim
+                } else {
+                    1.0 / sqrt_dim
+                }
             })
             .collect()
     }
-    
+
     /// 构建查询的距离表
-    /// 
+    ///
     /// 返回：(query_normalized, query_norm)
     pub fn build_distance_table(&self, query: &[f32]) -> (Vec<f32>, f32) {
         if !self.trained {
             return (vec![0.0f32; self.dim], 0.0);
         }
-        
+
         // 计算范数
         let norm: f32 = query.iter().map(|&x| x * x).sum::<f32>().sqrt();
         let norm = norm.max(1e-10);
-        
+
         // 归一化
         let normalized: Vec<f32> = query.iter().map(|&x| x / norm).collect();
-        
+
         (normalized, norm)
     }
-    
+
     /// 使用质心构建查询的距离表
-    /// 
+    ///
     /// 返回：(query_residual_normalized, centroid, query_norm, residual_norm)
     pub fn build_distance_table_with_centroid(
-        &self, 
-        query: &[f32], 
-        centroid: &[f32]
+        &self,
+        query: &[f32],
+        centroid: &[f32],
     ) -> (Vec<f32>, Vec<f32>, f32, f32) {
         if !self.trained {
             return (vec![0.0f32; self.dim], vec![], 0.0, 0.0);
         }
-        
+
         // 计算残差
-        let residual: Vec<f32> = query.iter()
+        let residual: Vec<f32> = query
+            .iter()
             .zip(centroid.iter())
             .map(|(&q, &c)| q - c)
             .collect();
-        
+
         // 残差范数
         let residual_norm: f32 = residual.iter().map(|&x| x * x).sum::<f32>().sqrt();
         let residual_norm = residual_norm.max(1e-10);
-        
+
         // 归一化残差
         let normalized: Vec<f32> = residual.iter().map(|&x| x / residual_norm).collect();
-        
+
         (normalized, centroid.to_vec(), residual_norm, 0.0)
     }
-    
+
     /// 使用距离表计算与编码向量的距离 (qb=0 模式，不量化查询)
     ///
     /// 参考 C++ Faiss RaBitDistanceComputerNotQ::distance_to_code
@@ -232,7 +237,7 @@ impl RaBitQEncoder {
         data_code: &[u8],
         data_centroid_dist: f32,
         data_ip: f32, // dp_oO = sum(|r|)/||r||/sqrt(d)
-        data_sum_xb: f32,
+        _data_sum_xb: f32,
     ) -> f32 {
         if !self.trained {
             return f32::MAX;
@@ -302,9 +307,9 @@ impl RaBitQEncoder {
         // 找 v_min / v_max
         let mut v_min = f32::MAX;
         let mut v_max = f32::MIN;
-        for i in 0..d {
-            v_min = v_min.min(residual[i]);
-            v_max = v_max.max(residual[i]);
+        for &value in residual.iter().take(d) {
+            v_min = v_min.min(value);
+            v_max = v_max.max(value);
         }
 
         // 量化参数
@@ -317,7 +322,7 @@ impl RaBitQEncoder {
         let mut sum_qq: usize = 0;
         for i in 0..d {
             let v_qq = ((residual[i] - v_min) * inv_delta).round() as i32;
-            let clamped = v_qq.max(0).min(255) as u8;
+            let clamped = v_qq.clamp(0, 255) as u8;
             quantized_query[i] = clamped;
             sum_qq += clamped as usize;
         }
@@ -397,78 +402,84 @@ impl RaBitQEncoder {
         for (b1, b2) in code1.iter().zip(code2.iter()) {
             hamming += (b1 ^ b2).count_ones() as usize;
         }
-        
+
         // 转换为 L2 距离近似
         // 对于单位向量：L2^2 = 2 - 2*cos(theta) ≈ 2 * (hamming / dim)
         hamming as f32 * 2.0 / (self.dim as f32)
     }
-    
-    pub fn is_trained(&self) -> bool { self.trained }
-    pub fn dim(&self) -> usize { self.dim }
-    pub fn code_size(&self) -> usize { (self.dim + 7) / 8 }
+
+    pub fn is_trained(&self) -> bool {
+        self.trained
+    }
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+    pub fn code_size(&self) -> usize {
+        self.dim.div_ceil(8)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_rabitq_encoder_train() {
         let mut encoder = RaBitQEncoder::new(64);
-        
+
         // RaBitQ 无需训练，直接标记为已训练
         let data: Vec<f32> = (0..6400).map(|i| (i as f32) * 0.01).collect();
         encoder.train(&data);
-        
+
         assert!(encoder.is_trained());
     }
-    
+
     #[test]
     fn test_rabitq_encode_decode() {
         let mut encoder = RaBitQEncoder::new(32);
-        
+
         // 训练
         let data: Vec<f32> = (0..3200).map(|i| (i as f32) * 0.01).collect();
         encoder.train(&data);
-        
+
         // 测试编码
         let vector: Vec<f32> = (0..32).map(|i| i as f32 * 0.1).collect();
-        let (code, centroid_dist, ip) = encoder.encode(&vector);
-        
+        let (code, centroid_dist, _ip) = encoder.encode(&vector);
+
         assert_eq!(code.len(), (32 + 7) / 8);
         assert!(centroid_dist > 0.0);
-        
+
         // 测试解码
         let decoded = encoder.decode(&code);
         assert_eq!(decoded.len(), 32);
-        
+
         // 解码向量应该在单位球面上
         let decoded_norm: f32 = decoded.iter().map(|&x| x * x).sum::<f32>().sqrt();
         assert!((decoded_norm - 1.0).abs() < 1e-5);
     }
-    
+
     #[test]
     fn test_rabitq_encode_with_centroid() {
         let mut encoder = RaBitQEncoder::new(16);
-        
+
         // 训练
         let data: Vec<f32> = (0..1600).map(|i| (i as f32) * 0.01).collect();
         encoder.train(&data);
-        
+
         // 测试带质心编码
         let vector: Vec<f32> = (0..16).map(|i| i as f32 * 0.1).collect();
         let centroid: Vec<f32> = vec![0.5; 16];
         let (code, centroid_dist, ip, _sum_xb) = encoder.encode_with_centroid(&vector, &centroid);
-        
+
         assert_eq!(code.len(), (16 + 7) / 8);
         assert!(centroid_dist > 0.0);
-        
+
         // 验证校正因子在合理范围内
         // ip = <sign(residual), residual> / ||residual|| / sqrt(d)
         // 应该在 [0, 1] 范围内
         assert!(ip >= 0.0 && ip <= 2.0);
     }
-    
+
     #[test]
     fn test_rabitq_distance_computation() {
         let mut encoder = RaBitQEncoder::new(32);
@@ -486,9 +497,8 @@ mod tests {
         let (query_normalized, query_norm) = encoder.build_distance_table(&v1);
 
         // 计算距离 (qb=0)
-        let distance = encoder.compute_distance(
-            &query_normalized, query_norm, &code2, dist2, ip2, 0.0,
-        );
+        let distance =
+            encoder.compute_distance(&query_normalized, query_norm, &code2, dist2, ip2, 0.0);
 
         // 距离应该为非负
         assert!(distance >= 0.0);
@@ -533,7 +543,9 @@ mod tests {
 
         let mut rng = 42u64; // 简单伪随机 (LCG)
         let mut next_f32 = || -> f32 {
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             // Map to [-1, 1]
             (rng >> 33) as f32 / (1u64 << 30) as f32 - 1.0
         };
@@ -595,7 +607,10 @@ mod tests {
         }
 
         let avg_recall = total_recall / nq as f64;
-        println!("qb=8 recall@{}: {:.3} (single centroid, n={})", k, avg_recall, n);
+        println!(
+            "qb=8 recall@{}: {:.3} (single centroid, n={})",
+            k, avg_recall, n
+        );
         assert!(
             avg_recall > 0.5,
             "qb=8 recall@{} should be > 0.5, got {:.3}",

@@ -10,3 +10,20 @@ Cargo.lock
 
 # OS
 .DS_Store
+
+# Temp / artifacts
+*.log
+*.bak
+*.orig
+*.rej
+*.backup
+*.tmp
+*.temp
+
+# Local benchmark/data artifacts
+data/
+benchmark_results/
+cpp_bench_build/
+*.fvecs
+*.ivecs
+*.hdf5

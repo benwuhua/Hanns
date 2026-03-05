@@ -28,14 +28,14 @@ impl AsyncReader for SyncReader {
     fn read(&self, path: &Path, offset: u64, size: usize) -> Result<Vec<u8>, std::io::Error> {
         use std::fs::File;
         use std::io::{Read, Seek, SeekFrom};
-        
+
         let mut file = File::open(path)?;
         file.seek(SeekFrom::Start(offset))?;
         let mut buf = vec![0u8; size];
         file.read_exact(&mut buf)?;
         Ok(buf)
     }
-    
+
     fn read_batch(&self, requests: Vec<ReadRequest>) -> Result<Vec<ReadResult>, std::io::Error> {
         // 简化：顺序执行
         let mut results = Vec::new();
@@ -51,7 +51,7 @@ impl AsyncReader for SyncReader {
 mod tests {
     use super::*;
     use std::io::Result;
-    
+
     #[test]
     fn test_sync_read() -> Result<()> {
         let reader = SyncReader;

@@ -1,12 +1,12 @@
 //! Product Quantization (PQ)
-//! 
+//!
 //! Product Quantization splits vectors into subvectors and quantizes each independently.
 //! This provides compression and faster distance computation.
-//! 
+//!
 //! Reference: H. Jégou et al., "Product quantization for nearest neighbor search", 2011
 
-use crate::api::{Result, KnowhereError};
 use super::kmeans::KMeans;
+use crate::api::{KnowhereError, Result};
 
 /// Product Quantization configuration
 #[derive(Clone, Debug)]
@@ -52,27 +52,31 @@ impl PQConfig {
     /// Validate the configuration
     pub fn validate(&self) -> Result<()> {
         if self.dim == 0 {
-            return Err(KnowhereError::InvalidArg("Dimension must be > 0".to_string()));
+            return Err(KnowhereError::InvalidArg(
+                "Dimension must be > 0".to_string(),
+            ));
         }
-        
+
         if self.m == 0 {
-            return Err(KnowhereError::InvalidArg("Number of subquantizers (m) must be > 0".to_string()));
+            return Err(KnowhereError::InvalidArg(
+                "Number of subquantizers (m) must be > 0".to_string(),
+            ));
         }
-        
+
         if self.dim % self.m != 0 {
             return Err(KnowhereError::InvalidArg(format!(
                 "Dimension {} must be divisible by m={}",
                 self.dim, self.m
             )));
         }
-        
+
         if self.nbits == 0 || self.nbits > 16 {
             return Err(KnowhereError::InvalidArg(format!(
                 "nbits must be in range [1, 16], got {}",
                 self.nbits
             )));
         }
-        
+
         Ok(())
     }
 }
@@ -116,20 +120,25 @@ impl ProductQuantizer {
         self.config.validate()?;
 
         if n == 0 || x.is_empty() {
-            return Err(KnowhereError::InvalidArg("Cannot train with empty data".to_string()));
+            return Err(KnowhereError::InvalidArg(
+                "Cannot train with empty data".to_string(),
+            ));
         }
 
         let expected_size = n * self.config.dim;
         if x.len() != expected_size {
             return Err(KnowhereError::InvalidArg(format!(
                 "Expected {} floats for {} vectors of dim {}, got {}",
-                expected_size, n, self.config.dim, x.len()
+                expected_size,
+                n,
+                self.config.dim,
+                x.len()
             )));
         }
 
         let sub_dim = self.config.sub_dim();
         let ksub = self.config.ksub();
-        
+
         // Initialize centroids (m x ksub x sub_dim)
         let total_centroids = self.config.m * ksub * sub_dim;
         self.centroids = vec![0.0f32; total_centroids];
@@ -137,7 +146,7 @@ impl ProductQuantizer {
         // Train each subquantizer independently using k-means
         for sub_q in 0..self.config.m {
             let sub_centroid_offset = sub_q * ksub * sub_dim;
-            
+
             // Extract subvectors for this subquantizer
             let mut sub_vectors = Vec::with_capacity(n * sub_dim);
             for i in 0..n {
@@ -146,9 +155,23 @@ impl ProductQuantizer {
                 sub_vectors.extend_from_slice(&x[sub_offset..sub_offset + sub_dim]);
             }
 
-            // Run k-means
+            // Run k-means with adaptive iterations
+            // OPT-004: 动态调整迭代次数，避免小数据集训练过慢
+            // - n < 10K: 10 次迭代（快速训练）
+            // - 10K <= n < 100K: 25 次迭代
+            // - n >= 100K: 50 次迭代
+            let max_iter = if n < 10_000 {
+                10
+            } else if n < 100_000 {
+                25
+            } else {
+                50
+            };
+
             let mut kmeans = KMeans::new(ksub, sub_dim);
-            let centroids_slice = &mut self.centroids[sub_centroid_offset..sub_centroid_offset + ksub * sub_dim];
+            kmeans.set_max_iter(max_iter);
+            let centroids_slice =
+                &mut self.centroids[sub_centroid_offset..sub_centroid_offset + ksub * sub_dim];
             kmeans.train(&sub_vectors);
             centroids_slice.copy_from_slice(kmeans.centroids());
         }
@@ -160,33 +183,36 @@ impl ProductQuantizer {
     /// Encode a single vector
     pub fn encode(&self, x: &[f32]) -> Result<Vec<u8>> {
         if !self.is_trained {
-            return Err(KnowhereError::InternalError("PQ quantizer not trained".to_string()));
+            return Err(KnowhereError::InternalError(
+                "PQ quantizer not trained".to_string(),
+            ));
         }
 
         if x.len() != self.config.dim {
             return Err(KnowhereError::InvalidArg(format!(
                 "Expected {} floats, got {}",
-                self.config.dim, x.len()
+                self.config.dim,
+                x.len()
             )));
         }
 
         let code_size = self.config.code_size();
         let mut code = vec![0u8; code_size];
         let sub_dim = self.config.sub_dim();
-        let ksub = self.config.ksub();
+        let _ksub = self.config.ksub();
         let nbits = self.config.nbits;
 
         for sub_q in 0..self.config.m {
             let sub_offset = sub_q * sub_dim;
             let sub_vector = &x[sub_offset..sub_offset + sub_dim];
-            
+
             // Find nearest centroid
             let centroid_idx = self.find_nearest_centroid(sub_q, sub_vector);
-            
+
             // Pack index into code
             let byte_offset = sub_q * nbits / 8;
             let bit_offset = (sub_q * nbits) % 8;
-            
+
             if nbits == 8 {
                 code[byte_offset] = centroid_idx as u8;
             } else {
@@ -205,14 +231,18 @@ impl ProductQuantizer {
     /// Encode a batch of vectors
     pub fn encode_batch(&self, n: usize, x: &[f32]) -> Result<Vec<u8>> {
         if !self.is_trained {
-            return Err(KnowhereError::InternalError("PQ quantizer not trained".to_string()));
+            return Err(KnowhereError::InternalError(
+                "PQ quantizer not trained".to_string(),
+            ));
         }
 
         let expected_size = n * self.config.dim;
         if x.len() != expected_size {
             return Err(KnowhereError::InvalidArg(format!(
                 "Expected {} floats for {} vectors, got {}",
-                expected_size, n, x.len()
+                expected_size,
+                n,
+                x.len()
             )));
         }
 
@@ -222,7 +252,7 @@ impl ProductQuantizer {
         for i in 0..n {
             let vec_offset = i * self.config.dim;
             let code_offset = i * code_size;
-            
+
             let code = self.encode(&x[vec_offset..vec_offset + self.config.dim])?;
             codes[code_offset..code_offset + code_size].copy_from_slice(&code);
         }
@@ -242,9 +272,9 @@ impl ProductQuantizer {
         for c in 0..ksub {
             let centroid_start = centroid_offset + c * sub_dim;
             let centroid = &self.centroids[centroid_start..centroid_start + sub_dim];
-            
+
             let dist = self.compute_l2_distance(sub_vector, centroid);
-            
+
             if dist < best_dist {
                 best_dist = dist;
                 best_idx = c;
@@ -273,22 +303,22 @@ impl ProductQuantizer {
 
         let sub_dim = self.config.sub_dim();
         let ksub = self.config.ksub();
-        let nbits = self.config.nbits;
+        let _nbits = self.config.nbits;
 
         let mut total_dist = 0.0f32;
 
         for sub_q in 0..self.config.m {
             // Extract centroid index from code
             let centroid_idx = self.extract_index(code, sub_q);
-            
+
             // Get the centroid
             let centroid_offset = sub_q * ksub * sub_dim + centroid_idx * sub_dim;
             let centroid = &self.centroids[centroid_offset..centroid_offset + sub_dim];
-            
+
             // Get query subvector
             let sub_offset = sub_q * sub_dim;
             let query_sub = &query[sub_offset..sub_offset + sub_dim];
-            
+
             // Compute distance
             total_dist += self.compute_l2_distance(query_sub, centroid);
         }
@@ -320,7 +350,9 @@ impl ProductQuantizer {
     /// Decode a PQ code back to approximate vector (reconstruction)
     pub fn decode(&self, code: &[u8]) -> Result<Vec<f32>> {
         if !self.is_trained {
-            return Err(KnowhereError::InternalError("PQ quantizer not trained".to_string()));
+            return Err(KnowhereError::InternalError(
+                "PQ quantizer not trained".to_string(),
+            ));
         }
 
         if code.len() != self.config.code_size() {
@@ -339,7 +371,7 @@ impl ProductQuantizer {
             let centroid_idx = self.extract_index(code, sub_q);
             let centroid_offset = sub_q * ksub * sub_dim + centroid_idx * sub_dim;
             let centroid = &self.centroids[centroid_offset..centroid_offset + sub_dim];
-            
+
             reconstructed.extend_from_slice(centroid);
         }
 
@@ -351,11 +383,11 @@ impl ProductQuantizer {
         if sub_q >= self.config.m {
             return None;
         }
-        
+
         let ksub = self.config.ksub();
         let sub_dim = self.config.sub_dim();
         let offset = sub_q * ksub * sub_dim;
-        
+
         Some(&self.centroids[offset..offset + ksub * sub_dim])
     }
 }

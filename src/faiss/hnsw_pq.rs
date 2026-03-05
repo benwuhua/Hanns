@@ -1,16 +1,16 @@
 //! HNSW-PQ Index Implementation
-//! 
+//!
 //! HNSW index with Product Quantization for storage compression.
 //! Combines HNSW graph structure with PQ for efficient vector storage and search.
 
-use std::collections::{HashMap, HashSet};
 use rand::Rng;
+use std::collections::{HashMap, HashSet};
 
 use crate::api::{MetricType, Result as ApiResult};
-use crate::dataset::Dataset;
-use crate::index::{Index, IndexError, SearchResult};
 use crate::bitset::BitsetView;
+use crate::dataset::Dataset;
 use crate::faiss::pq::PqEncoder;
+use crate::index::{Index, IndexError, SearchResult};
 
 /// Maximum number of layers in the HNSW graph
 const MAX_LAYERS: usize = 16;
@@ -95,6 +95,7 @@ pub struct LayerNeighbors {
 }
 
 impl LayerNeighbors {
+    #[allow(dead_code)]
     fn new() -> Self {
         Self {
             neighbors: Vec::new(),
@@ -174,7 +175,7 @@ impl HnswPqIndex {
 
         // Create PQ encoder
         let pq = PqEncoder::new(config.dim, config.pq_m, config.pq_k);
-        let code_size = config.pq_m; // 1 byte per subvector
+        let _code_size = config.pq_m; // 1 byte per subvector
 
         // Calculate level multiplier: m_l = 1 / ln(M)
         let level_multiplier = 1.0 / (config.m as f32).ln().max(1.0);
@@ -212,20 +213,15 @@ impl HnswPqIndex {
     }
 
     /// Compute distance between two vectors
+    #[allow(dead_code)]
     fn compute_distance(&self, a: &[f32], b: &[f32]) -> f32 {
         match self.config.metric_type {
-            MetricType::L2 => {
-                a.iter()
-                    .zip(b.iter())
-                    .map(|(x, y)| (x - y).powi(2))
-                    .sum::<f32>()
-            }
-            MetricType::Ip => {
-                -a.iter()
-                    .zip(b.iter())
-                    .map(|(x, y)| x * y)
-                    .sum::<f32>()
-            }
+            MetricType::L2 => a
+                .iter()
+                .zip(b.iter())
+                .map(|(x, y)| (x - y).powi(2))
+                .sum::<f32>(),
+            MetricType::Ip => -a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>(),
             MetricType::Cosine => {
                 let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
                 let norm_a: f32 = a.iter().map(|x| x.powi(2)).sum::<f32>().sqrt();
@@ -250,7 +246,7 @@ impl HnswPqIndex {
     fn compute_distance_to_code(&self, query: &[f32], code: &[u8]) -> f32 {
         // Build distance table for this query
         let table = self.pq.build_distance_table(query);
-        
+
         // Compute ADC (Asymmetric Distance Computation)
         let mut sum = 0.0f32;
         for m_idx in 0..self.config.pq_m {
@@ -339,37 +335,29 @@ impl HnswPqIndex {
 
     /// Insert a node into the HNSW graph
     fn insert_node(&mut self, idx: usize, vector: &[f32], node_level: usize) {
-        let mut entry_point = self.entry_point.unwrap();
+        let entry_point = self.entry_point.unwrap();
         let mut entry_point_idx = self.id_to_idx[&entry_point];
 
         // Search for entry point at each level from max_level down to node_level + 1
         for layer in (node_level + 1..=self.max_level).rev() {
-            let ef = 1; // Greedy search at upper levels
-            let candidates = self.search_at_layer(
-                vector,
-                entry_point_idx,
-                layer,
-            );
+            let _ef = 1; // Greedy search at upper levels
+            let candidates = self.search_at_layer(vector, entry_point_idx, layer);
 
             if let Some(&(best_idx, _)) = candidates.first() {
                 entry_point_idx = best_idx;
-                entry_point = self.ids[best_idx];
+                let _ = self.ids[best_idx];
             }
         }
 
         // Connect at layers 0 to node_level
         for layer in 0..=node_level {
-            let ef = if layer == 0 {
+            let _ef = if layer == 0 {
                 self.config.ef_construction
             } else {
                 1
             };
 
-            let candidates = self.search_at_layer(
-                vector,
-                entry_point_idx,
-                layer,
-            );
+            let candidates = self.search_at_layer(vector, entry_point_idx, layer);
 
             // Select neighbors using heuristics
             let neighbors = self.select_neighbors(candidates, layer);
@@ -388,7 +376,8 @@ impl HnswPqIndex {
             for &(n_idx, dist) in &neighbors {
                 // Only connect if the neighbor exists at this layer
                 if layer <= self.node_info[n_idx].max_layer {
-                    let neighbors_list = &mut self.node_info[n_idx].layer_neighbors[layer].neighbors;
+                    let neighbors_list =
+                        &mut self.node_info[n_idx].layer_neighbors[layer].neighbors;
                     if neighbors_list.len() < max_m {
                         neighbors_list.push((self.ids[idx], dist));
                     } else {
@@ -426,19 +415,21 @@ impl HnswPqIndex {
 
         impl PartialOrd for OrderedDist {
             fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-                if self.0.is_nan() {
-                    return Some(std::cmp::Ordering::Greater);
-                }
-                if other.0.is_nan() {
-                    return Some(std::cmp::Ordering::Less);
-                }
-                other.0.partial_cmp(&self.0)
+                Some(self.cmp(other))
             }
         }
 
         impl Ord for OrderedDist {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+                match (self.0.is_nan(), other.0.is_nan()) {
+                    (true, true) => std::cmp::Ordering::Equal,
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    (false, false) => other
+                        .0
+                        .partial_cmp(&self.0)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                }
             }
         }
 
@@ -447,7 +438,8 @@ impl HnswPqIndex {
         let mut results: Vec<(usize, f32)> = Vec::new();
 
         // Initialize with entry point
-        let entry_dist = self.compute_distance_to_code(query, &self.node_info[entry_point_idx].code);
+        let entry_dist =
+            self.compute_distance_to_code(query, &self.node_info[entry_point_idx].code);
         candidates.push((OrderedDist(entry_dist), entry_point_idx));
         visited.insert(entry_point_idx);
 
@@ -462,8 +454,10 @@ impl HnswPqIndex {
                     if let Some(&neighbor_idx) = self.id_to_idx.get(&neighbor_id) {
                         if !visited.contains(&neighbor_idx) {
                             visited.insert(neighbor_idx);
-                            let neighbor_dist =
-                                self.compute_distance_to_code(query, &self.node_info[neighbor_idx].code);
+                            let neighbor_dist = self.compute_distance_to_code(
+                                query,
+                                &self.node_info[neighbor_idx].code,
+                            );
                             candidates.push((OrderedDist(neighbor_dist), neighbor_idx));
                         }
                     }
@@ -485,7 +479,12 @@ impl HnswPqIndex {
     }
 
     /// Search for nearest neighbors
-    pub fn search(&self, query: &[f32], top_k: usize, bitset: Option<&BitsetView>) -> Result<SearchResult, IndexError> {
+    pub fn search(
+        &self,
+        query: &[f32],
+        top_k: usize,
+        bitset: Option<&BitsetView>,
+    ) -> Result<SearchResult, IndexError> {
         if !self.trained || self.ids.is_empty() {
             return Err(IndexError::NotTrained);
         }
@@ -503,11 +502,7 @@ impl HnswPqIndex {
         let mut current_idx = entry_point;
 
         for layer in (1..=self.max_level).rev() {
-            let candidates = self.search_at_layer(
-                query,
-                current_idx,
-                layer,
-            );
+            let candidates = self.search_at_layer(query, current_idx, layer);
             if let Some(&(idx, _)) = candidates.first() {
                 current_idx = idx;
             }
@@ -515,7 +510,7 @@ impl HnswPqIndex {
 
         // Final search at layer 0 with ef_search
         let ef = self.config.ef_search.max(top_k);
-        
+
         // Do a more thorough search at layer 0
         let candidates = self.search_layer_ef(query, current_idx, 0, ef);
 
@@ -558,19 +553,21 @@ impl HnswPqIndex {
 
         impl PartialOrd for OrderedDist {
             fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-                if self.0.is_nan() {
-                    return Some(std::cmp::Ordering::Greater);
-                }
-                if other.0.is_nan() {
-                    return Some(std::cmp::Ordering::Less);
-                }
-                other.0.partial_cmp(&self.0)
+                Some(self.cmp(other))
             }
         }
 
         impl Ord for OrderedDist {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+                match (self.0.is_nan(), other.0.is_nan()) {
+                    (true, true) => std::cmp::Ordering::Equal,
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    (false, false) => other
+                        .0
+                        .partial_cmp(&self.0)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                }
             }
         }
 
@@ -579,7 +576,8 @@ impl HnswPqIndex {
         let mut results: BinaryHeap<(OrderedDist, usize)> = BinaryHeap::new();
 
         // Initialize with entry point
-        let entry_dist = self.compute_distance_to_code(query, &self.node_info[entry_point_idx].code);
+        let entry_dist =
+            self.compute_distance_to_code(query, &self.node_info[entry_point_idx].code);
         candidates.push((OrderedDist(entry_dist), entry_point_idx));
         results.push((OrderedDist(entry_dist), entry_point_idx));
         visited.insert(entry_point_idx);
@@ -601,9 +599,11 @@ impl HnswPqIndex {
                     if let Some(&neighbor_idx) = self.id_to_idx.get(&neighbor_id) {
                         if !visited.contains(&neighbor_idx) {
                             visited.insert(neighbor_idx);
-                            let neighbor_dist =
-                                self.compute_distance_to_code(query, &self.node_info[neighbor_idx].code);
-                            
+                            let neighbor_dist = self.compute_distance_to_code(
+                                query,
+                                &self.node_info[neighbor_idx].code,
+                            );
+
                             if results.len() < ef {
                                 results.push((OrderedDist(neighbor_dist), neighbor_idx));
                                 candidates.push((OrderedDist(neighbor_dist), neighbor_idx));
@@ -644,11 +644,12 @@ impl HnswPqIndex {
     pub fn size(&self) -> usize {
         let node_info_size = self.node_info.len() * std::mem::size_of::<NodeInfo>();
         let ids_size = self.ids.len() * std::mem::size_of::<i64>();
-        let id_to_idx_size = self.id_to_idx.len() * (std::mem::size_of::<i64>() + std::mem::size_of::<usize>());
-        
+        let id_to_idx_size =
+            self.id_to_idx.len() * (std::mem::size_of::<i64>() + std::mem::size_of::<usize>());
+
         // Approximate PQ size
         let pq_size = self.pq.codebooks.len() * std::mem::size_of::<f32>();
-        
+
         node_info_size + ids_size + id_to_idx_size + pq_size
     }
 
@@ -708,11 +709,15 @@ impl Index for HnswPqIndex {
     }
 
     fn save(&self, _path: &str) -> Result<(), IndexError> {
-        Err(IndexError::Unsupported("serialization not implemented".into()))
+        Err(IndexError::Unsupported(
+            "serialization not implemented".into(),
+        ))
     }
 
     fn load(&mut self, _path: &str) -> Result<(), IndexError> {
-        Err(IndexError::Unsupported("deserialization not implemented".into()))
+        Err(IndexError::Unsupported(
+            "deserialization not implemented".into(),
+        ))
     }
 }
 
@@ -740,7 +745,7 @@ mod tests {
             .with_m(8)
             .with_ef_construction(100)
             .with_ef_search(32)
-            .with_pq_params(4, 16);  // Smaller k for faster testing
+            .with_pq_params(4, 16); // Smaller k for faster testing
 
         let mut index = HnswPqIndex::new(config).unwrap();
 
@@ -792,7 +797,7 @@ mod tests {
         // Search without bitset
         let query: Vec<f32> = (0..16).map(|i| i as f32 * 0.1).collect();
         let results_no_filter = index.search(&query, 10, None).unwrap();
-        
+
         // Create bitset to filter out some vectors
         let mut bitset = BitsetView::new(n_train);
         bitset.set(0, true);
@@ -801,7 +806,7 @@ mod tests {
 
         // Search with bitset
         let results_filtered = index.search(&query, 10, Some(&bitset)).unwrap();
-        
+
         // Results should be filtered
         assert!(results_filtered.ids.len() <= results_no_filter.ids.len());
     }

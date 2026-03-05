@@ -2,10 +2,11 @@
 
 use std::thread;
 
-use rayon::prelude::*;
 use crate::simd;
+use rayon::prelude::*;
 
 /// Parallel executor for vector operations
+#[allow(dead_code)]
 pub struct Executor {
     num_threads: usize,
 }
@@ -21,60 +22,40 @@ impl Executor {
         let num_cpus = thread::available_parallelism()
             .map(|p| p.get())
             .unwrap_or(4);
-        Self { num_threads: num_cpus }
+        Self {
+            num_threads: num_cpus,
+        }
     }
 
     /// Execute a parallel search across multiple query vectors
-    pub fn parallel_search<F, R>(
-        &self,
-        queries: &[f32],
-        dim: usize,
-        f: F,
-    ) -> Vec<R>
+    pub fn parallel_search<F, R>(&self, queries: &[f32], dim: usize, f: F) -> Vec<R>
     where
         F: Fn(&[f32]) -> R + Send + Sync,
         R: Send,
     {
-        queries
-            .par_chunks(dim)
-            .map(f)
-            .collect()
+        queries.par_chunks(dim).map(f).collect()
     }
 
     /// Execute parallel batch add
-    pub fn parallel_add<F, R>(
-        &self,
-        vectors: &[f32],
-        dim: usize,
-        f: F,
-    ) -> Vec<R>
+    pub fn parallel_add<F, R>(&self, vectors: &[f32], dim: usize, f: F) -> Vec<R>
     where
         F: Fn(&[f32]) -> R + Send + Sync,
         R: Send,
     {
-        vectors
-            .par_chunks(dim)
-            .map(f)
-            .collect()
+        vectors.par_chunks(dim).map(f).collect()
     }
 
     /// Execute parallel distance computation
-    pub fn parallel_distance<L>(
-        &self,
-        a: &[f32],
-        b: &[f32],
-        dim: usize,
-        metric: L,
-    ) -> Vec<f32>
+    pub fn parallel_distance<L>(&self, a: &[f32], b: &[f32], dim: usize, metric: L) -> Vec<f32>
     where
         L: Fn(&[f32], &[f32]) -> f32 + Send + Sync,
     {
         assert_eq!(a.len() % dim, 0);
         assert_eq!(b.len() % dim, 0);
-        
+
         let num_a = a.len() / dim;
         let num_b = b.len() / dim;
-        
+
         // Compute distances between all pairs
         (0..num_a)
             .into_par_iter()
@@ -91,19 +72,13 @@ impl Executor {
     }
 
     /// Execute map-reduce style operation
-    pub fn map_reduce<T, U, M>(
-        &self,
-        data: &[T],
-        map: M,
-    ) -> Vec<U>
+    pub fn map_reduce<T, U, M>(&self, data: &[T], map: M) -> Vec<U>
     where
         T: Send + Sync,
         U: Send,
         M: Fn(&T) -> U + Send + Sync,
     {
-        data.par_iter()
-            .map(map)
-            .collect()
+        data.par_iter().map(map).collect()
     }
 }
 
@@ -122,7 +97,7 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let dot = inner_product(a, b);
     let norm_a = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let norm_b = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    
+
     if norm_a == 0.0 || norm_b == 0.0 {
         0.0
     } else {
@@ -146,11 +121,9 @@ mod tests {
         let executor = Executor::new(2);
         let queries = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let dim = 2;
-        
-        let results: Vec<usize> = executor.parallel_search(&queries, dim, |q| {
-            q.len()
-        });
-        
+
+        let results: Vec<usize> = executor.parallel_search(&queries, dim, |q| q.len());
+
         assert_eq!(results, vec![2, 2, 2]);
     }
 }

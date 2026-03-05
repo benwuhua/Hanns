@@ -16,7 +16,7 @@ impl<T> RingBuffer<T> {
             cap: capacity.max(1),
         }
     }
-    
+
     pub fn push(&mut self, item: T) {
         if self.data.len() < self.cap {
             self.data.push(item);
@@ -26,21 +26,29 @@ impl<T> RingBuffer<T> {
             self.tail = (self.tail + 1) % self.cap;
         }
     }
-    
+
     pub fn pop(&mut self) -> Option<T> {
-        if self.data.is_empty() { return None; }
+        if self.data.is_empty() {
+            return None;
+        }
         let item = self.data.remove(self.tail);
         self.tail = (self.tail + 1) % self.cap;
         Some(item)
     }
-    
-    pub fn len(&self) -> usize { self.data.len() }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_ring() {
         let mut r = RingBuffer::new(3);

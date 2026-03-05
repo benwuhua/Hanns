@@ -1,5 +1,5 @@
 //! LRU 缓存实现（简化版）
-//! 
+//!
 //! 使用 HashMap + Vec 实现高效的缓存操作
 
 use std::collections::HashMap;
@@ -9,7 +9,7 @@ pub struct LruCache<K, V> {
     data: Vec<(K, V)>,
     map: HashMap<K, usize>,
     capacity: usize,
-    access_order: Vec<usize>,  // 访问顺序索引
+    access_order: Vec<usize>, // 访问顺序索引
 }
 
 impl<K: Eq + std::hash::Hash + Clone, V> LruCache<K, V> {
@@ -21,7 +21,7 @@ impl<K: Eq + std::hash::Hash + Clone, V> LruCache<K, V> {
             access_order: Vec::new(),
         }
     }
-    
+
     /// 获取值
     pub fn get(&mut self, key: &K) -> Option<&V> {
         if let Some(&idx) = self.map.get(key) {
@@ -35,7 +35,7 @@ impl<K: Eq + std::hash::Hash + Clone, V> LruCache<K, V> {
             None
         }
     }
-    
+
     /// 放入新值
     pub fn put(&mut self, key: K, value: V) {
         // 如果 key 已存在，更新值
@@ -48,12 +48,12 @@ impl<K: Eq + std::hash::Hash + Clone, V> LruCache<K, V> {
             }
             return;
         }
-        
+
         // 如果容量已满，移除最久未使用的
         if self.data.len() >= self.capacity {
             if let Some(&idx_to_remove) = self.access_order.first() {
                 if let Some((k, _)) = self.data.get(idx_to_remove) {
-                    self.map.remove(&k);
+                    self.map.remove(k);
                 }
                 // 用新值替换最旧的位置
                 let new_idx = idx_to_remove;
@@ -64,7 +64,7 @@ impl<K: Eq + std::hash::Hash + Clone, V> LruCache<K, V> {
                 return;
             }
         }
-        
+
         // 添加新值
         let idx = self.data.len();
         self.data.push((key, value));
@@ -73,15 +73,15 @@ impl<K: Eq + std::hash::Hash + Clone, V> LruCache<K, V> {
             self.map.insert(k.clone(), idx);
         }
     }
-    
+
     pub fn len(&self) -> usize {
         self.data.len()
     }
-    
+
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
-    
+
     pub fn clear(&mut self) {
         self.data.clear();
         self.map.clear();
@@ -104,7 +104,7 @@ impl<V> SimpleLruCache<V> {
             next_key: 0,
         }
     }
-    
+
     pub fn get(&mut self, key: u64) -> Option<&V> {
         if let Some(pos) = self.data.iter().position(|(k, _)| *k == key) {
             let (_, v) = self.data.remove(pos);
@@ -114,29 +114,29 @@ impl<V> SimpleLruCache<V> {
             None
         }
     }
-    
+
     pub fn put(&mut self, value: V) -> u64 {
         if self.data.len() >= self.capacity {
             self.data.remove(0);
         }
-        
+
         let key = self.next_key;
         self.next_key += 1;
         self.data.push((key, value));
         key
     }
-    
+
     pub fn len(&self) -> usize {
         self.data.len()
     }
-    
+
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
 }
 
 /// 缓存预热策略
-/// 
+///
 /// 用于在搜索前将热点数据加载到内存缓存，减少冷启动延迟
 pub struct CachePrewarm {
     /// 预热数据大小阈值 (bytes)
@@ -148,7 +148,7 @@ pub struct CachePrewarm {
 impl Default for CachePrewarm {
     fn default() -> Self {
         Self {
-            warm_threshold_bytes: 64 * 1024 * 1024,  // 64MB
+            warm_threshold_bytes: 64 * 1024 * 1024, // 64MB
             warm_threshold_count: 1000,
         }
     }
@@ -159,14 +159,14 @@ impl CachePrewarm {
     pub fn needs_warm(&self, data_size_bytes: usize, count: usize) -> bool {
         data_size_bytes >= self.warm_threshold_bytes || count >= self.warm_threshold_count
     }
-    
+
     /// 预热回调 - 实际预热由调用方实现
     pub fn warmup<F>(&self, data: &[f32], dim: usize, mut warm_fn: F)
     where
         F: FnMut(&[f32], usize),
     {
         let count = data.len() / dim;
-        if self.needs_warm(data.len() * std::mem::size_of::<f32>(), count) {
+        if self.needs_warm(std::mem::size_of_val(data), count) {
             // 将数据切分成多个批次进行预热
             let batch_size = (count / 4).max(1);
             for i in (0..count).step_by(batch_size) {
@@ -181,81 +181,81 @@ impl CachePrewarm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_lru_new() {
         let cache: LruCache<i32, i32> = LruCache::new(3);
         assert!(cache.is_empty());
     }
-    
+
     #[test]
     fn test_lru_put_get() {
         let mut cache = LruCache::new(3);
-        
+
         cache.put(1, 10);
         cache.put(2, 20);
-        
+
         assert_eq!(cache.get(&1), Some(&10));
         assert_eq!(cache.get(&2), Some(&20));
     }
-    
+
     #[test]
     fn test_lru_eviction() {
         let mut cache = LruCache::new(3);
-        
+
         cache.put(1, 10);
         cache.put(2, 20);
         cache.put(3, 30);
         cache.put(4, 40);
-        
-        assert_eq!(cache.get(&1), None);  // Evicted
+
+        assert_eq!(cache.get(&1), None); // Evicted
         assert_eq!(cache.get(&4), Some(&40));
     }
-    
+
     #[test]
     fn test_lru_update() {
         let mut cache = LruCache::new(3);
-        
+
         cache.put(1, 10);
-        cache.put(1, 100);  // Update existing key
-        
+        cache.put(1, 100); // Update existing key
+
         assert_eq!(cache.get(&1), Some(&100));
         assert_eq!(cache.len(), 1);
     }
-    
+
     #[test]
     fn test_simple_lru() {
         let mut cache: SimpleLruCache<i32> = SimpleLruCache::new(3);
-        
+
         let k1 = cache.put(10);
         let k2 = cache.put(20);
-        
+
         assert_eq!(cache.get(k1), Some(&10));
         assert_eq!(cache.get(k2), Some(&20));
     }
-    
+
     #[test]
     fn test_cache_prewarm_defaults() {
         let warm = CachePrewarm::default();
-        assert!(!warm.needs_warm(1000, 10));  // Small data
-        assert!(warm.needs_warm(100 * 1024 * 1024, 100));  // Large data
+        assert!(!warm.needs_warm(1000, 10)); // Small data
+        assert!(warm.needs_warm(100 * 1024 * 1024, 100)); // Large data
     }
-    
+
     #[test]
     fn test_cache_prewarm_warmup() {
         // Use custom threshold to test warmup
         let mut warm = CachePrewarm::default();
-        warm.warm_threshold_bytes = 1000;  // Low threshold for test
-        
-        let data: Vec<f32> = (0..4000).map(|i| i as f32).collect();  // 100 vectors * 128 dim
-        
+        warm.warm_threshold_bytes = 1000; // Low threshold for test
+
+        let data: Vec<f32> = (0..4000).map(|i| i as f32).collect(); // 100 vectors * 128 dim
+
         let mut call_count = 0;
         warm.warmup(&data, 128, |_batch, count| {
             call_count += 1;
             // 验证批次大小合理
             assert!(count > 0);
         });
-        
+
         // 应该触发预热回调
         assert!(call_count > 0);
     }

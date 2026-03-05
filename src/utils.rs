@@ -3,7 +3,11 @@
 /// 断言宏
 #[macro_export]
 macro_rules! ensure {
-    ($cond:expr, $msg:expr) => { if !($cond) { panic!($msg) } };
+    ($cond:expr, $msg:expr) => {
+        if !($cond) {
+            panic!($msg)
+        }
+    };
 }
 
 /// 调试断言（仅调试版本）
@@ -29,13 +33,13 @@ pub fn byteswap(val: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_hash() {
         let h = hash(b"test");
         assert!(h > 0);
     }
-    
+
     #[test]
     fn test_byteswap() {
         assert_eq!(byteswap(0x12345678), 0x1E6A2C48);

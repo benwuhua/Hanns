@@ -21,7 +21,9 @@ impl BuildInfo {
 }
 
 impl Default for BuildInfo {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl std::fmt::Display for BuildInfo {
@@ -40,20 +42,24 @@ pub struct Config {
 
 impl Config {
     pub fn new(dim: usize) -> Self {
-        Self { dim, metric: "L2".into(), index_type: "HNSW".into() }
+        Self {
+            dim,
+            metric: "L2".into(),
+            index_type: "HNSW".into(),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_version() {
         let info = BuildInfo::new();
         assert!(!info.version.is_empty());
     }
-    
+
     #[test]
     fn test_config() {
         let cfg = Config::new(128);

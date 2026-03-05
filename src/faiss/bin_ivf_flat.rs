@@ -1,12 +1,12 @@
 //! BinIvfFlat - Binary IVF Flat Index
-//! 
+//!
 //! Implements IVF (Inverted File) indexing for binary vectors using Hamming distance.
 //! Reference: Faiss IndexBinaryIVF
-//! 
+//!
 //! Uses k-means clustering to partition the vector space into Voronoi cells,
 //! enabling faster search by only examining the most relevant clusters.
 
-use crate::api::{MetricType, Result, KnowhereError};
+use crate::api::{KnowhereError, MetricType, Result};
 use crate::bitset::BitsetView;
 
 /// Binary IVF Flat Index - uses clustering for faster search
@@ -35,13 +35,13 @@ pub struct BinIvfFlatIndex {
 
 impl BinIvfFlatIndex {
     /// Create a new Binary IVF Flat index
-    /// 
+    ///
     /// # Arguments
     /// * `dim` - Dimension in bits
     /// * `nlist` - Number of clusters
     /// * `metric` - Distance metric (Hamming or Jaccard)
     pub fn new(dim: usize, nlist: usize, metric: MetricType) -> Self {
-        let dim_bytes = (dim + 7) / 8;
+        let dim_bytes = dim.div_ceil(8);
         Self {
             dim,
             dim_bytes,
@@ -102,18 +102,20 @@ impl BinIvfFlatIndex {
     }
 
     /// Train the index using k-means clustering
-    /// 
+    ///
     /// # Arguments
     /// * `n` - Number of training vectors
     /// * `x` - Training vectors (size: n * dim_bytes)
     pub fn train(&mut self, n: u32, x: &[u8]) -> Result<()> {
         let n = n as usize;
         let expected_size = n * self.dim_bytes;
-        
+
         if x.len() != expected_size {
             return Err(KnowhereError::InvalidArg(format!(
                 "Expected {} bytes for {} training vectors, got {}",
-                expected_size, n, x.len()
+                expected_size,
+                n,
+                x.len()
             )));
         }
 
@@ -141,7 +143,7 @@ impl BinIvfFlatIndex {
     }
 
     /// Add binary vectors to the index
-    /// 
+    ///
     /// # Arguments
     /// * `n` - Number of vectors to add
     /// * `x` - Binary vectors (size: n * dim_bytes)
@@ -149,11 +151,14 @@ impl BinIvfFlatIndex {
     pub fn add(&mut self, n: u32, x: &[u8], ids: Option<&[i64]>) -> Result<()> {
         let n = n as usize;
         let expected_size = n * self.dim_bytes;
-        
+
         if x.len() != expected_size {
             return Err(KnowhereError::InvalidArg(format!(
                 "Expected {} bytes for {} vectors of {} bytes each, got {}",
-                expected_size, n, self.dim_bytes, x.len()
+                expected_size,
+                n,
+                self.dim_bytes,
+                x.len()
             )));
         }
 
@@ -163,7 +168,8 @@ impl BinIvfFlatIndex {
             if provided_ids.len() != n {
                 return Err(KnowhereError::InvalidArg(format!(
                     "Expected {} IDs, got {}",
-                    n, provided_ids.len()
+                    n,
+                    provided_ids.len()
                 )));
             }
             provided_ids
@@ -174,11 +180,11 @@ impl BinIvfFlatIndex {
 
         // Store vectors and assign to clusters
         let start_idx = self.xb.len() / self.dim_bytes;
-        
+
         for i in 0..n {
             let vec_start = i * self.dim_bytes;
             let vec = &x[vec_start..vec_start + self.dim_bytes];
-            
+
             // Find nearest centroid and add to that cluster
             let cluster_id = if self.is_trained {
                 self.find_nearest_centroid(vec)
@@ -186,7 +192,7 @@ impl BinIvfFlatIndex {
                 // If not trained, distribute evenly
                 i % self.nlist
             };
-            
+
             self.lists[cluster_id].push(start_idx + i);
         }
 
@@ -197,7 +203,7 @@ impl BinIvfFlatIndex {
     }
 
     /// Search for k nearest neighbors
-    /// 
+    ///
     /// # Arguments
     /// * `nq` - Number of query vectors
     /// * `xq` - Query vectors (size: nq * dim_bytes)
@@ -215,18 +221,22 @@ impl BinIvfFlatIndex {
         let nq = nq as usize;
         let k = k as usize;
         let expected_query_size = nq * self.dim_bytes;
-        
+
         if xq.len() != expected_query_size {
             return Err(KnowhereError::InvalidArg(format!(
                 "Expected {} bytes for {} query vectors, got {}",
-                expected_query_size, nq, xq.len()
+                expected_query_size,
+                nq,
+                xq.len()
             )));
         }
 
         if dists.len() != nq * k || ids.len() != nq * k {
             return Err(KnowhereError::InvalidArg(format!(
                 "Output arrays must have size {} (nq * k), got dists={} ids={}",
-                nq * k, dists.len(), ids.len()
+                nq * k,
+                dists.len(),
+                ids.len()
             )));
         }
 
@@ -245,10 +255,15 @@ impl BinIvfFlatIndex {
         for q in 0..nq {
             let query_start = q * self.dim_bytes;
             let query = &xq[query_start..query_start + self.dim_bytes];
-            
+
             let output_offset = q * k;
-            
-            self.search_single_query(query, k, &mut dists[output_offset..], &mut ids[output_offset..]);
+
+            self.search_single_query(
+                query,
+                k,
+                &mut dists[output_offset..],
+                &mut ids[output_offset..],
+            );
         }
 
         Ok(())
@@ -267,18 +282,22 @@ impl BinIvfFlatIndex {
         let nq = nq as usize;
         let k = k as usize;
         let expected_query_size = nq * self.dim_bytes;
-        
+
         if xq.len() != expected_query_size {
             return Err(KnowhereError::InvalidArg(format!(
                 "Expected {} bytes for {} query vectors, got {}",
-                expected_query_size, nq, xq.len()
+                expected_query_size,
+                nq,
+                xq.len()
             )));
         }
 
         if dists.len() != nq * k || ids.len() != nq * k {
             return Err(KnowhereError::InvalidArg(format!(
                 "Output arrays must have size {} (nq * k), got dists={} ids={}",
-                nq * k, dists.len(), ids.len()
+                nq * k,
+                dists.len(),
+                ids.len()
             )));
         }
 
@@ -295,10 +314,16 @@ impl BinIvfFlatIndex {
         for q in 0..nq {
             let query_start = q * self.dim_bytes;
             let query = &xq[query_start..query_start + self.dim_bytes];
-            
+
             let output_offset = q * k;
-            
-            self.search_single_query_with_bitset(query, k, bitset, &mut dists[output_offset..], &mut ids[output_offset..]);
+
+            self.search_single_query_with_bitset(
+                query,
+                k,
+                bitset,
+                &mut dists[output_offset..],
+                &mut ids[output_offset..],
+            );
         }
 
         Ok(())
@@ -308,21 +333,29 @@ impl BinIvfFlatIndex {
     fn search_single_query(&self, query: &[u8], k: usize, dists: &mut [f32], ids: &mut [i64]) {
         // Find nearest nprobe clusters
         let mut cluster_dists: Vec<(usize, u32)> = (0..self.nlist)
-            .map(|c| (c, self.hamming_distance_u32(query, &self.centroids[c * self.dim_bytes..(c + 1) * self.dim_bytes])))
+            .map(|c| {
+                (
+                    c,
+                    self.hamming_distance_u32(
+                        query,
+                        &self.centroids[c * self.dim_bytes..(c + 1) * self.dim_bytes],
+                    ),
+                )
+            })
             .collect();
-        
+
         // Sort by distance to centroids
         cluster_dists.sort_by_key(|&(_, d)| d);
         cluster_dists.truncate(self.nprobe);
 
         // Collect candidates from selected clusters
         let mut candidates: Vec<(f32, i64)> = Vec::new();
-        
+
         for (cluster_id, _) in cluster_dists {
             for &vec_idx in &self.lists[cluster_id] {
                 let vec_start = vec_idx * self.dim_bytes;
                 let vec = &self.xb[vec_start..vec_start + self.dim_bytes];
-                
+
                 let dist = self.compute_distance(query, vec) as f32;
                 candidates.push((dist, self.ids[vec_idx]));
             }
@@ -330,7 +363,7 @@ impl BinIvfFlatIndex {
 
         // Sort candidates by distance
         candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        
+
         // Take top k
         for (i, (dist, id)) in candidates.into_iter().take(k).enumerate() {
             dists[i] = dist;
@@ -339,17 +372,32 @@ impl BinIvfFlatIndex {
     }
 
     /// Search a single query vector with bitset filtering
-    fn search_single_query_with_bitset(&self, query: &[u8], k: usize, bitset: &BitsetView, dists: &mut [f32], ids: &mut [i64]) {
+    fn search_single_query_with_bitset(
+        &self,
+        query: &[u8],
+        k: usize,
+        bitset: &BitsetView,
+        dists: &mut [f32],
+        ids: &mut [i64],
+    ) {
         // Find nearest nprobe clusters
         let mut cluster_dists: Vec<(usize, u32)> = (0..self.nlist)
-            .map(|c| (c, self.hamming_distance_u32(query, &self.centroids[c * self.dim_bytes..(c + 1) * self.dim_bytes])))
+            .map(|c| {
+                (
+                    c,
+                    self.hamming_distance_u32(
+                        query,
+                        &self.centroids[c * self.dim_bytes..(c + 1) * self.dim_bytes],
+                    ),
+                )
+            })
             .collect();
-        
+
         cluster_dists.sort_by_key(|&(_, d)| d);
         cluster_dists.truncate(self.nprobe);
 
         let mut candidates: Vec<(f32, i64)> = Vec::new();
-        
+
         for (cluster_id, _) in cluster_dists {
             for &vec_idx in &self.lists[cluster_id] {
                 // Skip if filtered by bitset (get returns true if bit is set/filtered)
@@ -359,14 +407,14 @@ impl BinIvfFlatIndex {
 
                 let vec_start = vec_idx * self.dim_bytes;
                 let vec = &self.xb[vec_start..vec_start + self.dim_bytes];
-                
+
                 let dist = self.compute_distance(query, vec) as f32;
                 candidates.push((dist, self.ids[vec_idx]));
             }
         }
 
         candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        
+
         for (i, (dist, id)) in candidates.into_iter().take(k).enumerate() {
             dists[i] = dist;
             ids[i] = id;
@@ -410,7 +458,8 @@ impl BinIvfFlatIndex {
         if recons.len() != self.dim_bytes {
             return Err(KnowhereError::InvalidArg(format!(
                 "Expected {} bytes for reconstruction, got {}",
-                self.dim_bytes, recons.len()
+                self.dim_bytes,
+                recons.len()
             )));
         }
 
@@ -419,7 +468,10 @@ impl BinIvfFlatIndex {
             recons.copy_from_slice(&self.xb[start..start + self.dim_bytes]);
             Ok(())
         } else {
-            Err(KnowhereError::NotFound(format!("Vector with ID {} not found", id)))
+            Err(KnowhereError::NotFound(format!(
+                "Vector with ID {} not found",
+                id
+            )))
         }
     }
 
@@ -428,14 +480,16 @@ impl BinIvfFlatIndex {
         if recons.len() != self.dim_bytes {
             return Err(KnowhereError::InvalidArg(format!(
                 "Expected {} bytes for reconstruction, got {}",
-                self.dim_bytes, recons.len()
+                self.dim_bytes,
+                recons.len()
             )));
         }
 
         if idx >= self.len() {
             return Err(KnowhereError::InvalidArg(format!(
                 "Index {} out of bounds (len={})",
-                idx, self.len()
+                idx,
+                self.len()
             )));
         }
 
@@ -509,7 +563,7 @@ mod tests {
         let mut index = BinIvfFlatIndex::new(64, 10, MetricType::Hamming);
         index.set_nprobe(5);
         assert_eq!(index.nprobe(), 5);
-        
+
         // Should cap at nlist
         index.set_nprobe(20);
         assert_eq!(index.nprobe(), 10);
@@ -518,12 +572,12 @@ mod tests {
     #[test]
     fn test_bin_ivf_flat_train() {
         let mut index = BinIvfFlatIndex::new(64, 4, MetricType::Hamming);
-        
+
         // Create 20 training vectors (20 * 8 = 160 bytes)
         let vectors = create_test_vectors(20, 8);
-        
+
         index.train(20, &vectors).unwrap();
-        
+
         assert!(index.is_trained());
         // Check that centroids are initialized
         assert!(!index.get_centroids().iter().all(|&x| x == 0));
@@ -532,10 +586,10 @@ mod tests {
     #[test]
     fn test_bin_ivf_flat_train_insufficient_vectors() {
         let mut index = BinIvfFlatIndex::new(64, 10, MetricType::Hamming);
-        
+
         // Try to train with fewer vectors than nlist
         let vectors = vec![0u8; 5 * 8];
-        
+
         let result = index.train(5, &vectors);
         assert!(result.is_err());
     }
@@ -543,17 +597,17 @@ mod tests {
     #[test]
     fn test_bin_ivf_flat_add() {
         let mut index = BinIvfFlatIndex::new(64, 4, MetricType::Hamming);
-        
+
         // Train first
         let train_vectors = create_test_vectors(20, 8);
         index.train(20, &train_vectors).unwrap();
-        
+
         // Add vectors
         let vectors = create_test_vectors(10, 8);
         let ids: Vec<i64> = (0..10).collect();
-        
+
         index.add(10, &vectors, Some(&ids)).unwrap();
-        
+
         assert_eq!(index.len(), 10);
         assert!(!index.is_empty());
     }
@@ -561,11 +615,11 @@ mod tests {
     #[test]
     fn test_bin_ivf_flat_add_without_training() {
         let mut index = BinIvfFlatIndex::new(64, 4, MetricType::Hamming);
-        
+
         // Add without training - should distribute evenly
         let vectors = create_test_vectors(10, 8);
         index.add(10, &vectors, None).unwrap();
-        
+
         assert_eq!(index.len(), 10);
         // Vectors should be distributed across clusters
         let total_in_lists: usize = index.lists.iter().map(|l| l.len()).sum();
@@ -575,11 +629,11 @@ mod tests {
     #[test]
     fn test_bin_ivf_flat_search() {
         let mut index = BinIvfFlatIndex::new(256, 4, MetricType::Hamming); // 32 bytes for SIMD alignment
-        
+
         // Train
         let train_vectors = create_test_vectors(20, 32);
         index.train(20, &train_vectors).unwrap();
-        
+
         // Add test vectors
         let mut vectors = vec![0u8; 32 * 3];
         // Vector 0: all zeros
@@ -592,17 +646,19 @@ mod tests {
             vectors[i] = 0x0f;
         }
         let ids = vec![0, 1, 2];
-        
+
         index.add(3, &vectors, Some(&ids)).unwrap();
-        
+
         // Search
         let query = vec![0u8; 32];
         let mut dists = vec![0.0f32; 2];
         let mut ids_out = vec![0i64; 2];
-        
+
         index.set_nprobe(4); // Search all clusters
-        index.search(1, &query, 2, &mut dists, &mut ids_out).unwrap();
-        
+        index
+            .search(1, &query, 2, &mut dists, &mut ids_out)
+            .unwrap();
+
         assert_eq!(ids_out.len(), 2);
         // Results should be sorted by distance
         assert!(dists[0] <= dists[1]);
@@ -611,13 +667,13 @@ mod tests {
     #[test]
     fn test_bin_ivf_flat_search_empty() {
         let index = BinIvfFlatIndex::new(64, 4, MetricType::Hamming);
-        
+
         let query = vec![0u8; 8];
         let mut dists = vec![0.0f32; 5];
         let mut ids = vec![0i64; 5];
-        
+
         index.search(1, &query, 5, &mut dists, &mut ids).unwrap();
-        
+
         // All results should be -1 with infinity distance
         for i in 0..5 {
             assert_eq!(ids[i], -1);
@@ -628,37 +684,75 @@ mod tests {
     #[test]
     fn test_bin_ivf_flat_reconstruct() {
         let mut index = BinIvfFlatIndex::new(64, 4, MetricType::Hamming);
-        
+
         let train_vectors = create_test_vectors(20, 8);
         index.train(20, &train_vectors).unwrap();
-        
+
         let vectors = vec![
-            0b10101010u8, 0b01010101, 0b10101010, 0b01010101, 0b10101010, 0b01010101, 0b10101010, 0b01010101,
-            0b11110000u8, 0b00001111, 0b11110000, 0b00001111, 0b11110000, 0b00001111, 0b11110000, 0b00001111,
+            0b10101010u8,
+            0b01010101,
+            0b10101010,
+            0b01010101,
+            0b10101010,
+            0b01010101,
+            0b10101010,
+            0b01010101,
+            0b11110000u8,
+            0b00001111,
+            0b11110000,
+            0b00001111,
+            0b11110000,
+            0b00001111,
+            0b11110000,
+            0b00001111,
         ];
         let ids = vec![100, 200];
-        
+
         index.add(2, &vectors, Some(&ids)).unwrap();
-        
+
         let mut recons = vec![0u8; 8];
         index.reconstruct(100, &mut recons).unwrap();
-        assert_eq!(recons, vec![0b10101010u8, 0b01010101, 0b10101010, 0b01010101, 0b10101010, 0b01010101, 0b10101010, 0b01010101]);
-        
+        assert_eq!(
+            recons,
+            vec![
+                0b10101010u8,
+                0b01010101,
+                0b10101010,
+                0b01010101,
+                0b10101010,
+                0b01010101,
+                0b10101010,
+                0b01010101
+            ]
+        );
+
         index.reconstruct_at(1, &mut recons).unwrap();
-        assert_eq!(recons, vec![0b11110000u8, 0b00001111, 0b11110000, 0b00001111, 0b11110000, 0b00001111, 0b11110000, 0b00001111]);
+        assert_eq!(
+            recons,
+            vec![
+                0b11110000u8,
+                0b00001111,
+                0b11110000,
+                0b00001111,
+                0b11110000,
+                0b00001111,
+                0b11110000,
+                0b00001111
+            ]
+        );
     }
 
     #[test]
     fn test_bin_ivf_flat_reset() {
         let mut index = BinIvfFlatIndex::new(64, 4, MetricType::Hamming);
-        
+
         let train_vectors = create_test_vectors(20, 8);
         index.train(20, &train_vectors).unwrap();
-        
+
         let vectors = create_test_vectors(10, 8);
         index.add(10, &vectors, None).unwrap();
         assert_eq!(index.len(), 10);
-        
+
         index.reset();
         assert_eq!(index.len(), 0);
         assert!(index.is_empty());
@@ -668,13 +762,13 @@ mod tests {
     #[test]
     fn test_bin_ivf_flat_list_size() {
         let mut index = BinIvfFlatIndex::new(64, 4, MetricType::Hamming);
-        
+
         let train_vectors = create_test_vectors(20, 8);
         index.train(20, &train_vectors).unwrap();
-        
+
         let vectors = create_test_vectors(10, 8);
         index.add(10, &vectors, None).unwrap();
-        
+
         // Check that added vectors are distributed across clusters
         let total: usize = (0..4).map(|i| index.list_size(i)).sum();
         assert_eq!(total, 10);
@@ -683,26 +777,28 @@ mod tests {
     #[test]
     fn test_bin_ivf_flat_large_dataset() {
         let mut index = BinIvfFlatIndex::new(1024, 16, MetricType::Hamming); // 128 bytes for SIMD
-        
+
         // Train with 100 vectors
         let train_vectors = create_test_vectors(100, 128);
         index.train(100, &train_vectors).unwrap();
-        
+
         // Add 50 vectors
         let vectors = create_test_vectors(50, 128);
         let ids: Vec<i64> = (0..50).collect();
         index.add(50, &vectors, Some(&ids)).unwrap();
-        
+
         assert_eq!(index.len(), 50);
-        
+
         // Search
         let query = vec![0u8; 128];
         let mut dists = vec![0.0f32; 10];
         let mut ids_out = vec![0i64; 10];
-        
+
         index.set_nprobe(8);
-        index.search(1, &query, 10, &mut dists, &mut ids_out).unwrap();
-        
+        index
+            .search(1, &query, 10, &mut dists, &mut ids_out)
+            .unwrap();
+
         assert_eq!(ids_out.len(), 10);
         // Results should be sorted by distance
         for i in 1..10 {

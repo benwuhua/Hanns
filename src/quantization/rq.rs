@@ -1,10 +1,9 @@
 //! Residual Quantizer (RQ) Implementation
-//! 
+//!
 //! Residual quantization with variable number of bits per sub-quantizer.
 //! The residual centroids are stored in a big cumulative centroid table.
 
 use crate::api::{KnowhereError, Result};
-use std::collections::HashMap;
 
 /// Residual Quantizer configuration
 #[derive(Clone, Debug)]
@@ -49,13 +48,17 @@ impl ResidualQuantizer {
     /// Create a new ResidualQuantizer
     pub fn new(config: RQConfig) -> Result<Self> {
         if config.d == 0 {
-            return Err(KnowhereError::InvalidArg("dimension must be > 0".to_string()));
+            return Err(KnowhereError::InvalidArg(
+                "dimension must be > 0".to_string(),
+            ));
         }
         if config.m == 0 {
             return Err(KnowhereError::InvalidArg("m must be > 0".to_string()));
         }
         if config.nbits == 0 || config.nbits > 16 {
-            return Err(KnowhereError::InvalidArg("nbits must be in (0, 16]".to_string()));
+            return Err(KnowhereError::InvalidArg(
+                "nbits must be in (0, 16]".to_string(),
+            ));
         }
 
         let sub_dim = config.d / config.m;
@@ -88,7 +91,7 @@ impl ResidualQuantizer {
     pub fn code_size(&self) -> usize {
         // Each subvector uses nbits bits, packed into bytes
         let total_bits = self.config.m * self.config.nbits;
-        (total_bits + 7) / 8
+        total_bits.div_ceil(8)
     }
 
     /// Train the residual quantizer
@@ -99,21 +102,19 @@ impl ResidualQuantizer {
         }
 
         let codebooks_per_sub = 1 << self.config.nbits;
-        
+
         // Initialize codebooks using k-means on each subspace
         self.codebooks = vec![0.0f32; self.total_codebook_size * self.sub_dim];
 
         // Train each subquantizer independently
         for sub_idx in 0..self.config.m {
             let sub_codebook_offset = sub_idx * codebooks_per_sub * self.sub_dim;
-            
+
             // Extract subvectors for this subspace
             let mut sub_vectors = Vec::with_capacity(n * self.sub_dim);
             for i in 0..n {
                 let vec_start = i * self.config.d + sub_idx * self.sub_dim;
-                sub_vectors.extend_from_slice(
-                    &vectors[vec_start..vec_start + self.sub_dim],
-                );
+                sub_vectors.extend_from_slice(&vectors[vec_start..vec_start + self.sub_dim]);
             }
 
             // Perform k-means clustering for this subspace
@@ -144,15 +145,14 @@ impl ResidualQuantizer {
                 "not enough vectors for k-means".to_string(),
             ));
         }
-        
+
         // Initialize centroids with random vectors
         use rand::Rng;
         let mut rng = rand::thread_rng();
-        
+
         for i in 0..k {
             let idx = rng.gen_range(0..n);
-            centroids[i * dim..(i + 1) * dim]
-                .copy_from_slice(&vectors[idx * dim..(idx + 1) * dim]);
+            centroids[i * dim..(i + 1) * dim].copy_from_slice(&vectors[idx * dim..(idx + 1) * dim]);
         }
 
         // K-means iterations
@@ -229,7 +229,7 @@ impl ResidualQuantizer {
 
         let codebooks_per_sub = 1 << self.config.nbits;
         let mut residual = vector.to_vec();
-        
+
         // Store codes as unpacked indices first
         let mut indices = vec![0u32; self.config.m];
 
@@ -237,16 +237,16 @@ impl ResidualQuantizer {
         // For simplicity, use greedy encoding (beam_size = 1)
         for sub_idx in 0..self.config.m {
             let sub_vec = &residual[sub_idx * self.sub_dim..(sub_idx + 1) * self.sub_dim];
-            
+
             // Find the best codebook entry
             let mut best_idx = 0;
             let mut best_dist = f32::MAX;
 
             for j in 0..codebooks_per_sub {
                 let codebook_idx = self.codebook_offsets[sub_idx] + j;
-                let centroid = &self.codebooks
-                    [codebook_idx * self.sub_dim..(codebook_idx + 1) * self.sub_dim];
-                
+                let centroid =
+                    &self.codebooks[codebook_idx * self.sub_dim..(codebook_idx + 1) * self.sub_dim];
+
                 let dist = self.l2_distance(sub_vec, centroid);
                 if dist < best_dist {
                     best_dist = dist;
@@ -258,9 +258,9 @@ impl ResidualQuantizer {
 
             // Update residual
             let codebook_idx = self.codebook_offsets[sub_idx] + best_idx;
-            let centroid = &self.codebooks
-                [codebook_idx * self.sub_dim..(codebook_idx + 1) * self.sub_dim];
-            
+            let centroid =
+                &self.codebooks[codebook_idx * self.sub_dim..(codebook_idx + 1) * self.sub_dim];
+
             for d in 0..self.sub_dim {
                 residual[sub_idx * self.sub_dim + d] -= centroid[d];
             }
@@ -276,7 +276,7 @@ impl ResidualQuantizer {
     pub fn encode_batch(&self, vectors: &[f32], codes: &mut [u8]) -> Result<()> {
         let n = vectors.len() / self.config.d;
         let code_size = self.code_size();
-        
+
         if codes.len() < n * code_size {
             return Err(KnowhereError::InvalidArg(
                 "codes buffer too small".to_string(),
@@ -294,9 +294,9 @@ impl ResidualQuantizer {
 
     /// Pack code indices into bit-compact format
     fn pack_codes(&self, indices: &[u32], codes: &mut [u8]) {
-        let code_size = self.code_size();
+        let _code_size = self.code_size();
         codes.fill(0);
-        
+
         let mut bit_offset = 0;
         for &idx in indices {
             let nbits = self.config.nbits;
@@ -332,9 +332,9 @@ impl ResidualQuantizer {
         output.fill(0.0);
         for sub_idx in 0..self.config.m {
             let codebook_idx = self.codebook_offsets[sub_idx] + indices[sub_idx] as usize;
-            let centroid = &self.codebooks
-                [codebook_idx * self.sub_dim..(codebook_idx + 1) * self.sub_dim];
-            
+            let centroid =
+                &self.codebooks[codebook_idx * self.sub_dim..(codebook_idx + 1) * self.sub_dim];
+
             for d in 0..self.sub_dim {
                 output[sub_idx * self.sub_dim + d] += centroid[d];
             }
@@ -347,8 +347,8 @@ impl ResidualQuantizer {
     fn unpack_codes(&self, code: &[u8]) -> Vec<u32> {
         let mut indices = vec![0u32; self.config.m];
         let mut bit_offset = 0;
-        
-        for i in 0..self.config.m {
+
+        for slot in indices.iter_mut().take(self.config.m) {
             let nbits = self.config.nbits;
             let mut idx = 0u32;
             for bit in 0..nbits {
@@ -358,7 +358,7 @@ impl ResidualQuantizer {
                     idx |= 1 << bit;
                 }
             }
-            indices[i] = idx;
+            *slot = idx;
             bit_offset += nbits;
         }
 
@@ -369,7 +369,7 @@ impl ResidualQuantizer {
     pub fn compute_distance(&self, query: &[f32], code: &[u8]) -> f32 {
         // Decode the code and compute L2 distance
         let mut reconstructed = vec![0.0f32; self.config.d];
-        if let Ok(_) = self.decode(code, &mut reconstructed) {
+        if self.decode(code, &mut reconstructed).is_ok() {
             self.l2_distance(query, &reconstructed)
         } else {
             f32::MAX
@@ -420,8 +420,8 @@ mod tests {
         };
         let mut rq = ResidualQuantizer::new(config).unwrap();
 
-        // Generate training data
-        let n_train = 100;
+        // Generate training data - need at least as many vectors as codebooks
+        let n_train = 256; // Increased to ensure enough vectors for k-means
         let mut train_data = vec![0.0f32; n_train * 16];
         for i in 0..n_train {
             for j in 0..16 {
@@ -442,7 +442,8 @@ mod tests {
         rq.decode(&code, &mut decoded).unwrap();
 
         // The decoded vector should be close to the original (within quantization error)
-        let dist: f32 = test_vec.iter()
+        let dist: f32 = test_vec
+            .iter()
             .zip(decoded.iter())
             .map(|(a, b)| (a - b).powi(2))
             .sum();

@@ -71,9 +71,9 @@ impl RangeSearchResult {
 }
 
 /// AnnIterator - 迭代器风格的近似最近邻搜索
-/// 
+///
 /// 对齐 C++ Knowhere 的 AnnIterator 接口，支持流式结果迭代
-/// 
+///
 /// # Example
 /// ```ignore
 /// let mut iter = index.iter_search(query, top_k);
@@ -183,10 +183,10 @@ impl Predicate for IdsPredicate {
 }
 
 /// Bitset predicate for filtering using BitsetView
-/// 
+///
 /// This predicate uses a bitset to filter vectors by their index position.
 /// Bit value 1 = filtered out (excluded), 0 = kept (included).
-/// 
+///
 /// # Example
 /// ```ignore
 /// let bitset = BitsetView::new(1000);
@@ -201,7 +201,7 @@ impl BitsetPredicate {
     pub fn new(bitset: crate::bitset::BitsetView) -> Self {
         Self { bitset }
     }
-    
+
     pub fn from_raw(data: Vec<u64>, len: usize) -> Self {
         Self {
             bitset: crate::bitset::BitsetView::from_vec(data, len),

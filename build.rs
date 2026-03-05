@@ -14,7 +14,7 @@ fn main() {
             .include("/usr/local/include")
             .include("/usr/include")
             .compile("knowhere-faiss");
-        
+
         match result {
             Ok(_) => println!("cargo:rerun-if-changed=src/faiss/ffi.rs"),
             Err(e) => {
@@ -23,6 +23,6 @@ fn main() {
             }
         }
     }
-    
+
     println!("cargo:rerun-if-changed=src/");
 }

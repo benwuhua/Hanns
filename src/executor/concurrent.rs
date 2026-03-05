@@ -7,9 +7,11 @@ pub struct ConcurrentSearcher {
 
 impl ConcurrentSearcher {
     pub fn new(num_threads: usize) -> Self {
-        Self { num_threads: num_threads.max(1) }
+        Self {
+            num_threads: num_threads.max(1),
+        }
     }
-    
+
     /// 获取线程数
     pub fn threads(&self) -> usize {
         self.num_threads
@@ -19,13 +21,13 @@ impl ConcurrentSearcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_concurrent_searcher_new() {
         let searcher = ConcurrentSearcher::new(4);
         assert_eq!(searcher.num_threads, 4);
     }
-    
+
     #[test]
     fn test_concurrent_searcher_min() {
         let searcher = ConcurrentSearcher::new(0);

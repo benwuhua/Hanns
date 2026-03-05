@@ -1,13 +1,13 @@
 //! MinHash-LSH C API Bindings
-//! 
+//!
 //! C API for MinHash-LSH index operations.
 //! Compatible with C++ knowhere MinHash-LSH interface.
 
-use std::os::raw::{c_char, c_void};
-use std::ffi::CStr;
-use std::ptr;
-use crate::index::minhash_lsh::{MinHashLSHIndex, KVPair};
 use crate::bitset::BitsetView;
+use crate::index::minhash_lsh::MinHashLSHIndex;
+use std::ffi::CStr;
+use std::os::raw::{c_char, c_void};
+use std::ptr;
 
 /// Opaque pointer type for MinHash-LSH index
 pub type CMinHashLSHIndex = *mut c_void;
@@ -54,7 +54,7 @@ pub enum CMinHashError {
 }
 
 /// Build MinHash-LSH index from data file
-/// 
+///
 /// # Safety
 /// - `params` must be a valid pointer
 /// - `data_path` and `index_file_path` must be valid C strings
@@ -65,7 +65,7 @@ pub unsafe extern "C" fn knowhere_minhash_lsh_build(params: *const CMinHashLSHBu
     }
 
     let params_ref = &*params;
-    
+
     // Read data from file (simplified - in production would load binary vectors)
     let data = match load_binary_data(params_ref.data_path) {
         Ok(d) => d,
@@ -73,7 +73,7 @@ pub unsafe extern "C" fn knowhere_minhash_lsh_build(params: *const CMinHashLSHBu
     };
 
     let mut index = MinHashLSHIndex::new();
-    
+
     match index.build(
         &data,
         params_ref.mh_vec_length,
@@ -87,7 +87,7 @@ pub unsafe extern "C" fn knowhere_minhash_lsh_build(params: *const CMinHashLSHBu
                 Ok(s) => s,
                 Err(_) => return CMinHashError::InvalidArg as i32,
             };
-            
+
             match index.save(index_path) {
                 Ok(_) => CMinHashError::Success as i32,
                 Err(_) => CMinHashError::IoError as i32,
@@ -98,25 +98,27 @@ pub unsafe extern "C" fn knowhere_minhash_lsh_build(params: *const CMinHashLSHBu
 }
 
 /// Load MinHash-LSH index from file
-/// 
+///
 /// # Safety
 /// - `params` must be a valid pointer
 /// - Returns opaque pointer to index
 #[no_mangle]
-pub unsafe extern "C" fn knowhere_minhash_lsh_load(params: *const CMinHashLSHLoadParams) -> CMinHashLSHIndex {
+pub unsafe extern "C" fn knowhere_minhash_lsh_load(
+    params: *const CMinHashLSHLoadParams,
+) -> CMinHashLSHIndex {
     if params.is_null() {
         return ptr::null_mut();
     }
 
     let params_ref = &*params;
-    
+
     let index_path = match CStr::from_ptr(params_ref.index_file_path).to_str() {
         Ok(s) => s,
         Err(_) => return ptr::null_mut(),
     };
 
     let mut index = MinHashLSHIndex::new();
-    
+
     match index.load(index_path) {
         Ok(_) => {
             let boxed = Box::new(index);
@@ -127,12 +129,15 @@ pub unsafe extern "C" fn knowhere_minhash_lsh_load(params: *const CMinHashLSHLoa
 }
 
 /// Save MinHash-LSH index to file
-/// 
+///
 /// # Safety
 /// - `index` must be a valid pointer returned by load or build
 /// - `path` must be a valid C string
 #[no_mangle]
-pub unsafe extern "C" fn knowhere_minhash_lsh_save(index: CMinHashLSHIndex, path: *const c_char) -> i32 {
+pub unsafe extern "C" fn knowhere_minhash_lsh_save(
+    index: CMinHashLSHIndex,
+    path: *const c_char,
+) -> i32 {
     if index.is_null() || path.is_null() {
         return CMinHashError::InvalidArg as i32;
     }
@@ -150,7 +155,7 @@ pub unsafe extern "C" fn knowhere_minhash_lsh_save(index: CMinHashLSHIndex, path
 }
 
 /// Search for nearest neighbors
-/// 
+///
 /// # Safety
 /// - `index` must be a valid pointer
 /// - `query` must point to `mh_vec_length * mh_vec_element_size` bytes
@@ -165,16 +170,21 @@ pub unsafe extern "C" fn knowhere_minhash_lsh_search(
     labels: *mut i64,
     params: *const CMinHashLSHSearchParams,
 ) -> i32 {
-    if index.is_null() || query.is_null() || distances.is_null() || labels.is_null() || params.is_null() {
+    if index.is_null()
+        || query.is_null()
+        || distances.is_null()
+        || labels.is_null()
+        || params.is_null()
+    {
         return CMinHashError::InvalidArg as i32;
     }
 
     let index_ref = &*(index as *const MinHashLSHIndex);
     let params_ref = &*params;
-    
+
     let query_size = index_ref.count() * index_ref.count(); // Simplified
     let query_slice = std::slice::from_raw_parts(query as *const u8, query_size);
-    
+
     let bitset = if params_ref.bitset.is_null() {
         None
     } else {
@@ -192,7 +202,7 @@ pub unsafe extern "C" fn knowhere_minhash_lsh_search(
 }
 
 /// Batch search for multiple queries
-/// 
+///
 /// # Safety
 /// - `index` must be a valid pointer
 /// - `queries` must point to `nq * mh_vec_length * mh_vec_element_size` bytes
@@ -208,13 +218,18 @@ pub unsafe extern "C" fn knowhere_minhash_lsh_batch_search(
     labels: *mut i64,
     params: *const CMinHashLSHSearchParams,
 ) -> i32 {
-    if index.is_null() || queries.is_null() || distances.is_null() || labels.is_null() || params.is_null() {
+    if index.is_null()
+        || queries.is_null()
+        || distances.is_null()
+        || labels.is_null()
+        || params.is_null()
+    {
         return CMinHashError::InvalidArg as i32;
     }
 
     let index_ref = &*(index as *const MinHashLSHIndex);
     let params_ref = &*params;
-    
+
     let vec_size = index_ref.count() * index_ref.count(); // Simplified
     let queries_slice = std::slice::from_raw_parts(queries as *const u8, nq * vec_size);
 
@@ -226,11 +241,7 @@ pub unsafe extern "C" fn knowhere_minhash_lsh_batch_search(
                     distances.add(i * params_ref.k),
                     dists.len(),
                 );
-                ptr::copy_nonoverlapping(
-                    ids.as_ptr(),
-                    labels.add(i * params_ref.k),
-                    ids.len(),
-                );
+                ptr::copy_nonoverlapping(ids.as_ptr(), labels.add(i * params_ref.k), ids.len());
             }
             CMinHashError::Success as i32
         }
@@ -239,7 +250,7 @@ pub unsafe extern "C" fn knowhere_minhash_lsh_batch_search(
 }
 
 /// Get vectors by IDs
-/// 
+///
 /// # Safety
 /// - `index` must be a valid pointer
 /// - `ids` must point to `n` int64s
@@ -268,7 +279,7 @@ pub unsafe extern "C" fn knowhere_minhash_lsh_get_vector_by_ids(
 }
 
 /// Check if index has raw data
-/// 
+///
 /// # Safety
 /// - `index` must be a valid pointer
 #[no_mangle]
@@ -282,7 +293,7 @@ pub unsafe extern "C" fn knowhere_minhash_lsh_has_raw_data(index: CMinHashLSHInd
 }
 
 /// Get number of vectors in index
-/// 
+///
 /// # Safety
 /// - `index` must be a valid pointer
 #[no_mangle]
@@ -296,7 +307,7 @@ pub unsafe extern "C" fn knowhere_minhash_lsh_count(index: CMinHashLSHIndex) -> 
 }
 
 /// Get index size in bytes
-/// 
+///
 /// # Safety
 /// - `index` must be a valid pointer
 #[no_mangle]
@@ -310,7 +321,7 @@ pub unsafe extern "C" fn knowhere_minhash_lsh_size(index: CMinHashLSHIndex) -> u
 }
 
 /// Free MinHash-LSH index
-/// 
+///
 /// # Safety
 /// - `index` must be a valid pointer or null
 #[no_mangle]
@@ -324,14 +335,15 @@ pub unsafe extern "C" fn knowhere_minhash_lsh_free(index: CMinHashLSHIndex) {
 unsafe fn load_binary_data(path: *const c_char) -> Result<Vec<u8>, std::io::Error> {
     use std::fs::File;
     use std::io::Read;
-    
-    let path_str = CStr::from_ptr(path).to_str()
+
+    let path_str = CStr::from_ptr(path)
+        .to_str()
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid path"))?;
-    
+
     let mut file = File::open(path_str)?;
     let mut data = Vec::new();
     file.read_to_end(&mut data)?;
-    
+
     Ok(data)
 }
 
@@ -344,13 +356,19 @@ mod tests {
     fn test_null_pointer_handling() {
         // Test with null pointers
         unsafe {
-            assert_eq!(knowhere_minhash_lsh_build(ptr::null()), CMinHashError::InvalidArg as i32);
+            assert_eq!(
+                knowhere_minhash_lsh_build(ptr::null()),
+                CMinHashError::InvalidArg as i32
+            );
             assert_eq!(knowhere_minhash_lsh_load(ptr::null()), ptr::null_mut());
-            assert_eq!(knowhere_minhash_lsh_save(ptr::null_mut(), ptr::null()), CMinHashError::InvalidArg as i32);
+            assert_eq!(
+                knowhere_minhash_lsh_save(ptr::null_mut(), ptr::null()),
+                CMinHashError::InvalidArg as i32
+            );
             assert_eq!(knowhere_minhash_lsh_has_raw_data(ptr::null_mut()), false);
             assert_eq!(knowhere_minhash_lsh_count(ptr::null_mut()), 0);
             assert_eq!(knowhere_minhash_lsh_size(ptr::null_mut()), 0);
-            
+
             // Free should not panic with null
             knowhere_minhash_lsh_free(ptr::null_mut());
         }

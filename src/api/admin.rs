@@ -21,58 +21,73 @@ impl IndexRegistry {
 
     pub fn create_index(&self, name: &str, config: &IndexConfig) -> Result<()> {
         let index = MemIndex::new(config)?;
-        
-        let mut indices = self.indices.write()
+
+        let mut indices = self
+            .indices
+            .write()
             .map_err(|e| KnowhereError::InvalidArg(e.to_string()))?;
-        
+
         indices.insert(name.to_string(), index);
         Ok(())
     }
 
     pub fn get_index(&self, name: &str) -> Result<MemIndex> {
-        let indices = self.indices.read()
+        let indices = self
+            .indices
+            .read()
             .map_err(|e| KnowhereError::InvalidArg(e.to_string()))?;
-        
-        indices.get(name)
+
+        indices
+            .get(name)
             .cloned()
             .ok_or_else(|| KnowhereError::NotFound(name.to_string()))
     }
 
     pub fn drop_index(&self, name: &str) -> Result<()> {
-        let mut indices = self.indices.write()
+        let mut indices = self
+            .indices
+            .write()
             .map_err(|e| KnowhereError::InvalidArg(e.to_string()))?;
-        
-        indices.remove(name)
+
+        indices
+            .remove(name)
             .ok_or_else(|| KnowhereError::NotFound(name.to_string()))?;
-        
+
         Ok(())
     }
 
     pub fn list_indices(&self) -> Result<Vec<String>> {
-        let indices = self.indices.read()
+        let indices = self
+            .indices
+            .read()
             .map_err(|e| KnowhereError::InvalidArg(e.to_string()))?;
-        
+
         Ok(indices.keys().cloned().collect())
     }
 
     pub fn save_index(&self, name: &str, path: &Path) -> Result<()> {
-        let indices = self.indices.read()
+        let indices = self
+            .indices
+            .read()
             .map_err(|e| KnowhereError::InvalidArg(e.to_string()))?;
-        
-        let index = indices.get(name)
+
+        let index = indices
+            .get(name)
             .ok_or_else(|| KnowhereError::NotFound(name.to_string()))?;
-        
+
         index.save(path)
     }
 
     pub fn load_index(&self, name: &str, path: &Path, dim: usize) -> Result<()> {
-        let mut indices = self.indices.write()
+        let mut indices = self
+            .indices
+            .write()
             .map_err(|e| KnowhereError::InvalidArg(e.to_string()))?;
-        
+
         let config = IndexConfig::new(IndexType::Flat, MetricType::L2, dim);
         let mut index = MemIndex::new(&config)?;
         index.load(path)?;
-        
+
         indices.insert(name.to_string(), index);
         Ok(())
     }
@@ -97,15 +112,16 @@ impl Admin {
     }
 
     pub fn create_collection(&self, name: &str, dim: usize) -> Result<()> {
-        let config = IndexConfig::new(
-            IndexType::Flat,
-            MetricType::L2,
-            dim,
-        );
+        let config = IndexConfig::new(IndexType::Flat, MetricType::L2, dim);
         self.registry.create_index(name, &config)
     }
 
-    pub fn create_index(&self, collection: &str, index_type: IndexType, metric: MetricType) -> Result<()> {
+    pub fn create_index(
+        &self,
+        collection: &str,
+        index_type: IndexType,
+        metric: MetricType,
+    ) -> Result<()> {
         let config = IndexConfig::new(index_type, metric, 0); // dim will be set from collection
         self.registry.create_index(collection, &config)
     }

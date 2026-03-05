@@ -1,7 +1,7 @@
 //! Executor module - concurrent task execution
 
-pub mod threadpool;
 pub mod concurrent;
+pub mod threadpool;
 
-pub use threadpool::{Executor, l2_distance, inner_product, cosine_similarity};
 pub use concurrent::ConcurrentSearcher;
+pub use threadpool::{cosine_similarity, inner_product, l2_distance, Executor};

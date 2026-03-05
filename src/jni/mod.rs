@@ -1,5 +1,5 @@
 //! JNI 绑定 - 供 Java/Kotlin 调用
-//! 
+//!
 //! # Java 使用示例
 //! ```java
 //! // 创建索引
@@ -8,38 +8,42 @@
 //     .dimension(128)
 //     .metricType(MetricType.L2)
 //     .build();
-//! 
+//!
 //! // 添加向量
 //! float[][] vectors = ...;
 //! long[] ids = ...;
 //! index.add(vectors, ids);
-//! 
+//!
 //! // 搜索
 //! float[][] query = ...;
 //! SearchResult result = index.search(query, 10);
 //! long[] resultIds = result.getIds();
 //! float[] resultDistances = result.getDistances();
-//! 
+//!
 //! // 释放
 //! index.close();
 //! ```
 
 #![allow(dead_code)]
 
+use jni::objects::{JByteArray, JClass, JFloatArray, JLongArray, JObjectArray};
+use jni::sys::{jfloat, jint, jlong};
 use jni::JNIEnv;
-use jni::objects::{JClass, JLongArray, JFloatArray, JObjectArray, JByteArray};
-use jni::sys::{jlong, jint, jfloat};
-use std::sync::Mutex;
 use std::collections::HashMap;
+use std::sync::Mutex;
 
-use crate::api::{IndexConfig, IndexType, MetricType, IndexParams, SearchRequest, SearchResult as ApiSearchResult};
-use crate::faiss::{MemIndex, HnswIndex, IvfPqIndex, DiskAnnIndex};
+use crate::api::{
+    IndexConfig, IndexParams, IndexType, MetricType, SearchRequest, SearchResult as ApiSearchResult,
+};
+use crate::faiss::{DiskAnnIndex, HnswIndex, IvfPqIndex, MemIndex};
 use crate::index::Index;
 
 /// 全局索引注册表
-static INDEX_REGISTRY: Mutex<Option<HashMap<jlong, Box<dyn Index + Send + Sync>>>> = Mutex::new(None);
+static INDEX_REGISTRY: Mutex<Option<HashMap<jlong, Box<dyn Index + Send + Sync>>>> =
+    Mutex::new(None);
 
-fn get_registry() -> std::sync::MutexGuard<'static, Option<HashMap<jlong, Box<dyn Index + Send + Sync>>>> {
+fn get_registry(
+) -> std::sync::MutexGuard<'static, Option<HashMap<jlong, Box<dyn Index + Send + Sync>>>> {
     let mut guard = INDEX_REGISTRY.lock().unwrap();
     if guard.is_none() {
         *guard = Some(HashMap::new());
@@ -97,7 +101,7 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_createIndex(
     ef_search: jint,
 ) -> jlong {
     init();
-    
+
     let config = IndexConfig {
         index_type: parse_index_type(index_type as i32),
         dim: dim as usize,
@@ -108,50 +112,42 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_createIndex(
             ..Default::default()
         },
     };
-    
+
     let index: Box<dyn Index + Send + Sync> = match config.index_type {
-        IndexType::Flat | IndexType::IvfFlat => {
-            match MemIndex::new(config.clone()) {
-                Ok(idx) => Box::new(idx),
-                Err(e) => {
-                    tracing::error!("Failed to create MemIndex: {:?}", e);
-                    return 0;
-                }
+        IndexType::Flat | IndexType::IvfFlat => match MemIndex::new(config.clone()) {
+            Ok(idx) => Box::new(idx),
+            Err(e) => {
+                tracing::error!("Failed to create MemIndex: {:?}", e);
+                return 0;
             }
-        }
-        IndexType::Hnsw => {
-            match HnswIndex::new(config.clone(), config.params.clone()) {
-                Ok(idx) => Box::new(idx),
-                Err(e) => {
-                    tracing::error!("Failed to create HnswIndex: {:?}", e);
-                    return 0;
-                }
+        },
+        IndexType::Hnsw => match HnswIndex::new(config.clone(), config.params.clone()) {
+            Ok(idx) => Box::new(idx),
+            Err(e) => {
+                tracing::error!("Failed to create HnswIndex: {:?}", e);
+                return 0;
             }
-        }
-        IndexType::IvfPq => {
-            match IvfPqIndex::new(config.clone()) {
-                Ok(idx) => Box::new(idx),
-                Err(e) => {
-                    tracing::error!("Failed to create IvfPqIndex: {:?}", e);
-                    return 0;
-                }
+        },
+        IndexType::IvfPq => match IvfPqIndex::new(config.clone()) {
+            Ok(idx) => Box::new(idx),
+            Err(e) => {
+                tracing::error!("Failed to create IvfPqIndex: {:?}", e);
+                return 0;
             }
-        }
-        IndexType::DiskAnn => {
-            match DiskAnnIndex::new(config.clone()) {
-                Ok(idx) => Box::new(idx),
-                Err(e) => {
-                    tracing::error!("Failed to create DiskAnnIndex: {:?}", e);
-                    return 0;
-                }
+        },
+        IndexType::DiskAnn => match DiskAnnIndex::new(config.clone()) {
+            Ok(idx) => Box::new(idx),
+            Err(e) => {
+                tracing::error!("Failed to create DiskAnnIndex: {:?}", e);
+                return 0;
             }
-        }
+        },
     };
-    
+
     let handle = next_handle();
     let mut guard = get_registry();
     guard.as_mut().unwrap().insert(handle, index);
-    
+
     handle
 }
 
@@ -182,30 +178,30 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_addIndex(
         Some(g) => g,
         None => return -1,
     };
-    
+
     let index = match guard.as_ref().and_then(|r| r.get(&handle)) {
         Some(i) => i,
         None => return -1,
     };
-    
+
     // 获取向量数据
     let vec_slice = match env.get_array_elements(&vectors, jni::objects::ReleaseMode::NoCopyBack) {
         Ok(s) => s,
         Err(_) => return -1,
     };
-    
+
     // 获取 IDs
     let ids_slice = match env.get_array_elements(&ids, jni::objects::ReleaseMode::NoCopyBack) {
         Ok(s) => s,
         Err(_) => return -1,
     };
-    
+
     let ids: Option<Vec<i64>> = if !ids.is_null() {
         Some(ids_slice.iter().map(|&x| x as i64).collect())
     } else {
         None
     };
-    
+
     match index.add(&vec_slice, ids.as_deref()) {
         Ok(n) => n as jint,
         Err(e) => {
@@ -229,23 +225,23 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_search(
         Some(g) => g,
         None => return 0,
     };
-    
+
     let index = match guard.as_ref().and_then(|r| r.get(&handle)) {
         Some(i) => i,
         None => return 0,
     };
-    
+
     // 获取查询向量
     let query_slice = match env.get_array_elements(&query, jni::objects::ReleaseMode::NoCopyBack) {
         Ok(s) => s,
         Err(_) => 0,
     };
-    
+
     let req = SearchRequest {
         k: k as usize,
         ..Default::default()
     };
-    
+
     match index.search(&query_slice, &req) {
         Ok(result) => {
             // 返回结果指针（简化实现，实际需要更好的内存管理）
@@ -269,16 +265,16 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_getResultIds(
     if result_ptr == 0 {
         return JObjectArray::null(&env).into();
     }
-    
+
     let result = unsafe { &*(result_ptr as *const ApiSearchResult) };
-    
+
     // 展平 IDs
     let mut ids: Vec<jlong> = Vec::new();
     for &ids_batch in &result.distances {
         // 这里简化处理，实际需要正确的 ID 提取
         ids.push(ids_batch as jlong);
     }
-    
+
     match env.new_long_array(ids.len() as jint) {
         Ok(arr) => {
             let _ = env.set_array_region(&arr, 0, &ids);
@@ -298,12 +294,17 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_getResultDistances
     if result_ptr == 0 {
         return JObjectArray::null(&env).into();
     }
-    
+
     let result = unsafe { &*(result_ptr as *const ApiSearchResult) };
-    
+
     // 展平距离
-    let distances: Vec<jfloat> = result.distances.iter().flat_map(|d| d.iter()).map(|&x| x as jfloat).collect();
-    
+    let distances: Vec<jfloat> = result
+        .distances
+        .iter()
+        .flat_map(|d| d.iter())
+        .map(|&x| x as jfloat)
+        .collect();
+
     match env.new_float_array(distances.len() as jint) {
         Ok(arr) => {
             let _ = env.set_array_region(&arr, 0, &distances);
@@ -401,9 +402,8 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_deserializeIndex(
         Err(_) => return 0,
     }
 
-    let bytes: Vec<u8> = unsafe {
-        std::slice::from_raw_parts(buf.as_ptr() as *const u8, len).to_vec()
-    };
+    let bytes: Vec<u8> =
+        unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, len).to_vec() };
 
     // 解析头部获取维度等信息
     if bytes.len() < 21 {
@@ -419,7 +419,9 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_deserializeIndex(
 
     // 从序列化数据中提取维度来创建正确的索引类型
     let dim = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
-    let num = u64::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15], bytes[16], bytes[17], bytes[18], bytes[19]]) as usize;
+    let num = u64::from_le_bytes([
+        bytes[12], bytes[13], bytes[14], bytes[15], bytes[16], bytes[17], bytes[18], bytes[19],
+    ]) as usize;
 
     // 创建 MemIndex 并反序列化
     // 注意: 实际应用中需要保存索引类型信息
@@ -455,7 +457,7 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_deserializeIndex(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_registry() {
         init();

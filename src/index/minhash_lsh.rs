@@ -1,15 +1,15 @@
 //! MinHash-LSH Index Implementation
-//! 
+//!
 //! MinHash LSH (Locality Sensitive Hashing) for Jaccard similarity search.
 //! This implementation is based on the C++ knowhere MinHash-LSH index.
 
-use std::fs::File;
-use std::io::{Read, Write, Seek, SeekFrom};
-use std::cmp::{min, max};
-use crate::error::KnowhereError;
 use crate::bitset::BitsetView;
-use crate::interrupt::Interrupt;
 use crate::comp::bloomfilter::BloomFilter;
+use crate::error::KnowhereError;
+use crate::interrupt::Interrupt;
+use std::cmp::min;
+use std::fs::File;
+use std::io::{Read, Seek, Write};
 
 type Result<T> = std::result::Result<T, KnowhereError>;
 
@@ -62,7 +62,11 @@ impl MinHashBandIndex {
     }
 
     /// Create a new band index with Bloom Filter support
-    pub fn with_bloom_filter(expected_elements: usize, false_positive_prob: f64, use_shared: bool) -> Self {
+    pub fn with_bloom_filter(
+        expected_elements: usize,
+        false_positive_prob: f64,
+        use_shared: bool,
+    ) -> Self {
         let mut this = Self::new();
         this.bloom_filter = Some(BloomFilter::new(expected_elements, false_positive_prob));
         this.use_shared_bloom = use_shared;
@@ -75,56 +79,67 @@ impl MinHashBandIndex {
     }
 
     /// Build the band index from sorted KV pairs (with interrupt support)
-    pub fn build_with_interrupt(&mut self, sorted_kv: &[KVPair], block_size: usize, interrupt: &Interrupt) -> Result<usize> {
+    pub fn build_with_interrupt(
+        &mut self,
+        sorted_kv: &[KVPair],
+        block_size: usize,
+        interrupt: &Interrupt,
+    ) -> Result<usize> {
         self.block_size = block_size;
-        let max_num_per_block = block_size / (std::mem::size_of::<KeyType>() + std::mem::size_of::<ValueType>());
-        self.blocks_num = (sorted_kv.len() + max_num_per_block - 1) / max_num_per_block;
-        
+        let max_num_per_block =
+            block_size / (std::mem::size_of::<KeyType>() + std::mem::size_of::<ValueType>());
+        self.blocks_num = sorted_kv.len().div_ceil(max_num_per_block);
+
         self.mins.resize(self.blocks_num, 0);
         self.maxs.resize(self.blocks_num, 0);
         self.num_in_block.resize(self.blocks_num, 0);
-        
+
         let mut data_buf = Vec::new();
-        
+
         // Initialize Bloom Filter if not already present
         if self.bloom_filter.is_none() {
             self.bloom_filter = Some(BloomFilter::new(sorted_kv.len().max(1000), 0.01));
         }
-        
+
         for i in 0..self.blocks_num {
             // Check interrupt periodically (every 100 blocks)
             if i % 100 == 0 && interrupt.is_interrupted() {
                 return Err(KnowhereError::interrupted());
             }
-            
+
             let beg = i * max_num_per_block;
             let end = min((i + 1) * max_num_per_block, sorted_kv.len());
             let num = end - beg;
-            
+
             self.num_in_block[i] = num;
             self.mins[i] = sorted_kv[beg].key;
             self.maxs[i] = sorted_kv[end - 1].key;
-            
+
             // Write keys
-            for j in beg..end {
-                data_buf.extend_from_slice(&sorted_kv[j].key.to_le_bytes());
+            for item in sorted_kv.iter().take(end).skip(beg) {
+                data_buf.extend_from_slice(&item.key.to_le_bytes());
                 // Add to Bloom Filter
                 if let Some(ref mut bf) = self.bloom_filter {
-                    bf.add(&sorted_kv[j].key);
+                    bf.add(&item.key);
                 }
             }
             // Write values
-            for j in beg..end {
-                data_buf.extend_from_slice(&sorted_kv[j].value.to_le_bytes());
+            for item in sorted_kv.iter().take(end).skip(beg) {
+                data_buf.extend_from_slice(&item.value.to_le_bytes());
             }
         }
-        
+
         self.data = data_buf;
         Ok(self.blocks_num)
     }
 
     /// Search for a key in the band index
-    pub fn search(&self, key: KeyType, res: &mut MinHashLSHResultHandler, id_selector: Option<&BitsetView>) {
+    pub fn search(
+        &self,
+        key: KeyType,
+        res: &mut MinHashLSHResultHandler,
+        id_selector: Option<&BitsetView>,
+    ) {
         // Fast path: check Bloom Filter first
         if let Some(ref bf) = self.bloom_filter {
             if !bf.contains(&key) {
@@ -151,11 +166,11 @@ impl MinHashBandIndex {
         while current_block < self.mins.len() && key >= self.mins[current_block] {
             let rows = self.num_in_block[current_block];
             let block_offset = current_block * self.block_size;
-            
+
             // Read keys from block
             let key_start = block_offset;
             let key_end = key_start + rows * std::mem::size_of::<KeyType>();
-            
+
             if key_end > self.data.len() {
                 break;
             }
@@ -167,7 +182,9 @@ impl MinHashBandIndex {
                 let mid = (left + right) / 2;
                 let key_offset = key_start + mid * std::mem::size_of::<KeyType>();
                 let block_key = KeyType::from_le_bytes(
-                    self.data[key_offset..key_offset + std::mem::size_of::<KeyType>()].try_into().unwrap()
+                    self.data[key_offset..key_offset + std::mem::size_of::<KeyType>()]
+                        .try_into()
+                        .unwrap(),
                 );
                 if block_key < key {
                     left = mid + 1;
@@ -181,16 +198,20 @@ impl MinHashBandIndex {
             while inner_id < rows {
                 let key_offset = key_start + inner_id * std::mem::size_of::<KeyType>();
                 let block_key = KeyType::from_le_bytes(
-                    self.data[key_offset..key_offset + std::mem::size_of::<KeyType>()].try_into().unwrap()
+                    self.data[key_offset..key_offset + std::mem::size_of::<KeyType>()]
+                        .try_into()
+                        .unwrap(),
                 );
-                
+
                 if block_key != key {
                     break;
                 }
 
                 let val_offset = key_end + inner_id * std::mem::size_of::<ValueType>();
                 let block_val = ValueType::from_le_bytes(
-                    self.data[val_offset..val_offset + std::mem::size_of::<ValueType>()].try_into().unwrap()
+                    self.data[val_offset..val_offset + std::mem::size_of::<ValueType>()]
+                        .try_into()
+                        .unwrap(),
                 );
 
                 // Check ID selector (bitset filter)
@@ -220,32 +241,64 @@ impl MinHashBandIndex {
     /// Save band index to file
     pub fn save<W: Write + Seek>(&self, writer: &mut W) -> Result<u64> {
         // Write metadata first (fixed size)
-        writer.write_all(&self.blocks_num.to_le_bytes())
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
-        writer.write_all(&self.block_size.to_le_bytes())
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
-        
+        writer
+            .write_all(&self.blocks_num.to_le_bytes())
+            .map_err(|e| {
+                KnowhereError::new(
+                    crate::error::ErrorCode::IO_ERROR,
+                    &format!("IO error: {}", e),
+                )
+            })?;
+        writer
+            .write_all(&self.block_size.to_le_bytes())
+            .map_err(|e| {
+                KnowhereError::new(
+                    crate::error::ErrorCode::IO_ERROR,
+                    &format!("IO error: {}", e),
+                )
+            })?;
+
         // Write data length and data
         let data_len = self.data.len() as u64;
-        writer.write_all(&data_len.to_le_bytes())
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
-        writer.write_all(&self.data)
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
-        
+        writer.write_all(&data_len.to_le_bytes()).map_err(|e| {
+            KnowhereError::new(
+                crate::error::ErrorCode::IO_ERROR,
+                &format!("IO error: {}", e),
+            )
+        })?;
+        writer.write_all(&self.data).map_err(|e| {
+            KnowhereError::new(
+                crate::error::ErrorCode::IO_ERROR,
+                &format!("IO error: {}", e),
+            )
+        })?;
+
         // Write mins, maxs, and num_in_block
         for &min in &self.mins {
-            writer.write_all(&min.to_le_bytes())
-                .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+            writer.write_all(&min.to_le_bytes()).map_err(|e| {
+                KnowhereError::new(
+                    crate::error::ErrorCode::IO_ERROR,
+                    &format!("IO error: {}", e),
+                )
+            })?;
         }
         for &max in &self.maxs {
-            writer.write_all(&max.to_le_bytes())
-                .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+            writer.write_all(&max.to_le_bytes()).map_err(|e| {
+                KnowhereError::new(
+                    crate::error::ErrorCode::IO_ERROR,
+                    &format!("IO error: {}", e),
+                )
+            })?;
         }
         for &num in &self.num_in_block {
-            writer.write_all(&num.to_le_bytes())
-                .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+            writer.write_all(&num.to_le_bytes()).map_err(|e| {
+                KnowhereError::new(
+                    crate::error::ErrorCode::IO_ERROR,
+                    &format!("IO error: {}", e),
+                )
+            })?;
         }
-        
+
         Ok(0)
     }
 
@@ -253,48 +306,76 @@ impl MinHashBandIndex {
     pub fn load<R: Read + Seek>(&mut self, reader: &mut R) -> Result<()> {
         // Read metadata
         let mut buf = [0u8; 8];
-        
-        reader.read_exact(&mut buf)
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+
+        reader.read_exact(&mut buf).map_err(|e| {
+            KnowhereError::new(
+                crate::error::ErrorCode::IO_ERROR,
+                &format!("IO error: {}", e),
+            )
+        })?;
         self.blocks_num = usize::from_le_bytes(buf);
-        
-        reader.read_exact(&mut buf)
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+
+        reader.read_exact(&mut buf).map_err(|e| {
+            KnowhereError::new(
+                crate::error::ErrorCode::IO_ERROR,
+                &format!("IO error: {}", e),
+            )
+        })?;
         self.block_size = usize::from_le_bytes(buf);
-        
+
         // Read data length and data
-        reader.read_exact(&mut buf)
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+        reader.read_exact(&mut buf).map_err(|e| {
+            KnowhereError::new(
+                crate::error::ErrorCode::IO_ERROR,
+                &format!("IO error: {}", e),
+            )
+        })?;
         let data_len = u64::from_le_bytes(buf) as usize;
-        
+
         self.data.resize(data_len, 0);
-        reader.read_exact(&mut self.data)
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
-        
+        reader.read_exact(&mut self.data).map_err(|e| {
+            KnowhereError::new(
+                crate::error::ErrorCode::IO_ERROR,
+                &format!("IO error: {}", e),
+            )
+        })?;
+
         // Read mins
         self.mins.clear();
         for _ in 0..self.blocks_num {
-            reader.read_exact(&mut buf)
-                .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+            reader.read_exact(&mut buf).map_err(|e| {
+                KnowhereError::new(
+                    crate::error::ErrorCode::IO_ERROR,
+                    &format!("IO error: {}", e),
+                )
+            })?;
             self.mins.push(KeyType::from_le_bytes(buf));
         }
-        
+
         // Read maxs
         self.maxs.clear();
         for _ in 0..self.blocks_num {
-            reader.read_exact(&mut buf)
-                .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+            reader.read_exact(&mut buf).map_err(|e| {
+                KnowhereError::new(
+                    crate::error::ErrorCode::IO_ERROR,
+                    &format!("IO error: {}", e),
+                )
+            })?;
             self.maxs.push(KeyType::from_le_bytes(buf));
         }
-        
+
         // Read num_in_block
         self.num_in_block.clear();
         for _ in 0..self.blocks_num {
-            reader.read_exact(&mut buf)
-                .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+            reader.read_exact(&mut buf).map_err(|e| {
+                KnowhereError::new(
+                    crate::error::ErrorCode::IO_ERROR,
+                    &format!("IO error: {}", e),
+                )
+            })?;
             self.num_in_block.push(usize::from_le_bytes(buf));
         }
-        
+
         Ok(())
     }
 }
@@ -365,7 +446,7 @@ impl Default for MinHashLSHConfig {
     fn default() -> Self {
         Self {
             bands: 8,
-            band_size: 0,  // Will be calculated from mh_vec_length
+            band_size: 0, // Will be calculated from mh_vec_length
             use_shared_bloom: true,
             bloom_false_positive_prob: 0.01,
             expected_elements: 10000,
@@ -415,7 +496,10 @@ impl MinHashLSHIndex {
     /// Create a new MinHash-LSH index with configuration
     pub fn with_config(config: &MinHashLSHConfig) -> Self {
         let shared_bloom = if config.use_shared_bloom {
-            Some(BloomFilter::new(config.expected_elements, config.bloom_false_positive_prob))
+            Some(BloomFilter::new(
+                config.expected_elements,
+                config.bloom_false_positive_prob,
+            ))
         } else {
             None
         };
@@ -437,7 +521,11 @@ impl MinHashLSHIndex {
     pub fn optimize_params(mh_vec_length: usize, target_bands: usize) -> (usize, usize) {
         // Simple optimization: divide vector length by target bands
         let band_size = mh_vec_length / target_bands;
-        let bands = if band_size > 0 { mh_vec_length / band_size } else { 1 };
+        let bands = if band_size > 0 {
+            mh_vec_length / band_size
+        } else {
+            1
+        };
         (bands, band_size)
     }
 
@@ -446,7 +534,7 @@ impl MinHashLSHIndex {
         let r = data.len() / band;
         let band_start = r * band_i;
         let band_end = min(band_start + r, data.len());
-        
+
         if band_start >= data.len() {
             return 0;
         }
@@ -473,7 +561,7 @@ impl MinHashLSHIndex {
         for row in 0..rows {
             let row_start = row * vec_size;
             let row_end = min(row_start + vec_size, data.len());
-            
+
             if row_start >= data.len() {
                 continue;
             }
@@ -481,7 +569,7 @@ impl MinHashLSHIndex {
             for band_i in 0..band_num {
                 let band_start = row_start + band_i * band_size;
                 let band_end = min(band_start + band_size, row_end);
-                
+
                 if band_start >= row_end {
                     break;
                 }
@@ -534,10 +622,14 @@ impl MinHashLSHIndex {
         self.mh_vec_length = mh_vec_length;
         self.mh_vec_element_size = mh_vec_element_size;
         self.with_raw_data = with_raw_data;
-        
+
         let vec_size = mh_vec_length * mh_vec_element_size;
-        self.ntotal = if vec_size > 0 { data.len() / vec_size } else { 0 };
-        
+        self.ntotal = if vec_size > 0 {
+            data.len() / vec_size
+        } else {
+            0
+        };
+
         // Optimize parameters
         let (band_num, band_size) = Self::optimize_params(mh_vec_length, bands);
         self.bands = band_num;
@@ -550,23 +642,23 @@ impl MinHashLSHIndex {
 
         // Build band indexes with Bloom Filters
         self.band_indexes.clear();
-        
+
         if self.ntotal == 0 {
             return Ok(());
         }
 
         // Generate hash KV pairs for all bands
         let all_kv = Self::gen_transposed_hash_kv(data, self.ntotal, band_num, band_size);
-        
+
         for band_i in 0..band_num {
             // Check interrupt for each band
             if interrupt.is_interrupted() {
                 return Err(KnowhereError::interrupted());
             }
-            
+
             let band_start = band_i * self.ntotal;
             let band_end = band_start + self.ntotal;
-            
+
             if band_end > all_kv.len() {
                 break;
             }
@@ -581,14 +673,14 @@ impl MinHashLSHIndex {
                 self.shared_bloom_filter.is_some(),
             );
             band_index.build_with_interrupt(&band_kv, 8192, interrupt)?;
-            
+
             // Add keys to shared bloom filter if enabled
             if let Some(ref mut shared_bf) = self.shared_bloom_filter {
                 for kv in &band_kv {
                     shared_bf.add(&kv.key);
                 }
             }
-            
+
             self.band_indexes.push(band_index);
         }
 
@@ -620,16 +712,16 @@ impl MinHashLSHIndex {
             if interrupt.is_interrupted() {
                 return Err(KnowhereError::interrupted());
             }
-            
+
             let hash = Self::get_hash_key(query, self.bands, band_i);
-            
+
             // Check shared bloom filter first (if enabled)
             let should_search = if let Some(ref shared_bf) = self.shared_bloom_filter {
                 shared_bf.contains(&hash)
             } else {
-                true  // No shared filter, always search
+                true // No shared filter, always search
             };
-            
+
             if should_search {
                 // Band index has its own bloom filter for additional filtering
                 self.band_indexes[band_i].search(hash, &mut res, id_selector);
@@ -673,17 +765,22 @@ impl MinHashLSHIndex {
             if interrupt.is_interrupted() {
                 return Err(KnowhereError::interrupted());
             }
-            
+
             let query_start = i * vec_size;
             let query_end = query_start + vec_size;
-            
+
             if query_end > queries.len() {
                 break;
             }
 
             let selector = id_selectors.and_then(|s| s.get(i));
-            let (ids, dists) = self.search_with_interrupt(&queries[query_start..query_end], topk, selector, interrupt)?;
-            
+            let (ids, dists) = self.search_with_interrupt(
+                &queries[query_start..query_end],
+                topk,
+                selector,
+                interrupt,
+            )?;
+
             all_ids.push(ids);
             all_distances.push(dists);
         }
@@ -694,7 +791,10 @@ impl MinHashLSHIndex {
     /// Get vectors by IDs
     pub fn get_vector_by_ids(&self, ids: &[i64]) -> Result<Vec<u8>> {
         if !self.with_raw_data {
-            return Err(KnowhereError::new(crate::error::ErrorCode::NOT_IMPLEMENTED, "raw data not stored"));
+            return Err(KnowhereError::new(
+                crate::error::ErrorCode::NOT_IMPLEMENTED,
+                "raw data not stored",
+            ));
         }
 
         let vec_size = self.mh_vec_length * self.mh_vec_element_size;
@@ -707,7 +807,7 @@ impl MinHashLSHIndex {
 
             let start = (id as usize) * vec_size;
             let end = start + vec_size;
-            
+
             if end <= self.raw_data.len() {
                 result.extend_from_slice(&self.raw_data[start..end]);
             }
@@ -733,30 +833,69 @@ impl MinHashLSHIndex {
 
     /// Save index to file
     pub fn save(&self, path: &str) -> Result<()> {
-        let mut file = File::create(path)
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("Failed to create file: {}", e)))?;
+        let mut file = File::create(path).map_err(|e| {
+            KnowhereError::new(
+                crate::error::ErrorCode::IO_ERROR,
+                &format!("Failed to create file: {}", e),
+            )
+        })?;
 
         // Write header
-        file.write_all(&self.ntotal.to_le_bytes())
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+        file.write_all(&self.ntotal.to_le_bytes()).map_err(|e| {
+            KnowhereError::new(
+                crate::error::ErrorCode::IO_ERROR,
+                &format!("IO error: {}", e),
+            )
+        })?;
         file.write_all(&self.mh_vec_length.to_le_bytes())
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+            .map_err(|e| {
+                KnowhereError::new(
+                    crate::error::ErrorCode::IO_ERROR,
+                    &format!("IO error: {}", e),
+                )
+            })?;
         file.write_all(&self.mh_vec_element_size.to_le_bytes())
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
-        file.write_all(&self.bands.to_le_bytes())
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
-        file.write_all(&self.band_size.to_le_bytes())
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+            .map_err(|e| {
+                KnowhereError::new(
+                    crate::error::ErrorCode::IO_ERROR,
+                    &format!("IO error: {}", e),
+                )
+            })?;
+        file.write_all(&self.bands.to_le_bytes()).map_err(|e| {
+            KnowhereError::new(
+                crate::error::ErrorCode::IO_ERROR,
+                &format!("IO error: {}", e),
+            )
+        })?;
+        file.write_all(&self.band_size.to_le_bytes()).map_err(|e| {
+            KnowhereError::new(
+                crate::error::ErrorCode::IO_ERROR,
+                &format!("IO error: {}", e),
+            )
+        })?;
         file.write_all(&(self.with_raw_data as u8).to_le_bytes())
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+            .map_err(|e| {
+                KnowhereError::new(
+                    crate::error::ErrorCode::IO_ERROR,
+                    &format!("IO error: {}", e),
+                )
+            })?;
 
         // Write raw data if present
         if self.with_raw_data {
             let raw_len = self.raw_data.len();
-            file.write_all(&raw_len.to_le_bytes())
-                .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
-            file.write_all(&self.raw_data)
-                .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+            file.write_all(&raw_len.to_le_bytes()).map_err(|e| {
+                KnowhereError::new(
+                    crate::error::ErrorCode::IO_ERROR,
+                    &format!("IO error: {}", e),
+                )
+            })?;
+            file.write_all(&self.raw_data).map_err(|e| {
+                KnowhereError::new(
+                    crate::error::ErrorCode::IO_ERROR,
+                    &format!("IO error: {}", e),
+                )
+            })?;
         }
 
         // Write band indexes
@@ -770,52 +909,88 @@ impl MinHashLSHIndex {
     /// Load index from file
     pub fn load(&mut self, path: &str) -> Result<()> {
         use std::io::BufReader;
-        
-        let file = File::open(path)
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("Failed to open file: {}", e)))?;
+
+        let file = File::open(path).map_err(|e| {
+            KnowhereError::new(
+                crate::error::ErrorCode::IO_ERROR,
+                &format!("Failed to open file: {}", e),
+            )
+        })?;
         let mut reader = BufReader::new(file);
 
         // Read header
         let mut buf = [0u8; 8];
 
-        reader.read_exact(&mut buf)
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+        reader.read_exact(&mut buf).map_err(|e| {
+            KnowhereError::new(
+                crate::error::ErrorCode::IO_ERROR,
+                &format!("IO error: {}", e),
+            )
+        })?;
         self.ntotal = usize::from_le_bytes(buf);
 
-        reader.read_exact(&mut buf)
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+        reader.read_exact(&mut buf).map_err(|e| {
+            KnowhereError::new(
+                crate::error::ErrorCode::IO_ERROR,
+                &format!("IO error: {}", e),
+            )
+        })?;
         self.mh_vec_length = usize::from_le_bytes(buf);
 
-        reader.read_exact(&mut buf)
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+        reader.read_exact(&mut buf).map_err(|e| {
+            KnowhereError::new(
+                crate::error::ErrorCode::IO_ERROR,
+                &format!("IO error: {}", e),
+            )
+        })?;
         self.mh_vec_element_size = usize::from_le_bytes(buf);
 
-        reader.read_exact(&mut buf)
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+        reader.read_exact(&mut buf).map_err(|e| {
+            KnowhereError::new(
+                crate::error::ErrorCode::IO_ERROR,
+                &format!("IO error: {}", e),
+            )
+        })?;
         self.bands = usize::from_le_bytes(buf);
 
-        reader.read_exact(&mut buf)
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+        reader.read_exact(&mut buf).map_err(|e| {
+            KnowhereError::new(
+                crate::error::ErrorCode::IO_ERROR,
+                &format!("IO error: {}", e),
+            )
+        })?;
         self.band_size = usize::from_le_bytes(buf);
 
         let mut raw_flag = [0u8; 1];
-        reader.read_exact(&mut raw_flag)
-            .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+        reader.read_exact(&mut raw_flag).map_err(|e| {
+            KnowhereError::new(
+                crate::error::ErrorCode::IO_ERROR,
+                &format!("IO error: {}", e),
+            )
+        })?;
         self.with_raw_data = raw_flag[0] != 0;
 
         // Read raw data if present
         if self.with_raw_data {
-            reader.read_exact(&mut buf)
-                .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+            reader.read_exact(&mut buf).map_err(|e| {
+                KnowhereError::new(
+                    crate::error::ErrorCode::IO_ERROR,
+                    &format!("IO error: {}", e),
+                )
+            })?;
             let raw_len = usize::from_le_bytes(buf);
             self.raw_data.resize(raw_len, 0);
-            reader.read_exact(&mut self.raw_data)
-                .map_err(|e| KnowhereError::new(crate::error::ErrorCode::IO_ERROR, &format!("IO error: {}", e)))?;
+            reader.read_exact(&mut self.raw_data).map_err(|e| {
+                KnowhereError::new(
+                    crate::error::ErrorCode::IO_ERROR,
+                    &format!("IO error: {}", e),
+                )
+            })?;
         }
 
         // Load band indexes
         self.band_indexes.clear();
-        
+
         for _ in 0..self.bands {
             let mut band_index = MinHashBandIndex::new();
             band_index.load(&mut reader)?;
@@ -832,7 +1007,7 @@ impl MinHashLSHIndex {
     /// Get memory usage in bytes
     pub fn memory_usage(&self) -> usize {
         let mut size = 0;
-        
+
         // Band indexes
         for band in &self.band_indexes {
             size += std::mem::size_of::<MinHashBandIndex>();
@@ -841,16 +1016,128 @@ impl MinHashLSHIndex {
                 size += bf.memory_usage();
             }
         }
-        
+
         // Shared bloom filter
         if let Some(ref bf) = self.shared_bloom_filter {
             size += bf.memory_usage();
         }
-        
+
         // Raw data
         size += self.raw_data.len();
-        
+
         size
+    }
+
+    /// Calculate Jaccard similarity between two MinHash vectors
+    ///
+    /// Jaccard(A, B) = |A ∩ B| / |A ∪ B|
+    /// For MinHash, this is approximated as the fraction of matching elements
+    pub fn jaccard_distance(x: &[u8], y: &[u8], element_size: usize) -> f32 {
+        if x.len() != y.len() || x.is_empty() {
+            return 1.0; // Maximum distance for invalid inputs
+        }
+
+        let element_count = x.len() / element_size;
+        if element_count == 0 {
+            return 1.0;
+        }
+
+        let mut matches = 0;
+        for i in 0..element_count {
+            let offset = i * element_size;
+            let end = offset + element_size;
+
+            if end <= x.len() && end <= y.len()
+                && x[offset..end] == y[offset..end] {
+                    matches += 1;
+                }
+        }
+
+        // Jaccard distance = 1 - Jaccard similarity
+        1.0 - (matches as f32 / element_count as f32)
+    }
+
+    /// Jaccard KNN search by IDs (for precise re-ranking)
+    ///
+    /// Given a list of candidate IDs from LSH, re-rank them by exact Jaccard distance
+    /// and return the top-k results.
+    pub fn jaccard_knn_search_by_ids(
+        &self,
+        query: &[u8],
+        candidate_ids: &[i64],
+        topk: usize,
+    ) -> Result<(Vec<i64>, Vec<f32>)> {
+        if !self.with_raw_data {
+            return Err(KnowhereError::new(
+                crate::error::ErrorCode::NOT_IMPLEMENTED,
+                "raw data not stored, cannot compute Jaccard distance",
+            ));
+        }
+
+        let vec_size = self.mh_vec_length * self.mh_vec_element_size;
+
+        // Calculate Jaccard distance for all candidates
+        let mut candidates: Vec<(i64, f32)> = candidate_ids
+            .iter()
+            .filter(|&&id| id >= 0 && (id as usize) < self.ntotal)
+            .map(|&id| {
+                let start = (id as usize) * vec_size;
+                let end = start + vec_size;
+
+                if end <= self.raw_data.len() {
+                    let dist =
+                        Self::jaccard_distance(query, &self.raw_data[start..end], self.mh_vec_element_size);
+                    (id, dist)
+                } else {
+                    (id, 1.0) // Invalid, assign maximum distance
+                }
+            })
+            .collect();
+
+        // Sort by distance (ascending)
+        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Take top-k
+        let k = topk.min(candidates.len());
+        let ids: Vec<i64> = candidates.iter().take(k).map(|(id, _)| *id).collect();
+        let distances: Vec<f32> = candidates.iter().take(k).map(|(_, dist)| *dist).collect();
+
+        // Pad with -1 if necessary
+        let mut final_ids = ids;
+        let mut final_dists = distances;
+        while final_ids.len() < topk {
+            final_ids.push(-1);
+            final_dists.push(0.0);
+        }
+
+        Ok((final_ids, final_dists))
+    }
+
+    /// Search with Jaccard re-ranking
+    ///
+    /// Two-phase search:
+    /// 1. LSH band matching (fast, approximate)
+    /// 2. Jaccard exact re-ranking (slow, precise)
+    pub fn search_with_jaccard(
+        &self,
+        query: &[u8],
+        topk: usize,
+        refine_k: usize,
+        id_selector: Option<&BitsetView>,
+    ) -> Result<(Vec<i64>, Vec<f32>)> {
+        // Phase 1: LSH search to get candidates
+        let refine_k = refine_k.max(topk);
+        let (candidate_ids, _) = self.search(query, refine_k, id_selector)?;
+
+        // Filter out invalid IDs
+        let valid_candidates: Vec<i64> = candidate_ids.iter().filter(|&&id| id >= 0).cloned().collect();
+
+        if valid_candidates.is_empty() {
+            return Ok((vec![-1; topk], vec![0.0; topk]));
+        }
+
+        // Phase 2: Jaccard re-ranking
+        self.jaccard_knn_search_by_ids(query, &valid_candidates, topk)
     }
 }
 
@@ -861,12 +1148,12 @@ mod tests {
     #[test]
     fn test_minhash_lsh_build() {
         let mut index = MinHashLSHIndex::new();
-        
+
         // Create test data: 10 vectors of 8 elements each (u64)
         let data: Vec<u8> = (0..10 * 8 * 8).map(|i| i as u8).collect();
-        
+
         index.build(&data, 8, 8, 4, true).unwrap();
-        
+
         assert_eq!(index.count(), 10);
         assert!(index.has_raw_data());
     }
@@ -874,16 +1161,16 @@ mod tests {
     #[test]
     fn test_minhash_lsh_search() {
         let mut index = MinHashLSHIndex::new();
-        
+
         // Create test data
         let data: Vec<u8> = (0..100 * 8 * 8).map(|i| i as u8).collect();
-        
+
         index.build(&data, 8, 8, 4, true).unwrap();
-        
+
         // Search with a query vector
         let query: Vec<u8> = (0..8 * 8).map(|i| i as u8).collect();
         let (ids, dists) = index.search(&query, 5, None).unwrap();
-        
+
         assert!(ids.len() <= 5);
         assert_eq!(ids.len(), dists.len());
     }
@@ -891,21 +1178,21 @@ mod tests {
     #[test]
     fn test_minhash_lsh_save_load() {
         let mut index = MinHashLSHIndex::new();
-        
+
         let data: Vec<u8> = (0..50 * 8 * 8).map(|i| i as u8).collect();
         index.build(&data, 8, 8, 4, true).unwrap();
-        
+
         // Save to temp file
         let temp_path = "/tmp/test_minhash_lsh.bin";
         index.save(temp_path).unwrap();
-        
+
         // Load from file
         let mut loaded_index = MinHashLSHIndex::new();
         loaded_index.load(temp_path).unwrap();
-        
+
         assert_eq!(loaded_index.count(), index.count());
         assert_eq!(loaded_index.bands, index.bands);
-        
+
         // Cleanup
         std::fs::remove_file(temp_path).unwrap();
     }
@@ -913,23 +1200,23 @@ mod tests {
     #[test]
     fn test_minhash_lsh_get_vector_by_ids() {
         let mut index = MinHashLSHIndex::new();
-        
+
         let data: Vec<u8> = (0..10 * 8 * 8).map(|i| i as u8).collect();
         index.build(&data, 8, 8, 4, true).unwrap();
-        
+
         let ids = vec![0i64, 5, 9];
         let vectors = index.get_vector_by_ids(&ids).unwrap();
-        
+
         assert_eq!(vectors.len(), 3 * 8 * 8);
     }
 
     #[test]
     fn test_bloom_filter() {
         let mut bf = BloomFilter::<u64>::new(100, 0.01);
-        
+
         bf.add(&42);
         bf.add(&100);
-        
+
         assert!(bf.contains(&42));
         assert!(bf.contains(&100));
         assert!(!bf.contains(&999));
@@ -939,28 +1226,120 @@ mod tests {
     fn test_hash_key() {
         let data = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
         let hash = MinHashLSHIndex::get_hash_key(&data, 1, 0);
-        
+
         assert!(hash > 0);
     }
 
     #[test]
     fn test_result_handler() {
         let mut res = MinHashLSHResultHandler::new(5);
-        
+
         res.push(1, 0.9);
         res.push(2, 0.8);
         res.push(3, 0.7);
-        
+
         assert_eq!(res.count(), 3);
         assert!(!res.is_full());
-        
+
         res.push(4, 0.6);
         res.push(5, 0.5);
-        
+
         assert!(res.is_full());
-        
+
         // Should not add more
         res.push(6, 0.4);
         assert_eq!(res.count(), 5);
+    }
+
+    #[test]
+    fn test_jaccard_distance() {
+        let vec1 = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
+        let vec2 = vec![1u8, 2, 3, 4, 5, 6, 7, 8]; // Identical
+        let vec3 = vec![8u8, 7, 6, 5, 4, 3, 2, 1]; // Different
+
+        let dist_same = MinHashLSHIndex::jaccard_distance(&vec1, &vec2, 8);
+        let dist_diff = MinHashLSHIndex::jaccard_distance(&vec1, &vec3, 8);
+
+        // Identical vectors should have distance 0
+        assert!((dist_same - 0.0).abs() < 0.001);
+
+        // Different vectors should have distance > 0
+        assert!(dist_diff > 0.0);
+    }
+
+    #[test]
+    fn test_search_with_jaccard() {
+        let mut index = MinHashLSHIndex::new();
+
+        // Create test data with similar vectors
+        let vec_len = 8;
+        let elem_size = 8;
+        let num_vectors = 50;
+        let mut data = Vec::new();
+
+        // Vector 0: all zeros
+        for _ in 0..vec_len * elem_size {
+            data.push(0u8);
+        }
+
+        // Vector 1: also all zeros (identical to vector 0)
+        for _ in 0..vec_len * elem_size {
+            data.push(0u8);
+        }
+
+        // Remaining vectors: random
+        for i in 2..num_vectors {
+            for j in 0..vec_len * elem_size {
+                data.push(((i * 100 + j) % 256) as u8);
+            }
+        }
+
+        index.build(&data, vec_len, elem_size, 4, true).unwrap();
+
+        // Query with vector 0 (all zeros)
+        let query = vec![0u8; vec_len * elem_size];
+        let (ids, dists) = index.search_with_jaccard(&query, 5, 10, None).unwrap();
+
+        assert!(ids.len() <= 5);
+        assert_eq!(ids.len(), dists.len());
+
+        // First result should have smallest distance (ideally 0 for identical vectors)
+        if !ids.is_empty() && ids[0] >= 0 {
+            assert!(dists[0] >= 0.0 && dists[0] <= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_jaccard_knn_search_by_ids() {
+        let mut index = MinHashLSHIndex::new();
+
+        let vec_len = 8;
+        let elem_size = 8;
+        let num_vectors = 20;
+        let mut data = Vec::new();
+
+        // Create vectors with different patterns
+        for i in 0..num_vectors {
+            for j in 0..vec_len * elem_size {
+                data.push(((i * 10 + j) % 256) as u8);
+            }
+        }
+
+        index.build(&data, vec_len, elem_size, 4, true).unwrap();
+
+        // Query with vector 5
+        let query_start = 5 * vec_len * elem_size;
+        let query_end = query_start + vec_len * elem_size;
+        let query = data[query_start..query_end].to_vec();
+
+        // Candidate IDs (including the correct one)
+        let candidates = vec![0i64, 5, 10, 15];
+        let (ids, dists) = index.jaccard_knn_search_by_ids(&query, &candidates, 3).unwrap();
+
+        assert!(ids.len() <= 3);
+        assert_eq!(ids.len(), dists.len());
+
+        // Vector 5 should be in top results with distance 0
+        assert!(ids.contains(&5));
     }
 }

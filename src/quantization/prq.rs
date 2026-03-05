@@ -1,11 +1,11 @@
 //! Product Residual Quantizer (PRQ) Implementation
-//! 
+//!
 //! Product Additive Quantizer variant that splits the vector space into
 //! multiple orthogonal subspaces and quantizes each with an independent
 //! Residual Quantizer.
 
+use super::rq::{RQConfig, ResidualQuantizer};
 use crate::api::{KnowhereError, Result};
-use super::rq::{ResidualQuantizer, RQConfig};
 
 /// Product Residual Quantizer configuration
 #[derive(Clone, Debug)]
@@ -49,7 +49,9 @@ impl ProductResidualQuantizer {
     /// Create a new ProductResidualQuantizer
     pub fn new(config: PRQConfig) -> Result<Self> {
         if config.d == 0 {
-            return Err(KnowhereError::InvalidArg("dimension must be > 0".to_string()));
+            return Err(KnowhereError::InvalidArg(
+                "dimension must be > 0".to_string(),
+            ));
         }
         if config.nsplits == 0 {
             return Err(KnowhereError::InvalidArg("nsplits must be > 0".to_string()));
@@ -104,9 +106,7 @@ impl ProductResidualQuantizer {
             let mut sub_vectors = Vec::with_capacity(n * self.split_dim);
             for i in 0..n {
                 let vec_start = i * self.config.d + split_idx * self.split_dim;
-                sub_vectors.extend_from_slice(
-                    &vectors[vec_start..vec_start + self.split_dim],
-                );
+                sub_vectors.extend_from_slice(&vectors[vec_start..vec_start + self.split_dim]);
             }
 
             // Train this sub-quantizer
@@ -146,7 +146,7 @@ impl ProductResidualQuantizer {
     pub fn encode_batch(&self, vectors: &[f32], codes: &mut [u8]) -> Result<()> {
         let n = vectors.len() / self.config.d;
         let code_size = self.code_size();
-        
+
         if codes.len() < n * code_size {
             return Err(KnowhereError::InvalidArg(
                 "codes buffer too small".to_string(),
@@ -180,7 +180,8 @@ impl ProductResidualQuantizer {
         for (split_idx, quantizer) in self.quantizers.iter().enumerate() {
             let code_offset = split_idx * quantizer.code_size();
             let sub_code = &code[code_offset..code_offset + quantizer.code_size()];
-            let sub_output = &mut output[split_idx * self.split_dim..(split_idx + 1) * self.split_dim];
+            let sub_output =
+                &mut output[split_idx * self.split_dim..(split_idx + 1) * self.split_dim];
             quantizer.decode(sub_code, sub_output)?;
         }
 
@@ -191,8 +192,9 @@ impl ProductResidualQuantizer {
     pub fn compute_distance(&self, query: &[f32], code: &[u8]) -> f32 {
         // Decode the code and compute L2 distance
         let mut reconstructed = vec![0.0f32; self.config.d];
-        if let Ok(_) = self.decode(code, &mut reconstructed) {
-            query.iter()
+        if self.decode(code, &mut reconstructed).is_ok() {
+            query
+                .iter()
                 .zip(reconstructed.iter())
                 .map(|(a, b)| (a - b).powi(2))
                 .sum::<f32>()
@@ -210,7 +212,7 @@ impl ProductResidualQuantizer {
             let sub_query = &query[split_idx * self.split_dim..(split_idx + 1) * self.split_dim];
             let code_offset = split_idx * quantizer.code_size();
             let sub_code = &code[code_offset..code_offset + quantizer.code_size()];
-            
+
             total_dist += quantizer.compute_distance(sub_query, sub_code);
         }
 
@@ -236,17 +238,19 @@ impl ProductResidualQuantizer {
     pub fn bits_per_subvector(&self) -> usize {
         self.config.nbits
     }
-    
+
     /// Get the approximate memory size in bytes
     pub fn size(&self) -> usize {
         let config_size = std::mem::size_of::<PRQConfig>();
         let quantizers_size = self.quantizers.len() * std::mem::size_of::<ResidualQuantizer>();
-        
+
         // Approximate: each RQ has codebooks
-        let codebook_size = self.quantizers.iter()
+        let codebook_size = self
+            .quantizers
+            .iter()
             .map(|q| q.codebooks.len() * std::mem::size_of::<f32>())
             .sum::<usize>();
-        
+
         config_size + quantizers_size + codebook_size
     }
 }
@@ -276,13 +280,13 @@ mod tests {
             d: 32,
             nsplits: 2,
             msub: 4,
-            nbits: 6,  // Reduced from 8 to 6 (64 codebooks) to work with fewer training vectors
+            nbits: 6, // Reduced from 8 to 6 (64 codebooks) to work with fewer training vectors
             max_beam_size: 5,
         };
         let mut prq = ProductResidualQuantizer::new(config).unwrap();
 
         // Generate training data - need at least as many vectors as codebooks per subquantizer
-        let n_train = 512;  // Increased to ensure enough vectors for k-means
+        let n_train = 512; // Increased to ensure enough vectors for k-means
         let mut train_data = vec![0.0f32; n_train * 32];
         for i in 0..n_train {
             for j in 0..32 {
@@ -303,7 +307,8 @@ mod tests {
         prq.decode(&code, &mut decoded).unwrap();
 
         // The decoded vector should be close to the original
-        let dist: f32 = test_vec.iter()
+        let dist: f32 = test_vec
+            .iter()
             .zip(decoded.iter())
             .map(|(a, b)| (a - b).powi(2))
             .sum();

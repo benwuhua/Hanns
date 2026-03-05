@@ -1,13 +1,13 @@
 //! Bloom Filter Implementation
-//! 
+//!
 //! A space-efficient probabilistic data structure for membership testing.
 //! Based on C++ knowhere implementation: knowhere/comp/bloomfilter.h
 
-use std::io::{Read, Write};
 use std::hash::Hasher;
+use std::io::{Read, Write};
 
 /// Bloom Filter for fast membership testing
-/// 
+///
 /// False positives are possible, but false negatives are not.
 #[derive(Debug, Clone)]
 pub struct BloomFilter<T> {
@@ -26,25 +26,25 @@ pub struct BloomFilter<T> {
 
 impl<T> BloomFilter<T> {
     /// Create a new Bloom Filter
-    /// 
+    ///
     /// # Arguments
     /// * `expected_elements` - Expected number of elements to insert
     /// * `false_positive_prob` - Desired false positive probability (e.g., 0.01 for 1%)
     pub fn new(expected_elements: usize, false_positive_prob: f64) -> Self {
         let n = expected_elements;
         let p = false_positive_prob;
-        
+
         // Calculate optimal m (number of bits) and k (number of hash functions)
         // m = -(n * ln(p)) / (ln(2)^2)
         // k = (m/n) * ln(2)
         let m = ((-(n as f64) * p.ln()) / (2.0_f64.ln().powi(2))).ceil() as usize;
         let k = (((m as f64 / n as f64) * 2.0_f64.ln()).ceil() as usize).max(1);
         let m = m.max(1);
-        
+
         // Allocate bits (rounded up to nearest byte)
-        let bytes = (m + 7) / 8;
+        let bytes = m.div_ceil(8);
         let bits = vec![0u8; bytes];
-        
+
         Self {
             n,
             p,
@@ -89,7 +89,7 @@ impl<T> BloomFilter<T> {
     }
 
     /// Add an element to the filter
-    pub fn add(&mut self, element: &T) 
+    pub fn add(&mut self, element: &T)
     where
         T: serde::Serialize,
     {
@@ -101,10 +101,10 @@ impl<T> BloomFilter<T> {
     }
 
     /// Check if an element might be in the filter
-    /// 
+    ///
     /// Returns true if the element might be in the set (possible false positive),
     /// false if the element is definitely not in the set.
-    pub fn contains(&self, element: &T) -> bool 
+    pub fn contains(&self, element: &T) -> bool
     where
         T: serde::Serialize,
     {
@@ -150,23 +150,23 @@ impl<T> BloomFilter<T> {
     /// Load the Bloom Filter from a reader
     pub fn load<R: Read>(reader: &mut R) -> std::io::Result<Self> {
         let mut buf = [0u8; 8];
-        
+
         reader.read_exact(&mut buf)?;
         let m = usize::from_le_bytes(buf);
-        
+
         reader.read_exact(&mut buf)?;
         let k = usize::from_le_bytes(buf);
-        
+
         reader.read_exact(&mut buf)?;
         let n = usize::from_le_bytes(buf);
-        
+
         reader.read_exact(&mut buf)?;
         let p = f64::from_le_bytes(buf);
-        
-        let bytes = (m + 7) / 8;
+
+        let bytes = m.div_ceil(8);
         let mut bits = vec![0u8; bytes];
         reader.read_exact(&mut bits)?;
-        
+
         Ok(Self {
             n,
             p,
@@ -190,11 +190,11 @@ impl<T> BloomFilter<T> {
         for byte in &self.bits {
             ones += byte.count_ones() as usize;
         }
-        
+
         let m = self.m as f64;
         let k = self.k as f64;
         let x = ones as f64;
-        
+
         // n = -(m/k) * ln(1 - x/m)
         if x >= m {
             self.n
@@ -240,17 +240,17 @@ mod tests {
     #[test]
     fn test_bloom_filter_basic() {
         let mut bf = BloomFilter::<u64>::new(1000, 0.01);
-        
+
         // Add some elements
         for i in 0..100u64 {
             bf.add(&i);
         }
-        
+
         // Check that all added elements are found
         for i in 0..100u64 {
             assert!(bf.contains(&i), "Element {} should be found", i);
         }
-        
+
         // Check that non-added elements are mostly not found (some false positives expected)
         let mut false_positives = 0;
         for i in 1000..1100u64 {
@@ -258,21 +258,25 @@ mod tests {
                 false_positives += 1;
             }
         }
-        
+
         // False positive rate should be around 1%
         let fp_rate = false_positives as f64 / 100.0;
-        assert!(fp_rate < 0.05, "False positive rate {} too high (expected ~1%)", fp_rate);
+        assert!(
+            fp_rate < 0.05,
+            "False positive rate {} too high (expected ~1%)",
+            fp_rate
+        );
     }
 
     #[test]
     fn test_bloom_filter_bytes() {
         let mut bf = BloomFilter::<Vec<u8>>::new(1000, 0.01);
-        
+
         let data1 = vec![1u8, 2, 3, 4];
         let data2 = vec![5u8, 6, 7, 8];
-        
+
         bf.add(&data1);
-        
+
         assert!(bf.contains(&data1));
         assert!(!bf.contains(&data2));
     }
@@ -280,19 +284,19 @@ mod tests {
     #[test]
     fn test_bloom_filter_save_load() {
         let mut bf = BloomFilter::<u64>::new(1000, 0.01);
-        
+
         for i in 0..100u64 {
             bf.add(&i);
         }
-        
+
         // Save to buffer
         let mut buffer = Vec::new();
         bf.save(&mut buffer).unwrap();
-        
+
         // Load from buffer
         let mut cursor = std::io::Cursor::new(buffer);
         let bf2 = BloomFilter::<u64>::load(&mut cursor).unwrap();
-        
+
         // Verify loaded filter works
         for i in 0..100u64 {
             assert!(bf2.contains(&i), "Loaded filter should contain {}", i);
@@ -302,7 +306,7 @@ mod tests {
     #[test]
     fn test_bloom_filter_parameters() {
         let bf = BloomFilter::<u64>::new(10000, 0.001);
-        
+
         assert_eq!(bf.expected_elements(), 10000);
         assert!((bf.false_positive_probability() - 0.001).abs() < 0.0001);
         assert!(bf.memory_usage() > 0);
@@ -313,13 +317,13 @@ mod tests {
     #[test]
     fn test_bloom_filter_clear() {
         let mut bf = BloomFilter::<u64>::new(1000, 0.01);
-        
+
         for i in 0..100u64 {
             bf.add(&i);
         }
-        
+
         bf.clear();
-        
+
         // After clearing, nothing should be found
         for i in 0..100u64 {
             assert!(!bf.contains(&i), "Cleared filter should not contain {}", i);
