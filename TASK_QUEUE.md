@@ -1,13 +1,14 @@
 # Builder 任务队列
-> 最后更新: 2026-03-05 18:15 | 优先级: BUG > PARITY > OPT > BENCH
+> 最后更新: 2026-03-05 19:25 | 优先级: BUG > PARITY > OPT > BENCH
 
 ## 待办 (TODO)
 
 ### P0 (紧急)
-- [ ] **BUG-P0-001**: 修复 `mini_batch_kmeans` SIMD 长度不匹配导致的测试失败
+- [x] **BUG-P0-001**: 修复 `mini_batch_kmeans` SIMD 长度不匹配导致的测试失败 (2026-03-05)
   - 失败用例: `clustering::mini_batch_kmeans::tests::test_mini_batch_kmeans_large_dataset`
   - 现象: `src/simd.rs` 中 `l2_distance`/`l2_distance_sq` 长度断言触发
-  - 验收: 相关 mini-batch-kmeans 测试通过，且不引入其他聚类回归
+  - 修复: 在 `init_centroids`/`find_nearest_centroid`/`process_batch` 中修正切片长度为 dim
+  - 验收: 所有 mini_batch_kmeans 测试通过 (7/7)
 - [ ] **BUG-P0-002**: 修复 `diskann_complete` 批量 add 路径维度切片错误
   - 失败用例: `faiss::diskann_complete::tests::test_diskann_add_batch`
   - 现象: `src/simd.rs` 长度断言触发（8 vs 16）

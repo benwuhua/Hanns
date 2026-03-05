@@ -125,7 +125,7 @@ impl DiskAnnIndex {
     pub fn add_batch(&mut self, vectors: &[f32]) -> usize {
         let n = vectors.len() / self.dim;
         for i in 0..n {
-            self.add(&vectors[i * self.dim..]);
+            self.add(&vectors[i * self.dim..(i + 1) * self.dim]);
         }
         n
     }
