@@ -1,33 +1,16 @@
 # Builder 任务队列
-> 最后更新: 2026-03-05 20:35 | 优先级: BUG > PARITY > OPT > BENCH
+> 最后更新: 2026-03-05 21:22 | 优先级: BUG > PARITY > OPT > BENCH
 
 ## 待办 (TODO)
 
 ### P0 (紧急)
 - [x] **BUG-P0-001**: 修复 `mini_batch_kmeans` SIMD 长度不匹配导致的测试失败 (2026-03-05)
-  - 失败用例: `clustering::mini_batch_kmeans::tests::test_mini_batch_kmeans_large_dataset`
-  - 现象: `src/simd.rs` 中 `l2_distance`/`l2_distance_sq` 长度断言触发
-  - 修复: 在 `init_centroids`/`find_nearest_centroid`/`process_batch` 中修正切片长度为 dim
-  - 验收: 所有 mini_batch_kmeans 测试通过 (7/7)
 - [x] **BUG-P0-002**: 修复 `diskann_complete` 批量 add 路径维度切片错误 (2026-03-05)
-  - 失败用例: `faiss::diskann_complete::tests::test_diskann_add_batch`
-  - 现象: `src/simd.rs` 长度断言触发（8 vs 16）
-  - 修复: 在 `add_batch` 中修正切片长度为 dim
-  - 验收: 所有 diskann_complete 测试通过 (5/5)
 - [x] **BUG-P0-003**: 修复 `ivf_sq_cc` 系列并发/检索路径的维度不一致 (2026-03-05)
-  - 失败用例:
-    - `faiss::ivf_sq_cc::tests::test_ivf_sq_cc_concurrent_add` ✅ 已修复
-    - `faiss::ivf_sq_cc::tests::test_ivf_sq_cc_concurrent_mixed` ✅ 已修复
-    - `faiss::ivf_sq_cc::tests::test_ivf_sq_cc_get_vectors` ✅ 已修复
-    - `faiss::ivf_sq_cc::tests::test_ivf_sq_cc_concurrent_search` ✅ 已修复
-    - `faiss::ivf_sq_cc::tests::test_ivf_sq_cc_train_add_search` ✅ 已修复
-  - 现象: `src/simd.rs` 长度断言触发（4 vs 8 等）
-  - 修复: 在 `find_nearest_cluster` 和 `search` 中修正 centroids 切片长度为 dim
-  - 验收: SIMD 相关测试全部通过 (6/6)
 - [ ] **PARITY-P0-001**: 统一核心索引契约行为（Build/Train/Add/Search/RangeSearch/AnnIterator/GetVectorByIds/Serialize/Deserialize）
   - 验收: 非 GPU 核心索引在契约层行为一致，`docs/PARITY_AUDIT.md` 的相关项变更为 Done。
 - [ ] **PARITY-P0-002**: 修复 FFI 能力声明与运行时不一致问题
-  - 验收: `src/ffi.rs` 索引能力矩阵与实际构造/调用路径一致；无“声明支持但运行时 NotImplemented”错位。
+  - 验收: `src/ffi.rs` 索引能力矩阵与实际构造/调用路径一致；无"声明支持但运行时 NotImplemented"错位。
 
 ### P1 (重要)
 - [ ] **PARITY-P1-000**: 为核心索引实现 AnnIterator 接口（HNSW/IVF/Flat）
