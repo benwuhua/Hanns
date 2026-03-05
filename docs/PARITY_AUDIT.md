@@ -1,9 +1,10 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-05 23:35
-Sync baseline: b284d55 from origin/main
+Last updated: 2026-03-06 00:35
+Sync baseline: 5d81dc6 from origin/main
 
 ## 轮次记录
+- 2026-03-06 00:35: **更新 FFI 能力矩阵** - 标记 HNSW/ScaNN/HNSW-PQ/DiskANN 的 AnnIterator 为 ✅；HNSW GetByID ✅；ScaNN GetByID ⚠️；DiskANN GetByID ⚠️
 - 2026-03-05 23:35: **实现 AnnIterator 接口** - HNSW, ScaNN, HNSW-PQ, DiskANN 四个索引实现 create_ann_iterator，验收标准达成（>=3个索引）
 - 2026-03-05 22:32: 详细对比 C++/Rust 核心接口，发现 IsAdditionalScalarSupported/GetIndexMeta 缺失，AnnIterator 未实现
 - 2026-03-05 21:22: 扫描 C++/Rust 接口对齐状态，确认 AnnIterator 未实现但已定义，HNSW 实现核心接口
@@ -35,12 +36,12 @@ Risk levels:
 |---|---|---|---|---|---|
 | Core contract | `include/knowhere/index/index.h`, `include/knowhere/index/index_node.h` | `src/index.rs`, `src/api/search.rs` | Partial | P0 | unify lifecycle contract and fallback semantics; AnnIterator trait implemented (2026-03-05) |
 | Index factory/legality | `include/knowhere/index/index_factory.h`, `include/knowhere/index/index_table.h`, `include/knowhere/comp/knowhere_check.h` | `src/api/index.rs`, `src/faiss/mod.rs`, `src/ffi.rs` | Partial | P1 | centralized legal matrix for index/datatype/metric |
-| HNSW | `src/index/hnsw/faiss_hnsw.cc` | `src/faiss/hnsw.rs` | Partial | P1 | ✅ get_vector_by_ids (2026-03-05), ✅ AnnIterator (2026-03-05); range search parity remaining |
+| HNSW | `src/index/hnsw/faiss_hnsw.cc` | `src/faiss/hnsw.rs` | Partial | P1 | ✅ AnnIterator (2026-03-05), ✅ get_vector_by_ids (2026-03-05); range search parity remaining |
 | IVF core | `src/index/ivf/ivf.cc`, `src/index/ivf/ivf_config.h` | `src/faiss/ivf.rs`, `src/faiss/ivf_flat.rs`, `src/faiss/ivfpq.rs`, `src/api/index.rs` | Partial | P1 | parameter coverage and edge behavior alignment; SIMD slice fix in ivf_sq_cc (2026-03-05) |
 | RaBitQ | `src/index/ivf/ivfrbq_wrapper.*` | `src/faiss/ivf_rabitq.rs`, `src/faiss/rabitq_ffi.rs` | Partial | P1 | query-bits and config boundary consistency |
-| DiskANN | `src/index/diskann/diskann.cc`, `src/index/diskann/diskann_config.h` | `src/faiss/diskann.rs`, `src/faiss/diskann_complete.rs` | Partial | P1 | ✅ AnnIterator (inherent impl); lifecycle parity and config semantics; add_batch SIMD slice fix (2026-03-05) |
+| DiskANN | `src/index/diskann/diskann.cc`, `src/index/diskann/diskann_config.h` | `src/faiss/diskann.rs`, `src/faiss/diskann_complete.rs` | Partial | P1 | ✅ AnnIterator (inherent impl); lifecycle parity and config semantics; ⚠️ get_vector_by_ids; add_batch SIMD slice fix (2026-03-05) |
 | AISAQ | `src/index/diskann/diskann_aisaq.cc`, `src/index/diskann/aisaq_config.h` | `src/faiss/diskann_aisaq.rs`, `src/faiss/aisaq.rs` | Partial | P1 | parameter and file-layout behavior alignment |
-| ScaNN | - | `src/faiss/scann.rs` | Partial | P1 | ✅ AnnIterator (2026-03-05), get_vector_by_ids, has_raw_data |
+| ScaNN | - | `src/faiss/scann.rs` | Partial | P1 | ✅ AnnIterator (2026-03-05), ⚠️ get_vector_by_ids, has_raw_data |
 | HNSW-PQ | - | `src/faiss/hnsw_pq.rs` | Partial | P2 | ✅ AnnIterator (2026-03-05); has_raw_data=false (lossy) |
 | Sparse | `src/index/sparse/sparse_index_node.cc`, `src/index/sparse/sparse_inverted_index.h` | `src/faiss/sparse_inverted.rs`, `src/faiss/sparse_wand.rs`, `src/faiss/sparse_wand_cc.rs` | Partial | P2 | iterator/filter behavior and parameter parity |
 | MinHash | `src/index/minhash/minhash_index_node.cc`, `src/index/minhash/minhash_lsh_config.h` | `src/index/minhash_lsh.rs`, `src/ffi/minhash_lsh_ffi.rs`, `src/api/index.rs` | Partial | P2 | `mh_*` parameter naming/validation parity |

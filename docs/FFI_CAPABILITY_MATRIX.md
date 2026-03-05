@@ -1,6 +1,6 @@
 # FFI Capability Matrix
 
-Last updated: 2026-03-05 20:40
+Last updated: 2026-03-06 00:35
 
 ## Purpose
 
@@ -18,12 +18,13 @@ Document the capability matrix for all FFI-exposed index types, showing which op
 | Index Type | Train | Add | Search | Range Search | Ann Iterator | Get By ID | Serialize | Deserialize |
 |---|---|---|---|---|---|---|---|---|
 | Flat | ✅ | ✅ | ✅ | ⚠️ | ❌ | ✅ | ✅ | ✅ |
-| HNSW | ✅ | ✅ | ✅ | ⚠️ | ❌ | ⚠️ | ✅ | ✅ |
-| ScaNN | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ⚠️ | ⚠️ |
+| HNSW | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ |
+| ScaNN | ✅ | ✅ | ✅ | ❌ | ✅ | ⚠️ | ⚠️ | ⚠️ |
 | HNSW-PRQ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ⚠️ | ⚠️ |
 | IVF-RaBitQ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ⚠️ | ⚠️ |
 | HNSW-SQ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ⚠️ | ⚠️ |
-| HNSW-PQ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ⚠️ | ⚠️ |
+| HNSW-PQ | ✅ | ✅ | ✅ | ❌ | ✅ | ❌ | ⚠️ | ⚠️ |
+| DiskANN | ✅ | ✅ | ✅ | ❌ | ✅ | ⚠️ | ⚠️ | ⚠️ |
 | IVF-SQ8 | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ⚠️ | ⚠️ |
 | BinFlat | ✅ | ✅ | ✅ | ⚠️ | ❌ | ❌ | ✅ | ✅ |
 | BinaryHNSW | ✅ | ✅ | ✅ | ⚠️ | ❌ | ❌ | ⚠️ | ⚠️ |
@@ -41,9 +42,14 @@ Document the capability matrix for all FFI-exposed index types, showing which op
 - Need comprehensive testing for radius-based filtering
 
 ### Ann Iterator
-- New interface added (2026-03-05) to match C++ knowhere
-- No indexes implement it yet
-- Planned for HNSW and IVF families first
+- Interface added (2026-03-05) to match C++ knowhere
+- **Implemented indexes (2026-03-05 23:35):** HNSW, ScaNN, HNSW-PQ, DiskANN
+- Implementation locations:
+  - HNSW: `src/faiss/hnsw.rs:2470`
+  - ScaNN: `src/faiss/scann.rs:1005`
+  - HNSW-PQ: `src/faiss/hnsw_pq.rs:729`
+  - DiskANN: `src/faiss/diskann.rs:961` (inherent impl)
+- Planned for IVF family next
 
 ### Get Vector By ID
 - Only indexes that store raw data (Flat, IVF-Flat variants) can fully support
@@ -86,4 +92,5 @@ cargo test serialize --lib
 
 ## Changes
 
+- 2026-03-06: Updated AnnIterator status for HNSW/ScaNN/HNSW-PQ/DiskANN (now ✅); HNSW GetByID ✅; ScaNN GetByID ⚠️
 - 2026-03-05: Initial matrix creation, added AnnIterator interface
