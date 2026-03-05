@@ -206,7 +206,7 @@ impl IvfSqCcIndex {
         let mut best = 0;
 
         for c in 0..nlist {
-            let dist = l2_distance(vector, &centroids[c * dim..]);
+            let dist = l2_distance(vector, &centroids[c * dim..(c + 1) * dim]);
             if dist < min_dist {
                 min_dist = dist;
                 best = c;
@@ -273,7 +273,7 @@ impl IvfSqCcIndex {
 
         // Find nearest nprobe clusters
         let mut cluster_dists: Vec<(usize, f32)> = (0..self.nlist)
-            .map(|c| (c, l2_distance(query, &centroids[c * self.dim..])))
+            .map(|c| (c, l2_distance(query, &centroids[c * self.dim..(c + 1) * self.dim])))
             .collect();
 
         cluster_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());

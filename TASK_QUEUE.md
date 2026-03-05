@@ -1,5 +1,5 @@
 # Builder 任务队列
-> 最后更新: 2026-03-05 19:25 | 优先级: BUG > PARITY > OPT > BENCH
+> 最后更新: 2026-03-05 19:28 | 优先级: BUG > PARITY > OPT > BENCH
 
 ## 待办 (TODO)
 
@@ -9,10 +9,11 @@
   - 现象: `src/simd.rs` 中 `l2_distance`/`l2_distance_sq` 长度断言触发
   - 修复: 在 `init_centroids`/`find_nearest_centroid`/`process_batch` 中修正切片长度为 dim
   - 验收: 所有 mini_batch_kmeans 测试通过 (7/7)
-- [ ] **BUG-P0-002**: 修复 `diskann_complete` 批量 add 路径维度切片错误
+- [x] **BUG-P0-002**: 修复 `diskann_complete` 批量 add 路径维度切片错误 (2026-03-05)
   - 失败用例: `faiss::diskann_complete::tests::test_diskann_add_batch`
   - 现象: `src/simd.rs` 长度断言触发（8 vs 16）
-  - 验收: `diskann_complete` 全量单测通过
+  - 修复: 在 `add_batch` 中修正切片长度为 dim
+  - 验收: 所有 diskann_complete 测试通过 (5/5)
 - [ ] **BUG-P0-003**: 修复 `ivf_sq_cc` 系列并发/检索路径的维度不一致
   - 失败用例:
     - `faiss::ivf_sq_cc::tests::test_ivf_sq_cc_concurrent_add`
