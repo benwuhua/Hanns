@@ -38,7 +38,7 @@ fn ivf_flat_nprobe_recall_tradeoff() {
         index_type: IndexType::IvfFlat,
         dim: DIM,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams::ivf(NLIST, 1), // nprobe will be set in search
     };
 

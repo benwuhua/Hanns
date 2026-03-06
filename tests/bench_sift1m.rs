@@ -69,7 +69,7 @@ fn benchmark_flat(dataset: &SiftDataset, num_queries: usize) -> BenchmarkResult 
         index_type: IndexType::Flat,
         dim: dataset.dim(),
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -163,7 +163,7 @@ fn benchmark_hnsw(dataset: &SiftDataset, num_queries: usize) -> BenchmarkResult 
         index_type: IndexType::Hnsw,
         dim: dataset.dim(),
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams {
             m: Some(32),
             ef_construction: Some(400),
@@ -266,7 +266,7 @@ fn benchmark_ivf_flat(dataset: &SiftDataset, num_queries: usize) -> BenchmarkRes
         index_type: IndexType::IvfFlat,
         dim: dataset.dim(),
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),
@@ -368,7 +368,7 @@ fn benchmark_ivf_pq(dataset: &SiftDataset, num_queries: usize) -> BenchmarkResul
         index_type: IndexType::IvfPq,
         dim: dataset.dim(),
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),
@@ -468,7 +468,7 @@ fn benchmark_ivf_sq8(dataset: &SiftDataset, num_queries: usize) -> BenchmarkResu
         index_type: IndexType::IvfSq8,
         dim: dataset.dim(),
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),

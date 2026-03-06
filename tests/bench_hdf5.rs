@@ -82,7 +82,7 @@ fn benchmark_flat(dataset: &Hdf5Dataset, num_queries: usize) -> BenchmarkResult 
         index_type: IndexType::Flat,
         dim: dataset.dim(),
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -160,7 +160,7 @@ fn benchmark_hnsw(dataset: &Hdf5Dataset, num_queries: usize) -> BenchmarkResult 
         index_type: IndexType::Hnsw,
         dim: dataset.dim(),
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),
@@ -248,7 +248,7 @@ fn benchmark_ivf_flat(dataset: &Hdf5Dataset, num_queries: usize) -> BenchmarkRes
         index_type: IndexType::IvfFlat,
         dim: dataset.dim(),
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist),
             nprobe: Some((nlist as f64 * 0.05) as usize), // 5% of clusters

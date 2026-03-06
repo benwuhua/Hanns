@@ -30,6 +30,7 @@ fn analyze_distribution(name: &str, data: &[f32], dim: usize) {
     let config = IndexConfig {
         index_type: IndexType::IvfFlat,
         metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
         dim,
         params: IndexParams::ivf(NLIST, NPROBE),
     };

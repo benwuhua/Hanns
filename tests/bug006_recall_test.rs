@@ -28,6 +28,7 @@ fn test_hnsw_recall_after_heuristic_fix() {
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
         dim,
         params: Default::default(),
     };

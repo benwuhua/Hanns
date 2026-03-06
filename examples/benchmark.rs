@@ -65,6 +65,7 @@ fn benchmark_hnsw_index() {
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
         dim: DIM,
         params,
     };
@@ -119,6 +120,7 @@ fn benchmark_ivfpq_index() {
     let config = IndexConfig {
         index_type: IndexType::IvfFlat,
         metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
         dim: DIM,
         params,
     };
@@ -172,8 +174,8 @@ fn benchmark_diskann_index() {
     let config = IndexConfig {
         index_type: IndexType::DiskAnn,
         metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
         dim: DIM,
-            data_type: crate::api::DataType::Float,
         params: IndexParams::default(),
     };
 

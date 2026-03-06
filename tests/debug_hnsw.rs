@@ -48,7 +48,7 @@ fn debug_hnsw_recall() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams {
             m: Some(32),
             ef_construction: Some(400),

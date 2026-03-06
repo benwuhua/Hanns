@@ -136,7 +136,7 @@ fn benchmark_flat(base: &[f32], query: &[f32], ground_truth: &[Vec<i32>]) -> Mem
         index_type: IndexType::Flat,
         dim: DIM,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -212,7 +212,7 @@ fn benchmark_hnsw(base: &[f32], query: &[f32], ground_truth: &[Vec<i32>]) -> Mem
         index_type: IndexType::Hnsw,
         dim: DIM,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams {
             m: Some(m),
             ef_construction: Some(ef_construction),
@@ -310,7 +310,7 @@ fn benchmark_ivf_flat(
         index_type: IndexType::IvfFlat,
         dim: DIM,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),

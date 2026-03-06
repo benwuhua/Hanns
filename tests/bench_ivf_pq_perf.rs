@@ -33,6 +33,7 @@ fn test_ivf_pq_perf_50k() {
     let config = IndexConfig {
         index_type: IndexType::IvfPq,
         metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
         dim,
         params: IndexParams {
             nlist: Some(nlist),
@@ -130,6 +131,7 @@ fn test_ivf_pq_perf_10k() {
     let config = IndexConfig {
         index_type: IndexType::IvfPq,
         metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
         dim,
         params: IndexParams {
             nlist: Some(nlist),

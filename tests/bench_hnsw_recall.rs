@@ -95,7 +95,7 @@ fn benchmark_hnsw_ef_search(
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams {
             m: Some(32),                    // OPT-021: M=32 for excellent connectivity
             ef_construction: Some(600),     // High ef_construction for better graph

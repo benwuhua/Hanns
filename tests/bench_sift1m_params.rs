@@ -138,7 +138,7 @@ fn bench_hnsw(dataset: &SiftDataset, nq: usize) -> Vec<ParamResult> {
             index_type: IndexType::Hnsw,
             dim: dataset.dim(),
             metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+            data_type: knowhere_rs::api::DataType::Float,
             params: IndexParams {
                 m: Some(32),
                 ef_construction: Some(400),
@@ -219,7 +219,7 @@ fn bench_ivf_flat(dataset: &SiftDataset, nq: usize) -> Vec<ParamResult> {
             index_type: IndexType::IvfFlat,
             dim: dataset.dim(),
             metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+            data_type: knowhere_rs::api::DataType::Float,
             params: IndexParams {
                 nlist: Some(nlist),
                 nprobe: Some(nprobe),
@@ -300,7 +300,7 @@ fn bench_ivf_pq(dataset: &SiftDataset, nq: usize) -> Vec<ParamResult> {
             index_type: IndexType::IvfPq,
             dim: dataset.dim(),
             metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+            data_type: knowhere_rs::api::DataType::Float,
             params: IndexParams {
                 nlist: Some(nlist),
                 nprobe: Some(nprobe),
@@ -384,7 +384,7 @@ fn bench_ivf_sq8(dataset: &SiftDataset, nq: usize) -> Vec<ParamResult> {
             index_type: IndexType::IvfSq8,
             dim: dataset.dim(),
             metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+            data_type: knowhere_rs::api::DataType::Float,
             params: IndexParams {
                 nlist: Some(nlist),
                 nprobe: Some(nprobe),

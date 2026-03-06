@@ -25,7 +25,7 @@ fn main() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams {
             m: Some(m),
             ef_construction: Some(ef_construction),

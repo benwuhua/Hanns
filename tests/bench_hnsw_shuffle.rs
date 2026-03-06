@@ -117,6 +117,7 @@ fn benchmark_shuffle_build() {
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
         dim: DIM,
         params,
     };

@@ -82,7 +82,7 @@ fn build_hnsw_index(
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams {
             m: Some(m),
             ef_construction: Some(ef_construction),
@@ -326,7 +326,7 @@ fn test_adaptive_ef_config_api() {
         index_type: IndexType::Hnsw,
         dim: 128,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),
@@ -343,7 +343,7 @@ fn test_adaptive_ef_config_api() {
         index_type: IndexType::Hnsw,
         dim: 128,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),

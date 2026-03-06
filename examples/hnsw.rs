@@ -9,8 +9,8 @@ fn main() {
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
-        dim: 4,
         data_type: knowhere_rs::api::DataType::Float,
+        dim: 4,
         params,
     };
 

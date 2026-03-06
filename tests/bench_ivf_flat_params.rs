@@ -152,6 +152,7 @@ fn benchmark_ivf_flat_config(
         index_type: IndexType::IvfFlat,
         dim,
         metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
         params,
     };
 

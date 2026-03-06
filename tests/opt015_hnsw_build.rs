@@ -30,7 +30,7 @@ fn test_hnsw_build_performance() {
         index_type: IndexType::Hnsw,
         dim: 128,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),

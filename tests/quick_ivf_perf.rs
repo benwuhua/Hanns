@@ -30,6 +30,7 @@ fn test_ivf_flat_quick_perf_50k() {
     let config = IndexConfig {
         index_type: IndexType::IvfFlat,
         metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
         dim,
         params: IndexParams::ivf(nlist, nprobe),
     };
@@ -114,6 +115,7 @@ fn test_ivf_flat_quick_perf_10k() {
     let config = IndexConfig {
         index_type: IndexType::IvfFlat,
         metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
         dim,
         params: IndexParams::ivf(nlist, nprobe),
     };

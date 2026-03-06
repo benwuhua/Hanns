@@ -28,6 +28,7 @@ fn bench_hnsw_serial(n: usize, dim: usize, m: usize, ef_construction: usize) -> 
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
         dim,
         params: IndexParams {
             m: Some(m),
@@ -63,6 +64,7 @@ fn bench_hnsw_parallel(
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
         dim,
         params: IndexParams {
             m: Some(m),
@@ -313,8 +315,8 @@ fn test_hnsw_parallel_error_handling() {
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
         dim: 128,
-            data_type: crate::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),
@@ -375,8 +377,8 @@ fn test_hnsw_parallel_api_compatibility() {
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
         dim: 64,
-            data_type: crate::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),
@@ -462,8 +464,8 @@ fn test_hnsw_batch_size_optimization() {
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
         dim: 128,
-            data_type: crate::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),
@@ -511,8 +513,8 @@ fn test_hnsw_parallel_performance_target() {
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
         dim: 128,
-            data_type: crate::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),

@@ -34,7 +34,7 @@ fn test_hnsw_get_vector_by_ids() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -97,7 +97,7 @@ fn test_hnsw_get_vector_by_ids_errors() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -139,7 +139,7 @@ fn test_hnsw_ann_iterator() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -188,7 +188,7 @@ fn test_hnsw_serialize_deserialize() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -251,7 +251,7 @@ fn test_hnsw_range_search() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams::default(),
     };
 

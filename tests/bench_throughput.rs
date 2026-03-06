@@ -55,7 +55,7 @@ fn generate_ground_truth(base: &[f32], queries: &[f32], dim: usize, top_k: usize
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -103,7 +103,7 @@ fn benchmark_flat_throughput(
         index_type: IndexType::Flat,
         dim: DIM,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -214,7 +214,7 @@ fn benchmark_hnsw_throughput(
         index_type: IndexType::Hnsw,
         dim: DIM,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams::hnsw(16, 200, 0.5),
     };
 
@@ -326,7 +326,7 @@ fn benchmark_ivf_flat_throughput(
         index_type: IndexType::IvfFlat,
         dim: DIM,
         metric_type: MetricType::L2,
-            data_type: crate::api::DataType::Float,
+        data_type: knowhere_rs::api::DataType::Float,
         params: IndexParams::ivf(100, 20),
     };
 
