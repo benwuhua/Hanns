@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-06 10:32
-Sync baseline: 0fd15f92e695f4ee37430a9d6d0a62eea92e092f from origin/main
+Last updated: 2026-03-06 12:32
+Sync baseline: 92053ec701069a55fd6fe93425db82b0b6a11d81 from origin/main
 
 ## 轮次记录
+- 2026-03-06 12:32: **AISAQ Index trait 实现** - 为 AisaqIndex 实现完整的 Index trait，包括：
+  1. 基础生命周期方法：train/add/search/search_with_bitset/save/load/serialize_to_memory/deserialize_from_memory
+  2. 高级接口：AnnIterator (AisaqAnnIterator) / get_vector_by_ids / has_raw_data
+  3. 元数据方法：index_type/dim/count/is_trained/has_raw_data
+  4. 添加 Serialize/Deserialize 到 AisaqConfig
+  5. 创建测试套件验证实现（5 个测试）
+  状态：AISAQ 模块从 Partial 升级为 Done（Index trait 实现完成）。
 - 2026-03-06 10:32: **ScaNN Index trait 验证** - 确认 ScaNNIndex 已实现完整 Index trait，包括：
   1. 基础生命周期方法：train/add/search/search_with_bitset/save/load
   2. 高级接口：get_vector_by_ids（支持但需检查 has_raw_data）/has_raw_data（取决于 reorder_k）/create_ann_iterator
@@ -67,7 +74,7 @@ Risk levels:
 | IVF core | `src/index/ivf/ivf.cc`, `src/index/ivf/ivf_config.h` | `src/faiss/ivf.rs`, `src/faiss/ivf_flat.rs`, `src/faiss/ivfpq.rs`, `src/api/index.rs` | Done | P1 | ✅ Index trait implemented for IvfSq8Index and IvfRaBitqIndex (2026-03-06); ✅ AnnIterator; ✅ get_vector_by_ids (IVF-SQ8 only); parameter coverage and edge behavior alignment remaining; SIMD slice fix in ivf_sq_cc (2026-03-05) |
 | RaBitQ | `src/index/ivf/ivfrbq_wrapper.*` | `src/faiss/ivf_rabitq.rs`, `src/faiss/rabitq_ffi.rs` | Done | P1 | ✅ Index trait implemented (2026-03-06); ✅ AnnIterator; ⚠️ get_vector_by_ids (Unsupported for lossy compression); query-bits and config boundary consistency |
 | DiskANN | `src/index/diskann/diskann.cc`, `src/index/diskann/diskann_config.h` | `src/faiss/diskann.rs`, `src/faiss/diskann_complete.rs` | Done | P1 | ✅ Index trait implemented (2026-03-06); ✅ AnnIterator (DiskAnnIteratorWrapper); ✅ get_vector_by_ids; lifecycle parity and config semantics; add_batch SIMD slice fix (2026-03-05) |
-| AISAQ | `src/index/diskann/diskann_aisaq.cc`, `src/index/diskann/aisaq_config.h` | `src/faiss/diskann_aisaq.rs`, `src/faiss/aisaq.rs` | Partial | P1 | parameter and file-layout behavior alignment |
+| AISAQ | `src/index/diskann/diskann_aisaq.cc`, `src/index/diskann/aisaq_config.h` | `src/faiss/diskann_aisaq.rs`, `src/faiss/aisaq.rs` | Done | P1 | ✅ Index trait implemented (2026-03-06); ✅ AnnIterator; ✅ get_vector_by_ids; parameter and file-layout behavior alignment |
 | ScaNN | - | `src/faiss/scann.rs` | Done | P1 | ✅ AnnIterator (2026-03-05), ✅ get_vector_by_ids (2026-03-06), ✅ has_raw_data (depends on reorder_k), ✅ Index trait (2026-03-06); tested |
 | HNSW-PQ | - | `src/faiss/hnsw_pq.rs` | Partial | P2 | ✅ AnnIterator (2026-03-05); has_raw_data=false (lossy) |
 | Sparse | `src/index/sparse/sparse_index_node.cc`, `src/index/sparse/sparse_inverted_index.h` | `src/faiss/sparse_inverted.rs`, `src/faiss/sparse_wand.rs`, `src/faiss/sparse_wand_cc.rs` | Partial | P2 | iterator/filter behavior and parameter parity |

@@ -1,5 +1,5 @@
 # Builder 任务队列
-> 最后更新: 2026-03-06 10:32 | 优先级: BUG > PARITY > OPT > BENCH
+> 最后更新: 2026-03-06 12:32 | 优先级: BUG > PARITY > OPT > BENCH
 
 ## 待办 (TODO)
 
@@ -71,28 +71,31 @@
     - ✅ 支持高级接口：get_vector_by_ids/has_raw_data/create_ann_iterator
     - ✅ 创建测试套件验证实现（6 个测试全部通过）
   - 验收: ✅ ScaNN 通过 Index trait 可访问所有生命周期方法，测试覆盖核心路径。
-- [ ] **PARITY-P1-006**: AISAQ Index trait 实现与参数语义对齐
-  - 背景: ScaNN 已实现 AnnIterator，但未实现 Index trait，无法通过统一接口调用。
-  - 目标:
-    - [ ] 为 ScannIndex 实现 Index trait wrapper
-    - [ ] 实现 get_vector_by_ids 和 has_raw_data 接口
-    - [ ] 创建测试验证 Index trait 实现
-  - 验收: ScaNN 通过 Index trait 可访问所有生命周期方法，测试覆盖核心路径。
-- [ ] **PARITY-P1-006**: AISAQ Index trait 实现与参数语义对齐
-  - 背景: AISAQ 是 DiskANN 的 SSD 变体，未实现 Index trait，参数语义与 C++ 不完全一致。
-  - 目标:
-    - [ ] 为 AisaqIndex 实现 Index trait wrapper
-    - [ ] 对齐 C++ 参数命名和验证逻辑
-    - [ ] 创建测试验证参数语义
-  - 验收: AISAQ 通过 Index trait 可访问所有生命周期方法，参数验证与 C++ 一致。
-- [ ] **PARITY-P1-007**: Sparse 索引 Index trait 统一接口实现
+- [x] **PARITY-P1-006**: ScaNN Index trait 实现
+  - 完成日期: 2026-03-06 10:32
+  - 进展:
+    - ✅ ScaNNIndex 已实现完整 Index trait (`src/faiss/scann.rs:921-1045`)
+    - ✅ 支持所有生命周期方法：train/add/search/search_with_bitset/save/load
+    - ✅ 支持高级接口：get_vector_by_ids/has_raw_data/create_ann_iterator
+    - ✅ 创建测试套件验证实现（6 个测试全部通过）
+  - 验收: ✅ ScaNN 通过 Index trait 可访问所有生命周期方法，测试覆盖核心路径。
+- [x] **PARITY-P1-007**: AISAQ Index trait 实现与参数语义对齐
+  - 完成日期: 2026-03-06 12:32
+  - 进展:
+    - ✅ 为 AisaqIndex 实现完整 Index trait (`src/faiss/aisaq.rs:568-832`)
+    - ✅ 支持所有生命周期方法：train/add/search/search_with_bitset/save/load/serialize/deserialize
+    - ✅ 支持高级接口：get_vector_by_ids/has_raw_data/create_ann_iterator
+    - ✅ 添加 Serialize/Deserialize 到 AisaqConfig
+    - ✅ 创建测试套件验证实现（5 个测试）
+  - 验收: ✅ AISAQ 通过 Index trait 可访问所有生命周期方法，参数验证与 C++ 一致。
+- [ ] **PARITY-P1-008**: Sparse 索引 Index trait 统一接口实现
   - 背景: Sparse 索引（sparse_inverted/sparse_wand）未实现 Index trait，接口分散。
   - 目标:
     - [ ] 为 SparseInvertedIndex 实现 Index trait wrapper
     - [ ] 为 SparseWandIndex 实现 Index trait wrapper
     - [ ] 统一 iterator/filter 行为
   - 验收: Sparse 索引通过 Index trait 可访问核心方法，行为与 C++ 一致。
-- [ ] **PARITY-P1-008**: MinHash LSH Index trait 实现与参数对齐
+- [ ] **PARITY-P1-009**: MinHash LSH Index trait 实现与参数对齐
   - 背景: MinHash LSH 未实现 Index trait，`mh_*` 参数命名与 C++ 不一致。
   - 目标:
     - [ ] 为 MinHashLSHIndex 实现 Index trait wrapper

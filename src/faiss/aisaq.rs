@@ -13,12 +13,14 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet};
 
+use serde::{Deserialize, Serialize};
+
 use crate::api::{IndexConfig, KnowhereError, MetricType, Result, SearchResult};
 use crate::faiss::pq::PqEncoder;
 
 /// AISAQ configuration parameters
 /// Reference: C++ knowhere `AisaqConfig`
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AisaqConfig {
     /// Graph degree (max neighbors per node), typically 48-150
     pub max_degree: usize,
@@ -537,5 +539,533 @@ mod tests {
         index_ip.add(&data).unwrap();
         let result_ip = index_ip.search(&[1.0, 1.0], 1).unwrap();
         assert!(!result_ip.distances.is_empty());
+    }
+}
+// ============================================================================
+// Index Trait Implementation for AisaqIndex
+// ============================================================================
+
+use std::fs::File;
+use std::io::{Read, Write};
+
+use bincode;
+
+use crate::bitset::BitsetView;
+use crate::dataset::Dataset;
+use crate::index::{AnnIterator, Index, IndexError, SearchResult as IndexSearchResult};
+
+/// AnnIterator implementation for AISAQ
+pub struct AisaqAnnIterator {
+    results: Vec<(i64, f32)>,
+    pos: usize,
+}
+
+impl AnnIterator for AisaqAnnIterator {
+    fn next(&mut self) -> Option<(i64, f32)> {
+        if self.pos >= self.results.len() {
+            return None;
+        }
+        let result = self.results[self.pos];
+        self.pos += 1;
+        Some(result)
+    }
+}
+
+impl Index for AisaqIndex {
+    fn index_type(&self) -> &str {
+        "AISAQ"
+    }
+
+    fn dim(&self) -> usize {
+        self.dim
+    }
+
+    fn count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    fn is_trained(&self) -> bool {
+        self.is_trained
+    }
+
+    fn train(&mut self, dataset: &Dataset) -> std::result::Result<(), IndexError> {
+        let vectors = dataset.vectors();
+        self.train(vectors)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn add(&mut self, dataset: &Dataset) -> std::result::Result<usize, IndexError> {
+        let vectors = dataset.vectors();
+        self.add(vectors)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        Ok(self.nodes.len())
+    }
+
+    fn search(&self, query: &Dataset, top_k: usize) -> std::result::Result<IndexSearchResult, IndexError> {
+        let query_vectors = query.vectors();
+        if query_vectors.len() / self.dim != 1 {
+            return Err(IndexError::DimMismatch);
+        }
+
+        let result = self.search(query_vectors, top_k)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+
+        Ok(IndexSearchResult::new(
+            result.ids,
+            result.distances,
+            result.elapsed_ms,
+        ))
+    }
+
+    fn search_with_bitset(
+        &self,
+        query: &Dataset,
+        top_k: usize,
+        bitset: &BitsetView,
+    ) -> std::result::Result<IndexSearchResult, IndexError> {
+        let query_vectors = query.vectors();
+        if query_vectors.len() / self.dim != 1 {
+            return Err(IndexError::DimMismatch);
+        }
+
+        let result = self.search(query_vectors, top_k)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+
+        // Filter results
+        let mut filtered_ids = Vec::new();
+        let mut filtered_distances = Vec::new();
+        for (id, dist) in result.ids.iter().zip(result.distances.iter()) {
+            let idx = *id as usize;
+            if idx < bitset.len() && !bitset.get(idx) {
+                filtered_ids.push(*id);
+                filtered_distances.push(*dist);
+            }
+        }
+
+        Ok(IndexSearchResult::new(
+            filtered_ids,
+            filtered_distances,
+            result.elapsed_ms,
+        ))
+    }
+
+    fn get_vector_by_ids(&self, ids: &[i64]) -> std::result::Result<Vec<f32>, IndexError> {
+        let vectors = self.get_vector_by_ids(ids)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        // Flatten results (Vec<Vec<f32>> -> flat Vec<f32>)
+        let mut result = Vec::with_capacity(ids.len() * self.dim);
+        for vec in vectors {
+            result.extend_from_slice(&vec);
+        }
+        Ok(result)
+    }
+
+    fn has_raw_data(&self) -> bool {
+        true
+    }
+
+    fn save(&self, path: &str) -> std::result::Result<(), IndexError> {
+        let mut file = File::create(path)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+
+        // Serialize index metadata
+        let metadata = SerializedAisaqIndex {
+            version: 1,
+            config: self.config.clone(),
+            metric_type: self.metric_type,
+            dim: self.dim,
+            entry_points: self.entry_points.clone(),
+            is_trained: self.is_trained,
+            node_count: self.nodes.len(),
+        };
+
+        let metadata_bytes = bincode::serialize(&metadata)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        
+        file.write_all(&metadata_bytes)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+
+        // Serialize node data
+        for node in &self.nodes {
+            // Vector data
+            for &v in &node.data {
+                file.write_all(&v.to_le_bytes())
+                    .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+            }
+            // PQ code (if any)
+            if let Some(ref pq_code) = node.pq_code {
+                let len = pq_code.len() as u32;
+                file.write_all(&len.to_le_bytes())
+                    .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+                file.write_all(pq_code)
+                    .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+            } else {
+                let len = 0u32;
+                file.write_all(&len.to_le_bytes())
+                    .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+            }
+            // Neighbors
+            let neighbor_count = node.neighbors.len() as u32;
+            file.write_all(&neighbor_count.to_le_bytes())
+                .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+            for neighbor in &node.neighbors {
+                file.write_all(&(*neighbor as u32).to_le_bytes())
+                    .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+            }
+        }
+
+        file.flush()
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        Ok(())
+    }
+
+    fn load(&mut self, path: &str) -> std::result::Result<(), IndexError> {
+        let mut file = File::open(path)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+
+        // Read metadata
+        let mut metadata_len_bytes = [0u8; 8];
+        file.read_exact(&mut metadata_len_bytes)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        let metadata_len = u64::from_le_bytes(metadata_len_bytes) as usize;
+        let mut metadata_bytes = vec![0u8; metadata_len];
+        file.read_exact(&mut metadata_bytes)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        let metadata: SerializedAisaqIndex = bincode::deserialize(&metadata_bytes)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+
+        if metadata.version != 1 {
+            return Err(IndexError::Unsupported(format!(
+                "Unsupported AISAQ metadata version {}",
+                metadata.version
+            )));
+        }
+
+        self.config = metadata.config;
+        self.metric_type = metadata.metric_type;
+        self.dim = metadata.dim;
+        self.entry_points = metadata.entry_points;
+        self.is_trained = metadata.is_trained;
+
+        // Read node data
+        let node_count = metadata.node_count;
+        self.nodes = Vec::with_capacity(node_count);
+
+        for _ in 0..node_count {
+            // Read vector data
+            let mut vector = vec![0.0f32; self.dim];
+            for v in &mut vector {
+                let mut bytes = [0u8; 4];
+                file.read_exact(&mut bytes)
+                    .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+                *v = f32::from_le_bytes(bytes);
+            }
+
+            // Read PQ code
+            let mut len_bytes = [0u8; 4];
+            file.read_exact(&mut len_bytes)
+                .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+            let pq_len = u32::from_le_bytes(len_bytes) as usize;
+            let pq_code = if pq_len > 0 {
+                let mut code = vec![0u8; pq_len];
+                file.read_exact(&mut code)
+                    .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+                Some(code)
+            } else {
+                None
+            };
+
+            // Read neighbors
+            let mut neighbor_count_bytes = [0u8; 4];
+            file.read_exact(&mut neighbor_count_bytes)
+                .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+            let neighbor_count = u32::from_le_bytes(neighbor_count_bytes) as usize;
+            let mut neighbors = Vec::with_capacity(neighbor_count);
+            for _ in 0..neighbor_count {
+                let mut neighbor_bytes = [0u8; 4];
+                file.read_exact(&mut neighbor_bytes)
+                    .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+                neighbors.push(u32::from_le_bytes(neighbor_bytes) as usize);
+            }
+
+            self.nodes.push(GraphNode {
+                data: vector,
+                pq_code,
+                neighbors,
+                layer: 0,
+            });
+        }
+        self.cache = Vec::new();
+        Ok(())
+    }
+
+    fn serialize_to_memory(&self) -> std::result::Result<Vec<u8>, IndexError> {
+        let mut buffer = Vec::new();
+
+        // Write metadata length prefix
+        let metadata = SerializedAisaqIndex {
+            version: 1,
+            config: self.config.clone(),
+            metric_type: self.metric_type,
+            dim: self.dim,
+            entry_points: self.entry_points.clone(),
+            is_trained: self.is_trained,
+            node_count: self.nodes.len(),
+        };
+        let metadata_bytes = bincode::serialize(&metadata)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        let metadata_len = metadata_bytes.len() as u64;
+        buffer.extend_from_slice(&metadata_len.to_le_bytes());
+        buffer.extend_from_slice(&metadata_bytes);
+
+        // Serialize nodes
+        for node in &self.nodes {
+            // Vector data
+            for &v in &node.data {
+                buffer.extend_from_slice(&v.to_le_bytes());
+            }
+            // PQ code
+            if let Some(ref pq_code) = node.pq_code {
+                let len = pq_code.len() as u32;
+                buffer.extend_from_slice(&len.to_le_bytes());
+                buffer.extend_from_slice(pq_code);
+            } else {
+                let len = 0u32;
+                buffer.extend_from_slice(&len.to_le_bytes());
+            }
+            // Neighbors
+            let neighbor_count = node.neighbors.len() as u32;
+            buffer.extend_from_slice(&neighbor_count.to_le_bytes());
+            for neighbor in &node.neighbors {
+                buffer.extend_from_slice(&(*neighbor as u32).to_le_bytes());
+            }
+        }
+
+        Ok(buffer)
+    }
+
+    fn deserialize_from_memory(&mut self, data: &[u8]) -> std::result::Result<(), IndexError> {
+        // Read metadata length
+        if data.len() < 8 {
+            return Err(IndexError::Unsupported("data too short".into()));
+        }
+        let metadata_len = u64::from_le_bytes(data[0..8].try_into().unwrap());
+        let end = 8 + metadata_len as usize;
+        if data.len() < end {
+            return Err(IndexError::Unsupported("data truncated".into()));
+        }
+
+        let metadata_bytes = &data[8..end];
+        let metadata: SerializedAisaqIndex = bincode::deserialize(metadata_bytes)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+
+        if metadata.version != 1 {
+            return Err(IndexError::Unsupported(format!(
+                "Unsupported AISAQ metadata version {}",
+                metadata.version
+            )));
+        }
+
+        self.config = metadata.config;
+        self.metric_type = metadata.metric_type;
+        self.dim = metadata.dim;
+        self.entry_points = metadata.entry_points;
+        self.is_trained = metadata.is_trained;
+
+        let node_count = metadata.node_count;
+        self.nodes = Vec::with_capacity(node_count);
+
+        let mut cursor = end;
+        for _ in 0..node_count {
+            // Read vector data
+            let mut vector = vec![0.0f32; self.dim];
+            for v in &mut vector {
+                if cursor + 4 > data.len() {
+                    return Err(IndexError::Unsupported("data truncated at vector".into()));
+                }
+                let bytes = &data[cursor..cursor + 4];
+                cursor += 4;
+                *v = f32::from_le_bytes(bytes.try_into().unwrap());
+            }
+
+            // Read PQ code length
+            if cursor + 4 > data.len() {
+                return Err(IndexError::Unsupported("data truncated at pq_code length".into()));
+            }
+            let len_bytes = &data[cursor..cursor + 4];
+            cursor += 4;
+            let pq_len = u32::from_le_bytes(len_bytes.try_into().unwrap()) as usize;
+            let pq_code = if pq_len > 0 {
+                if cursor + pq_len > data.len() {
+                    return Err(IndexError::Unsupported("data truncated at pq_code".into()));
+                }
+                let code = data[cursor..cursor + pq_len].to_vec();
+                cursor += pq_len;
+                Some(code)
+            } else {
+                None
+            };
+
+            // Read neighbors
+            if cursor + 4 > data.len() {
+                return Err(IndexError::Unsupported("data truncated at neighbor count".into()));
+            }
+            let neighbor_count_bytes = &data[cursor..cursor + 4];
+            cursor += 4;
+            let neighbor_count = u32::from_le_bytes(neighbor_count_bytes.try_into().unwrap()) as usize;
+            let mut neighbors = Vec::with_capacity(neighbor_count);
+            for _ in 0..neighbor_count {
+                if cursor + 4 > data.len() {
+                    return Err(IndexError::Unsupported("data truncated at neighbor".into()));
+                }
+                let neighbor_bytes = &data[cursor..cursor + 4];
+                cursor += 4;
+                neighbors.push(u32::from_le_bytes(neighbor_bytes.try_into().unwrap()) as usize);
+            }
+
+            self.nodes.push(GraphNode {
+                data: vector,
+                pq_code,
+                neighbors,
+                layer: 0,
+            });
+        }
+
+        Ok(())
+    }
+
+    fn create_ann_iterator(
+        &self,
+        query: &Dataset,
+        _bitset: Option<&BitsetView>,
+    ) -> std::result::Result<Box<dyn AnnIterator>, IndexError> {
+        let query_vectors = query.vectors();
+        if query_vectors.len() / self.dim != 1 {
+            return Err(IndexError::DimMismatch);
+        }
+        let result = self.search(query_vectors, 100)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        
+        let results: Vec<(i64, f32)> = result.ids
+            .into_iter()
+            .zip(result.distances.into_iter())
+            .collect();
+        
+        Ok(Box::new(AisaqAnnIterator {
+            results,
+            pos: 0,
+        }))
+    }
+}
+
+/// Serialized metadata for persistence
+#[derive(Serialize, Deserialize)]
+struct SerializedAisaqIndex {
+    version: u32,
+    config: AisaqConfig,
+    metric_type: MetricType,
+    dim: usize,
+    entry_points: Vec<usize>,
+    is_trained: bool,
+    node_count: usize,
+}
+
+#[cfg(test)]
+mod tests_index_trait {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_aisaq_index_trait_new() {
+        let config = AisaqConfig::default();
+        let index = AisaqIndex::new(config, MetricType::L2, 8);
+        assert_eq!(index.index_type(), "AISAQ");
+        assert_eq!(index.dim(), 8);
+        assert_eq!(index.count(), 0);
+        assert!(!index.is_trained());
+    }
+
+    #[test]
+    fn test_aisaq_index_train_and_search() {
+        let config = AisaqConfig {
+            max_degree: 16,
+            search_list_size: 32,
+            ..Default::default()
+        };
+        let mut index = AisaqIndex::new(config, MetricType::L2, 8);
+
+        // Generate test data
+        let data: Vec<f32> = (0..64).map(|i| i as f32).collect();
+        let dataset = Dataset::from_vectors(data.clone(), 8);
+
+        // Train using Index trait
+        Index::train(&mut index, &dataset).unwrap();
+        assert!(index.is_trained());
+
+        // Add using Index trait
+        let added = Index::add(&mut index, &dataset).unwrap();
+        assert_eq!(added, 2);
+
+        // Search using Index trait
+        let query = Dataset::from_vectors(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], 8);
+        let result = Index::search(&index, &query, 2).unwrap();
+        assert_eq!(result.ids.len(), 2);
+    }
+
+    #[test]
+    fn test_aisaq_index_save_load() {
+        let config = AisaqConfig::default();
+        let mut index = AisaqIndex::new(config, MetricType::L2, 4);
+
+        // Add data using Index trait
+        let data: Vec<f32> = (0..16).map(|i| i as f32).collect();
+        let dataset = Dataset::from_vectors(data, 4);
+        Index::add(&mut index, &dataset).unwrap();
+
+        // Save
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("aisaq_index.bin");
+        let path_str = path.to_str().unwrap();
+        index.save(path_str).unwrap();
+
+        // Load into new index
+        let mut loaded_index = AisaqIndex::new(config, MetricType::L2, 4);
+        loaded_index.load(path_str).unwrap();
+
+        assert_eq!(loaded_index.count(), 4);
+    }
+
+    #[test]
+    fn test_aisaq_index_get_vector_by_ids() {
+        let config = AisaqConfig::default();
+        let mut index = AisaqIndex::new(config, MetricType::L2, 4);
+
+        let data: Vec<f32> = (0..16).map(|i| i as f32).collect();
+        let dataset = Dataset::from_vectors(data, 4);
+        Index::add(&mut index, &dataset).unwrap();
+
+        let vectors = Index::get_vector_by_ids(&index, &[0, 1]).unwrap();
+        assert_eq!(vectors.len(), 8); // 2 vectors * 4 dims each
+        assert_eq!(vectors[0..4], [0.0, 1.0, 2.0, 3.0]);
+        assert_eq!(vectors[4..8], [4.0, 5.0, 6.0, 7.0]);
+    }
+
+    #[test]
+    fn test_aisaq_index_ann_iterator() {
+        let config = AisaqConfig::default();
+        let mut index = AisaqIndex::new(config, MetricType::L2, 4);
+
+        let data: Vec<f32> = (0..16).map(|i| i as f32).collect();
+        let dataset = Dataset::from_vectors(data, 4);
+        Index::add(&mut index, &dataset).unwrap();
+        
+        let query = Dataset::from_vectors(vec![1.0, 2.0, 3.0, 4.0], 4);
+        let mut iter = Index::create_ann_iterator(&index, &query, None).unwrap();
+        
+        let mut count = 0;
+        while iter.next().is_some() {
+            count += 1;
+        }
+        assert!(count > 0);
     }
 }
