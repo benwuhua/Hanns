@@ -1,5 +1,5 @@
 # Builder 任务队列
-> 最后更新: 2026-03-06 07:35 | 优先级: BUG > PARITY > OPT > BENCH
+> 最后更新: 2026-03-06 08:32 | 优先级: BUG > PARITY > OPT > BENCH
 
 ## 待办 (TODO)
 
@@ -53,8 +53,16 @@
     - [ ] 为 AISAQ 实现 Index trait wrapper（可选，架构已就位）
     - [ ] 统一 DiskANN 系列参数校验和错误路径
   - 验收: ✅ DiskANN 核心 Index trait 实现完成并测试通过。
-- [ ] **PARITY-P1-004**: 建立 index × datatype × metric 合法性统一校验层
-  - 验收: 非法组合在入口层被阻断并返回一致错误码。
+- [x] **PARITY-P1-004**: 建立 index × datatype × metric 合法性统一校验层
+  - 完成日期: 2026-03-06 08:32
+  - 进展:
+    - ✅ 新增 `src/api/data_type.rs` - DataType enum 定义 (对应 C++ VecType)
+    - ✅ 新增 `src/api/legal_matrix.rs` - LegalMatrix 集中化校验逻辑
+    - ✅ 更新 `src/api/index.rs` - 添加 data_type 字段和 validate() 方法
+    - ✅ 更新 `src/ffi.rs` - FFI 层集成验证 (CIndexConfig.data_type 字段)
+    - ✅ 3 个新测试 (data_type/legal_matrix/index_config)
+    - ✅ 8 个回归测试全部通过
+  - 验收: ✅ 非法组合在 API/FFI 层被阻断，返回一致错误信息
 
 ### P2 (优化)
 - [ ] **OPT-P2-001**: 统一 benchmark 报告模板并强制 ground truth 来源字段
