@@ -314,6 +314,7 @@ fn test_hnsw_parallel_error_handling() {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
         dim: 128,
+            data_type: crate::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),
@@ -375,6 +376,7 @@ fn test_hnsw_parallel_api_compatibility() {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
         dim: 64,
+            data_type: crate::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),
@@ -461,6 +463,7 @@ fn test_hnsw_batch_size_optimization() {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
         dim: 128,
+            data_type: crate::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),
@@ -509,6 +512,7 @@ fn test_hnsw_parallel_performance_target() {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
         dim: 128,
+            data_type: crate::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),

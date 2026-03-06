@@ -723,6 +723,7 @@ mod tests {
             index_type: IndexType::IvfSq8,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: IndexParams::default(),
         };
 
@@ -737,6 +738,7 @@ mod tests {
             index_type: IndexType::IvfSq8,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_sq8(4, 2),
         };
 
@@ -777,6 +779,7 @@ mod tests {
             index_type: IndexType::IvfSq8,
             metric_type: MetricType::L2,
             dim: 8,
+                    data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_sq8(10, 3),
         };
 

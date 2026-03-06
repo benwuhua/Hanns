@@ -573,6 +573,7 @@ mod tests {
             index_type: IndexType::IvfFlat,
             metric_type: MetricType::L2,
             dim: 128,
+                    data_type: crate::api::DataType::Float,
             params: IndexParams::ivf(100, 10),
         };
 
@@ -586,6 +587,7 @@ mod tests {
             index_type: IndexType::IvfFlat,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: IndexParams::ivf(2, 2), // nprobe=2 to search both clusters
         };
 

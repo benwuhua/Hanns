@@ -96,6 +96,7 @@ fn benchmark_flat_range_validation(
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -221,6 +222,7 @@ fn test_range_search_validation_unit() {
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -321,6 +323,7 @@ fn test_range_search_radius_monotonicity() {
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::default(),
     };
 

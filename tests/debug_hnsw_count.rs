@@ -27,6 +27,7 @@ fn test_hnsw_search_count() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::hnsw(16, 200, 0.5),
     };
 

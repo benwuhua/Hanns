@@ -580,6 +580,7 @@ mod tests {
             index_type: IndexType::BinaryHnsw,
             dim: dim_bits,
             metric_type: MetricType::Hamming,
+            data_type: crate::api::DataType::Binary,
             params: IndexParams {
                 m: Some(16),
                 ef_construction: Some(200),

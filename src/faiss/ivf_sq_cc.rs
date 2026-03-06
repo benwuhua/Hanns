@@ -393,6 +393,7 @@ mod tests {
             index_type: IndexType::IvfFlatCc,
             metric_type: MetricType::L2,
             dim: 128,
+                    data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_cc(100, 10, 1024),
         };
 
@@ -409,6 +410,7 @@ mod tests {
             index_type: IndexType::IvfFlatCc,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_cc(2, 1, 100),
         };
 
@@ -446,6 +448,7 @@ mod tests {
             index_type: IndexType::IvfFlatCc,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_cc(2, 1, 100),
         };
 
@@ -488,6 +491,7 @@ mod tests {
             index_type: IndexType::IvfFlatCc,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_cc(2, 1, 100),
         };
 
@@ -538,6 +542,7 @@ mod tests {
             index_type: IndexType::IvfFlatCc,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_cc(2, 1, 100),
         };
 
@@ -568,6 +573,7 @@ mod tests {
             index_type: IndexType::IvfFlatCc,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_cc(2, 1, 100),
         };
 

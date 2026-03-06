@@ -171,6 +171,7 @@ impl PyIndex {
             index_type: index_type_enum.clone(),
             dim: dimension,
             metric_type: metric_type_enum,
+            data_type: crate::api::DataType::Float,
             params: IndexParams {
                 ef_construction: Some(ef_construction.unwrap_or(400)),
                 ef_search: Some(ef_search.unwrap_or(128)),
@@ -351,6 +352,7 @@ impl PyIndex {
                         index_type: IndexType::Flat,
                         dim,
                         metric_type: MetricType::L2,
+                        data_type: crate::api::DataType::Float,
                         params: IndexParams::default(),
                     },
                 )
@@ -370,6 +372,7 @@ impl PyIndex {
                         index_type: IndexType::Hnsw,
                         dim,
                         metric_type: MetricType::L2,
+                        data_type: crate::api::DataType::Float,
                         params: IndexParams::default(),
                     },
                 )
@@ -407,6 +410,7 @@ impl PyIndex {
                             index_type: IndexType::IvfPq,
                             dim,
                             metric_type: MetricType::L2,
+                            data_type: crate::api::DataType::Float,
                             params: IndexParams {
                                 nlist: Some(nlist),
                                 m: Some(m),

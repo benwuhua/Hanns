@@ -1,5 +1,5 @@
 # Builder 任务队列
-> 最后更新: 2026-03-06 08:32 | 优先级: BUG > PARITY > OPT > BENCH
+> 最后更新: 2026-03-06 10:32 | 优先级: BUG > PARITY > OPT > BENCH
 
 ## 待办 (TODO)
 
@@ -63,16 +63,63 @@
     - ✅ 3 个新测试 (data_type/legal_matrix/index_config)
     - ✅ 8 个回归测试全部通过
   - 验收: ✅ 非法组合在 API/FFI 层被阻断，返回一致错误信息
+- [x] **PARITY-P1-005**: ScaNN Index trait 实现与 get_vector_by_ids 对齐
+  - 完成日期: 2026-03-06 10:32
+  - 进展:
+    - ✅ ScaNNIndex 已实现完整 Index trait (`src/faiss/scann.rs:921-1045`)
+    - ✅ 支持所有生命周期方法：train/add/search/search_with_bitset/save/load
+    - ✅ 支持高级接口：get_vector_by_ids/has_raw_data/create_ann_iterator
+    - ✅ 创建测试套件验证实现（6 个测试全部通过）
+  - 验收: ✅ ScaNN 通过 Index trait 可访问所有生命周期方法，测试覆盖核心路径。
+- [ ] **PARITY-P1-006**: AISAQ Index trait 实现与参数语义对齐
+  - 背景: ScaNN 已实现 AnnIterator，但未实现 Index trait，无法通过统一接口调用。
+  - 目标:
+    - [ ] 为 ScannIndex 实现 Index trait wrapper
+    - [ ] 实现 get_vector_by_ids 和 has_raw_data 接口
+    - [ ] 创建测试验证 Index trait 实现
+  - 验收: ScaNN 通过 Index trait 可访问所有生命周期方法，测试覆盖核心路径。
+- [ ] **PARITY-P1-006**: AISAQ Index trait 实现与参数语义对齐
+  - 背景: AISAQ 是 DiskANN 的 SSD 变体，未实现 Index trait，参数语义与 C++ 不完全一致。
+  - 目标:
+    - [ ] 为 AisaqIndex 实现 Index trait wrapper
+    - [ ] 对齐 C++ 参数命名和验证逻辑
+    - [ ] 创建测试验证参数语义
+  - 验收: AISAQ 通过 Index trait 可访问所有生命周期方法，参数验证与 C++ 一致。
+- [ ] **PARITY-P1-007**: Sparse 索引 Index trait 统一接口实现
+  - 背景: Sparse 索引（sparse_inverted/sparse_wand）未实现 Index trait，接口分散。
+  - 目标:
+    - [ ] 为 SparseInvertedIndex 实现 Index trait wrapper
+    - [ ] 为 SparseWandIndex 实现 Index trait wrapper
+    - [ ] 统一 iterator/filter 行为
+  - 验收: Sparse 索引通过 Index trait 可访问核心方法，行为与 C++ 一致。
+- [ ] **PARITY-P1-008**: MinHash LSH Index trait 实现与参数对齐
+  - 背景: MinHash LSH 未实现 Index trait，`mh_*` 参数命名与 C++ 不一致。
+  - 目标:
+    - [ ] 为 MinHashLSHIndex 实现 Index trait wrapper
+    - [ ] 对齐 C++ `mh_*` 参数命名和验证
+    - [ ] 创建测试验证实现
+  - 验收: MinHash LSH 通过 Index trait 可访问核心方法，参数命名与 C++ 一致。
+- [ ] **BENCH-P1-001**: 建立核心索引 recall-gated 性能基线
+  - 背景: 性能验证未完全标准化，缺少统一的 recall 约束和 ground truth 来源。
+  - 目标:
+    - [ ] 为 HNSW/IVF/DiskANN 建立基准性能数据（R@10 >= 80%）
+    - [ ] 强制所有 benchmark 报告包含 ground truth 来源、R@10 和可信度标记
+    - [ ] 建立自动化性能回归检测
+  - 验收: 核心索引性能报告包含完整的可信度标记，R@10 < 80% 标记为"不可信"。
+- [ ] **OPT-P1-001**: 统一 benchmark 报告质量标准
+  - 背景: benchmark 报告格式不统一，缺少强制字段。
+  - 目标:
+    - [ ] 创建统一的 benchmark 报告模板
+    - [ ] 强制包含 ground truth 来源、R@10、QPS、可信度标记
+    - [ ] 自动化报告生成脚本
+  - 验收: 所有 benchmark 报告符合统一模板，缺少字段时报错。
 
 ### P2 (优化)
-- [ ] **OPT-P2-001**: 统一 benchmark 报告模板并强制 ground truth 来源字段
-  - 验收: benchmark 报告自动包含 ground truth 来源、R@10 和可信度标记。
 - [ ] **OPT-P2-002**: 扩展回归测试覆盖到 300+ 稳定用例
   - 验收: 测试数量达标且无新增 flaky 模块。
-- [ ] **BENCH-P2-001**: 建立 recall-gated 性能对标流水（Rust vs C++）
-  - 验收: 报告包含差距、可信度和重验标记。
 
 ## 归档
 - [x] **DOCS-BASELINE-002**: 创建 FFI 能力矩阵文档 `docs/FFI_CAPABILITY_MATRIX.md` (2026-03-05)
 - [x] **PARITY-P0-003**: 添加 AnnIterator trait 定义到 `src/index.rs` (2026-03-05)
 - [x] **DOCS-BASELINE-001**: 重建 GAP/ROADMAP/TASK_QUEUE/PARITY_AUDIT 文档基线（2026-03-05）
+- [x] **PARITY-P1-000~004**: Phase 1 核心契约与 IVF/DiskANN 架构对齐完成 (2026-03-06)

@@ -28,6 +28,7 @@ fn compute_ground_truth(
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::default(),
     };
     let mut flat_index = FlatIndex::new(&config).expect("Flat index creation failed");
@@ -84,6 +85,7 @@ fn run_pq_benchmark(
         index_type: IndexType::IvfPq,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),

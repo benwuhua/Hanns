@@ -63,6 +63,7 @@ fn test_opt013_ivf_flat_fast_build() {
         index_type: IndexType::IvfFlat,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::ivf_flat_fast(nlist, 10),
     };
 

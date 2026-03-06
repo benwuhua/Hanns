@@ -2567,6 +2567,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -2597,6 +2598,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::Ip,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -2627,6 +2629,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::Cosine,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -2660,6 +2663,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -2707,6 +2711,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -2759,6 +2764,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -2793,6 +2799,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(16),
                 ..Default::default()
@@ -2830,6 +2837,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(8),
                 ..Default::default()
@@ -2882,6 +2890,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -2923,6 +2932,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -2937,6 +2947,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -2956,6 +2967,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(8),
                 ef_construction: Some(100),
@@ -3003,6 +3015,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(8),
                 ef_construction: Some(100),
@@ -3055,6 +3068,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(16),
                 ef_construction: Some(200),
@@ -3103,6 +3117,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(8),
                 ef_construction: Some(150),
@@ -3165,6 +3180,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 128,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(16),
                 ef_construction: Some(200),
@@ -3276,6 +3292,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 128,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(16),
                 ef_construction: Some(200),
@@ -3343,6 +3360,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 128,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(16),
                 num_threads: Some(4),
@@ -3390,6 +3408,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 128,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 num_threads: Some(8),
                 ..Default::default()
@@ -3430,6 +3449,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 64,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(16),
                 ef_construction: Some(200),

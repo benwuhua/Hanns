@@ -38,6 +38,7 @@ fn run_flat_bench(
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -102,6 +103,7 @@ fn run_sq8_bench(
         index_type: IndexType::IvfSq8,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),
@@ -175,6 +177,7 @@ fn run_pq_bench(
         index_type: IndexType::IvfPq,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),
@@ -395,6 +398,7 @@ fn bench_quantization_accuracy() {
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::default(),
     };
     let mut flat_index = FlatIndex::new(&flat_config).expect("Flat index failed");

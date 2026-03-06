@@ -16,6 +16,7 @@ fn test_ivf_sq8_index_trait_metadata() {
         index_type: IndexType::IvfSq8,
         metric_type: MetricType::L2,
         dim: 4,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::ivf_sq8(4, 2),
     };
 
@@ -35,6 +36,7 @@ fn test_ivf_sq8_index_trait_lifecycle() {
         index_type: IndexType::IvfSq8,
         metric_type: MetricType::L2,
         dim: 4,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::ivf_sq8(4, 2),
     };
 
@@ -73,6 +75,7 @@ fn test_ivf_sq8_ann_iterator() {
         index_type: IndexType::IvfSq8,
         metric_type: MetricType::L2,
         dim: 4,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::ivf_sq8(4, 2),
     };
 
@@ -185,6 +188,7 @@ fn test_ivf_sq8_search_with_bitset() {
         index_type: IndexType::IvfSq8,
         metric_type: MetricType::L2,
         dim: 4,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::ivf_sq8(4, 2),
     };
 

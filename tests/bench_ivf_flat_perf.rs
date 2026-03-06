@@ -66,6 +66,7 @@ fn run_once(nbase: usize, seed: u64) -> RunResult {
         index_type: IndexType::IvfFlat,
         dim: DIM,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::ivf(NLIST, NPROBE),
     };
 

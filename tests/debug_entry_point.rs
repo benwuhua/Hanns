@@ -48,6 +48,7 @@ fn debug_entry_point_test() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams {
             m: Some(32),
             ef_construction: Some(400),

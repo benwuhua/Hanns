@@ -2,8 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::DataType;
+
 /// Index type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum IndexType {
@@ -98,7 +100,7 @@ impl IndexType {
 }
 
 /// Distance metric type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum MetricType {
@@ -147,7 +149,7 @@ pub struct IndexConfig {
     pub dim: usize,
     /// Data type (float, binary, sparse, etc.)
     #[serde(default)]
-    pub data_type: super::DataType,
+    pub data_type: DataType,
     /// Index-specific parameters
     #[serde(default)]
     pub params: IndexParams,
@@ -159,7 +161,7 @@ impl IndexConfig {
             index_type,
             metric_type,
             dim,
-            data_type: super::DataType::Float,
+            data_type: DataType::Float,
             params: IndexParams::default(),
         }
     }
@@ -169,7 +171,7 @@ impl IndexConfig {
         index_type: IndexType,
         metric_type: MetricType,
         dim: usize,
-        data_type: super::DataType,
+        data_type: DataType,
     ) -> Self {
         Self {
             index_type,
@@ -477,7 +479,7 @@ mod tests {
         assert_eq!(config.index_type, IndexType::IvfSq8);
         assert_eq!(config.metric_type, MetricType::L2);
         assert_eq!(config.dim, 128);
-        assert_eq!(config.data_type, super::DataType::Float);
+        assert_eq!(config.data_type, DataType::Float);
     }
 
     #[test]
@@ -491,7 +493,7 @@ mod tests {
             IndexType::BinFlat,
             MetricType::L2,
             128,
-            super::DataType::Binary,
+            DataType::Binary,
         );
         assert!(config.validate().is_err());
     }

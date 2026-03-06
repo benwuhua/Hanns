@@ -41,6 +41,7 @@ fn test_bug001_summary() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::hnsw(64, 400, 0.5), // M=64, ef_construction=400
     };
 

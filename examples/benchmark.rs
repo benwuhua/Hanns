@@ -173,6 +173,7 @@ fn benchmark_diskann_index() {
         index_type: IndexType::DiskAnn,
         metric_type: MetricType::L2,
         dim: DIM,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::default(),
     };
 

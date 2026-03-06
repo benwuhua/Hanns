@@ -29,6 +29,7 @@ fn test_ivf_flat_standard(n: usize, dim: usize, nlist: usize) -> TrainResult {
         index_type: IndexType::IvfFlat,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::ivf(nlist, 10),
     };
 
@@ -71,6 +72,7 @@ fn test_ivf_flat_mini_batch(n: usize, dim: usize, nlist: usize, batch_size: usiz
         index_type: IndexType::IvfFlat,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::ivf_mini_batch(nlist, 10, batch_size, 100, 1e-4),
     };
 

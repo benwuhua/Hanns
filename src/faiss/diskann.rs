@@ -1005,6 +1005,7 @@ mod tests {
             index_type: IndexType::DiskAnn,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -1034,6 +1035,7 @@ mod tests {
             index_type: IndexType::DiskAnn,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -1078,6 +1080,7 @@ mod tests {
             index_type: IndexType::DiskAnn,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -1099,6 +1102,7 @@ mod tests {
             index_type: IndexType::DiskAnn,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -1122,6 +1126,7 @@ mod tests {
             index_type: IndexType::DiskAnn,
             metric_type: MetricType::L2,
             dim: 4,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -1158,6 +1163,7 @@ mod tests {
             index_type: IndexType::DiskAnn,
             metric_type: MetricType::L2,
             dim: 4,
+            data_type: crate::api::DataType::Float,
             params,
         };
 
@@ -1177,6 +1183,7 @@ mod tests {
             index_type: IndexType::DiskAnn,
             metric_type: MetricType::L2,
             dim: 4,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 

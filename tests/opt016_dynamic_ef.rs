@@ -31,6 +31,7 @@ fn test_dynamic_ef_search() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),
@@ -103,6 +104,7 @@ fn test_dynamic_ef_recall_improvement() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),

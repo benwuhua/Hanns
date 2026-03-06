@@ -34,6 +34,7 @@ fn diagnose_ivf_recall() {
                 index_type: IndexType::IvfFlat,
                 dim: DIM,
                 metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
                 params: IndexParams::ivf(nlist, nprobe),
             };
 

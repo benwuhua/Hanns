@@ -140,6 +140,7 @@ fn benchmark_hnsw(
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams {
             m: Some(m),
             ef_construction: Some(ef_construction),
@@ -196,6 +197,7 @@ fn benchmark_ivf_flat(
         index_type: IndexType::IvfFlat,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),
@@ -252,6 +254,7 @@ fn benchmark_ivf_pq(
         index_type: IndexType::IvfPq,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),

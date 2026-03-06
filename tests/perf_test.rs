@@ -77,6 +77,7 @@ fn test_flat_index(n: usize, dim: usize) -> PerfResult {
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -147,6 +148,7 @@ fn test_hnsw_index(n: usize, dim: usize) -> PerfResult {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams {
             m: Some(32),                // OPT-029: M=16→32 for better graph connectivity
             ef_construction: Some(400), // OPT-029: Higher ef_construction for better graph quality
@@ -224,6 +226,7 @@ fn test_ivf_flat_index(n: usize, dim: usize) -> PerfResult {
         index_type: IndexType::IvfFlat,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist as usize),
             nprobe: Some(10),
@@ -302,6 +305,7 @@ fn test_ivf_flat_index_fast(n: usize, dim: usize) -> PerfResult {
         index_type: IndexType::IvfFlat,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::ivf_flat_fast(nlist as usize, 10),
     };
 
@@ -572,6 +576,7 @@ fn test_hnsw_adaptive_ef(
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),

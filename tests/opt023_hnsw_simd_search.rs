@@ -35,6 +35,7 @@ fn main() {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
         dim,
+        data_type: knowhere_rs::api::DataType::Float,
         params: knowhere_rs::api::IndexParams {
             m: Some(16),
             ef_construction: Some(200),

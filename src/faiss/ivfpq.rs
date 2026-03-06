@@ -866,6 +866,7 @@ mod tests {
             index_type: IndexType::IvfPq,
             metric_type: MetricType::L2,
             dim: 16,
+                    data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 nlist: Some(4),
                 nprobe: Some(4),
@@ -918,6 +919,7 @@ mod tests {
             index_type: IndexType::IvfPq,
             metric_type: MetricType::L2,
             dim,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 nlist: Some(16),
                 nprobe: Some(8),

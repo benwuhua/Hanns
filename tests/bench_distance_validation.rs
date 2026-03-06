@@ -56,6 +56,7 @@ fn benchmark_flat_validation(dataset: &SiftDataset, num_queries: usize, top_k: u
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -143,6 +144,7 @@ fn benchmark_hnsw_validation(dataset: &SiftDataset, num_queries: usize, top_k: u
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::hnsw(16, 64, 0.5),
     };
 
@@ -212,6 +214,7 @@ fn benchmark_ivf_flat_validation(dataset: &SiftDataset, num_queries: usize, top_
         index_type: IndexType::IvfFlat,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::ivf(256, 20),
     };
 
@@ -322,6 +325,7 @@ fn test_distance_validation_unit() {
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::default(),
     };
 

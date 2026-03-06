@@ -111,6 +111,7 @@ fn run_rust_benchmark(
         index_type: IndexType::Hnsw,
         dim,
         metric_type: knowhere_rs::MetricType::L2,
+            data_type: crate::api::DataType::Float,
         params: IndexParams::hnsw(ef_construction, ef_search, m as f32),
     };
 

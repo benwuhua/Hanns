@@ -239,7 +239,13 @@ impl IndexWrapper {
         let index_type: IndexType = match config.index_type {
             CIndexType::Flat => IndexType::Flat,
             CIndexType::Hnsw => IndexType::Hnsw,
+            #[cfg(feature = "scann")]
             CIndexType::Scann => IndexType::Scann,
+            #[cfg(not(feature = "scann"))]
+            CIndexType::Scann => {
+                eprintln!("Scann index type requires 'scann' feature to be enabled");
+                return None;
+            }
             CIndexType::HnswPrq => IndexType::HnswPrq,
             CIndexType::IvfRabitq => IndexType::IvfRabitq,
             CIndexType::HnswSq => IndexType::HnswSq,
@@ -272,6 +278,7 @@ impl IndexWrapper {
                     index_type: IndexType::Flat,
                     metric_type: metric,
                     dim,
+                    data_type,
                     params: IndexParams::default(),
                 };
                 let flat = MemIndex::new(&index_config).ok()?;
@@ -298,6 +305,7 @@ impl IndexWrapper {
                     index_type: IndexType::Hnsw,
                     metric_type: metric,
                     dim,
+                    data_type,
                     params: IndexParams::default(),
                 };
                 if config.ef_construction > 0 {
@@ -366,6 +374,7 @@ impl IndexWrapper {
                     index_type: IndexType::HnswPrq,
                     metric_type: metric,
                     dim,
+                    data_type,
                     params: IndexParams {
                         m: Some(16),
                         ef_construction: if config.ef_construction > 0 {
@@ -565,6 +574,7 @@ impl IndexWrapper {
                     index_type: IndexType::IvfSq8,
                     metric_type: metric,
                     dim,
+                    data_type,
                     params: IndexParams::ivf_sq8(nlist, nprobe),
                 };
 
@@ -614,6 +624,7 @@ impl IndexWrapper {
                     index_type: IndexType::BinaryHnsw,
                     metric_type: metric,
                     dim,
+                    data_type,
                     params: IndexParams::default(),
                 };
                 if config.ef_construction > 0 {

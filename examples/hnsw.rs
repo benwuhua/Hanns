@@ -10,6 +10,7 @@ fn main() {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
         dim: 4,
+        data_type: knowhere_rs::api::DataType::Float,
         params,
     };
 
