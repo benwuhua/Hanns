@@ -4,6 +4,8 @@
 //! 支持稀疏向量 (BM25, IP) 的高效搜索
 //! 使用倒排索引 + WAND/MaxScore 算法
 
+use crate::dataset::Dataset;
+use crate::index::{Index, IndexError, SearchResult};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -629,6 +631,116 @@ pub struct SparseInvertedSearcher<'a> {
     algorithm: InvertedIndexAlgo,
 }
 
+impl SparseInvertedIndex {
+    fn dataset_row_to_sparse(dataset: &Dataset, row: usize) -> Result<SparseVector, IndexError> {
+        dataset
+            .get_vector(row)
+            .map(|v| SparseVector::from_dense(v, 0.0))
+            .ok_or(IndexError::DimMismatch)
+    }
+
+    fn bitset_to_bool_vec(bitset: &crate::bitset::BitsetView) -> Vec<bool> {
+        (0..bitset.len()).map(|i| bitset.get(i)).collect()
+    }
+}
+
+impl Index for SparseInvertedIndex {
+    fn index_type(&self) -> &str {
+        "SparseInverted"
+    }
+
+    fn dim(&self) -> usize {
+        self.n_cols()
+    }
+
+    fn count(&self) -> usize {
+        self.n_rows()
+    }
+
+    fn is_trained(&self) -> bool {
+        true
+    }
+
+    fn train(&mut self, _dataset: &Dataset) -> Result<(), IndexError> {
+        Ok(())
+    }
+
+    fn add(&mut self, dataset: &Dataset) -> Result<usize, IndexError> {
+        let base = self.n_rows() as i64;
+        for row in 0..dataset.num_vectors() {
+            let sparse = Self::dataset_row_to_sparse(dataset, row)?;
+            let doc_id = dataset
+                .ids()
+                .and_then(|ids| ids.get(row).copied())
+                .unwrap_or(base + row as i64);
+            SparseInvertedIndex::add(self, &sparse, doc_id)
+                .map_err(IndexError::Unsupported)?;
+        }
+        Ok(dataset.num_vectors())
+    }
+
+    fn search(&self, query: &Dataset, top_k: usize) -> Result<SearchResult, IndexError> {
+        if query.num_vectors() == 0 {
+            return Ok(SearchResult::new(Vec::new(), Vec::new(), 0.0));
+        }
+
+        let q = Self::dataset_row_to_sparse(query, 0)?;
+        let result = SparseInvertedIndex::search(self, &q, top_k, None);
+        let (ids, distances): (Vec<i64>, Vec<f32>) = result.into_iter().unzip();
+        Ok(SearchResult::new(ids, distances, 0.0))
+    }
+
+    fn search_with_bitset(
+        &self,
+        query: &Dataset,
+        top_k: usize,
+        bitset: &crate::bitset::BitsetView,
+    ) -> Result<SearchResult, IndexError> {
+        if query.num_vectors() == 0 {
+            return Ok(SearchResult::new(Vec::new(), Vec::new(), 0.0));
+        }
+
+        let q = Self::dataset_row_to_sparse(query, 0)?;
+        let bools = Self::bitset_to_bool_vec(bitset);
+        let result = SparseInvertedIndex::search(self, &q, top_k, Some(&bools));
+        let (ids, distances): (Vec<i64>, Vec<f32>) = result.into_iter().unzip();
+        Ok(SearchResult::new(ids, distances, 0.0))
+    }
+
+    fn get_vector_by_ids(&self, ids: &[i64]) -> Result<Vec<f32>, IndexError> {
+        let dim = self.dim();
+        let mut out = Vec::with_capacity(ids.len() * dim);
+        for &id in ids {
+            let Some(sparse) = self.get_vector_by_id(id) else {
+                continue;
+            };
+            let mut dense = vec![0.0f32; dim];
+            for elem in sparse.elements {
+                if (elem.dim as usize) < dim {
+                    dense[elem.dim as usize] = elem.val;
+                }
+            }
+            out.extend_from_slice(&dense);
+        }
+        if out.is_empty() {
+            return Err(IndexError::Empty);
+        }
+        Ok(out)
+    }
+
+    fn has_raw_data(&self) -> bool {
+        true
+    }
+
+    fn save(&self, _path: &str) -> Result<(), IndexError> {
+        Err(IndexError::Unsupported("save not implemented".into()))
+    }
+
+    fn load(&mut self, _path: &str) -> Result<(), IndexError> {
+        Err(IndexError::Unsupported("load not implemented".into()))
+    }
+}
+
 impl<'a> SparseInvertedSearcher<'a> {
     pub fn new(index: &'a SparseInvertedIndex, algorithm: InvertedIndexAlgo) -> Self {
         Self { index, algorithm }
@@ -980,5 +1092,22 @@ mod tests {
 
         // Doc 3 should be the best match (has all query terms)
         assert_eq!(results[0].0, 3);
+    }
+
+    #[test]
+    fn test_sparse_inverted_index_trait_path() {
+        let mut index = SparseInvertedIndex::new(SparseMetricType::Ip);
+        let base = Dataset::from_vectors(
+            vec![
+                1.0, 0.0, 1.0, 0.0, // id 0
+                0.0, 1.0, 1.0, 0.0, // id 1
+            ],
+            4,
+        );
+        Index::add(&mut index, &base).unwrap();
+
+        let query = Dataset::from_vectors(vec![1.0, 0.0, 0.0, 0.0], 4);
+        let result = Index::search(&index, &query, 1).unwrap();
+        assert_eq!(result.ids.len(), 1);
     }
 }

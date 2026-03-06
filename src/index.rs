@@ -3,6 +3,7 @@
 //! 统一的索引接口
 
 pub mod minhash_lsh;
+pub mod minhash_lsh_index_trait;
 pub use minhash_lsh::MinHashLSHIndex;
 
 use crate::dataset::Dataset;

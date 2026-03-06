@@ -1,5 +1,5 @@
 # Builder 任务队列
-> 最后更新: 2026-03-06 14:38 | 优先级: BUG > PARITY > OPT > BENCH
+> 最后更新: 2026-03-06 23:58 | 优先级: BUG > PARITY > OPT > BENCH
 
 ## 待办 (TODO)
 
@@ -13,6 +13,13 @@
 - [x] **PARITY-P0-002**: 修复 FFI 能力声明与运行时不一致问题 (2026-03-06)
   - 进展: ✅ 添加 FFI AnnIterator 接口 (`knowhere_create_ann_iterator`/`knowhere_ann_iterator_next`/`knowhere_free_ann_iterator`)
   - 验收: `src/ffi.rs` 索引能力矩阵与实际构造/调用路径一致；无"声明支持但运行时 NotImplemented"错位。
+- [x] **BUG-P0-004**: 修复全量 `cargo test` 编译回归（IndexConfig::data_type 迁移后 tests/*.rs 仍引用旧路径/缺字段）
+  - 背景: `cargo test` / `cargo test --tests` 在多个测试文件报错 `missing field data_type` 与 `crate::api::DataType` unresolved import。
+  - 进展 (2026-03-06 23:58):
+    - [x] 批量修复 tests/examples 中 IndexConfig 初始化补齐 `data_type`
+    - [x] 统一替换 `crate::api::DataType` 为 `knowhere_rs::api::DataType`
+    - [x] 恢复 `cargo test --tests --no-run` 可编译通过（不再出现 data_type 迁移相关编译错误）
+  - 备注: 全量 `cargo test` 仍有运行期失败（AISAQ/ScaNN/KMeans 等既有失败项），已转入功能回归问题追踪。
 
 ### P1 (重要)
 - [x] **PARITY-P1-000**: 为核心索引实现 AnnIterator 接口（HNSW/IVF/Flat）

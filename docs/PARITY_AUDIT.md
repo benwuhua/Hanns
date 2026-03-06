@@ -1,9 +1,29 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-06 14:38
+Last updated: 2026-03-06 23:58
 Sync baseline: 388aea90260084965f965b29e0a8b87b7a808d51 from origin/main
 
 ## 轮次记录
+- 2026-03-06 23:58: **BUG-P0-004 编译回归收敛 + 双模块复核（src/index.rs / src/ffi.rs）**
+  1. 执行同步与基线更新：`git fetch origin && git checkout main && git pull origin main && git rev-parse origin/main` -> `388aea90260084965f965b29e0a8b87b7a808d51`
+  2. C++/Rust 增量扫描：`ls .../knowhere/src/index | wc -l`=17，`ls .../include/knowhere/index | wc -l`=8，`ls .../knowhere-rs/src/faiss | wc -l`=47
+  3. 深比对（本轮按要求至少 2 模块逐接口复核）：
+     - `src/index.rs`：`trait Index` 统一契约仍在 (`src/index.rs:127`)
+     - `src/ffi.rs`：`CIndexConfig` / `knowhere_get_index_type` / `knowhere_create_ann_iterator` 接口声明完整
+  4. 回归修复：批量修复 tests/examples 的 `IndexConfig::data_type` 缺失；统一 `crate::api::DataType` -> `knowhere_rs::api::DataType`
+  5. 验证结果：
+     - `cargo test --tests --no-run -q` ✅（data_type 迁移导致的编译错误已清零）
+     - `cargo test -q` / `cargo test --lib -q` ❌（运行期失败：AISAQ trait tests、ScaNN FFI tests、kmeans convergence 等）
+  6. 新发现差距：从“编译回归”转为“运行期功能回归”聚焦，下一步应拆分 AISAQ/ScaNN/KMeans 的稳定性缺口。
+  状态：BUG-P0-004 关闭（编译回归已修复）；全量功能回归仍为 P1。
+- 2026-03-06 18:02: **MinHash Index trait wrapper 接入 + 全量测试回归诊断**
+  1. 执行同步与基线更新：`git fetch origin && git checkout main && git pull origin main && git rev-parse origin/main` -> `388aea90260084965f965b29e0a8b87b7a808d51`
+  2. 对齐扫描命令：`ls /Users/ryan/Code/vectorDB/knowhere/src/index && ls /Users/ryan/Code/vectorDB/knowhere/include/knowhere/index && ls /Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/faiss`
+  3. 逐文件复核：`src/index.rs`、`src/ffi.rs`、`src/index/minhash_lsh.rs`、`src/index/minhash_lsh_index_trait.rs`、`src/index/minhash/minhash_index_node.cc`
+  4. 变更：新增 `src/index/minhash_lsh_index_trait.rs`，为 MinHashLSHIndex 实现统一 `Index` trait（train/add/search/range/get_vector/serialize/iterator 元数据）并补齐 5 个单测；`src/index.rs` 导出模块。
+  5. 验证：`cargo test --lib minhash_lsh_index_trait` 通过；`cargo test` / `cargo test --tests` 失败，失败原因为 tests 侧 `IndexConfig.data_type` 迁移未完成（非本轮 MinHash 模块逻辑错误）。
+  6. 新发现差距：全量测试编译回归，需新增 P0 修复任务 `BUG-P0-004`。
+  状态：MinHash 模块从 Partial（无 trait）提升到 Partial（trait 已接入，仍待 FFI 统一接线与全量回归恢复）。
 - 2026-03-06 14:38: **MinHash FFI 查询长度对齐修复 + 抽样复核**
   1. 执行同步与基线更新：`git fetch origin && git checkout main && git pull origin main && git rev-parse origin/main` -> `388aea90260084965f965b29e0a8b87b7a808d51`
   2. 抽样深比对命令：`ls /Users/ryan/Code/vectorDB/knowhere/src/index && ls /Users/ryan/Code/vectorDB/knowhere/include/knowhere/index && ls /Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/faiss`
@@ -91,7 +111,7 @@ Risk levels:
 | ScaNN | - | `src/faiss/scann.rs` | Done | P1 | ✅ AnnIterator (2026-03-05), ✅ get_vector_by_ids (2026-03-06), ✅ has_raw_data (depends on reorder_k), ✅ Index trait (2026-03-06); tested |
 | HNSW-PQ | - | `src/faiss/hnsw_pq.rs` | Partial | P2 | ✅ AnnIterator (2026-03-05); has_raw_data=false (lossy) |
 | Sparse | `src/index/sparse/sparse_index_node.cc`, `src/index/sparse/sparse_inverted_index.h` | `src/faiss/sparse_inverted.rs`, `src/faiss/sparse_wand.rs`, `src/faiss/sparse_wand_cc.rs` | Partial | P2 | iterator/filter behavior and parameter parity |
-| MinHash | `src/index/minhash/minhash_index_node.cc`, `src/index/minhash/minhash_lsh_config.h` | `src/index/minhash_lsh.rs`, `src/ffi/minhash_lsh_ffi.rs`, `src/api/index.rs` | Partial | P1 | ✅ 参数别名映射已补齐（mh_element_bit_width/mh_lsh_band/mh_lsh_aligned_block_size/mh_lsh_shared_bloom_filter/mh_lsh_bloom_false_positive_prob）；✅ FFI query 长度已对齐 `mh_vec_length * mh_vec_element_size`（2026-03-06 14:38）；⏳ Index trait wrapper 未实现 |
+| MinHash | `src/index/minhash/minhash_index_node.cc`, `src/index/minhash/minhash_lsh_config.h` | `src/index/minhash_lsh.rs`, `src/index/minhash_lsh_index_trait.rs`, `src/ffi/minhash_lsh_ffi.rs`, `src/api/index.rs` | Partial | P1 | ✅ 参数别名映射已补齐；✅ FFI query 长度已对齐 `mh_vec_length * mh_vec_element_size`；✅ `MinHashLSHIndex` 已接入 `Index trait`（2026-03-06 18:02）；⏳ 仍需补齐 FFI 统一路径验证与全量 tests 回归 |
 | FFI ABI | C++ factory + index runtime behavior | `src/ffi.rs`, `docs/FFI_CAPABILITY_MATRIX.md` | Partial | P1 | ✅ capability matrix documented; ✅ consistent error handling (19 NotImplemented returns); runtime behavior mismatch removal ongoing |
 
 ## 4. Validation Policy
