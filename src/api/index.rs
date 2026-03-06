@@ -145,6 +145,9 @@ pub struct IndexConfig {
     pub metric_type: MetricType,
     /// Vector dimension
     pub dim: usize,
+    /// Data type (float, binary, sparse, etc.)
+    #[serde(default)]
+    pub data_type: super::DataType,
     /// Index-specific parameters
     #[serde(default)]
     pub params: IndexParams,
@@ -156,8 +159,30 @@ impl IndexConfig {
             index_type,
             metric_type,
             dim,
+            data_type: super::DataType::Float,
             params: IndexParams::default(),
         }
+    }
+
+    /// Create with explicit data type
+    pub fn with_data_type(
+        index_type: IndexType,
+        metric_type: MetricType,
+        dim: usize,
+        data_type: super::DataType,
+    ) -> Self {
+        Self {
+            index_type,
+            metric_type,
+            dim,
+            data_type,
+            params: IndexParams::default(),
+        }
+    }
+
+    /// Validate the configuration against legal matrix
+    pub fn validate(&self) -> Result<(), String> {
+        super::validate_index_config(self.index_type, self.data_type, self.metric_type)
     }
 }
 
@@ -452,5 +477,22 @@ mod tests {
         assert_eq!(config.index_type, IndexType::IvfSq8);
         assert_eq!(config.metric_type, MetricType::L2);
         assert_eq!(config.dim, 128);
+        assert_eq!(config.data_type, super::DataType::Float);
+    }
+
+    #[test]
+    fn test_index_config_validate() {
+        // Legal combination
+        let config = IndexConfig::new(IndexType::Hnsw, MetricType::L2, 128);
+        assert!(config.validate().is_ok());
+
+        // Illegal combination (binary index with L2 metric)
+        let config = IndexConfig::with_data_type(
+            IndexType::BinFlat,
+            MetricType::L2,
+            128,
+            super::DataType::Binary,
+        );
+        assert!(config.validate().is_err());
     }
 }

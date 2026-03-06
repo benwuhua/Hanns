@@ -1,11 +1,15 @@
 //! API module - public interfaces
 
 pub mod admin;
+pub mod data_type;
 pub mod index;
+pub mod legal_matrix;
 pub mod search;
 
 pub use admin::Admin;
+pub use data_type::DataType;
 pub use index::{IndexConfig, IndexParams, IndexType, MetricType};
+pub use legal_matrix::{validate_index_config, LegalMatrix};
 pub use search::{
     BitsetPredicate, IdsPredicate, Predicate, RangePredicate, RangeSearchResult, SearchRequest,
     SearchResult,

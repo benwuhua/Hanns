@@ -119,6 +119,8 @@ pub struct CIndexConfig {
     // IVF-RaBitQ parameters
     pub num_clusters: usize,
     pub nprobe: usize,
+    /// Data type (0 = Float, 100 = Binary, etc.) - matches Milvus VecType enum
+    pub data_type: i32,
 }
 
 impl Default for CIndexConfig {
@@ -137,6 +139,7 @@ impl Default for CIndexConfig {
             prq_nbits: 8,
             num_clusters: 256,
             nprobe: 8,
+            data_type: 101, // Default to Float (101)
         }
     }
 }
@@ -231,6 +234,37 @@ impl IndexWrapper {
             CMetricType::Cosine => MetricType::Cosine,
             CMetricType::Hamming => MetricType::Hamming,
         };
+
+        // Map CIndexType to IndexType for validation
+        let index_type: IndexType = match config.index_type {
+            CIndexType::Flat => IndexType::Flat,
+            CIndexType::Hnsw => IndexType::Hnsw,
+            CIndexType::Scann => IndexType::Scann,
+            CIndexType::HnswPrq => IndexType::HnswPrq,
+            CIndexType::IvfRabitq => IndexType::IvfRabitq,
+            CIndexType::HnswSq => IndexType::HnswSq,
+            CIndexType::HnswPq => IndexType::HnswPq,
+            CIndexType::BinFlat => IndexType::BinFlat,
+            CIndexType::BinaryHnsw => IndexType::BinaryHnsw,
+            CIndexType::IvfSq8 => IndexType::IvfSq8,
+            CIndexType::IvfFlatCc => IndexType::IvfFlatCc,
+            CIndexType::IvfSqCc => IndexType::IvfSqCc,
+            CIndexType::SparseInverted => IndexType::SparseInverted,
+            CIndexType::SparseWand => IndexType::SparseWand,
+            CIndexType::BinIvfFlat => IndexType::BinIvfFlat,
+            CIndexType::SparseWandCc => IndexType::SparseWandCc,
+            CIndexType::MinHashLsh => IndexType::MinHashLsh,
+        };
+
+        // Parse data_type from i32 (Milvus VecType enum)
+        let data_type = super::api::DataType::from_i32(config.data_type)
+            .unwrap_or(super::api::DataType::Float);
+
+        // Validate (index_type, data_type, metric_type) combination
+        if let Err(e) = super::api::validate_index_config(index_type, data_type, metric) {
+            eprintln!("Invalid index configuration: {}", e);
+            return None;
+        }
 
         match config.index_type {
             CIndexType::Flat => {
