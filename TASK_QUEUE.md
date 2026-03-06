@@ -97,9 +97,13 @@
   - 验收: ✅ AISAQ 通过 Index trait 可访问所有生命周期方法，参数验证与 C++ 一致。
 - [ ] **PARITY-P1-008**: Sparse 索引 Index trait 统一接口实现
   - 背景: Sparse 索引（sparse_inverted/sparse_wand）未实现 Index trait，接口分散。
+  - 进展 (2026-03-07 00:38):
+    - ✅ `SparseInvertedIndex` 已提供 Index trait wrapper（train/add/search/search_with_bitset/get_vector_by_ids）
+    - ✅ `SparseWandIndex` 已提供 Index trait wrapper（train/add/search/search_with_bitset/get_vector_by_ids）
+    - ⚠️ 仍缺 `create_ann_iterator` 与持久化（save/load）对齐；当前返回 Unsupported
   - 目标:
-    - [ ] 为 SparseInvertedIndex 实现 Index trait wrapper
-    - [ ] 为 SparseWandIndex 实现 Index trait wrapper
+    - [x] 为 SparseInvertedIndex 实现 Index trait wrapper
+    - [x] 为 SparseWandIndex 实现 Index trait wrapper
     - [ ] 统一 iterator/filter 行为
   - 验收: Sparse 索引通过 Index trait 可访问核心方法，行为与 C++ 一致。
 - [ ] **PARITY-P1-009**: MinHash LSH Index trait 实现与参数对齐

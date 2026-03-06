@@ -110,7 +110,7 @@ Risk levels:
 | AISAQ | `src/index/diskann/diskann_aisaq.cc`, `src/index/diskann/aisaq_config.h` | `src/faiss/diskann_aisaq.rs`, `src/faiss/aisaq.rs` | Done | P1 | ✅ Index trait implemented (2026-03-06); ✅ AnnIterator; ✅ get_vector_by_ids; parameter and file-layout behavior alignment |
 | ScaNN | - | `src/faiss/scann.rs` | Done | P1 | ✅ AnnIterator (2026-03-05), ✅ get_vector_by_ids (2026-03-06), ✅ has_raw_data (depends on reorder_k), ✅ Index trait (2026-03-06); tested |
 | HNSW-PQ | - | `src/faiss/hnsw_pq.rs` | Partial | P2 | ✅ AnnIterator (2026-03-05); has_raw_data=false (lossy) |
-| Sparse | `src/index/sparse/sparse_index_node.cc`, `src/index/sparse/sparse_inverted_index.h` | `src/faiss/sparse_inverted.rs`, `src/faiss/sparse_wand.rs`, `src/faiss/sparse_wand_cc.rs` | Partial | P2 | iterator/filter behavior and parameter parity |
+| Sparse | `src/index/sparse/sparse_index_node.cc`, `src/index/sparse/sparse_inverted_index.h` | `src/faiss/sparse_inverted.rs`, `src/faiss/sparse_wand.rs`, `src/faiss/sparse_wand_cc.rs` | Partial | P1 | ✅ Index trait train/add/search/search_with_bitset/get_vector_by_ids 已接入；⏳ create_ann_iterator 与 save/load 仍未对齐（当前 Unsupported） |
 | MinHash | `src/index/minhash/minhash_index_node.cc`, `src/index/minhash/minhash_lsh_config.h` | `src/index/minhash_lsh.rs`, `src/index/minhash_lsh_index_trait.rs`, `src/ffi/minhash_lsh_ffi.rs`, `src/api/index.rs` | Partial | P1 | ✅ 参数别名映射已补齐；✅ FFI query 长度已对齐 `mh_vec_length * mh_vec_element_size`；✅ `MinHashLSHIndex` 已接入 `Index trait`（2026-03-06 18:02）；⏳ 仍需补齐 FFI 统一路径验证与全量 tests 回归 |
 | FFI ABI | C++ factory + index runtime behavior | `src/ffi.rs`, `docs/FFI_CAPABILITY_MATRIX.md` | Partial | P1 | ✅ capability matrix documented; ✅ consistent error handling (19 NotImplemented returns); runtime behavior mismatch removal ongoing |
 
@@ -128,6 +128,9 @@ Risk levels:
 
 ## 5. Audit Changelog
 
+- 2026-03-07 00:38: 增量审计 Sparse 模块（`src/index/sparse/*` vs `src/faiss/sparse_inverted.rs` / `src/faiss/sparse_wand.rs` / `src/index.rs` / `src/ffi.rs`）。
+  - ✅ SparseInverted/SparseWand 已通过 Index trait 暴露 train/add/search/search_with_bitset/get_vector_by_ids。
+  - 🆕 新发现差距：Sparse wrapper 的 `save/load` 仍为 Unsupported，`create_ann_iterator` 仍未接线。
 - 2026-03-05 22:32: Detailed interface comparison between C++ and Rust.
   - **C++ Index class methods (17 total):**
     - Build/Train/Add/Search (core lifecycle) ✅
