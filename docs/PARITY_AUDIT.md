@@ -1,9 +1,22 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-06 12:32
-Sync baseline: 92053ec701069a55fd6fe93425db82b0b6a11d81 from origin/main
+Last updated: 2026-03-06 14:38
+Sync baseline: 388aea90260084965f965b29e0a8b87b7a808d51 from origin/main
 
 ## 轮次记录
+- 2026-03-06 14:38: **MinHash FFI 查询长度对齐修复 + 抽样复核**
+  1. 执行同步与基线更新：`git fetch origin && git checkout main && git pull origin main && git rev-parse origin/main` -> `388aea90260084965f965b29e0a8b87b7a808d51`
+  2. 抽样深比对命令：`ls /Users/ryan/Code/vectorDB/knowhere/src/index && ls /Users/ryan/Code/vectorDB/knowhere/include/knowhere/index && ls /Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/faiss`
+  3. 复核接口：`src/index.rs`、`src/ffi.rs`、`src/index/minhash_lsh.rs`、`src/ffi/minhash_lsh_ffi.rs`
+  4. 修复项：`src/index/minhash_lsh.rs` 新增 `vector_byte_size()`；`src/ffi/minhash_lsh_ffi.rs` 将 query/queries 长度计算从占位逻辑改为 `mh_vec_length * mh_vec_element_size`
+  5. 新增回归测试：`test_search_uses_vector_byte_size`
+  状态：MinHash 模块维持 Partial（Index trait wrapper 仍缺失），但 FFI query 长度缺口已关闭，风险从 P1-high 降为 P1-medium。
+- 2026-03-06 13:32: **MinHash 参数别名对齐 + 目录级复核**
+  1. 执行同步与基线更新：`git fetch origin && git checkout main && git pull origin main && git rev-parse origin/main` -> `388aea90260084965f965b29e0a8b87b7a808d51`
+  2. 扫描 C++ 目录：`src/index/`、`include/knowhere/index/`；并对照 Rust `src/index.rs`、`src/ffi.rs`、`src/index/minhash_lsh.rs`
+  3. MinHash 参数命名对齐（部分完成）：`src/api/index.rs` 新增 `mh_*` 到 Rust 参数字段的 serde alias + 单测
+  4. 新发现差距：MinHash 仍未接入统一 `Index trait`；`src/ffi/minhash_lsh_ffi.rs` 的 query 大小计算仍为占位逻辑（`count()*count()`）
+  状态：MinHash 模块保持 Partial，风险维持 P1。
 - 2026-03-06 12:32: **AISAQ Index trait 实现** - 为 AisaqIndex 实现完整的 Index trait，包括：
   1. 基础生命周期方法：train/add/search/search_with_bitset/save/load/serialize_to_memory/deserialize_from_memory
   2. 高级接口：AnnIterator (AisaqAnnIterator) / get_vector_by_ids / has_raw_data
@@ -78,7 +91,7 @@ Risk levels:
 | ScaNN | - | `src/faiss/scann.rs` | Done | P1 | ✅ AnnIterator (2026-03-05), ✅ get_vector_by_ids (2026-03-06), ✅ has_raw_data (depends on reorder_k), ✅ Index trait (2026-03-06); tested |
 | HNSW-PQ | - | `src/faiss/hnsw_pq.rs` | Partial | P2 | ✅ AnnIterator (2026-03-05); has_raw_data=false (lossy) |
 | Sparse | `src/index/sparse/sparse_index_node.cc`, `src/index/sparse/sparse_inverted_index.h` | `src/faiss/sparse_inverted.rs`, `src/faiss/sparse_wand.rs`, `src/faiss/sparse_wand_cc.rs` | Partial | P2 | iterator/filter behavior and parameter parity |
-| MinHash | `src/index/minhash/minhash_index_node.cc`, `src/index/minhash/minhash_lsh_config.h` | `src/index/minhash_lsh.rs`, `src/ffi/minhash_lsh_ffi.rs`, `src/api/index.rs` | Partial | P2 | `mh_*` parameter naming/validation parity |
+| MinHash | `src/index/minhash/minhash_index_node.cc`, `src/index/minhash/minhash_lsh_config.h` | `src/index/minhash_lsh.rs`, `src/ffi/minhash_lsh_ffi.rs`, `src/api/index.rs` | Partial | P1 | ✅ 参数别名映射已补齐（mh_element_bit_width/mh_lsh_band/mh_lsh_aligned_block_size/mh_lsh_shared_bloom_filter/mh_lsh_bloom_false_positive_prob）；✅ FFI query 长度已对齐 `mh_vec_length * mh_vec_element_size`（2026-03-06 14:38）；⏳ Index trait wrapper 未实现 |
 | FFI ABI | C++ factory + index runtime behavior | `src/ffi.rs`, `docs/FFI_CAPABILITY_MATRIX.md` | Partial | P1 | ✅ capability matrix documented; ✅ consistent error handling (19 NotImplemented returns); runtime behavior mismatch removal ongoing |
 
 ## 4. Validation Policy

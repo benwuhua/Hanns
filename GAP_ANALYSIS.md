@@ -1,6 +1,6 @@
 # Knowhere-RS Gap Analysis (Non-GPU)
 
-Last updated: 2026-03-05  
+Last updated: 2026-03-06  
 Scope: Non-GPU production parity against C++ knowhere
 
 ## 1. Baseline and Method
@@ -33,6 +33,7 @@ Evaluation dimensions:
 
 - DiskANN/AISAQ lifecycle and parameter semantics still differ from C++ behavior.
 - HNSW/IVF advanced paths (range search, iterator, vector retrieval, serialization nuances) are not uniformly aligned.
+- MinHash-LSH parity incomplete: `mh_*` naming刚完成别名映射，但 Index trait wrapper 与 FFI 查询长度语义仍未对齐 C++。
 - Legal matrix (index × datatype × metric) is not centralized as a strict runtime gate.
 
 ## P2 (Optimization)

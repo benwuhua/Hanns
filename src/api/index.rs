@@ -242,23 +242,28 @@ pub struct IndexParams {
     /// For IVF: use Elkan algorithm for k-means
     #[serde(default)]
     pub use_elkan: Option<bool>,
-    /// For MinHash-LSH: number of bits for hash
-    #[serde(default)]
+    /// For MinHash-LSH: number of bits for each MinHash element
+    /// C++ parity aliases: mh_element_bit_width
+    #[serde(default, alias = "mh_element_bit_width")]
     pub num_bit: Option<usize>,
     /// For MinHash-LSH: number of bands
-    #[serde(default)]
+    /// C++ parity aliases: mh_lsh_band
+    #[serde(default, alias = "mh_lsh_band")]
     pub num_band: Option<usize>,
-    /// For MinHash-LSH: block size in bytes
-    #[serde(default)]
+    /// For MinHash-LSH: aligned block size in bytes
+    /// C++ parity aliases: mh_lsh_aligned_block_size
+    #[serde(default, alias = "mh_lsh_aligned_block_size")]
     pub block_size: Option<usize>,
     /// For MinHash-LSH: whether to store raw data
     #[serde(default)]
     pub with_raw_data: Option<bool>,
-    /// For MinHash-LSH: whether to use Bloom filter
-    #[serde(default)]
+    /// For MinHash-LSH: whether to use shared/global Bloom filter
+    /// C++ parity aliases: mh_lsh_shared_bloom_filter
+    #[serde(default, alias = "mh_lsh_shared_bloom_filter")]
     pub use_bloom: Option<bool>,
     /// For MinHash-LSH: Bloom filter false positive rate
-    #[serde(default)]
+    /// C++ parity aliases: mh_lsh_bloom_false_positive_prob
+    #[serde(default, alias = "mh_lsh_bloom_false_positive_prob")]
     pub bloom_fp_rate: Option<f64>,
     /// For IVF: use mini-batch k-means (faster for large datasets)
     #[serde(default)]
@@ -496,5 +501,32 @@ mod tests {
             DataType::Binary,
         );
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_minhash_cpp_param_aliases_deserialize() {
+        let json = r#"{
+            "index_type": "min_hash_lsh",
+            "metric_type": "hamming",
+            "dim": 128,
+            "data_type": "binary",
+            "params": {
+                "mh_element_bit_width": 32,
+                "mh_lsh_band": 8,
+                "mh_lsh_aligned_block_size": 4096,
+                "with_raw_data": true,
+                "mh_lsh_shared_bloom_filter": true,
+                "mh_lsh_bloom_false_positive_prob": 0.01
+            }
+        }"#;
+
+        let cfg: IndexConfig = serde_json::from_str(json).expect("deserialize minhash config");
+
+        assert_eq!(cfg.params.num_bit, Some(32));
+        assert_eq!(cfg.params.num_band, Some(8));
+        assert_eq!(cfg.params.block_size, Some(4096));
+        assert_eq!(cfg.params.with_raw_data, Some(true));
+        assert_eq!(cfg.params.use_bloom, Some(true));
+        assert_eq!(cfg.params.bloom_fp_rate, Some(0.01));
     }
 }

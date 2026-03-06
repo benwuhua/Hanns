@@ -182,7 +182,10 @@ pub unsafe extern "C" fn knowhere_minhash_lsh_search(
     let index_ref = &*(index as *const MinHashLSHIndex);
     let params_ref = &*params;
 
-    let query_size = index_ref.count() * index_ref.count(); // Simplified
+    let query_size = index_ref.vector_byte_size();
+    if query_size == 0 {
+        return CMinHashError::InvalidArg as i32;
+    }
     let query_slice = std::slice::from_raw_parts(query as *const u8, query_size);
 
     let bitset = if params_ref.bitset.is_null() {
@@ -230,7 +233,10 @@ pub unsafe extern "C" fn knowhere_minhash_lsh_batch_search(
     let index_ref = &*(index as *const MinHashLSHIndex);
     let params_ref = &*params;
 
-    let vec_size = index_ref.count() * index_ref.count(); // Simplified
+    let vec_size = index_ref.vector_byte_size();
+    if vec_size == 0 {
+        return CMinHashError::InvalidArg as i32;
+    }
     let queries_slice = std::slice::from_raw_parts(queries as *const u8, nq * vec_size);
 
     match index_ref.batch_search(queries_slice, nq, params_ref.k, None) {
@@ -371,6 +377,37 @@ mod tests {
 
             // Free should not panic with null
             knowhere_minhash_lsh_free(ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn test_search_uses_vector_byte_size() {
+        unsafe {
+            let mut idx = MinHashLSHIndex::new();
+            let data: Vec<u8> = (0..(10 * 8 * 8)).map(|i| i as u8).collect();
+            idx.build(&data, 8, 8, 4, true).unwrap();
+
+            let index_ptr = Box::into_raw(Box::new(idx)) as CMinHashLSHIndex;
+            let query: Vec<u8> = data[0..64].to_vec(); // exactly one vector
+            let mut distances = vec![0.0f32; 3];
+            let mut labels = vec![-1i64; 3];
+            let params = CMinHashLSHSearchParams {
+                k: 3,
+                refine_k: 0,
+                search_with_jaccard: false,
+                bitset: ptr::null(),
+            };
+
+            let rc = knowhere_minhash_lsh_search(
+                index_ptr,
+                query.as_ptr() as *const c_char,
+                distances.as_mut_ptr(),
+                labels.as_mut_ptr(),
+                &params,
+            );
+            assert_eq!(rc, CMinHashError::Success as i32);
+
+            knowhere_minhash_lsh_free(index_ptr);
         }
     }
 }

@@ -1,6 +1,6 @@
 # Knowhere-RS Development Roadmap (Non-GPU)
 
-Last updated: 2026-03-05
+Last updated: 2026-03-06
 
 ## Goal
 

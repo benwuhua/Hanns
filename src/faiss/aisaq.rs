@@ -1015,7 +1015,7 @@ mod tests_index_trait {
     #[test]
     fn test_aisaq_index_save_load() {
         let config = AisaqConfig::default();
-        let mut index = AisaqIndex::new(config, MetricType::L2, 4);
+        let mut index = AisaqIndex::new(config.clone(), MetricType::L2, 4);
 
         // Add data using Index trait
         let data: Vec<f32> = (0..16).map(|i| i as f32).collect();

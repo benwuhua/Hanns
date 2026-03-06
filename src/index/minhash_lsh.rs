@@ -826,6 +826,11 @@ impl MinHashLSHIndex {
         self.ntotal
     }
 
+    /// Get bytes per MinHash vector (mh_vec_length * mh_vec_element_size)
+    pub fn vector_byte_size(&self) -> usize {
+        self.mh_vec_length.saturating_mul(self.mh_vec_element_size)
+    }
+
     /// Get index size in bytes
     pub fn size(&self) -> usize {
         self.ntotal * self.bands * std::mem::size_of::<KeyType>()
