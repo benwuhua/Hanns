@@ -108,7 +108,7 @@
   - 验收: Sparse 索引通过 Index trait 可访问核心方法，行为与 C++ 一致。
 - [ ] **PARITY-P1-009**: MinHash LSH Index trait 实现与参数对齐
   - 背景: MinHash LSH 未实现 Index trait，`mh_*` 参数命名与 C++ 不一致。
-  - 进展 (2026-03-06 14:38):
+  - 进展 (2026-03-07 08:55):
     - ✅ 在 `src/api/index.rs` 为 MinHash 参数新增 C++ 别名反序列化：
       - `mh_element_bit_width` -> `num_bit`
       - `mh_lsh_band` -> `num_band`
@@ -118,6 +118,11 @@
     - ✅ 新增单测 `test_minhash_cpp_param_aliases_deserialize`
     - ✅ 修复 `src/ffi/minhash_lsh_ffi.rs` 查询长度占位逻辑：由 `count()*count()` 改为 `vector_byte_size()`（与 `mh_vec_length * mh_vec_element_size` 对齐）
     - ✅ 新增 FFI 回归单测 `test_search_uses_vector_byte_size`
+    - ✅ 修复 `src/ffi.rs` 中 MinHashLSH FFI 能力声明缺口：
+      - `knowhere_get_index_type` 现可返回 `"MinHashLSH"`
+      - `IndexWrapper::create_ann_iterator` 已接入 MinHashLSH 分支
+      - 新增回归测试 `ffi::tests::test_index_type_minhash_lsh`
+    - ⚠️ `cargo test` / `cargo test --tests` 当前仍存在非 MinHash 既有失败（AISAQ/ScaNN/HNSW 若干用例），导致任务未达成“全量回归通过”验收
   - 目标:
     - [ ] 为 MinHashLSHIndex 实现 Index trait wrapper
     - [ ] 对齐 C++ `mh_*` 参数命名和验证

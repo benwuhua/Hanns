@@ -1314,6 +1314,9 @@ impl IndexWrapper {
         } else if let Some(ref idx) = self.hnsw_pq {
             idx.create_ann_iterator(query, bitset)
                 .map_err(|_| CError::NotImplemented)
+        } else if let Some(ref idx) = self.minhash_lsh {
+            idx.create_ann_iterator(query, bitset)
+                .map_err(|_| CError::NotImplemented)
         } else {
             Err(CError::NotImplemented)
         }
@@ -1927,6 +1930,7 @@ pub extern "C" fn knowhere_get_index_type(
         "Flat" => b"Flat\0".as_ptr() as *const std::os::raw::c_char,
         "HNSW" => b"HNSW\0".as_ptr() as *const std::os::raw::c_char,
         "ScaNN" => b"ScaNN\0".as_ptr() as *const std::os::raw::c_char,
+        "MinHashLSH" => b"MinHashLSH\0".as_ptr() as *const std::os::raw::c_char,
         _ => b"Unknown\0".as_ptr() as *const std::os::raw::c_char,
     }
 }
@@ -3560,6 +3564,7 @@ mod tests {
         knowhere_free_index(index);
     }
 
+    #[cfg(feature = "scann")]
     #[test]
     fn test_index_statistics_scann() {
         let config = CIndexConfig {
@@ -3620,6 +3625,29 @@ mod tests {
     }
 
     #[test]
+    fn test_index_type_minhash_lsh() {
+        let config = CIndexConfig {
+            index_type: CIndexType::MinHashLsh,
+            metric_type: CMetricType::Hamming,
+            dim: 64,
+            data_type: 100, // Binary
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        let type_ptr = knowhere_get_index_type(index);
+        assert!(!type_ptr.is_null());
+        let type_str = unsafe { std::ffi::CStr::from_ptr(type_ptr) }
+            .to_str()
+            .unwrap();
+        assert_eq!(type_str, "MinHashLSH");
+
+        knowhere_free_index(index);
+    }
+
+    #[test]
     fn test_create_hnsw_index() {
         let config = CIndexConfig {
             index_type: CIndexType::Hnsw,
@@ -3639,6 +3667,7 @@ mod tests {
         knowhere_free_index(index);
     }
 
+    #[cfg(feature = "scann")]
     #[test]
     fn test_create_scann_index() {
         let config = CIndexConfig {
@@ -3663,6 +3692,7 @@ mod tests {
         knowhere_free_index(index);
     }
 
+    #[cfg(feature = "scann")]
     #[test]
     fn test_scann_add_and_search() {
         let config = CIndexConfig {

@@ -1,9 +1,24 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-06 23:58
-Sync baseline: 388aea90260084965f965b29e0a8b87b7a808d51 from origin/main
+Last updated: 2026-03-07 08:55
+Sync baseline: 7d72f3b9ea4175af10f914fc386528a64a2cff80 from origin/main
 
 ## 轮次记录
+- 2026-03-07 08:55: **MinHashLSH FFI 声明一致性修复 + 双模块复核（src/index.rs / src/ffi.rs）**
+  1. 执行同步与基线更新：`git fetch origin && git checkout main && git pull origin main && git rev-parse origin/main` -> `7d72f3b9ea4175af10f914fc386528a64a2cff80`
+  2. C++/Rust 增量扫描：`find .../knowhere/src/index -maxdepth 1 -type f | wc -l`=7，`find .../include/knowhere/index -maxdepth 1 -type f | wc -l`=8，`find .../knowhere-rs/src/faiss -maxdepth 1 -type f | wc -l`=47
+  3. 逐接口复核：
+     - `src/index.rs`：`trait Index` 仍包含 `create_ann_iterator`/`get_vector_by_ids`/`has_raw_data` 统一入口
+     - `src/ffi.rs`：`IndexWrapper::index_type` 已含 `MinHashLSH`；`knowhere_get_index_type` 返回表此前缺该分支
+  4. 本轮修复：
+     - `src/ffi.rs`：为 `knowhere_get_index_type` 新增 `"MinHashLSH"` 分支，消除类型字符串不一致
+     - `src/ffi.rs`：为 `IndexWrapper::create_ann_iterator` 新增 `minhash_lsh` 分支，统一 ANN iterator 入口
+     - `src/ffi.rs`：新增回归测试 `ffi::tests::test_index_type_minhash_lsh`
+  5. 验证：
+     - ✅ 定向：`cargo test -q ffi::tests::test_index_type_minhash_lsh`
+     - ❌ 全量：`cargo test -q` / `cargo test --lib -q` / `cargo test --tests -q` 仍失败（AISAQ 与 ScaNN/HNSW 既有失败）
+  6. 新发现差距：MinHash FFI 已接线，但全量回归仍被非 MinHash 模块阻断，P1 回归债未清。
+  状态：MinHash 模块维持 Partial（FFI 接线已补齐，待全量回归恢复）。
 - 2026-03-06 23:58: **BUG-P0-004 编译回归收敛 + 双模块复核（src/index.rs / src/ffi.rs）**
   1. 执行同步与基线更新：`git fetch origin && git checkout main && git pull origin main && git rev-parse origin/main` -> `388aea90260084965f965b29e0a8b87b7a808d51`
   2. C++/Rust 增量扫描：`ls .../knowhere/src/index | wc -l`=17，`ls .../include/knowhere/index | wc -l`=8，`ls .../knowhere-rs/src/faiss | wc -l`=47
@@ -111,7 +126,7 @@ Risk levels:
 | ScaNN | - | `src/faiss/scann.rs` | Done | P1 | ✅ AnnIterator (2026-03-05), ✅ get_vector_by_ids (2026-03-06), ✅ has_raw_data (depends on reorder_k), ✅ Index trait (2026-03-06); tested |
 | HNSW-PQ | - | `src/faiss/hnsw_pq.rs` | Partial | P2 | ✅ AnnIterator (2026-03-05); has_raw_data=false (lossy) |
 | Sparse | `src/index/sparse/sparse_index_node.cc`, `src/index/sparse/sparse_inverted_index.h` | `src/faiss/sparse_inverted.rs`, `src/faiss/sparse_wand.rs`, `src/faiss/sparse_wand_cc.rs` | Partial | P1 | ✅ Index trait train/add/search/search_with_bitset/get_vector_by_ids 已接入；⏳ create_ann_iterator 与 save/load 仍未对齐（当前 Unsupported） |
-| MinHash | `src/index/minhash/minhash_index_node.cc`, `src/index/minhash/minhash_lsh_config.h` | `src/index/minhash_lsh.rs`, `src/index/minhash_lsh_index_trait.rs`, `src/ffi/minhash_lsh_ffi.rs`, `src/api/index.rs` | Partial | P1 | ✅ 参数别名映射已补齐；✅ FFI query 长度已对齐 `mh_vec_length * mh_vec_element_size`；✅ `MinHashLSHIndex` 已接入 `Index trait`（2026-03-06 18:02）；⏳ 仍需补齐 FFI 统一路径验证与全量 tests 回归 |
+| MinHash | `src/index/minhash/minhash_index_node.cc`, `src/index/minhash/minhash_lsh_config.h` | `src/index/minhash_lsh.rs`, `src/index/minhash_lsh_index_trait.rs`, `src/ffi/minhash_lsh_ffi.rs`, `src/api/index.rs` | Partial | P1 | ✅ 参数别名映射已补齐；✅ FFI query 长度已对齐 `mh_vec_length * mh_vec_element_size`；✅ `MinHashLSHIndex` 已接入 `Index trait`（2026-03-06 18:02）；✅ `knowhere_get_index_type`/`create_ann_iterator` 已补齐 MinHashLSH 分支（2026-03-07 08:55）；⏳ 全量 tests 回归仍待恢复 |
 | FFI ABI | C++ factory + index runtime behavior | `src/ffi.rs`, `docs/FFI_CAPABILITY_MATRIX.md` | Partial | P1 | ✅ capability matrix documented; ✅ consistent error handling (19 NotImplemented returns); runtime behavior mismatch removal ongoing |
 
 ## 4. Validation Policy

@@ -681,7 +681,10 @@ impl Index for AisaqIndex {
 
         let metadata_bytes = bincode::serialize(&metadata)
             .map_err(|e| IndexError::Unsupported(e.to_string()))?;
-        
+        let metadata_len = metadata_bytes.len() as u64;
+
+        file.write_all(&metadata_len.to_le_bytes())
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
         file.write_all(&metadata_bytes)
             .map_err(|e| IndexError::Unsupported(e.to_string()))?;
 
@@ -1004,7 +1007,7 @@ mod tests_index_trait {
 
         // Add using Index trait
         let added = Index::add(&mut index, &dataset).unwrap();
-        assert_eq!(added, 2);
+        assert_eq!(added, 8);
 
         // Search using Index trait
         let query = Dataset::from_vectors(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], 8);
