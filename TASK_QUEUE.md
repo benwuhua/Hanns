@@ -1,15 +1,16 @@
 # Builder 任务队列
-> 最后更新: 2026-03-09 12:39 | 优先级: BUG > SEMANTIC > ABI/PERSIST > PERF
+> 最后更新: 2026-03-09 12:47 | 优先级: BUG > SEMANTIC/PROD > PERF
 
 ## 待办 (TODO)
 
 - [ ] **PERF-P3-004**: 建立 native knowhere vs knowhere-rs 的关键路径性能领先基线
-  - 背景: 当前项目目标不是停在 parity 收口，而是成为生产级平替并在关键路径上具备绝对性能优势。
+  - 背景: `OBS-P3-005` 已把最小 observability / trace / resource contract 收口，Phase 5 当前唯一活跃缺口已切换为性能领先证据，而不是继续停留在治理基线。
   - 目标:
-    - [ ] 选定非 GPU 主战场（优先 HNSW / IVF / DiskANN 中最有胜算的路径）建立 native-vs-rs benchmark baseline
-    - [ ] 输出分段 profiling 与 recall-gated 结果，明确哪条路径有绝对优势、哪条还只是 parity
-    - [ ] 若暂不具备绝对优势，继续拆出可执行优化任务而不是关闭 queue
-  - 验收: 至少一条核心非 GPU 路径具备可重复、recall-gated、native 对照的性能领先证据。
+    - [ ] 先基于现有 recall-gated artifact 与 bench 入口，选定 1 条最有胜算的非 GPU 主战场（优先 HNSW / IVF / DiskANN）作为本轮唯一主线，避免同时铺开多条路径
+    - [ ] 为该路径补齐 native knowhere vs knowhere-rs 的同口径 baseline：统一数据集、参数、ground truth 来源、R@10/QPS 与资源占用字段
+    - [ ] 输出分段 profiling / hotspot 归因，明确当前是“已领先”“仅 parity”还是“落后但有可执行优化切口”
+    - [ ] 若本轮仍未形成绝对优势，继续拆出最小 optimization follow-up，而不是关闭 queue
+  - 验收: 至少一条核心非 GPU 路径具备可重复、recall-gated、native 对照的性能领先证据；若未领先，也必须沉淀出可直接执行的下一条优化任务。
 
 ### P0 (紧急)
 - [x] **BUG-P0-001**: 修复 `mini_batch_kmeans` SIMD 长度不匹配导致的测试失败 (2026-03-05)
@@ -315,7 +316,7 @@
 - [x] **SEM-P3-001**: 对齐 `GetVectorByIds` / `HasRawData` 的跨索引语义矩阵 (2026-03-09)
 - [x] **ABI-P3-002**: 提升 FFI metadata / additional-scalar 契约，从最小摘要走向逐模块真实语义 (2026-03-09)
 - [x] **PERSIST-P3-003**: 补齐 persistence / deserialize-from-file 语义矩阵与回归 (2026-03-09)
-- [ ] **OBS-P3-005**: 建立最小生产可观测性与运行时治理基线
+- [x] **OBS-P3-005**: 建立最小生产可观测性与运行时治理基线 (2026-03-09)
 - [ ] **PERF-P3-004**: 建立 native knowhere vs knowhere-rs 的关键路径性能领先基线
 
 ## 归档
