@@ -1,6 +1,6 @@
 # Knowhere-RS Development Roadmap (Non-GPU)
 
-Last updated: 2026-03-09 11:03 UTC
+Last updated: 2026-03-09 12:06 UTC
 
 ## Goal
 
@@ -102,7 +102,7 @@ Objective:
 
 Active scoped tasks:
 
-- `HNSW-P1-001`: reduce HNSW hot-path engineering gaps (`visited` allocation, distance reuse, layout inefficiency) and turn HNSW into the first serious performance-lead candidate; current sub-stage is to convert the already-landed local hot-path delta into a remote x86 recall-gated before/after artifact, with repo cwd / runner invocation treated as the active blocker.
+- `HNSW-P1-001`: reduce HNSW hot-path engineering gaps (`visited` allocation, distance reuse, layout inefficiency) and turn HNSW into the first serious performance-lead candidate; current sub-stage is narrower than generic runner/cwd cleanup: first restore the remote x86 repo to an executable baseline (manifest parsable, cwd asserted, sync path recoverable from dirty worktree), then convert the already-landed local hot-path delta into a recall-gated before/after artifact.
 - `IVFPQ-P1-002`: audit and strengthen IVF/PQ search reality (ADC/centroid path), and explicitly classify IVF base as rewrite candidate or non-core placeholder.
 - `DISKANN-P1-003`: fix Rust DiskANN’s distance-path issues and honestly classify the current `PQCode` simplification before using it in any leadership claim.
 - `PERF-P3-005`: once core-path correctness is trustworthy, generate the first recall-gated native-vs-rs baseline for a single core path (priority: `clustered_l2 + HNSW`).

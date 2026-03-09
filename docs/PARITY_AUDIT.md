@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-09 19:03
+Last updated: 2026-03-09 20:06
 Sync baseline: 4f60908fc9ad7438b4b8ff64210481ab281009b0 from origin/main
 
 ## 轮次记录
+- 2026-03-09 20:06: **计划轮次：`HNSW-P1-001` 继续置顶，但 blocker 收窄为远端 repo 基线修复 + artifact 落地（builder-plan）**
+  1. 复核输入：`TASK_QUEUE.md`、`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`。
+  2. 调度判断：queue 首个 TODO 仍为 `HNSW-P1-001`，且最新 `EXEC_RESULT.updated_at=2026-03-09T12:00:00Z` 晚于当前 plan；exec 已把 blocker 从“runner/cwd 需修通”进一步收敛为“远端 repo manifest 已损坏且 sync path 被 dirty worktree 阻断”，因此本轮不能 skip。
+  3. 现状复核：本地 `cargo test --lib hnsw -- --nocapture` 仍通过，说明 HNSW 最近一轮热路径收紧没有引入新的 focused correctness 回归；当前缺口是远端 `/data/work/knowhere-src` 已不具备可执行 benchmark 前置条件，而非新的 HNSW 本地 bugfix。
+  4. 阶段决策：保持 `HNSW-P1-001` 为唯一当前任务，不前移 `IVFPQ-P1-002` / `DISKANN-P1-003` / `PERF-P3-005`；但将出口再次收窄为“先恢复远端 repo 基线（cwd 断言、manifest 可解析、dirty worktree 可恢复），再产出 recall-gated before/after artifact 并给出 go/no-go 结论”。
+  5. 治理动作：同步更新 `TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md` 与 `memory/PLAN_RESULT.json`，避免 exec 继续停留在已经过时的宽泛 runner 叙事。
+  状态：Phase 5 Active（HNSW remains first; remote repo repair is now the active gate before artifact generation）。
 - 2026-03-09 19:03: **计划轮次：`HNSW-P1-001` 不换任务号，但收窄为远端 x86 artifact 落地（builder-plan）**
   1. 复核输入：`TASK_QUEUE.md`、`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`。
   2. 调度判断：queue 首个 TODO 仍为 `HNSW-P1-001`，但最新 `EXEC_RESULT.updated_at=2026-03-09T10:46:09Z` 晚于当前 plan，且 exec 已把 blocker 从“泛热路径工程缺口”收敛为 `remote_x86_artifact_generation`，因此本轮不能 skip。

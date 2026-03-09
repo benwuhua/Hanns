@@ -1,27 +1,31 @@
 # Builder 任务队列
-> 最后更新: 2026-03-09 11:03 UTC | 优先级: BUG > CORE(IMPL/PERF) > SEMANTIC/PROD > BENCH
+> 最后更新: 2026-03-09 12:06 UTC | 优先级: BUG > CORE(IMPL/PERF) > SEMANTIC/PROD > BENCH
 
 ## 待办 (TODO)
 
-- [ ] **HNSW-P1-001**: 收紧 HNSW 热路径工程实现，建立第一条可冲击 native 的核心路径
-  - 背景: HNSW 是当前最接近生产级且最有机会建立性能领先证据的实现；本轮 exec 已完成一轮邻居表 AoS→SoA 收紧并通过本地 `cargo test --lib hnsw -- --nocapture`，当前真实 blocker 已收敛为“远端 x86 recall-gated before/after artifact 仍未落地”，而不是新的本地正确性问题。
+- [ ] **HNSW-P1-001**: 收紧 HNSW 热路径工程实现，先修复远端 repo 前置条件并落地第一份 x86 artifact
+  - 背景: HNSW 仍是当前最接近生产级且最有机会建立性能领先证据的实现；最新 exec 已完成一轮邻居表 AoS→SoA 收紧并通过本地 `cargo test --lib hnsw -- --nocapture`。当前真实 blocker 不再是本地正确性，而是远端工作树已失真：benchmark runner 虽已更接近正确 cwd，但 `/data/work/knowhere-src` 上 `Cargo.toml` 无法解析、`sync.sh --mode git` 又被远端脏工作树拦住，导致 recall-gated artifact 仍无法产出。
   - 代码/文档接缝:
     - `src/faiss/hnsw.rs`
     - `src/faiss/hnsw_search.rs`
     - `scripts/remote/test.sh`
+    - `scripts/remote/sync.sh`
+    - `scripts/remote/common.sh`
     - `benchmark_results/recall_gated_baseline.json`
   - 目标:
     - [ ] 保持 visited list 复用 / 距离复用 / 邻居布局收紧这一热路径主线，不扩散到 IVF / DiskANN
-    - [ ] 先修通远端 benchmark 执行前置条件（repo cwd / runner 调用方式），避免 benchmark 命令落到 `/root` 等错误目录
+    - [ ] 先把远端 repo 恢复到可执行基线：runner 必须 fail-fast 校验 cwd 位于 repo，且远端 `Cargo.toml`/`src/lib.rs`/工作树状态可支持 benchmark 执行
+    - [ ] 消除 `sync.sh --mode git` 被远端脏工作树阻断的路径：要么修正同步策略，要么让脚本对脏树给出可恢复方案，而不是静默卡死在错误 repo 状态
     - [ ] 基于同一 recall gate 产出至少一份 HNSW before/after artifact，并据此判定邻居布局调整是否真实获益
   - required_checks:
     - [x] `cargo test --lib hnsw -- --nocapture`
+    - [ ] 远端 x86：确认 repo 处于可执行基线（manifest 可解析、cwd 正确、同步路径可恢复）
     - [ ] 远端 x86：在正确 repo cwd 下产出至少一份 HNSW recall-gated before/after artifact
   - deferred_checks:
     - [ ] `cargo test --lib -q`
     - [ ] `cargo test --tests -q`
     - [ ] native-vs-rs `clustered_l2 + HNSW` 对照结论（`PERF-P3-005`）
-  - 验收: HNSW 形成第一条可信的 recall-gated 主证据链；若邻居布局调整无收益，也必须留下可复用的 no-go artifact，而不是口头结论。
+  - 验收: 远端 HNSW benchmark 执行前置条件被修通并留下可复用脚本路径；HNSW 形成第一条可信的 recall-gated 主证据链；若邻居布局调整无收益，也必须留下可复用的 no-go artifact，而不是口头结论。
 
 - [ ] **IVFPQ-P1-002**: 审核并强化 IVF / PQ 核心搜索路径（以 ADC 和 centroid search 为中心）
   - 背景: IVF base 仍偏占位，IVF-PQ/ScaNN 虽已有 ADC 代码路径，但当前还缺一轮“实现真实性 + 核心搜索路径”的审计与 targeted benchmark。
