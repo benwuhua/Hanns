@@ -4,6 +4,13 @@ Last updated: 2026-03-09 15:03
 Sync baseline: 4f60908fc9ad7438b4b8ff64210481ab281009b0 from origin/main
 
 ## 轮次记录
+- 2026-03-09 17:05: **计划轮次：将 `CORE-P0-001` 从代码语义修复继续收窄为远端 x86 toolchain unblock（builder-plan）**
+  1. 复核输入：`TASK_QUEUE.md`、`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`。
+  2. 调度判断：queue 首个 TODO 仍与 `PLAN_RESULT.task_id=CORE-P0-001` 一致，但最新 `EXEC_RESULT.updated_at` 已晚于 plan，且 blocker 已由 `src/simd.rs` 代码语义推进为 `remote_x86_toolchain`，因此本轮不能 skip。
+  3. 现状复核：本地 smoke `cargo test --lib -q` 通过，`scripts/remote/common.sh` 的最小兼容修复已落地；当前无法拿到新鲜 required gate 的直接原因是远端 cargo 1.75 解析 `getrandom 0.4.1` 时不支持 edition2024 manifest，而不是新的 SIMD 数值错误。
+  4. 阶段决策：保留 `CORE-P0-001` 为当前任务，但将其出口改写为“先恢复远端 x86 SIMD 验证链可执行性，再重跑 focused SIMD gate”；`HNSW-P1-001` / `IVFPQ-P1-002` / `DISKANN-P1-003` / `PERF-P3-005` 继续排在其后。
+  5. 治理动作：同步更新 `TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md` 与 `memory/PLAN_RESULT.json`，把当前 blocker 固化为可执行的 scoped task，避免 exec 继续围绕过时的 `src/simd.rs` 叙事空转。
+  状态：Phase 5 Active（remote x86 toolchain drift blocks fresh SIMD evidence）。
 - 2026-03-09 16:14: **计划轮次：将 `CORE-P0-001` 从泛 SIMD 正确性收窄为 x86 default+simd 构建语义修复（builder-plan）**
   1. 复核输入：`TASK_QUEUE.md`、`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`。
   2. 调度判断：queue 首个 TODO 与 `PLAN_RESULT.task_id` 形式上一致，但最新 exec 已把 blocker 收敛为 `remote_x86_default_simd_build`，且 `next_action=plan`；原 plan 中“修 SIMD correctness + default policy”的宽目标已失效，因此本轮不能 skip。

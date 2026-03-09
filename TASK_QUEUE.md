@@ -3,28 +3,28 @@
 
 ## 待办 (TODO)
 
-- [ ] **CORE-P0-001**: 收敛 x86 default+simd 构建语义，使 SIMD 成为可信核心默认路径
-  - 背景: exec 已完成 SSE/AVX2 L2 reduction 最小修复，并将 `simd` 纳入 default；当前真实阻塞点已收敛为远端 x86 `default+simd` 构建失败：`src/simd.rs` 存在大量既有 intrinsic 调用未置于正确 `unsafe` / `target_feature` 上下文，导致 `DISKANN / HNSW / IVF / PQ` 无法拿到可信的 x86 SIMD 正向门禁与性能结论。
+- [ ] **CORE-P0-001**: 恢复远端 x86 SIMD 验证链可执行性，重新建立 default+simd 的可信 required gate
+  - 背景: exec 已完成 SSE/AVX2 L2 reduction 最小修复、补 irregular-input focused regression，并将 `simd` 纳入 default；但最新 blocker 已不再是本地 `src/simd.rs` 语义整理，而是远端 x86 gate 无法执行：远端 cargo 1.75 在解析依赖时卡在 `getrandom 0.4.1` 的 edition2024 manifest，导致 `DISKANN / HNSW / IVF / PQ` 仍拿不到新鲜的 x86 SIMD required-check 证据。
   - 代码/文档接缝:
-    - `Cargo.toml`
-    - `src/simd.rs`
-    - `scripts/remote/*.sh`（仅用于远端 x86 gate 复核）
+    - `Cargo.lock`
+    - `scripts/remote/common.sh`
+    - `scripts/remote/*.sh`
     - `TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`
   - 目标:
-    - [ ] 系统梳理 `src/simd.rs` 中 x86 intrinsic 调用点，补齐最小必要的 `unsafe` 边界与 `#[target_feature]` / 调度包装，恢复 default+simd x86 可编译性
-    - [ ] 保持已修复的 SSE/AVX2 `l2_*` 水平求和正确性，不因安全语义重构引入数值回退
-    - [ ] 补 focused x86 SIMD correctness regressions，至少覆盖 irregular input 上 scalar vs SSE/AVX2 一致性
-    - [ ] 在远端 x86 上重新拿到一条可信 required gate，证明 default SIMD 路径可构建、可执行、可对齐标量结果
+    - [ ] 收敛远端 x86 Rust/Cargo toolchain 兼容层（升级/引导/隔离依赖解析策略三选一），确保当前工作树可稳定执行 SIMD gate
+    - [ ] 保持已修复的 SSE/AVX2 `l2_*` 正确性与 irregular-input regression 不回退，不为绕过 toolchain 问题回退 `simd` default 策略
+    - [ ] 在远端 x86 重新跑通 focused SIMD required checks，恢复 default+simd 可构建、可执行、可对齐标量结果的可信证据
+    - [ ] 若远端 toolchain 需要长期约束，补最小可审计说明，避免后续 perf/leadership 轮次再次踩同一环境坑
   - required_checks:
     - [ ] 远端 x86：`cargo test --features simd simd::tests -- --nocapture`
-    - [ ] 远端 x86：至少一条 focused 回归证明 SIMD 与标量 `l2` 结果一致
-    - [ ] 本地/远端其一：`cargo test --lib -q`
+    - [ ] 远端 x86：`cargo test --lib --features simd test_x86_simd_l2_reduction_matches_scalar_on_irregular_input -- --nocapture`
+    - [ ] 本地：`cargo test --lib -q`
   - deferred_checks:
-    - [ ] 跨全部索引的大规模 perf sweep
     - [ ] `cargo test --tests -q`
     - [ ] `cargo test -q`
+    - [ ] 跨全部索引的大规模 perf sweep
     - [ ] native-vs-rs recall-gated leadership benchmark
-  - 验收: x86 `default+simd` 构建恢复、focused correctness 证据成立，SIMD 可作为 `DISKANN / HNSW / IVF / PQ` 后续性能工作的可信默认底座。
+  - 验收: 远端 x86 SIMD gate 可稳定执行并通过，default+simd 重新具备新鲜 required-check 证据，后续 `HNSW / IVF / PQ / DiskANN` 性能工作不再受 toolchain 漂移阻断。
 
 - [ ] **HNSW-P1-001**: 收紧 HNSW 热路径工程实现，建立第一条可冲击 native 的核心路径
   - 背景: HNSW 是当前最接近生产级且最有机会建立性能领先证据的实现，但热路径仍有 `visited` 分配、结果距离二次计算、邻居布局不紧凑等工程缺口。

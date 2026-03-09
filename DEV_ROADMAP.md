@@ -102,7 +102,7 @@ Objective:
 
 Active scoped tasks:
 
-- `CORE-P0-001`: close x86 `default+simd` build semantics (`unsafe` / `target_feature`) and re-establish SIMD as a credible default execution path before any performance claim on `DISKANN / HNSW / IVF / PQ`.
+- `CORE-P0-001`: restore the remote x86 SIMD verification lane (toolchain compatibility + fresh required gates) so `default+simd` is again a credible default execution path before any performance claim on `DISKANN / HNSW / IVF / PQ`.
 - `HNSW-P1-001`: reduce HNSW hot-path engineering gaps (`visited` allocation, distance reuse, layout inefficiency) and turn HNSW into the first serious performance-lead candidate.
 - `IVFPQ-P1-002`: audit and strengthen IVF/PQ search reality (ADC/centroid path), and explicitly classify IVF base as rewrite candidate or non-core placeholder.
 - `DISKANN-P1-003`: fix Rust DiskANN’s distance-path issues and honestly classify the current `PQCode` simplification before using it in any leadership claim.

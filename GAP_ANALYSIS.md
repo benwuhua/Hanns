@@ -37,7 +37,7 @@ Evaluation dimensions:
 
 ## P3 (Core Implementation / Semantic Fidelity / Production Readiness / Performance Advantage)
 
-- 🚧 `CORE-P0-001`: 当前最高优先级已进一步收敛为恢复 x86 `default+simd` 构建语义可信度。L2 reduction 最小修复和 `simd` 默认化已经开始落地，但远端 x86 gate 证明 `src/simd.rs` 仍有大量既有 intrinsic 调用缺少正确 `unsafe` / `target_feature` 边界；在这一步闭环前，`DISKANN / HNSW / IVF / PQ` 的性能和正确性结论都不稳。
+- 🚧 `CORE-P0-001`: 当前最高优先级已进一步收敛为恢复远端 x86 SIMD 验证链的可执行性。L2 reduction 最小修复与 `simd` 默认化已落地，但最新 exec 证明真正阻塞点已切到远端 Rust/Cargo toolchain 失配（cargo 1.75 无法解析 `getrandom 0.4.1` 的 edition2024 manifest），导致 x86 `default+simd` required gate 无法获得新鲜证据；在这一步闭环前，`DISKANN / HNSW / IVF / PQ` 的性能和正确性结论都不稳。
 - 🚧 `HNSW-P1-001`: HNSW 是当前最接近生产级且最可能先跑出“绝对性能优势”的路径，但热路径仍有工程差距（`visited` 分配、结果距离二次计算、邻居布局不紧凑）。
 - 🚧 `IVFPQ-P1-002`: IVF/PQ 需要从“接口存在”切到“实现真实性和热点路径可信”。IVF base 当前更像占位实现，IVF-PQ/ScaNN 则需要 focused 审计和 benchmark 证明。
 - 🚧 `DISKANN-P1-003`: Rust DiskANN 当前仍是“简化 Vamana + 简化 PQ”边界，需先修距离路径并明确工程边界，避免误把它当原生 DiskANN 同级实现。
