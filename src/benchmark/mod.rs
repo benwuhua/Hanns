@@ -3,14 +3,20 @@
 use std::time::Instant;
 
 pub mod avx512_bench;
+pub mod cross_dataset_sampling;
 pub mod distance_validator;
 pub mod memory_tracker;
 pub mod recall;
+pub mod recall_gated_baseline;
+pub mod report_schema;
 
 pub use avx512_bench::*;
+pub use cross_dataset_sampling::*;
 pub use distance_validator::*;
 pub use memory_tracker::*;
 pub use recall::*;
+pub use recall_gated_baseline::*;
+pub use report_schema::*;
 
 /// 简单的基准测试工具
 pub struct Bench {
