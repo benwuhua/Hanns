@@ -1,16 +1,10 @@
 # Builder 任务队列
-> 最后更新: 2026-03-09 10:02 | 优先级: BUG > SEMANTIC > ABI/PERSIST > PERF
+> 最后更新: 2026-03-09 10:34 | 优先级: BUG > SEMANTIC > ABI/PERSIST > PERF
 
 ## 待办 (TODO)
 
-- [ ] **SEM-P3-001**: 收敛 `GetVectorByIds` / `HasRawData` 剩余语义尾项（HNSW / IVF / Sparse / ScaNN）
-  - 背景: `DiskANN` / `AISAQ` 已按 native knowhere 的 metric-gated raw-data 语义收敛，但 Phase 5 语义矩阵仍剩 `HNSW` / `IVF` / `Sparse` / `ScaNN` 的 missing-id、empty-index、lossy-index 与 `has_raw_data=false` 行为未系统化。
-  - 目标:
-    - [ ] 对照原生 `include/knowhere/index/index_node.h` 与 `src/index/*`，补完 `HNSW` / `IVF` / `Sparse` / `ScaNN` 的 `GetVectorByIds` / `HasRawData` 语义矩阵
-    - [ ] 显式收敛 missing-id、empty-index、lossy-index、`has_raw_data=false` 四类边界的错误模型与 Unsupported 语义
-    - [ ] 新增 focused conformance tests，优先覆盖 `ScaNN reorder/raw-data gate`、`IVF/RaBitQ lossy get-by-id`、`Sparse missing-id`、`HNSW empty/missing-id`
-  - 验收: `docs/PARITY_AUDIT.md` 能给出剩余索引的 native-vs-rs 语义矩阵与差异边界；当前任务关闭时，不再只停留在“入口存在”，而是能解释 get-by-id/raw-data 在各索引上的支持/拒绝/报错语义。
 - [ ] **ABI-P3-002**: 提升 FFI metadata / additional-scalar 契约，从最小摘要走向逐模块真实语义
+  - 背景: `SEM-P3-001` 已收口，当前 `knowhere_is_additional_scalar_supported` / `knowhere_get_index_meta` 虽已有统一入口，但更多是稳定的最小 JSON contract，不是逐模块真实元数据语义。
   - 背景: 当前 `knowhere_is_additional_scalar_supported` / `knowhere_get_index_meta` 已有统一入口，但更多是稳定的最小 JSON contract，不是逐模块真实元数据语义。
   - 目标:
     - [ ] 对照原生 `Index::IsAdditionalScalarSupported` / `Index::GetIndexMeta` 路径，建立 per-index 语义矩阵
@@ -333,12 +327,19 @@
   - 验收: ✅ 测试数量达标且无新增 flaky 模块。
 
 ### P3 (语义对齐 / 生产硬化 / 性能领先)
-- [ ] **SEM-P3-001**: 对齐 `GetVectorByIds` / `HasRawData` 的跨索引语义矩阵
+- [x] **SEM-P3-001**: 对齐 `GetVectorByIds` / `HasRawData` 的跨索引语义矩阵 (2026-03-09)
 - [ ] **ABI-P3-002**: 提升 FFI metadata / additional-scalar 契约，从最小摘要走向逐模块真实语义
 - [ ] **PERSIST-P3-003**: 补齐 persistence / deserialize-from-file 语义矩阵与回归
 - [ ] **PERF-P3-004**: 建立 native knowhere vs knowhere-rs 的关键路径性能领先基线
 
 ## 归档
+- [x] **SEM-P3-001**: 收敛 `GetVectorByIds` / `HasRawData` 剩余语义尾项（HNSW / IVF / Sparse / ScaNN） (2026-03-09)
+  - 完成情况:
+    - [x] HNSW 空索引 / missing-id 行为已稳定化并具备 focused regression
+    - [x] IVF-SQ8 / IVF-RaBitQ 的 raw-data / lossy get-by-id 语义已显式收敛
+    - [x] Sparse missing-id 与显式 doc_id 路径语义已收敛并可审计
+    - [x] ScaNN reorder/raw-data gate 已收敛为稳定 contract
+  - 验收: ✅ Phase 5 第一条 semantic-fidelity 尾项关闭，queue 不再保留已完成 umbrella 任务。
 - [x] **DOCS-BASELINE-002**: 创建 FFI 能力矩阵文档 `docs/FFI_CAPABILITY_MATRIX.md` (2026-03-05)
 - [x] **PARITY-P0-003**: 添加 AnnIterator trait 定义到 `src/index.rs` (2026-03-05)
 - [x] **DOCS-BASELINE-001**: 重建 GAP/ROADMAP/TASK_QUEUE/PARITY_AUDIT 文档基线（2026-03-05）

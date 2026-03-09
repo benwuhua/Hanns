@@ -1,6 +1,6 @@
 # Knowhere-RS Gap Analysis (Non-GPU)
 
-Last updated: 2026-03-08  
+Last updated: 2026-03-09  
 Scope: Non-GPU production parity against C++ knowhere
 
 ## 1. Baseline and Method
@@ -37,8 +37,8 @@ Evaluation dimensions:
 
 ## P3 (Semantic Fidelity / Production Readiness / Performance Advantage)
 
-- 🚧 `SEM-P3-001`: `DiskANN` / `AISAQ` 已完成 metric-gated raw-data 语义收敛，但 `HNSW` / `IVF` / `Sparse` / `ScaNN` 的 `GetVectorByIds` / `HasRawData` 仍缺少 missing-id、empty-index、lossy-index、`has_raw_data=false` 的系统化语义矩阵。
-- 🚧 `ABI-P3-002`: FFI metadata / additional-scalar 目前仍偏“最小稳定摘要”，需要向逐模块真实语义提升。
+- ✅ `SEM-P3-001`: `DiskANN` / `AISAQ` / `HNSW` / `IVF` / `Sparse` / `ScaNN` 的 `GetVectorByIds` / `HasRawData` Phase-5 语义尾项已完成 focused 收敛；当前不再缺“入口存在但边界语义不可解释”的 semantic-fidelity blocker。
+- 🚧 `ABI-P3-002`: FFI metadata / additional-scalar 目前仍偏“最小稳定摘要”，需要向逐模块真实语义提升；这是最小且最高价值的下一条 production-readiness 缺口。
 - 🚧 `PERSIST-P3-003`: persistence / `DeserializeFromFile` 语义矩阵尚未系统化，不足以直接宣称生产级替代完成。
 - 🚧 `PERF-P3-004`: 项目目标已明确升级为“生产级平替 + 绝对性能优势”；仍需建立 native-vs-rs 的 recall-gated 优势基线。
 

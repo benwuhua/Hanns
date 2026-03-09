@@ -1,6 +1,6 @@
 # Knowhere-RS Development Roadmap (Non-GPU)
 
-Last updated: 2026-03-08
+Last updated: 2026-03-09
 
 ## Goal
 
@@ -101,10 +101,13 @@ Objective:
 
 Active scoped tasks:
 
-- `SEM-P3-001`: finish the remaining semantic tail for `GetVectorByIds` / `HasRawData` on HNSW / IVF / Sparse / ScaNN after DiskANN + AISAQ metric-gated raw-data behavior was aligned.
 - `ABI-P3-002`: upgrade FFI metadata / additional-scalar semantics from minimal summary to per-index real contract.
 - `PERSIST-P3-003`: build a complete persistence / deserialize-from-file semantics matrix and regression set.
 - `PERF-P3-004`: establish recall-gated native-vs-rs performance leadership baseline on selected non-GPU paths.
+
+Recently closed milestone:
+
+- `SEM-P3-001`: HNSW / IVF / Sparse / ScaNN 的 `GetVectorByIds` / `HasRawData` 语义尾项已完成 focused 收敛；missing-id、empty-index、lossy-index、reorder/raw-data gate 等边界现已具备可审计回归证据。 
 
 Exit criteria:
 

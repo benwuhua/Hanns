@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-09 01:50
+Last updated: 2026-03-09 02:34
 Sync baseline: 4f60908fc9ad7438b4b8ff64210481ab281009b0 from origin/main
 
 ## 轮次记录
+- 2026-03-09 02:34: **计划轮次：关闭 `SEM-P3-001` 并切换 `ABI-P3-002`（builder-plan）**
+  1. 复核输入：`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`memory/DEV_RESULT.json`、`memory/VERIFY_RESULT.json`、`TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`。
+  2. 调度判断：最新 `EXEC_RESULT.updated_at=2026-03-09T02:14:52Z` 晚于 `PLAN_RESULT.updated_at=2026-03-09T02:02:00Z`，且 queue 首个 TODO 仍指向旧 umbrella `SEM-P3-001`，因此当前 plan 已失效，不能 skip。
+  3. 收口结论：最新 exec 已把 `HNSW` / `IVF` / `Sparse` / `ScaNN` 的 `GetVectorByIds` / `HasRawData` focused semantic tail 收敛到可审计状态；继续保留 `SEM-P3-001` 作为当前任务只会让 exec 重复进入已关闭范围。
+  4. 阶段决策：按 `BUG > PARITY > OPT > BENCH` 与 Phase 5 目标，下一最小高价值缺口切换为 `ABI-P3-002`，先把 FFI metadata / additional-scalar 从“最小稳定摘要”提升为逐模块真实 contract。
+  5. 治理动作：同步更新 `TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`，将 `SEM-P3-001` 从 active queue 出队并把 `ABI-P3-002` 提升为当前任务。
+  状态：Phase 5 Active（semantic tail closed；production metadata hardening in progress）。
 - 2026-03-09 01:50: **SEM-P3-001 focused delta：收敛 DiskANN / AISAQ 的 `HasRawData` 度量语义（builder-exec）**
   1. 对照原生 `src/index/diskann/diskann.cc` 与 `src/index/diskann/diskann_aisaq.cc`，确认 `HasRawData` 只对 `L2/COSINE` 返回 true，而非“是否已有内存向量”这种运行态条件。
   2. Rust 侧修复：`src/faiss/diskann.rs` 与 `src/faiss/aisaq.rs` 改为按 metric gate 暴露 raw-data 语义；`get_vector_by_ids` 在 `has_raw_data=false` 时返回 Unsupported，而不是继续走伪 raw-data 路径。
