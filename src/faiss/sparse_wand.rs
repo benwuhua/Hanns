@@ -5,9 +5,11 @@
 
 use crate::dataset::Dataset;
 use crate::faiss::sparse_inverted::{
-    InvertedIndexAlgo, SparseInvertedIndex, SparseInvertedSearcher, SparseMetricType, SparseVector,
+    ann_results_from_sparse_query, bitset_to_bool_vec, dataset_row_to_sparse, InvertedIndexAlgo,
+    SparseAnnIterator, SparseInvertedIndex, SparseInvertedSearcher, SparseMetricType,
+    SparseVector,
 };
-use crate::index::{Index, IndexError, SearchResult};
+use crate::index::{AnnIterator, Index, IndexError, SearchResult};
 
 /// 稀疏 WAND 索引
 pub struct SparseWandIndex {
@@ -78,8 +80,7 @@ impl Index for SparseWandIndex {
     fn add(&mut self, dataset: &Dataset) -> Result<usize, IndexError> {
         let base = self.count() as i64;
         for row in 0..dataset.num_vectors() {
-            let dense = dataset.get_vector(row).ok_or(IndexError::DimMismatch)?;
-            let sparse = SparseVector::from_dense(dense, 0.0);
+            let sparse = dataset_row_to_sparse(dataset, row)?;
             let doc_id = dataset
                 .ids()
                 .and_then(|ids| ids.get(row).copied())
@@ -93,8 +94,7 @@ impl Index for SparseWandIndex {
         if query.num_vectors() == 0 {
             return Ok(SearchResult::new(Vec::new(), Vec::new(), 0.0));
         }
-        let dense = query.get_vector(0).ok_or(IndexError::DimMismatch)?;
-        let sparse = SparseVector::from_dense(dense, 0.0);
+        let sparse = dataset_row_to_sparse(query, 0)?;
         let result = SparseWandIndex::search(self, &sparse, top_k, None);
         let (ids, distances): (Vec<i64>, Vec<f32>) = result.into_iter().unzip();
         Ok(SearchResult::new(ids, distances, 0.0))
@@ -109,9 +109,8 @@ impl Index for SparseWandIndex {
         if query.num_vectors() == 0 {
             return Ok(SearchResult::new(Vec::new(), Vec::new(), 0.0));
         }
-        let dense = query.get_vector(0).ok_or(IndexError::DimMismatch)?;
-        let sparse = SparseVector::from_dense(dense, 0.0);
-        let bools: Vec<bool> = (0..bitset.len()).map(|i| bitset.get(i)).collect();
+        let sparse = dataset_row_to_sparse(query, 0)?;
+        let bools = bitset_to_bool_vec(bitset);
         let result = SparseWandIndex::search(self, &sparse, top_k, Some(&bools));
         let (ids, distances): (Vec<i64>, Vec<f32>) = result.into_iter().unzip();
         Ok(SearchResult::new(ids, distances, 0.0))
@@ -138,22 +137,42 @@ impl Index for SparseWandIndex {
         Ok(out)
     }
 
+    fn create_ann_iterator(
+        &self,
+        query: &Dataset,
+        bitset: Option<&crate::bitset::BitsetView>,
+    ) -> Result<Box<dyn AnnIterator>, IndexError> {
+        if query.num_vectors() == 0 {
+            return Ok(Box::new(SparseAnnIterator::new(Vec::new())));
+        }
+
+        let sparse = dataset_row_to_sparse(query, 0)?;
+        let results = ann_results_from_sparse_query(
+            &self.inner,
+            &sparse,
+            bitset,
+            InvertedIndexAlgo::DaatWand,
+        );
+        Ok(Box::new(SparseAnnIterator::new(results)))
+    }
+
     fn has_raw_data(&self) -> bool {
         true
     }
 
-    fn save(&self, _path: &str) -> Result<(), IndexError> {
-        Err(IndexError::Unsupported("save not implemented".into()))
+    fn save(&self, path: &str) -> Result<(), IndexError> {
+        self.inner.save_to_path(path)
     }
 
-    fn load(&mut self, _path: &str) -> Result<(), IndexError> {
-        Err(IndexError::Unsupported("load not implemented".into()))
+    fn load(&mut self, path: &str) -> Result<(), IndexError> {
+        self.inner.load_from_path(path)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_sparse_wand_new() {
@@ -193,5 +212,83 @@ mod tests {
         let query = Dataset::from_vectors(vec![1.0, 0.0, 0.0, 0.0], 4);
         let result = Index::search(&index, &query, 1).unwrap();
         assert_eq!(result.ids.len(), 1);
+    }
+
+    #[test]
+    fn test_sparse_wand_ann_iterator_respects_bitset() {
+        let mut index = SparseWandIndex::new(SparseMetricType::Ip);
+        let base = Dataset::from_vectors(
+            vec![
+                1.0, 0.0, 0.0, 0.0, // id 0
+                0.0, 1.0, 0.0, 0.0, // id 1
+            ],
+            4,
+        );
+        Index::add(&mut index, &base).unwrap();
+
+        let query = Dataset::from_vectors(vec![1.0, 0.0, 0.0, 0.0], 4);
+        let mut bitset = crate::bitset::BitsetView::new(2);
+        bitset.set(0, true); // filter id=0
+
+        let mut it = Index::create_ann_iterator(&index, &query, Some(&bitset)).unwrap();
+        if let Some((id, _)) = it.next() {
+            assert_ne!(id, 0);
+        }
+    }
+
+    #[test]
+    fn test_sparse_wand_iterator_and_search_with_bitset_consistent() {
+        let mut index = SparseWandIndex::new(SparseMetricType::Ip);
+        let base = Dataset::from_vectors(
+            vec![
+                1.0, 0.0, 1.0, 0.0, // id 0
+                0.8, 0.2, 0.0, 0.0, // id 1
+                0.0, 1.0, 1.0, 0.0, // id 2
+            ],
+            4,
+        );
+        Index::add(&mut index, &base).unwrap();
+
+        let query = Dataset::from_vectors(vec![1.0, 0.0, 1.0, 0.0], 4);
+        let mut bitset = crate::bitset::BitsetView::new(3);
+        bitset.set(0, true); // 过滤最优 doc，验证路径一致
+
+        let search_result = Index::search_with_bitset(&index, &query, 1, &bitset).unwrap();
+        assert_eq!(search_result.ids.len(), 1);
+
+        let mut it = Index::create_ann_iterator(&index, &query, Some(&bitset)).unwrap();
+        let first = it.next().expect("iterator should return at least one item");
+
+        assert_eq!(first.0, search_result.ids[0]);
+    }
+
+    #[test]
+    fn test_sparse_wand_save_load_roundtrip_preserves_wand_behavior() {
+        let mut index = SparseWandIndex::new(SparseMetricType::Ip);
+        let base = Dataset::from_vectors(
+            vec![
+                1.0, 0.0, 1.0, 0.0,
+                0.8, 0.2, 0.0, 0.0,
+                0.0, 1.0, 1.0, 0.0,
+            ],
+            4,
+        );
+        Index::add(&mut index, &base).unwrap();
+
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().to_string_lossy().to_string();
+        Index::save(&index, &path).unwrap();
+
+        let mut loaded = SparseWandIndex::new(SparseMetricType::Ip);
+        Index::load(&mut loaded, &path).unwrap();
+
+        let query = Dataset::from_vectors(vec![1.0, 0.0, 1.0, 0.0], 4);
+        let original = Index::search(&index, &query, 2).unwrap();
+        let restored = Index::search(&loaded, &query, 2).unwrap();
+        assert_eq!(restored.ids, original.ids);
+        assert_eq!(restored.distances, original.distances);
+
+        let mut it = Index::create_ann_iterator(&loaded, &query, None).unwrap();
+        assert_eq!(it.next().map(|(id, _)| id), original.ids.first().copied());
     }
 }

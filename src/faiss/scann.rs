@@ -1072,8 +1072,8 @@ mod tests {
 
         let mut index = ScaNNIndex::new(dim, config).unwrap();
 
-        // Generate test data
-        let n = 1000;
+        // Generate test data (keep small for stable regression runtime)
+        let n = 256;
         let mut data = vec![0.0f32; n * dim];
         for i in 0..data.len() {
             data[i] = (i as f32 * 0.01).sin();

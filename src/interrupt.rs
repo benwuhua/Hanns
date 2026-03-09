@@ -7,16 +7,20 @@
 //! ```rust
 //! use knowhere_rs::interrupt::Interrupt;
 //!
-//! let interrupt = Interrupt::new();
-//!
-//! // In a long-running operation
-//! for i in 0..1000 {
-//!     if interrupt.is_interrupted() {
-//!         println!("Operation cancelled at iteration {}", i);
-//!         return Err("Operation interrupted");
+//! fn run_operation(interrupt: &Interrupt) -> Result<(), &'static str> {
+//!     // In a long-running operation
+//!     for i in 0..1000 {
+//!         if interrupt.is_interrupted() {
+//!             println!("Operation cancelled at iteration {}", i);
+//!             return Err("Operation interrupted");
+//!         }
+//!         // ... do work ...
 //!     }
-//!     // ... do work ...
+//!     Ok(())
 //! }
+//!
+//! let interrupt = Interrupt::new();
+//! let _ = run_operation(&interrupt);
 //!
 //! // From another thread, cancel the operation
 //! interrupt.interrupt();

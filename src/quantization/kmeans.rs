@@ -176,19 +176,28 @@ impl KMeans {
             // 计算收敛
             let mut max_shift = 0.0f32;
             for c in 0..self.k {
+                let centroid_start = c * self.dim;
+                let centroid_end = centroid_start + self.dim;
+
                 if counts[c] > 0 {
-                    let centroid_start = c * self.dim;
-                    let centroid_end = centroid_start + self.dim;
+                    let mut updated = vec![0.0f32; self.dim];
+                    for j in 0..self.dim {
+                        updated[j] = new_centroids[c * self.dim + j] / counts[c] as f32;
+                    }
+
                     let shift = compute_l2_distance(
                         &self.centroids[centroid_start..centroid_end],
-                        &new_centroids[centroid_start..centroid_end],
+                        &updated,
                     );
                     max_shift = max_shift.max(shift);
-
-                    for j in 0..self.dim {
-                        self.centroids[c * self.dim + j] =
-                            new_centroids[c * self.dim + j] / counts[c] as f32;
-                    }
+                    self.centroids[centroid_start..centroid_end].copy_from_slice(&updated);
+                } else {
+                    // 避免空簇长期不更新导致收敛到退化解
+                    let idx = self.rng.gen_range(0..n);
+                    let src_start = idx * self.dim;
+                    let src_end = src_start + self.dim;
+                    self.centroids[centroid_start..centroid_end]
+                        .copy_from_slice(&vectors[src_start..src_end]);
                 }
             }
 
@@ -248,7 +257,6 @@ impl KMeans {
         self.random_init(vectors, n);
 
         let _assignments = vec![0usize; n];
-        let centroids_clone = self.centroids.clone();
 
         for _iter in 0..self.max_iter {
             // 并行分配阶段 - 使用 L2 平方距离 (避免 sqrt)
@@ -265,7 +273,7 @@ impl KMeans {
                         let centroid_end = centroid_start + self.dim;
                         let dist = compute_l2_distance_sq(
                             vec,
-                            &centroids_clone[centroid_start..centroid_end],
+                            &self.centroids[centroid_start..centroid_end],
                         );
                         if dist < min_dist {
                             min_dist = dist;
@@ -314,19 +322,28 @@ impl KMeans {
             // 计算收敛
             let mut max_shift = 0.0f32;
             for c in 0..self.k {
+                let centroid_start = c * self.dim;
+                let centroid_end = centroid_start + self.dim;
+
                 if counts[c] > 0 {
-                    let centroid_start = c * self.dim;
-                    let centroid_end = centroid_start + self.dim;
+                    let mut updated = vec![0.0f32; self.dim];
+                    for j in 0..self.dim {
+                        updated[j] = new_centroids[c * self.dim + j] / counts[c] as f32;
+                    }
+
                     let shift = compute_l2_distance(
                         &self.centroids[centroid_start..centroid_end],
-                        &new_centroids[centroid_start..centroid_end],
+                        &updated,
                     );
                     max_shift = max_shift.max(shift);
-
-                    for j in 0..self.dim {
-                        self.centroids[c * self.dim + j] =
-                            new_centroids[c * self.dim + j] / counts[c] as f32;
-                    }
+                    self.centroids[centroid_start..centroid_end].copy_from_slice(&updated);
+                } else {
+                    // 避免空簇长期不更新导致收敛到退化解
+                    let idx = self.rng.gen_range(0..n);
+                    let src_start = idx * self.dim;
+                    let src_end = src_start + self.dim;
+                    self.centroids[centroid_start..centroid_end]
+                        .copy_from_slice(&vectors[src_start..src_end]);
                 }
             }
 

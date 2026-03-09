@@ -222,7 +222,7 @@ impl IvfFlatCcIndex {
             .collect();
 
         cluster_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        cluster_dists.truncate(nprobe);
+        let selected_nprobe = nprobe.min(self.nlist);
 
         // 获取 inverted_lists 的读锁
         let inverted_lists = self
@@ -233,14 +233,31 @@ impl IvfFlatCcIndex {
         // Search in selected clusters
         let mut all_results: Vec<(i64, f32)> = Vec::new();
 
-        for (cluster_id, _) in cluster_dists {
+        let mut scan_cluster = |cluster_id: usize, acc: &mut Vec<(i64, f32)>| {
             if let Some(list) = inverted_lists.get(&cluster_id) {
                 for (id, vector) in list {
                     let dist = l2_distance(query, vector);
-                    all_results.push((*id, dist));
+                    acc.push((*id, dist));
+                }
+            }
+        };
+
+        for &(cluster_id, _) in cluster_dists.iter().take(selected_nprobe) {
+            scan_cluster(cluster_id, &mut all_results);
+        }
+
+        // Fallback: when nprobe is too small and candidate pool is insufficient,
+        // scan additional clusters by distance order to satisfy top_k contract.
+        if all_results.len() < top_k && selected_nprobe < self.nlist {
+            for &(cluster_id, _) in cluster_dists.iter().skip(selected_nprobe) {
+                scan_cluster(cluster_id, &mut all_results);
+                if all_results.len() >= top_k {
+                    break;
                 }
             }
         }
+
+        let num_visited = all_results.len();
 
         // Sort and take top-k
         all_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
@@ -253,7 +270,7 @@ impl IvfFlatCcIndex {
             ids,
             distances,
             elapsed_ms: 0.0,
-            num_visited: all_results.len(),
+            num_visited,
         })
     }
 

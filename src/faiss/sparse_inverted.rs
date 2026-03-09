@@ -5,19 +5,22 @@
 //! 使用倒排索引 + WAND/MaxScore 算法
 
 use crate::dataset::Dataset;
-use crate::index::{Index, IndexError, SearchResult};
+use crate::index::{AnnIterator, Index, IndexError, SearchResult};
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read, Write};
 
 /// 稀疏向量元素
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SparseVecElement {
     pub dim: u32, // 维度索引
     pub val: f32, // 值
 }
 
 /// 稀疏向量 (使用 Vec 存储非零元素)
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SparseVector {
     pub elements: Vec<SparseVecElement>,
 }
@@ -122,8 +125,7 @@ impl SparseVector {
 }
 
 /// 度量类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum SparseMetricType {
     /// 内积 (Inner Product)
     #[default]
@@ -134,7 +136,7 @@ pub enum SparseMetricType {
 
 
 /// BM25 参数
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bm25Params {
     pub k1: f32,    // 词频饱和度参数 (通常 1.2-2.0)
     pub b: f32,     // 文档长度归一化参数 (通常 0.75)
@@ -287,6 +289,7 @@ impl MaxMinHeap {
 }
 
 /// 稀疏倒排索引
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SparseInvertedIndex {
     /// 维度映射: 原始维度 -> 内部维度 ID
     dim_map: HashMap<u32, u32>,
@@ -311,6 +314,14 @@ pub struct SparseInvertedIndex {
     next_dim_id: u32,
 }
 
+const SPARSE_INVERTED_SNAPSHOT_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SparseInvertedSnapshot {
+    version: u32,
+    index: SparseInvertedIndex,
+}
+
 impl SparseInvertedIndex {
     /// 创建新索引
     pub fn new(metric_type: SparseMetricType) -> Self {
@@ -327,6 +338,36 @@ impl SparseInvertedIndex {
             max_dim: 0,
             next_dim_id: 0,
         }
+    }
+
+    pub(crate) fn save_to_path(&self, path: &str) -> Result<(), IndexError> {
+        let snapshot = SparseInvertedSnapshot {
+            version: SPARSE_INVERTED_SNAPSHOT_VERSION,
+            index: self.clone(),
+        };
+        let bytes = bincode::serialize(&snapshot)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        let mut file = File::create(path).map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        file.write_all(&bytes)
+            .and_then(|_| file.flush())
+            .map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    pub(crate) fn load_from_path(&mut self, path: &str) -> Result<(), IndexError> {
+        let mut file = File::open(path).map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        let snapshot: SparseInvertedSnapshot =
+            bincode::deserialize(&bytes).map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        if snapshot.version != SPARSE_INVERTED_SNAPSHOT_VERSION {
+            return Err(IndexError::Unsupported(format!(
+                "unsupported sparse snapshot version {}",
+                snapshot.version
+            )));
+        }
+        *self = snapshot.index;
+        Ok(())
     }
 
     /// 设置 BM25 参数
@@ -441,15 +482,15 @@ impl SparseInvertedIndex {
         let scores = self.compute_all_distances(&q_vec);
 
         // 添加到堆
-        for (doc_id, &score) in scores.iter().enumerate() {
+        for (doc_id, score) in scores {
             if score != 0.0 {
                 // 检查 bitset
                 if let Some(bs) = bitset {
-                    if doc_id < bs.len() && bs[doc_id] {
+                    if (doc_id as usize) < bs.len() && bs[doc_id as usize] {
                         continue; // 被过滤
                     }
                 }
-                heap.push(doc_id as i64, score);
+                heap.push(doc_id, score);
             }
         }
 
@@ -458,8 +499,8 @@ impl SparseInvertedIndex {
     }
 
     /// 计算所有文档的距离/分数
-    fn compute_all_distances(&self, q_vec: &[(u32, f32)]) -> Vec<f32> {
-        let mut scores = vec![0.0f32; self.n_rows];
+    fn compute_all_distances(&self, q_vec: &[(u32, f32)]) -> Vec<(i64, f32)> {
+        let mut scores: HashMap<i64, f32> = HashMap::new();
 
         for &(inner_dim_id, q_val) in q_vec {
             let dim_id = inner_dim_id as usize;
@@ -471,17 +512,20 @@ impl SparseInvertedIndex {
             let vals = &self.inverted_index_vals[dim_id];
 
             for (i, &doc_id) in ids.iter().enumerate() {
-                if doc_id >= 0 && (doc_id as usize) < scores.len() {
-                    let val = if self.metric_type == SparseMetricType::Bm25 {
-                        self.compute_bm25_value(vals[i], doc_id)
-                    } else {
-                        vals[i]
-                    };
-                    scores[doc_id as usize] += q_val * val;
+                if doc_id < 0 {
+                    continue;
                 }
+                let val = if self.metric_type == SparseMetricType::Bm25 {
+                    self.compute_bm25_value(vals[i], doc_id)
+                } else {
+                    vals[i]
+                };
+                *scores.entry(doc_id).or_insert(0.0) += q_val * val;
             }
         }
 
+        let mut scores: Vec<(i64, f32)> = scores.into_iter().collect();
+        scores.sort_by_key(|(doc_id, _)| *doc_id);
         scores
     }
 
@@ -631,16 +675,58 @@ pub struct SparseInvertedSearcher<'a> {
     algorithm: InvertedIndexAlgo,
 }
 
-impl SparseInvertedIndex {
-    fn dataset_row_to_sparse(dataset: &Dataset, row: usize) -> Result<SparseVector, IndexError> {
-        dataset
-            .get_vector(row)
-            .map(|v| SparseVector::from_dense(v, 0.0))
-            .ok_or(IndexError::DimMismatch)
+pub(crate) fn dataset_row_to_sparse(dataset: &Dataset, row: usize) -> Result<SparseVector, IndexError> {
+    dataset
+        .get_vector(row)
+        .map(|v| SparseVector::from_dense(v, 0.0))
+        .ok_or(IndexError::DimMismatch)
+}
+
+pub(crate) fn bitset_to_bool_vec(bitset: &crate::bitset::BitsetView) -> Vec<bool> {
+    (0..bitset.len()).map(|i| bitset.get(i)).collect()
+}
+
+pub(crate) fn ann_results_from_sparse_query(
+    index: &SparseInvertedIndex,
+    query: &SparseVector,
+    bitset: Option<&crate::bitset::BitsetView>,
+    algo: InvertedIndexAlgo,
+) -> Vec<(i64, f32)> {
+    let bools = bitset.map(bitset_to_bool_vec);
+    let bitset_slice = bools.as_deref();
+    let top_k = index.count();
+
+    match algo {
+        InvertedIndexAlgo::TaatNaive => index.search(query, top_k, bitset_slice),
+        InvertedIndexAlgo::DaatWand | InvertedIndexAlgo::DaatMaxScore => {
+            SparseInvertedSearcher::new(index, algo).search(query, top_k, bitset_slice)
+        }
+    }
+}
+
+pub struct SparseAnnIterator {
+    results: Vec<(i64, f32)>,
+    pos: usize,
+}
+
+impl SparseAnnIterator {
+    pub fn new(results: Vec<(i64, f32)>) -> Self {
+        Self { results, pos: 0 }
+    }
+}
+
+impl AnnIterator for SparseAnnIterator {
+    fn next(&mut self) -> Option<(i64, f32)> {
+        if self.pos >= self.results.len() {
+            return None;
+        }
+        let out = self.results[self.pos];
+        self.pos += 1;
+        Some(out)
     }
 
-    fn bitset_to_bool_vec(bitset: &crate::bitset::BitsetView) -> Vec<bool> {
-        (0..bitset.len()).map(|i| bitset.get(i)).collect()
+    fn buffer_size(&self) -> usize {
+        self.results.len().saturating_sub(self.pos)
     }
 }
 
@@ -668,7 +754,7 @@ impl Index for SparseInvertedIndex {
     fn add(&mut self, dataset: &Dataset) -> Result<usize, IndexError> {
         let base = self.n_rows() as i64;
         for row in 0..dataset.num_vectors() {
-            let sparse = Self::dataset_row_to_sparse(dataset, row)?;
+            let sparse = dataset_row_to_sparse(dataset, row)?;
             let doc_id = dataset
                 .ids()
                 .and_then(|ids| ids.get(row).copied())
@@ -684,7 +770,7 @@ impl Index for SparseInvertedIndex {
             return Ok(SearchResult::new(Vec::new(), Vec::new(), 0.0));
         }
 
-        let q = Self::dataset_row_to_sparse(query, 0)?;
+        let q = dataset_row_to_sparse(query, 0)?;
         let result = SparseInvertedIndex::search(self, &q, top_k, None);
         let (ids, distances): (Vec<i64>, Vec<f32>) = result.into_iter().unzip();
         Ok(SearchResult::new(ids, distances, 0.0))
@@ -700,8 +786,8 @@ impl Index for SparseInvertedIndex {
             return Ok(SearchResult::new(Vec::new(), Vec::new(), 0.0));
         }
 
-        let q = Self::dataset_row_to_sparse(query, 0)?;
-        let bools = Self::bitset_to_bool_vec(bitset);
+        let q = dataset_row_to_sparse(query, 0)?;
+        let bools = bitset_to_bool_vec(bitset);
         let result = SparseInvertedIndex::search(self, &q, top_k, Some(&bools));
         let (ids, distances): (Vec<i64>, Vec<f32>) = result.into_iter().unzip();
         Ok(SearchResult::new(ids, distances, 0.0))
@@ -728,16 +814,35 @@ impl Index for SparseInvertedIndex {
         Ok(out)
     }
 
+    fn create_ann_iterator(
+        &self,
+        query: &Dataset,
+        bitset: Option<&crate::bitset::BitsetView>,
+    ) -> Result<Box<dyn AnnIterator>, IndexError> {
+        if query.num_vectors() == 0 {
+            return Ok(Box::new(SparseAnnIterator::new(Vec::new())));
+        }
+
+        let sparse_query = dataset_row_to_sparse(query, 0)?;
+        let results = ann_results_from_sparse_query(
+            self,
+            &sparse_query,
+            bitset,
+            InvertedIndexAlgo::TaatNaive,
+        );
+        Ok(Box::new(SparseAnnIterator::new(results)))
+    }
+
     fn has_raw_data(&self) -> bool {
         true
     }
 
-    fn save(&self, _path: &str) -> Result<(), IndexError> {
-        Err(IndexError::Unsupported("save not implemented".into()))
+    fn save(&self, path: &str) -> Result<(), IndexError> {
+        self.save_to_path(path)
     }
 
-    fn load(&mut self, _path: &str) -> Result<(), IndexError> {
-        Err(IndexError::Unsupported("load not implemented".into()))
+    fn load(&mut self, path: &str) -> Result<(), IndexError> {
+        self.load_from_path(path)
     }
 }
 
@@ -780,131 +885,61 @@ impl<'a> SparseInvertedSearcher<'a> {
         k: usize,
         bitset: Option<&[bool]>,
     ) -> Vec<(i64, f32)> {
-        if query.elements.is_empty() || self.index.n_rows() == 0 {
+        if query.elements.is_empty() || self.index.n_rows() == 0 || k == 0 {
             return Vec::new();
         }
 
-        // Sort query terms by max_score descending (optimization)
-        let mut query_terms: Vec<(u32, f32, f32)> = query
+        // 保持与 TAAT 结果一致：按 DAAT 方式逐 doc 聚合分数，避免重复 doc 被拆分计分。
+        let query_terms: Vec<(u32, f32)> = query
             .elements
             .iter()
-            .filter_map(|elem| {
-                self.index.get_inner_dim_id(elem.dim).map(|inner_id| {
-                    let max_score = self.index.max_score_in_dim(inner_id as usize);
-                    (inner_id, elem.val, max_score)
-                })
-            })
+            .filter_map(|elem| self.index.get_inner_dim_id(elem.dim).map(|inner_id| (inner_id, elem.val)))
             .collect();
-        query_terms.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
-        // Initialize cursors for each posting list
+        if query_terms.is_empty() {
+            return Vec::new();
+        }
+
         let mut cursors: Vec<usize> = vec![0; query_terms.len()];
-
-        // Min-heap for top-k results (capacity k)
         let mut heap = crate::faiss::sparse_inverted::MaxMinHeap::new(k);
-        let mut threshold = 0.0f32;
 
         loop {
-            // Calculate upper bound for current cursor positions
-            let mut upper_bound = 0.0f32;
-            let mut pivot = None;
-
-            for (i, &(_, qval, max_score)) in query_terms.iter().enumerate() {
-                let cursor = cursors[i];
-                let posting_len = self.index.get_posting_len(i);
-                if cursor >= posting_len {
-                    continue;
-                }
-                upper_bound += qval * max_score;
-                if upper_bound >= threshold && pivot.is_none() {
-                    pivot = Some(i);
+            // 找到当前所有 posting cursor 的最小 doc_id（下一个候选文档）
+            let mut min_doc_id = i64::MAX;
+            for (i, (term_idx, _)) in query_terms.iter().enumerate() {
+                if let Some(doc_id) = self.index.get_posting_doc(*term_idx as usize, cursors[i]) {
+                    min_doc_id = min_doc_id.min(doc_id);
                 }
             }
 
-            // If upper bound < threshold, advance cursors
-            if upper_bound < threshold || pivot.is_none() {
-                // Find the doc_id with minimum value across all cursors
-                let mut min_doc_id = i64::MAX;
-                let mut _min_cursor_idx = 0;
-
-                for (i, &(_, _, _)) in query_terms.iter().enumerate() {
-                    let cursor = cursors[i];
-                    let posting_len = self.index.get_posting_len(i);
-                    if cursor < posting_len {
-                        if let Some(doc_id) = self.index.get_posting_doc(i, cursor) {
-                            if doc_id < min_doc_id {
-                                min_doc_id = doc_id;
-                                _min_cursor_idx = i;
-                            }
-                        }
-                    }
-                }
-
-                if min_doc_id == i64::MAX {
-                    break; // All cursors exhausted
-                }
-
-                // Advance cursors to skip to min_doc_id
-                for (i, cursor) in cursors.iter_mut().enumerate() {
-                    let posting_len = self.index.get_posting_len(i);
-                    while *cursor < posting_len {
-                        if let Some(doc_id) = self.index.get_posting_doc(i, *cursor) {
-                            if doc_id >= min_doc_id {
-                                break;
-                            }
-                        }
-                        *cursor += 1;
-                    }
-                }
-                continue;
+            if min_doc_id == i64::MAX {
+                break; // 所有 posting list 都已耗尽
             }
 
-            // Pivot found - fully evaluate the pivot document
-            let pivot_idx = pivot.unwrap();
-            let cursor = cursors[pivot_idx];
-            let posting_len = self.index.get_posting_len(pivot_idx);
-            if cursor >= posting_len {
-                break;
-            }
-
-            let pivot_doc_id = match self.index.get_posting_doc(pivot_idx, cursor) {
-                Some(id) => id,
-                None => break,
-            };
-
-            // Check bitset filter
-            if let Some(bs) = bitset {
-                if (pivot_doc_id as usize) < bs.len()
-                    && bs.get(pivot_doc_id as usize).copied().unwrap_or(false)
-                {
-                    // This doc is filtered out, advance cursor
-                    cursors[pivot_idx] += 1;
-                    continue;
-                }
-            }
-
-            // Compute actual score for pivot doc
+            // 对该 doc_id 聚合所有命中 term 的贡献，并同步推进所有等于该 doc 的 cursor
             let mut score = 0.0f32;
-            for (i, &(_, qval, _)) in query_terms.iter().enumerate() {
-                let cursor = cursors[i];
-                let posting_len = self.index.get_posting_len(i);
-                if cursor < posting_len {
-                    if let Some((doc_id, val)) = self.index.get_posting_entry(i, cursor) {
-                        if doc_id == pivot_doc_id {
-                            score += qval * val;
-                        }
+            for (i, (term_idx, qval)) in query_terms.iter().enumerate() {
+                while let Some((doc_id, val)) = self.index.get_posting_entry(*term_idx as usize, cursors[i]) {
+                    if doc_id < min_doc_id {
+                        cursors[i] += 1;
+                        continue;
                     }
+                    if doc_id == min_doc_id {
+                        score += *qval * val;
+                        cursors[i] += 1;
+                    }
+                    break;
                 }
             }
 
-            // Add to heap if score > threshold
-            if score > threshold {
-                heap.push(pivot_doc_id, score);
-                threshold = heap.min().unwrap_or(0.0);
+            // bitset 过滤
+            let filtered = bitset
+                .and_then(|bs| bs.get(min_doc_id as usize))
+                .copied()
+                .unwrap_or(false);
+            if !filtered && score != 0.0 {
+                heap.push(min_doc_id, score);
             }
-
-            // Advance pivot cursor
-            cursors[pivot_idx] += 1;
         }
 
         heap.into_sorted_vec()
@@ -925,6 +960,7 @@ impl<'a> SparseInvertedSearcher<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_sparse_vector() {
@@ -1109,5 +1145,91 @@ mod tests {
         let query = Dataset::from_vectors(vec![1.0, 0.0, 0.0, 0.0], 4);
         let result = Index::search(&index, &query, 1).unwrap();
         assert_eq!(result.ids.len(), 1);
+    }
+
+    #[test]
+    fn test_sparse_inverted_ann_iterator_respects_bitset() {
+        let mut index = SparseInvertedIndex::new(SparseMetricType::Ip);
+        let base = Dataset::from_vectors(
+            vec![
+                1.0, 0.0, 0.0, 0.0, // id 0
+                0.0, 1.0, 0.0, 0.0, // id 1
+            ],
+            4,
+        );
+        Index::add(&mut index, &base).unwrap();
+
+        let query = Dataset::from_vectors(vec![1.0, 0.0, 0.0, 0.0], 4);
+        let mut bitset = crate::bitset::BitsetView::new(2);
+        bitset.set(0, true); // filter id=0
+
+        let mut it = Index::create_ann_iterator(&index, &query, Some(&bitset)).unwrap();
+        if let Some((id, _)) = it.next() {
+            assert_ne!(id, 0);
+        }
+    }
+
+    #[test]
+    fn test_wand_matches_taat_on_non_contiguous_dims_with_bitset() {
+        let mut index = SparseInvertedIndex::new(SparseMetricType::Ip);
+        index
+            .add(&SparseVector::from_pairs(&[(100, 2.0), (7, 1.0)]), 0)
+            .unwrap();
+        index
+            .add(&SparseVector::from_pairs(&[(100, 0.8), (3, 3.0)]), 1)
+            .unwrap();
+        index
+            .add(&SparseVector::from_pairs(&[(7, 1.5), (3, 0.5)]), 2)
+            .unwrap();
+
+        let query = SparseVector::from_pairs(&[(3, 2.0), (100, 1.0), (7, 0.7)]);
+        let bitset = vec![false, true, false]; // 过滤 doc 1
+
+        let taat = SparseInvertedSearcher::new(&index, InvertedIndexAlgo::TaatNaive)
+            .search(&query, 3, Some(&bitset));
+        let wand = SparseInvertedSearcher::new(&index, InvertedIndexAlgo::DaatWand)
+            .search(&query, 3, Some(&bitset));
+
+        assert_eq!(wand, taat);
+    }
+
+    #[test]
+    fn test_sparse_inverted_save_load_roundtrip_preserves_iterator_and_vectors() {
+        let mut index = SparseInvertedIndex::new(SparseMetricType::Ip);
+        index
+            .add(&SparseVector::from_pairs(&[(1, 1.0), (5, 2.0)]), 10)
+            .unwrap();
+        index
+            .add(&SparseVector::from_pairs(&[(1, 0.5), (9, 3.0)]), 11)
+            .unwrap();
+
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().to_string_lossy().to_string();
+        Index::save(&index, &path).unwrap();
+
+        let mut loaded = SparseInvertedIndex::new(SparseMetricType::Ip);
+        Index::load(&mut loaded, &path).unwrap();
+
+        assert_eq!(loaded.index_type(), "SparseInverted");
+        assert_eq!(loaded.count(), index.count());
+        assert_eq!(loaded.dim(), index.dim());
+
+        let query = Dataset::from_vectors(vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.2, 0.0, 0.0, 0.0, 3.0], 10);
+        let mut bitset = crate::bitset::BitsetView::new(12);
+        bitset.set(10, true);
+
+        let original_search = Index::search_with_bitset(&index, &query, 2, &bitset).unwrap();
+        let loaded_search = Index::search_with_bitset(&loaded, &query, 2, &bitset).unwrap();
+        assert!(!original_search.ids.is_empty());
+        assert_eq!(loaded_search.ids, original_search.ids);
+        assert_eq!(loaded_search.distances, original_search.distances);
+
+        let mut it = Index::create_ann_iterator(&loaded, &query, Some(&bitset)).unwrap();
+        let first = it.next().expect("iterator should produce filtered result");
+        assert_eq!(first.0, original_search.ids[0]);
+
+        let original_dense = Index::get_vector_by_ids(&index, &[10, 11]).unwrap();
+        let loaded_dense = Index::get_vector_by_ids(&loaded, &[10, 11]).unwrap();
+        assert_eq!(loaded_dense, original_dense);
     }
 }

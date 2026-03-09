@@ -14,6 +14,12 @@ use crate::index::{Index, IndexError, SearchResult};
 
 /// Maximum number of layers in the HNSW graph
 const MAX_LAYERS: usize = 16;
+const HNSW_PQ_GET_VECTOR_BY_IDS_UNSUPPORTED_MSG: &str =
+    "get_vector_by_ids not supported for HNSW-PQ (lossy PQ storage)";
+const HNSW_PQ_SAVE_UNSUPPORTED_MSG: &str =
+    "save not supported for HNSW-PQ (persistence not implemented)";
+const HNSW_PQ_LOAD_UNSUPPORTED_MSG: &str =
+    "load not supported for HNSW-PQ (persistence not implemented)";
 
 /// HNSW-PQ configuration
 #[derive(Clone, Debug)]
@@ -710,19 +716,25 @@ impl Index for HnswPqIndex {
 
     fn save(&self, _path: &str) -> Result<(), IndexError> {
         Err(IndexError::Unsupported(
-            "serialization not implemented".into(),
+            HNSW_PQ_SAVE_UNSUPPORTED_MSG.into(),
         ))
     }
 
     fn load(&mut self, _path: &str) -> Result<(), IndexError> {
         Err(IndexError::Unsupported(
-            "deserialization not implemented".into(),
+            HNSW_PQ_LOAD_UNSUPPORTED_MSG.into(),
         ))
     }
 
     fn has_raw_data(&self) -> bool {
         // PQ is lossy compression, original data is not preserved
         false
+    }
+
+    fn get_vector_by_ids(&self, _ids: &[i64]) -> Result<Vec<f32>, IndexError> {
+        Err(IndexError::Unsupported(
+            HNSW_PQ_GET_VECTOR_BY_IDS_UNSUPPORTED_MSG.into(),
+        ))
     }
 
     /// Create ANN iterator for streaming search results (PARITY-P1-000)
@@ -779,6 +791,26 @@ impl crate::index::AnnIterator for HnswPqAnnIterator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn build_trained_hnsw_pq_index(dim: usize, pq_m: usize, pq_k: usize, n: usize) -> HnswPqIndex {
+        let config = HnswPqConfig::new(dim)
+            .with_m(8)
+            .with_ef_construction(100)
+            .with_ef_search(32)
+            .with_pq_params(pq_m, pq_k);
+
+        let mut index = HnswPqIndex::new(config).unwrap();
+        let mut data = vec![0.0f32; n * dim];
+        for i in 0..n {
+            for j in 0..dim {
+                data[i * dim + j] = (i as f32 * 0.01) + (j as f32 * 0.001);
+            }
+        }
+
+        index.train(&data).unwrap();
+        index.add(&data, None).unwrap();
+        index
+    }
 
     #[test]
     fn test_hnsw_pq_creation() {
@@ -864,5 +896,57 @@ mod tests {
 
         // Results should be filtered
         assert!(results_filtered.ids.len() <= results_no_filter.ids.len());
+    }
+
+    #[test]
+    fn test_hnsw_pq_has_raw_data_is_false() {
+        let index = build_trained_hnsw_pq_index(16, 4, 16, 128);
+        assert!(!Index::has_raw_data(&index));
+    }
+
+    #[test]
+    fn test_hnsw_pq_get_vector_by_ids_returns_stable_unsupported() {
+        let index = build_trained_hnsw_pq_index(16, 4, 16, 128);
+
+        let err = Index::get_vector_by_ids(&index, &[0]).unwrap_err();
+        match err {
+            IndexError::Unsupported(msg) => {
+                assert_eq!(msg, HNSW_PQ_GET_VECTOR_BY_IDS_UNSUPPORTED_MSG);
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_hnsw_pq_save_load_return_stable_unsupported() {
+        let mut index = build_trained_hnsw_pq_index(16, 4, 16, 128);
+
+        let save_err = Index::save(&index, "/tmp/hnsw_pq.index").unwrap_err();
+        match save_err {
+            IndexError::Unsupported(msg) => {
+                assert_eq!(msg, HNSW_PQ_SAVE_UNSUPPORTED_MSG);
+            }
+            other => panic!("expected Unsupported save error, got {other:?}"),
+        }
+
+        let load_err = Index::load(&mut index, "/tmp/hnsw_pq.index").unwrap_err();
+        match load_err {
+            IndexError::Unsupported(msg) => {
+                assert_eq!(msg, HNSW_PQ_LOAD_UNSUPPORTED_MSG);
+            }
+            other => panic!("expected Unsupported load error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_hnsw_pq_ann_iterator_returns_results_on_trained_index() {
+        let index = build_trained_hnsw_pq_index(16, 4, 16, 128);
+        let query = Dataset::from_vectors((0..16).map(|i| i as f32 * 0.01).collect(), 16);
+
+        let mut iter = Index::create_ann_iterator(&index, &query, None).unwrap();
+        let first = iter.next();
+
+        assert!(first.is_some());
+        assert!(iter.buffer_size() < index.count());
     }
 }

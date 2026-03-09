@@ -53,6 +53,7 @@ use crate::api::{
 };
 use crate::faiss::{HnswIndex, MemIndex, ScaNNConfig, ScaNNIndex};
 use crate::index::Index;
+use serde::Serialize;
 use std::path::Path;
 
 /// C API 错误码
@@ -200,6 +201,16 @@ pub struct CGetVectorResult {
     pub dim: usize,
     /// 对应的 ID 数组（可能少于输入，如果某些 ID 不存在）
     pub ids: *mut i64,
+}
+
+#[derive(Serialize)]
+struct IndexMetaSummary<'a> {
+    index_type: &'a str,
+    dim: usize,
+    count: usize,
+    is_trained: bool,
+    has_raw_data: bool,
+    additional_scalar_supported: bool,
 }
 
 /// 包装索引对象 - 支持 Flat, HNSW, ScaNN, HNSW-PRQ, IVF-RaBitQ, HNSW-SQ, HNSW-PQ, BinFlat, BinaryHnsw, IVF-SQ8, BinIvfFlat, SparseWand, SparseWandCC, MinHashLSH
@@ -836,10 +847,22 @@ impl IndexWrapper {
             Ok(n)
         } else if let Some(ref mut idx) = self.minhash_lsh {
             // MinHashLSH: build index from binary data
-            // Assume mh_vec_length = dim / 8 (each element is u64 = 8 bytes)
-            // For simplicity, use default parameters
-            let mh_vec_length = 8; // Default: 8 elements per vector
-            let mh_vec_element_size = 8; // u64
+            // C++ parity: vector byte size should follow configured dim bits.
+            // Use u64 elements by default (8 bytes each), and derive mh_vec_length from dim.
+            let mh_vec_element_size = std::mem::size_of::<u64>();
+            let vector_bytes = self.dim.div_ceil(8);
+            if vector_bytes == 0 || vectors.is_empty() || !vectors.len().is_multiple_of(vector_bytes) {
+                return Err(CError::InvalidArg);
+            }
+            if !vector_bytes.is_multiple_of(mh_vec_element_size) {
+                return Err(CError::InvalidArg);
+            }
+
+            let mh_vec_length = vector_bytes / mh_vec_element_size;
+            if mh_vec_length == 0 {
+                return Err(CError::InvalidArg);
+            }
+
             let bands = 4;
             let with_raw_data = true;
             idx.build(
@@ -1100,6 +1123,28 @@ impl IndexWrapper {
         }
     }
 
+    fn is_trained(&self) -> bool {
+        if let Some(ref idx) = self.hnsw {
+            idx.is_trained()
+        } else if let Some(ref idx) = self.scann {
+            idx.is_trained()
+        } else if let Some(ref idx) = self.hnsw_prq {
+            idx.is_trained()
+        } else if let Some(ref idx) = self.ivf_rabitq {
+            idx.is_trained()
+        } else if let Some(ref idx) = self.hnsw_pq {
+            idx.is_trained()
+        } else if let Some(ref idx) = self.ivf_sq8 {
+            idx.is_trained()
+        } else if let Some(ref idx) = self.sparse_wand {
+            idx.is_trained()
+        } else if let Some(ref idx) = self.minhash_lsh {
+            idx.is_trained()
+        } else {
+            self.count() > 0
+        }
+    }
+
     fn dim(&self) -> usize {
         self.dim
     }
@@ -1143,6 +1188,26 @@ impl IndexWrapper {
             "HNSW"
         } else if self.scann.is_some() {
             "ScaNN"
+        } else if self.hnsw_prq.is_some() {
+            "HNSW_PRQ"
+        } else if self.ivf_rabitq.is_some() {
+            "IVF_RABITQ"
+        } else if self.hnsw_sq.is_some() {
+            "HNSW_SQ"
+        } else if self.hnsw_pq.is_some() {
+            "HNSW_PQ"
+        } else if self.bin_flat.is_some() {
+            "BinFlat"
+        } else if self.binary_hnsw.is_some() {
+            "BinaryHNSW"
+        } else if self.ivf_sq8.is_some() {
+            "IVF_SQ8"
+        } else if self.bin_ivf_flat.is_some() {
+            "BinIVFFlat"
+        } else if self.sparse_wand.is_some() {
+            "SparseWand"
+        } else if self.sparse_wand_cc.is_some() {
+            "SparseWandCC"
         } else if self.minhash_lsh.is_some() {
             "MinHashLSH"
         } else {
@@ -1170,6 +1235,48 @@ impl IndexWrapper {
         } else {
             "Unknown"
         }
+    }
+
+    fn has_raw_data(&self) -> bool {
+        if let Some(ref idx) = self.flat {
+            idx.has_raw_data()
+        } else if let Some(ref idx) = self.hnsw {
+            idx.has_raw_data()
+        } else if let Some(ref idx) = self.scann {
+            idx.has_raw_data()
+        } else if let Some(ref idx) = self.hnsw_prq {
+            idx.has_raw_data()
+        } else if let Some(ref idx) = self.ivf_rabitq {
+            idx.has_raw_data()
+        } else if let Some(ref idx) = self.hnsw_pq {
+            idx.has_raw_data()
+        } else if let Some(ref idx) = self.ivf_sq8 {
+            idx.has_raw_data()
+        } else if let Some(ref idx) = self.sparse_wand {
+            idx.has_raw_data()
+        } else if let Some(ref idx) = self.minhash_lsh {
+            idx.has_raw_data()
+        } else {
+            false
+        }
+    }
+
+    fn is_additional_scalar_supported(&self, is_mv_only: bool) -> bool {
+        let _ = is_mv_only;
+        false
+    }
+
+    fn get_index_meta_json(&self) -> Result<String, CError> {
+        let summary = IndexMetaSummary {
+            index_type: self.index_type(),
+            dim: self.dim(),
+            count: self.count(),
+            is_trained: self.is_trained(),
+            has_raw_data: self.has_raw_data(),
+            additional_scalar_supported: self.is_additional_scalar_supported(true),
+        };
+
+        serde_json::to_string(&summary).map_err(|_| CError::Internal)
     }
 
     fn get_vectors(&self, ids: &[i64]) -> Result<(Vec<f32>, usize), CError> {
@@ -1315,6 +1422,9 @@ impl IndexWrapper {
             idx.create_ann_iterator(query, bitset)
                 .map_err(|_| CError::NotImplemented)
         } else if let Some(ref idx) = self.minhash_lsh {
+            idx.create_ann_iterator(query, bitset)
+                .map_err(|_| CError::NotImplemented)
+        } else if let Some(ref idx) = self.sparse_wand {
             idx.create_ann_iterator(query, bitset)
                 .map_err(|_| CError::NotImplemented)
         } else {
@@ -1930,6 +2040,16 @@ pub extern "C" fn knowhere_get_index_type(
         "Flat" => b"Flat\0".as_ptr() as *const std::os::raw::c_char,
         "HNSW" => b"HNSW\0".as_ptr() as *const std::os::raw::c_char,
         "ScaNN" => b"ScaNN\0".as_ptr() as *const std::os::raw::c_char,
+        "HNSW_PRQ" => b"HNSW_PRQ\0".as_ptr() as *const std::os::raw::c_char,
+        "IVF_RABITQ" => b"IVF_RABITQ\0".as_ptr() as *const std::os::raw::c_char,
+        "HNSW_SQ" => b"HNSW_SQ\0".as_ptr() as *const std::os::raw::c_char,
+        "HNSW_PQ" => b"HNSW_PQ\0".as_ptr() as *const std::os::raw::c_char,
+        "BinFlat" => b"BinFlat\0".as_ptr() as *const std::os::raw::c_char,
+        "BinaryHNSW" => b"BinaryHNSW\0".as_ptr() as *const std::os::raw::c_char,
+        "IVF_SQ8" => b"IVF_SQ8\0".as_ptr() as *const std::os::raw::c_char,
+        "BinIVFFlat" => b"BinIVFFlat\0".as_ptr() as *const std::os::raw::c_char,
+        "SparseWand" => b"SparseWand\0".as_ptr() as *const std::os::raw::c_char,
+        "SparseWandCC" => b"SparseWandCC\0".as_ptr() as *const std::os::raw::c_char,
         "MinHashLSH" => b"MinHashLSH\0".as_ptr() as *const std::os::raw::c_char,
         _ => b"Unknown\0".as_ptr() as *const std::os::raw::c_char,
     }
@@ -1992,28 +2112,61 @@ pub extern "C" fn knowhere_has_raw_data(index: *const std::ffi::c_void) -> i32 {
 
     unsafe {
         let wrapper = &*(index as *const IndexWrapper);
-        // Check which index type is active and call has_raw_data
-        if let Some(ref flat) = wrapper.flat {
-            if flat.has_raw_data() {
-                return 1;
-            }
+        if wrapper.has_raw_data() { 1 } else { 0 }
+    }
+}
+
+/// 检查索引是否支持附加标量能力 (FFI ABI metadata contract)
+#[no_mangle]
+pub extern "C" fn knowhere_is_additional_scalar_supported(
+    index: *const std::ffi::c_void,
+    is_mv_only: bool,
+) -> i32 {
+    if index.is_null() {
+        return 0;
+    }
+
+    unsafe {
+        let wrapper = &*(index as *const IndexWrapper);
+        if wrapper.is_additional_scalar_supported(is_mv_only) {
+            1
+        } else {
+            0
         }
-        if let Some(ref hnsw) = wrapper.hnsw {
-            if hnsw.has_raw_data() {
-                return 1;
-            }
+    }
+}
+
+/// 获取索引元数据 JSON (FFI ABI metadata contract)
+///
+/// 返回一段由 Rust 分配的 UTF-8 JSON 字符串；调用方需使用
+/// `knowhere_free_cstring` 释放。
+#[no_mangle]
+pub extern "C" fn knowhere_get_index_meta(
+    index: *const std::ffi::c_void,
+) -> *mut std::os::raw::c_char {
+    if index.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    unsafe {
+        let wrapper = &*(index as *const IndexWrapper);
+        match wrapper.get_index_meta_json() {
+            Ok(json) => match std::ffi::CString::new(json) {
+                Ok(cstr) => cstr.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            },
+            Err(_) => std::ptr::null_mut(),
         }
-        if let Some(ref scann) = wrapper.scann {
-            if scann.has_raw_data() {
-                return 1;
-            }
+    }
+}
+
+/// 释放由 FFI 返回的 C 字符串
+#[no_mangle]
+pub extern "C" fn knowhere_free_cstring(ptr: *mut std::os::raw::c_char) {
+    if !ptr.is_null() {
+        unsafe {
+            let _ = std::ffi::CString::from_raw(ptr);
         }
-        if let Some(ref minhash_lsh) = wrapper.minhash_lsh {
-            if minhash_lsh.has_raw_data() {
-                return 1;
-            }
-        }
-        0
     }
 }
 
@@ -3624,16 +3777,7 @@ mod tests {
         assert_eq!(metric_str, "Unknown");
     }
 
-    #[test]
-    fn test_index_type_minhash_lsh() {
-        let config = CIndexConfig {
-            index_type: CIndexType::MinHashLsh,
-            metric_type: CMetricType::Hamming,
-            dim: 64,
-            data_type: 100, // Binary
-            ..Default::default()
-        };
-
+    fn assert_index_type(config: CIndexConfig, expected: &str) {
         let index = knowhere_create_index(config);
         assert!(!index.is_null());
 
@@ -3642,9 +3786,105 @@ mod tests {
         let type_str = unsafe { std::ffi::CStr::from_ptr(type_ptr) }
             .to_str()
             .unwrap();
-        assert_eq!(type_str, "MinHashLSH");
+        assert_eq!(type_str, expected);
 
         knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_index_type_minhash_lsh() {
+        assert_index_type(
+            CIndexConfig {
+                index_type: CIndexType::MinHashLsh,
+                metric_type: CMetricType::Hamming,
+                dim: 64,
+                data_type: 100, // Binary
+                ..Default::default()
+            },
+            "MinHashLSH",
+        );
+    }
+
+    #[test]
+    fn test_index_type_hnsw_pq() {
+        assert_index_type(
+            CIndexConfig {
+                index_type: CIndexType::HnswPq,
+                metric_type: CMetricType::L2,
+                dim: 64,
+                ..Default::default()
+            },
+            "HNSW_PQ",
+        );
+    }
+
+    #[test]
+    fn test_minhash_add_binary_rejects_invalid_dim_alignment() {
+        let index = knowhere_create_index(CIndexConfig {
+            index_type: CIndexType::MinHashLsh,
+            metric_type: CMetricType::Hamming,
+            dim: 72, // 9 bytes, not aligned to u64 element size (8)
+            data_type: 100,
+            ..Default::default()
+        });
+        assert!(!index.is_null());
+
+        // 1 vector, 9 bytes
+        let vectors: Vec<u8> = (0..9).map(|v| v as u8).collect();
+        let ids = vec![0i64];
+
+        let rc = knowhere_add_binary_index(index, vectors.as_ptr(), ids.as_ptr(), 1, 72);
+        assert_eq!(rc, CError::InvalidArg as i32);
+
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_index_type_sparse_wand() {
+        assert_index_type(
+            CIndexConfig {
+                index_type: CIndexType::SparseWand,
+                metric_type: CMetricType::Ip,
+                dim: 64,
+                data_type: 104, // SparseFloatVector
+                ..Default::default()
+            },
+            "SparseWand",
+        );
+    }
+
+    #[test]
+    fn test_ffi_abi_metadata_contract() {
+        let index = knowhere_create_index(CIndexConfig {
+            index_type: CIndexType::Flat,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            ..Default::default()
+        });
+        assert!(!index.is_null());
+
+        assert_eq!(knowhere_is_additional_scalar_supported(index, false), 0);
+        assert_eq!(knowhere_is_additional_scalar_supported(index, true), 0);
+
+        let meta_ptr = knowhere_get_index_meta(index);
+        assert!(!meta_ptr.is_null());
+
+        let meta_str = unsafe { std::ffi::CStr::from_ptr(meta_ptr) }
+            .to_str()
+            .unwrap();
+        let meta_json: serde_json::Value = serde_json::from_str(meta_str).unwrap();
+        assert_eq!(meta_json["index_type"], "Flat");
+        assert_eq!(meta_json["dim"], 16);
+        assert_eq!(meta_json["count"], 0);
+        assert_eq!(meta_json["is_trained"], false);
+        assert_eq!(meta_json["has_raw_data"], true);
+        assert_eq!(meta_json["additional_scalar_supported"], false);
+
+        knowhere_free_cstring(meta_ptr);
+        knowhere_free_index(index);
+
+        assert_eq!(knowhere_is_additional_scalar_supported(std::ptr::null(), true), 0);
+        assert!(knowhere_get_index_meta(std::ptr::null()).is_null());
     }
 
     #[test]

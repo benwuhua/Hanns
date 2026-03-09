@@ -252,6 +252,24 @@ pub trait Index: Send + Sync {
         false
     }
 
+    /// 是否支持附加标量过滤/元数据协同能力 (IsAdditionalScalarSupported)
+    ///
+    /// 当前 Rust 侧默认采取保守语义：未显式实现的索引一律返回 false，
+    /// 避免 FFI capability 声明与运行时行为出现错位。
+    fn is_additional_scalar_supported(&self, _is_mv_only: bool) -> bool {
+        false
+    }
+
+    /// 获取索引元数据 (GetIndexMeta)
+    ///
+    /// 返回 JSON 字符串，作为 Rust 侧对 C++ `GetIndexMeta` 的最小统一抽象。
+    /// 默认返回 Unsupported，具体索引或桥接层可以提供更强的元数据视图。
+    fn get_index_meta(&self) -> Result<String, IndexError> {
+        Err(IndexError::Unsupported(
+            "get_index_meta not implemented".into(),
+        ))
+    }
+
     /// 训练索引（支持中断）
     ///
     /// # Arguments

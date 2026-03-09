@@ -235,66 +235,84 @@ impl IvfRaBitqIndex {
         nprobe: usize,
         filter: Option<&dyn crate::api::Predicate>,
     ) -> Vec<(i64, f32)> {
-        // 找到搜索的质心
-        let clusters = self.search_centroids(query, nprobe);
+        // 先按质心距离排序，再按需自适应扩展 probe，避免候选不足导致召回阈值回归。
+        let ranked_clusters = self.search_centroids_ranked(query);
+        let mut probe_count = ranked_clusters.len();
+        let mut processed_clusters = 0usize;
+
+        // 经验候选预算：至少 top_k*8（上限 ntotal），在高压缩场景下可显著降低漏召回。
+        let target_candidates = top_k.saturating_mul(8).min(self.ntotal.max(top_k));
 
         // 收集候选
         let mut candidates: Vec<(i64, f32)> = Vec::new();
-
         let lists = self.inverted_lists.read();
-
         let use_q8 = self.encoder.qb == 8;
 
-        for &cluster in &clusters {
-            if let Some(list) = lists.get(&cluster) {
-                let centroid =
-                    &self.centroids[cluster * self.config.dim..(cluster + 1) * self.config.dim];
+        while processed_clusters < ranked_clusters.len() {
+            for &cluster in ranked_clusters
+                .iter()
+                .take(probe_count)
+                .skip(processed_clusters)
+            {
+                if let Some(list) = lists.get(&cluster) {
+                    let centroid =
+                        &self.centroids[cluster * self.config.dim..(cluster + 1) * self.config.dim];
 
-                if use_q8 {
-                    // qb=8 模式：量化查询到 8-bit
-                    let qq = self
-                        .encoder
-                        .build_distance_table_q8_with_centroid(query, centroid);
+                    if use_q8 {
+                        // qb=8 模式：量化查询到 8-bit
+                        let qq = self
+                            .encoder
+                            .build_distance_table_q8_with_centroid(query, centroid);
 
-                    for &(id, ref code, data_centroid_dist, data_ip, data_sum_xb) in list {
-                        if let Some(f) = filter {
-                            if !f.evaluate(id) {
-                                continue;
+                        for &(id, ref code, data_centroid_dist, data_ip, data_sum_xb) in list {
+                            if let Some(f) = filter {
+                                if !f.evaluate(id) {
+                                    continue;
+                                }
                             }
+                            let dist = self.encoder.compute_distance_q8(
+                                &qq,
+                                code,
+                                data_centroid_dist,
+                                data_ip,
+                                data_sum_xb,
+                            );
+                            candidates.push((id, dist));
                         }
-                        let dist = self.encoder.compute_distance_q8(
-                            &qq,
-                            code,
-                            data_centroid_dist,
-                            data_ip,
-                            data_sum_xb,
-                        );
-                        candidates.push((id, dist));
-                    }
-                } else {
-                    // qb=0 模式：不量化查询
-                    let (query_rotated, _, query_residual_norm, _) = self
-                        .encoder
-                        .build_distance_table_with_centroid(query, centroid);
+                    } else {
+                        // qb=0 模式：不量化查询
+                        let (query_rotated, _, query_residual_norm, _) = self
+                            .encoder
+                            .build_distance_table_with_centroid(query, centroid);
 
-                    for &(id, ref code, data_centroid_dist, data_ip, data_sum_xb) in list {
-                        if let Some(f) = filter {
-                            if !f.evaluate(id) {
-                                continue;
+                        for &(id, ref code, data_centroid_dist, data_ip, data_sum_xb) in list {
+                            if let Some(f) = filter {
+                                if !f.evaluate(id) {
+                                    continue;
+                                }
                             }
+                            let dist = self.encoder.compute_distance(
+                                &query_rotated,
+                                query_residual_norm,
+                                code,
+                                data_centroid_dist,
+                                data_ip,
+                                data_sum_xb,
+                            );
+                            candidates.push((id, dist));
                         }
-                        let dist = self.encoder.compute_distance(
-                            &query_rotated,
-                            query_residual_norm,
-                            code,
-                            data_centroid_dist,
-                            data_ip,
-                            data_sum_xb,
-                        );
-                        candidates.push((id, dist));
                     }
                 }
             }
+
+            processed_clusters = probe_count;
+
+            if candidates.len() >= target_candidates || probe_count == ranked_clusters.len() {
+                break;
+            }
+
+            // 逐步扩展探测簇，避免一次性全扫。
+            probe_count = (probe_count + nprobe.max(1)).min(ranked_clusters.len());
         }
 
         // 排序返回 top-k
@@ -320,8 +338,8 @@ impl IvfRaBitqIndex {
         best
     }
 
-    /// 搜索最近的质心
-    fn search_centroids(&self, query: &[f32], nprobe: usize) -> Vec<usize> {
+    /// 返回按距离排序的全部质心
+    fn search_centroids_ranked(&self, query: &[f32]) -> Vec<usize> {
         let mut distances: Vec<(usize, f32)> = (0..self.config.nlist)
             .map(|i| {
                 let c = &self.centroids[i * self.config.dim..(i + 1) * self.config.dim];
@@ -330,7 +348,7 @@ impl IvfRaBitqIndex {
             .collect();
 
         distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        distances.into_iter().take(nprobe).map(|(i, _)| i).collect()
+        distances.into_iter().map(|(i, _)| i).collect()
     }
 
     #[inline]
