@@ -1,6 +1,6 @@
 # Knowhere-RS Gap Analysis (Non-GPU)
 
-Last updated: 2026-03-09 12:06 UTC  
+Last updated: 2026-03-09 13:03 UTC  
 Scope: Non-GPU production parity against C++ knowhere
 
 ## 1. Baseline and Method
@@ -38,8 +38,8 @@ Evaluation dimensions:
 ## P3 (Core Implementation / Semantic Fidelity / Production Readiness / Performance Advantage)
 
 - ✅ `CORE-P0-001`: 远端 x86 SIMD 验证链已恢复可执行并取得新鲜证据。最新复核中，本地 `cargo test --lib -q`、远端 `cargo test --features simd simd::tests -- --nocapture`、远端 `cargo test --lib --features simd test_x86_simd_l2_reduction_matches_scalar_on_irregular_input -- --nocapture` 均已通过；`default+simd` 不再因 toolchain/脚本漂移阻断后续核心路径工作。
-- 🚧 `HNSW-P1-001`: HNSW 是当前最接近生产级且最可能先跑出“绝对性能优势”的路径；最新 exec 已完成一轮邻居表布局收紧并通过本地 HNSW lib gate，当前主阻塞进一步收窄为远端 repo 基线损坏（manifest 不可解析 + dirty worktree 阻断同步），因此 recall-gated artifact 仍未落地；这已不再是新的本地功能错误。
-- 🚧 `IVFPQ-P1-002`: IVF/PQ 需要从“接口存在”切到“实现真实性和热点路径可信”。IVF base 当前更像占位实现，IVF-PQ/ScaNN 则需要 focused 审计和 benchmark 证明。
+- ✅ `HNSW-P1-001`: HNSW 已完成首轮远端 before/after artifact 落地；当前证据显示 recall 基本持平（`0.217 -> 0.215`）但 qps 大幅提升（`~1621 -> ~19235`），由于 recall 仍低于可信阈值，这条结果已被诚实归档为 `recheck required / no-go`，不再作为当前活动 blocker。
+- 🚧 `IVFPQ-P1-002`: IVF/PQ 需要从“接口存在”切到“实现真实性和热点路径可信”。IVF base 当前更像占位实现，IVF-PQ/ScaNN 则需要 focused 审计和 benchmark 证明；这是当前最高优先级的活跃核心实现任务。
 - 🚧 `DISKANN-P1-003`: Rust DiskANN 当前仍是“简化 Vamana + 简化 PQ”边界，需先修距离路径并明确工程边界，避免误把它当原生 DiskANN 同级实现。
 
 - ✅ `SEM-P3-001`: `DiskANN` / `AISAQ` / `HNSW` / `IVF` / `Sparse` / `ScaNN` 的 `GetVectorByIds` / `HasRawData` Phase-5 语义尾项已完成 focused 收敛；当前不再缺“入口存在但边界语义不可解释”的 semantic-fidelity blocker。
@@ -47,7 +47,7 @@ Evaluation dimensions:
 - ✅ `PERSIST-P3-003`: persistence / `DeserializeFromFile` 语义矩阵已系统化，`file_save_load` / `memory_serialize` / `deserialize_from_file` 的 supported / constrained / unsupported 边界现已可审计且具备 focused regressions。
 - ✅ `OBS-P3-005`: 最小 runtime governance contract 已收口到 `knowhere_get_index_meta`，统一暴露 `observability` / `trace_propagation` / `resource_contract` 三组字段；当前不再缺“缺少稳定 schema/透传入口/资源口径”的 P3 blocker。
 - ✅ `PERF-P3-004`: native benchmark harness 缺口已关闭；远端 x86 现已可构建 `benchmark_float_qps`、执行 `--gtest_list_tests`，且输出字段与 Rust parser 保持兼容。
-- 🚧 `PERF-P3-005`: 当前性能基线任务仍保留，但它不再压过核心实现修补；现在 `CORE-P0-001` 已关闭，下一步应在 HNSW 热路径可信化后产出 native-vs-rs 主证据。
+- 🚧 `PERF-P3-005`: 当前性能基线任务仍保留，但它不再压过核心实现修补；现阶段需先等待 `IVFPQ-P1-002` 给出 go/no-go 结论，或等待 HNSW recall gate 达到可信阈值，然后再进入 native-vs-rs 主证据轮次。
 
 ## 3. Validation Gaps
 

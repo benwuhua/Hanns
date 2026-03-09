@@ -1,47 +1,29 @@
 # Builder 任务队列
-> 最后更新: 2026-03-09 12:06 UTC | 优先级: BUG > CORE(IMPL/PERF) > SEMANTIC/PROD > BENCH
+> 最后更新: 2026-03-09 13:03 UTC | 优先级: BUG > CORE(IMPL/PERF) > SEMANTIC/PROD > BENCH
 
 ## 待办 (TODO)
 
-- [ ] **HNSW-P1-001**: 收紧 HNSW 热路径工程实现，先修复远端 repo 前置条件并落地第一份 x86 artifact
-  - 背景: HNSW 仍是当前最接近生产级且最有机会建立性能领先证据的实现；最新 exec 已完成一轮邻居表 AoS→SoA 收紧并通过本地 `cargo test --lib hnsw -- --nocapture`。当前真实 blocker 不再是本地正确性，而是远端工作树已失真：benchmark runner 虽已更接近正确 cwd，但 `/data/work/knowhere-src` 上 `Cargo.toml` 无法解析、`sync.sh --mode git` 又被远端脏工作树拦住，导致 recall-gated artifact 仍无法产出。
-  - 代码/文档接缝:
-    - `src/faiss/hnsw.rs`
-    - `src/faiss/hnsw_search.rs`
-    - `scripts/remote/test.sh`
-    - `scripts/remote/sync.sh`
-    - `scripts/remote/common.sh`
-    - `benchmark_results/recall_gated_baseline.json`
-  - 目标:
-    - [ ] 保持 visited list 复用 / 距离复用 / 邻居布局收紧这一热路径主线，不扩散到 IVF / DiskANN
-    - [ ] 先把远端 repo 恢复到可执行基线：runner 必须 fail-fast 校验 cwd 位于 repo，且远端 `Cargo.toml`/`src/lib.rs`/工作树状态可支持 benchmark 执行
-    - [ ] 消除 `sync.sh --mode git` 被远端脏工作树阻断的路径：要么修正同步策略，要么让脚本对脏树给出可恢复方案，而不是静默卡死在错误 repo 状态
-    - [ ] 基于同一 recall gate 产出至少一份 HNSW before/after artifact，并据此判定邻居布局调整是否真实获益
-  - required_checks:
-    - [x] `cargo test --lib hnsw -- --nocapture`
-    - [ ] 远端 x86：确认 repo 处于可执行基线（manifest 可解析、cwd 正确、同步路径可恢复）
-    - [ ] 远端 x86：在正确 repo cwd 下产出至少一份 HNSW recall-gated before/after artifact
-  - deferred_checks:
-    - [ ] `cargo test --lib -q`
-    - [ ] `cargo test --tests -q`
-    - [ ] native-vs-rs `clustered_l2 + HNSW` 对照结论（`PERF-P3-005`）
-  - 验收: 远端 HNSW benchmark 执行前置条件被修通并留下可复用脚本路径；HNSW 形成第一条可信的 recall-gated 主证据链；若邻居布局调整无收益，也必须留下可复用的 no-go artifact，而不是口头结论。
 
 - [ ] **IVFPQ-P1-002**: 审核并强化 IVF / PQ 核心搜索路径（以 ADC 和 centroid search 为中心）
-  - 背景: IVF base 仍偏占位，IVF-PQ/ScaNN 虽已有 ADC 代码路径，但当前还缺一轮“实现真实性 + 核心搜索路径”的审计与 targeted benchmark。
+  - 背景: `HNSW-P1-001` 已完成首轮远端 before/after 证据链，但当前 artifact 结论是 recall 0.217 -> 0.215、qps 1621 -> 19235，只能归类为 `recheck required / no-go`，不足以直接承接性能领先主线。按固定优先级，下一条应回到 `IVF / PQ` 的实现真实性与热点路径审计，先判断这条线是否值得成为新的核心实现/性能主战场。
   - 代码/文档接缝:
     - `src/faiss/ivf.rs`
     - `src/faiss/ivfpq.rs`
     - `src/faiss/scann.rs`
+    - `benchmark_results/`
   - 目标:
-    - [ ] 明确标记 IVF base 的角色（重写或降级为非主战场）
-    - [ ] 审核 IVF-PQ ADC / centroid search 真实热点，补 focused benchmark
-    - [ ] 形成 `IVF/PQ` 是否可作为性能主线的 go/no-go 结论
+    - [ ] 明确 `IVF base` 的角色：继续重写为真实核心路径，或降级为非主战场占位实现
+    - [ ] 审核 `IVF-PQ` 的 ADC / centroid search 是否走在真实热点路径上，而非停留在接口可用但性能不可判定状态
+    - [ ] 产出至少一份围绕 `IVF-PQ` 或 `ScaNN ADC` 的 focused benchmark artifact，并给出 go / no-go 结论
   - required_checks:
     - [ ] `cargo test --lib ivf -- --nocapture`
     - [ ] `cargo test --lib ivfpq -- --nocapture`
-    - [ ] 至少一份 IVF/PQ focused benchmark artifact
-  - 验收: IVF/PQ 主线的实现真实性和优化优先级被收敛成明确结论。
+    - [ ] 至少一份 `IVF/PQ` focused benchmark artifact（包含 ground_truth_source / recall_at_10 / confidence）
+  - deferred_checks:
+    - [ ] `cargo test --lib -q`
+    - [ ] `cargo test --tests -q`
+    - [ ] native-vs-rs `clustered_l2 + HNSW` 对照结论（`PERF-P3-005`）
+  - 验收: `IVF/PQ` 主线的实现真实性、热点路径与优化优先级被收敛成明确结论，可判定其是否进入下一阶段性能主线。
 
 - [ ] **DISKANN-P1-003**: 诚实收敛 Rust DiskANN 的实现边界，并修掉核心距离/压缩假实现问题
   - 背景: 当前 `diskann.rs` 更接近“简化 Vamana + 假 PQ”，不宜直接拿来对标原生 DiskANN；需先收敛实现边界，再决定是补真 PQ 还是明确降级说明。
@@ -372,8 +354,21 @@
 - [x] **OBS-P3-005**: 建立最小生产可观测性与运行时治理基线 (2026-03-09)
 - [x] **PERF-P3-004**: 修通 native benchmark 的 GTest/CMake 发现链路并拿到 `benchmark_float_qps` 可执行入口 (2026-03-09)
 - [ ] **PERF-P3-005**: 产出 clustered-l2 / HNSW 的 native-vs-rs recall-gated 对照基线并判定是否已领先
+  - 背景: 当前 `HNSW-P1-001` 已拿到 rs before/after artifact，但 recall gate 仍未达可信阈值；因此该 native-vs-rs 对照仍保留为后继任务，而不是当前第一优先级。
+  - 进入条件:
+    - [ ] HNSW recall gate 达到可信阈值，或 `IVF/PQ` 审计明确给出更优主线路由
+    - [ ] native benchmark harness 与 Rust baseline 使用可比参数、ground truth 与 schema
+  - 验收: clustered-l2 / HNSW（或改由新的核心主线路径）形成可审计的 native-vs-rs recall-gated 对照，并给出领先 / 持平 / 落后的明确结论。
 
 ## 归档
+- [x] **HNSW-P1-001**: 收紧 HNSW 热路径工程实现，修通远端 repo 基线并落地第一份 x86 artifact (2026-03-09)
+  - 完成情况:
+    - [x] 保持 visited list 复用 / 距离复用 / 邻居布局收紧这一热路径主线，不扩散到 IVF / DiskANN
+    - [x] 远端 repo 已恢复到可执行基线：runner 会 fail-fast 校验 cwd / `Cargo.toml` / `src/lib.rs`，且 manifest 可解析
+    - [x] `sync.sh --mode git` 已内建 `reset --hard` + `clean -fdx` 恢复路径，远端脏工作树不再阻断同步
+    - [x] 已基于同一 recall gate 产出 HNSW before/after 对照 artifact：`benchmark_results/recall_gated_baseline.json` vs `benchmark_results/hnsw_p1_001_after.remote.json`
+  - 结论: 已完成第一条远端 HNSW 证据链落地；当前 before/after 显示 recall 基本持平（0.217 -> 0.215）但 qps 大幅提升（约 1621 -> 19235）。由于 recall 仍低于可信阈值，这一结果目前只能作为已落地的 no-go / recheck-required artifact，不能直接宣称性能领先；后续是否形成 native-vs-rs 主结论转入 `PERF-P3-005`。
+  - 验收: ✅ 远端 HNSW benchmark 执行前置条件已修通并留下可复用脚本路径；第一份 recall-gated 主证据链已落地；未达 recall gate 的结果已以 artifact 形式诚实收口，而非口头结论。
 - [x] **SEM-P3-001**: 收敛 `GetVectorByIds` / `HasRawData` 剩余语义尾项（HNSW / IVF / Sparse / ScaNN） (2026-03-09)
   - 完成情况:
     - [x] HNSW 空索引 / missing-id 行为已稳定化并具备 focused regression

@@ -1,6 +1,6 @@
 # Knowhere-RS Development Roadmap (Non-GPU)
 
-Last updated: 2026-03-09 12:06 UTC
+Last updated: 2026-03-09 13:03 UTC
 
 ## Goal
 
@@ -102,13 +102,13 @@ Objective:
 
 Active scoped tasks:
 
-- `HNSW-P1-001`: reduce HNSW hot-path engineering gaps (`visited` allocation, distance reuse, layout inefficiency) and turn HNSW into the first serious performance-lead candidate; current sub-stage is narrower than generic runner/cwd cleanup: first restore the remote x86 repo to an executable baseline (manifest parsable, cwd asserted, sync path recoverable from dirty worktree), then convert the already-landed local hot-path delta into a recall-gated before/after artifact.
-- `IVFPQ-P1-002`: audit and strengthen IVF/PQ search reality (ADC/centroid path), and explicitly classify IVF base as rewrite candidate or non-core placeholder.
+- `IVFPQ-P1-002`: audit and strengthen IVF/PQ search reality (ADC/centroid path), explicitly classify IVF base as rewrite candidate or non-core placeholder, and produce a focused benchmark artifact that can decide whether IVF/PQ becomes the next core performance lane.
 - `DISKANN-P1-003`: fix Rust DiskANN’s distance-path issues and honestly classify the current `PQCode` simplification before using it in any leadership claim.
-- `PERF-P3-005`: once core-path correctness is trustworthy, generate the first recall-gated native-vs-rs baseline for a single core path (priority: `clustered_l2 + HNSW`).
+- `PERF-P3-005`: once HNSW recall is trustworthy or IVF/PQ proves to be the better route, generate the first recall-gated native-vs-rs baseline for a single core path (current default priority: `clustered_l2 + HNSW`).
 
 Recently closed milestones:
 
+- `HNSW-P1-001`: first remote x86 HNSW before/after artifact chain is now landed and honest about its outcome: recall stayed roughly flat (`0.217 -> 0.215`) while qps jumped (`~1621 -> ~19235`), so the result is archived as `recheck required / no-go` evidence rather than a leadership claim.
 - `CORE-P0-001`: remote x86 SIMD verification lane 已恢复；远端 x86 focused SIMD required gates 已重新通过，`default+simd` 不再因旧 toolchain/脚本漂移缺少可信证据。
 - `PERF-P3-004`: remote x86 native benchmark harness 已打通；`scripts/remote/native_benchmark_probe.sh` 现可补齐 GTest/CMake/Conan runtime 依赖，并成功构建 `benchmark_float_qps`、执行 `--gtest_list_tests`、保持 parser schema 对齐。
 - `SEM-P3-001`: HNSW / IVF / Sparse / ScaNN 的 `GetVectorByIds` / `HasRawData` 语义尾项已完成 focused 收敛；missing-id、empty-index、lossy-index、reorder/raw-data gate 等边界现已具备可审计回归证据。
