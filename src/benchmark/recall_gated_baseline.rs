@@ -3,8 +3,8 @@ use crate::benchmark::{average_recall_at_k, confidence_from_recall, write_report
 use crate::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
 use crate::faiss::sparse_inverted::SparseVector;
 use crate::faiss::{
-    HnswIndex, IvfFlatIndex, IvfRaBitqConfig, IvfRaBitqIndex, MemIndex as FlatIndex, ScaNNConfig,
-    ScaNNIndex, SparseMetricType, SparseWandIndex,
+    HnswIndex, IvfFlatIndex, IvfPqIndex, IvfRaBitqConfig, IvfRaBitqIndex, MemIndex as FlatIndex,
+    ScaNNConfig, ScaNNIndex, SparseMetricType, SparseWandIndex,
 };
 use rand::Rng;
 use std::error::Error;
@@ -60,6 +60,9 @@ fn explanation_for(index: &str, confidence: &str) -> String {
         }
         ("ScaNN", "unreliable") | ("ScaNN", "recheck required") => {
             "建议提升 reorder_k 与 num_partitions，并引入代表性 query_sample 重新训练量化器后复测。".to_string()
+        }
+        ("IVF-PQ", "unreliable") | ("IVF-PQ", "recheck required") => {
+            "优先检查 coarse centroid search 与 residual ADC 是否仍在真实热路径；若 recall 偏低，先提高 nprobe 并复查残差量化训练质量。".to_string()
         }
         ("RaBitQ", "unreliable") | ("RaBitQ", "recheck required") => {
             "RaBitQ 为有损量化，建议提高 nprobe 并开启 refine（fp32/dataview）后复测 recall@10。".to_string()
@@ -209,6 +212,48 @@ fn bench_scann(base: &[f32], queries: &[f32], gt: &[Vec<i32>]) -> BenchmarkRepor
     make_row("ScaNN", qps, recall_at_10, "flat_exact_l2_bruteforce")
 }
 
+fn bench_ivfpq(base: &[f32], queries: &[f32], gt: &[Vec<i32>]) -> BenchmarkReportRow {
+    let config = IndexConfig {
+        index_type: IndexType::IvfPq,
+        dim: DIM,
+        metric_type: MetricType::L2,
+        data_type: DataType::Float,
+        params: IndexParams {
+            nlist: Some(128),
+            nprobe: Some(16),
+            m: Some(16),
+            nbits_per_idx: Some(8),
+            ..Default::default()
+        },
+    };
+
+    let mut index = IvfPqIndex::new(&config).expect("create ivfpq");
+    index.train(base).expect("train ivfpq");
+    index.add(base, None).expect("add ivfpq");
+
+    let mut all_results = Vec::with_capacity(QUERY_SIZE);
+    let start = Instant::now();
+    for i in 0..QUERY_SIZE {
+        let q = &queries[i * DIM..(i + 1) * DIM];
+        let result = index
+            .search(
+                q,
+                &SearchRequest {
+                    top_k: TOP_K,
+                    nprobe: 16,
+                    ..Default::default()
+                },
+            )
+            .expect("search ivfpq");
+        all_results.push(result.ids);
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    let qps = QUERY_SIZE as f64 / elapsed;
+    let recall_at_10 = average_recall_at_k(&all_results, gt, TOP_K);
+
+    make_row("IVF-PQ", qps, recall_at_10, "flat_exact_l2_bruteforce")
+}
+
 fn bench_rabitq(base: &[f32], queries: &[f32], gt: &[Vec<i32>]) -> BenchmarkReportRow {
     let mut index = IvfRaBitqIndex::new(IvfRaBitqConfig::new(DIM, 128).with_nprobe(16));
     index.train(base).expect("train rabitq");
@@ -313,6 +358,7 @@ pub fn build_recall_gated_baseline_report() -> BenchmarkReport {
     let rows = vec![
         bench_hnsw(&base, &queries, &gt),
         bench_ivf(&base, &queries, &gt),
+        bench_ivfpq(&base, &queries, &gt),
         bench_diskann(&base, &queries, &gt),
         bench_scann(&base, &queries, &gt),
         bench_rabitq(&base, &queries, &gt),
