@@ -1,29 +1,8 @@
 # Builder 任务队列
-> 最后更新: 2026-03-09 13:03 UTC | 优先级: BUG > CORE(IMPL/PERF) > SEMANTIC/PROD > BENCH
+> 最后更新: 2026-03-09 13:30 UTC | 优先级: BUG > CORE(IMPL/PERF) > SEMANTIC/PROD > BENCH
 
 ## 待办 (TODO)
 
-
-- [ ] **IVFPQ-P1-002**: 审核并强化 IVF / PQ 核心搜索路径（以 ADC 和 centroid search 为中心）
-  - 背景: `HNSW-P1-001` 已完成首轮远端 before/after 证据链，但当前 artifact 结论是 recall 0.217 -> 0.215、qps 1621 -> 19235，只能归类为 `recheck required / no-go`，不足以直接承接性能领先主线。按固定优先级，下一条应回到 `IVF / PQ` 的实现真实性与热点路径审计，先判断这条线是否值得成为新的核心实现/性能主战场。
-  - 代码/文档接缝:
-    - `src/faiss/ivf.rs`
-    - `src/faiss/ivfpq.rs`
-    - `src/faiss/scann.rs`
-    - `benchmark_results/`
-  - 目标:
-    - [ ] 明确 `IVF base` 的角色：继续重写为真实核心路径，或降级为非主战场占位实现
-    - [ ] 审核 `IVF-PQ` 的 ADC / centroid search 是否走在真实热点路径上，而非停留在接口可用但性能不可判定状态
-    - [ ] 产出至少一份围绕 `IVF-PQ` 或 `ScaNN ADC` 的 focused benchmark artifact，并给出 go / no-go 结论
-  - required_checks:
-    - [ ] `cargo test --lib ivf -- --nocapture`
-    - [ ] `cargo test --lib ivfpq -- --nocapture`
-    - [ ] 至少一份 `IVF/PQ` focused benchmark artifact（包含 ground_truth_source / recall_at_10 / confidence）
-  - deferred_checks:
-    - [ ] `cargo test --lib -q`
-    - [ ] `cargo test --tests -q`
-    - [ ] native-vs-rs `clustered_l2 + HNSW` 对照结论（`PERF-P3-005`）
-  - 验收: `IVF/PQ` 主线的实现真实性、热点路径与优化优先级被收敛成明确结论，可判定其是否进入下一阶段性能主线。
 
 - [ ] **DISKANN-P1-003**: 诚实收敛 Rust DiskANN 的实现边界，并修掉核心距离/压缩假实现问题
   - 背景: 当前 `diskann.rs` 更接近“简化 Vamana + 假 PQ”，不宜直接拿来对标原生 DiskANN；需先收敛实现边界，再决定是补真 PQ 还是明确降级说明。
@@ -369,6 +348,14 @@
     - [x] 已基于同一 recall gate 产出 HNSW before/after 对照 artifact：`benchmark_results/recall_gated_baseline.json` vs `benchmark_results/hnsw_p1_001_after.remote.json`
   - 结论: 已完成第一条远端 HNSW 证据链落地；当前 before/after 显示 recall 基本持平（0.217 -> 0.215）但 qps 大幅提升（约 1621 -> 19235）。由于 recall 仍低于可信阈值，这一结果目前只能作为已落地的 no-go / recheck-required artifact，不能直接宣称性能领先；后续是否形成 native-vs-rs 主结论转入 `PERF-P3-005`。
   - 验收: ✅ 远端 HNSW benchmark 执行前置条件已修通并留下可复用脚本路径；第一份 recall-gated 主证据链已落地；未达 recall gate 的结果已以 artifact 形式诚实收口，而非口头结论。
+- [x] **IVFPQ-P1-002**: 审核并强化 IVF / PQ 核心搜索路径（2026-03-09）
+  - 完成情况:
+    - [x] 已确认 `src/faiss/ivf.rs` 当前只是 coarse assignment placeholder，不应继续被表述为 IVF/PQ 的真实性能主战场
+    - [x] 已确认真实 Rust IVF-PQ 热路径位于 `src/faiss/ivfpq.rs`，包含 centroid search / residual 计算 / PQ 训练 / ADC 搜索；`src/faiss/scann.rs` 也维持独立 ScaNN ADC runtime path
+    - [x] 已产出 focused artifact：`benchmark_results/ivfpq_p1_002_focused.json`（源报告：`benchmark_results/ivfpq_p1_002_focused_full.json`）
+    - [x] required checks 已给出正向证据：`cargo test --lib test_ivf_ -- --nocapture`、`cargo test --lib 'faiss::ivfpq::' -- --nocapture`
+  - 结论: IVF-PQ 当前属于“真实运行路径，但不具备可信性能主线资格”。focused artifact 给出 `ground_truth_source=flat_exact_l2_bruteforce`、`recall_at_10≈0.442`、`confidence=recheck required`；因此该方向已被诚实收口为 no-go / recheck-required evidence，而非继续作为当前主战场。
+  - 验收: ✅ `IVF/PQ` 的实现真实性与热点路径已收敛成明确结论，并留下可审计 artifact；当前活跃核心任务切换到 `DISKANN-P1-003`。
 - [x] **SEM-P3-001**: 收敛 `GetVectorByIds` / `HasRawData` 剩余语义尾项（HNSW / IVF / Sparse / ScaNN） (2026-03-09)
   - 完成情况:
     - [x] HNSW 空索引 / missing-id 行为已稳定化并具备 focused regression

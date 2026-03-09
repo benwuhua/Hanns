@@ -98,7 +98,12 @@ pub struct DiskAnnStats {
     pub memory_usage_bytes: usize,
 }
 
-/// PQ-compressed vector (simplified)
+/// PQ-compressed vector placeholder.
+///
+/// This is *not* native DiskANN's full PQ/SSD pipeline: it only stores a coarse
+/// per-subvector mean quantization so the Rust implementation can exercise a
+/// compressed-distance branch. Treat it as an explicit simplification rather than
+/// a performance-comparable implementation.
 #[derive(Clone)]
 struct PQCode {
     codes: Vec<u8>,
@@ -485,9 +490,8 @@ impl DiskAnnIndex {
         let start = b_idx * self.dim;
         let b = &self.vectors[start..start + self.dim];
 
-        // Use SIMD for distance, then square
-        let dist = simd::l2_distance(a, b);
-        dist * dist
+        // Search/range gate on squared L2 directly to avoid an unnecessary sqrt+square roundtrip.
+        simd::l2_distance_sq(a, b)
     }
 
     #[inline]
@@ -1216,6 +1220,80 @@ mod tests {
         let vectors = Index::get_vector_by_ids(&index, &[0, 1]).unwrap();
         assert_eq!(vectors.len(), 8); // 2 vectors * 4 dim
     }
+
+    #[test]
+    fn test_diskann_l2_sqr_matches_simd_squared_distance() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors = vec![0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0];
+        index.train(&vectors).unwrap();
+
+        let query = vec![0.5, 1.5, 2.5, 3.5];
+        let expected = simd::l2_distance_sq(&query, &vectors[4..8]);
+        let actual = index.l2_sqr(&query, 1);
+        assert!((actual - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_diskann_raw_data_semantics_follow_metric_type() {
+        use crate::index::Index;
+
+        let l2_index = DiskAnnIndex::new(&IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        })
+        .unwrap();
+        let cosine_index = DiskAnnIndex::new(&IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::Cosine,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        })
+        .unwrap();
+        let ip_index = DiskAnnIndex::new(&IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::Ip,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        })
+        .unwrap();
+
+        assert!(Index::has_raw_data(&l2_index));
+        assert!(Index::has_raw_data(&cosine_index));
+        assert!(!Index::has_raw_data(&ip_index));
+        assert!(Index::get_vector_by_ids(&ip_index, &[0]).is_err());
+    }
+
+    #[test]
+    fn test_diskann_get_vector_by_ids_rejects_missing_ids() {
+        use crate::dataset::Dataset;
+        use crate::index::{Index, IndexError};
+
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let dataset = Dataset::from_vectors(vec![0.0, 1.0, 2.0, 3.0], 4);
+        Index::train(&mut index, &dataset).unwrap();
+
+        let err = Index::get_vector_by_ids(&index, &[7]).unwrap_err();
+        assert!(matches!(err, IndexError::Unsupported(_)));
+    }
 }
 
 // ============================================================================
@@ -1332,32 +1410,37 @@ impl Index for DiskAnnIndex {
     }
 
     fn get_vector_by_ids(&self, ids: &[i64]) -> std::result::Result<Vec<f32>, IndexError> {
+        if !self.has_raw_data() {
+            return Err(IndexError::Unsupported(
+                "get_vector_by_ids not supported for DiskANN without raw-data metric semantics".into(),
+            ));
+        }
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let mut result = Vec::with_capacity(ids.len() * self.dim);
 
         for &id in ids {
-            // Find the index for this ID
-            let idx = self.ids.iter().position(|&x| x == id);
-            if let Some(i) = idx {
-                let start = i * self.dim;
-                let end = start + self.dim;
-                if end <= self.vectors.len() {
-                    result.extend_from_slice(&self.vectors[start..end]);
-                } else {
-                    // ID exists but vector data is invalid
-                    result.extend(std::iter::repeat(0.0f32).take(self.dim));
-                }
-            } else {
-                // ID not found, return zeros
-                result.extend(std::iter::repeat(0.0f32).take(self.dim));
+            let idx = self.ids.iter().position(|&x| x == id).ok_or_else(|| {
+                IndexError::Unsupported(format!("ID {} not found in index", id))
+            })?;
+            let start = idx * self.dim;
+            let end = start + self.dim;
+            if end > self.vectors.len() {
+                return Err(IndexError::Unsupported(format!(
+                    "Vector data corrupted for ID {}",
+                    id
+                )));
             }
+            result.extend_from_slice(&self.vectors[start..end]);
         }
 
         Ok(result)
     }
 
     fn has_raw_data(&self) -> bool {
-        // DiskANN stores raw vectors in memory (self.vectors)
-        !self.vectors.is_empty()
+        matches!(self.config.metric_type, MetricType::L2 | MetricType::Cosine)
     }
 
     fn create_ann_iterator(

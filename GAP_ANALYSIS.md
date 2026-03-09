@@ -39,8 +39,8 @@ Evaluation dimensions:
 
 - ✅ `CORE-P0-001`: 远端 x86 SIMD 验证链已恢复可执行并取得新鲜证据。最新复核中，本地 `cargo test --lib -q`、远端 `cargo test --features simd simd::tests -- --nocapture`、远端 `cargo test --lib --features simd test_x86_simd_l2_reduction_matches_scalar_on_irregular_input -- --nocapture` 均已通过；`default+simd` 不再因 toolchain/脚本漂移阻断后续核心路径工作。
 - ✅ `HNSW-P1-001`: HNSW 已完成首轮远端 before/after artifact 落地；当前证据显示 recall 基本持平（`0.217 -> 0.215`）但 qps 大幅提升（`~1621 -> ~19235`），由于 recall 仍低于可信阈值，这条结果已被诚实归档为 `recheck required / no-go`，不再作为当前活动 blocker。
-- 🚧 `IVFPQ-P1-002`: IVF/PQ 需要从“接口存在”切到“实现真实性和热点路径可信”。IVF base 当前更像占位实现，IVF-PQ/ScaNN 则需要 focused 审计和 benchmark 证明；这是当前最高优先级的活跃核心实现任务。
-- 🚧 `DISKANN-P1-003`: Rust DiskANN 当前仍是“简化 Vamana + 简化 PQ”边界，需先修距离路径并明确工程边界，避免误把它当原生 DiskANN 同级实现。
+- ✅ `IVFPQ-P1-002`: IVF/PQ 已完成 focused reality audit，并留下 `benchmark_results/ivfpq_p1_002_focused.json` 作为可审计 no-go / recheck-required artifact。结论已明确：`src/faiss/ivf.rs` 是 placeholder coarse-assignment scaffold，真实热点路径在 `src/faiss/ivfpq.rs`，但当前 recall@10 ≈ 0.442 仍不足以把 IVF/PQ 提升为可信性能主线。
+- 🚧 `DISKANN-P1-003`: Rust DiskANN 当前仍是“简化 Vamana + placeholder PQCode”边界；本轮已修掉 `l2_sqr` 的 sqrt round-trip 反模式，但仍需把压缩语义与 capability/audit 文档收敛到诚实口径，避免误把它当原生 DiskANN 同级实现。
 
 - ✅ `SEM-P3-001`: `DiskANN` / `AISAQ` / `HNSW` / `IVF` / `Sparse` / `ScaNN` 的 `GetVectorByIds` / `HasRawData` Phase-5 语义尾项已完成 focused 收敛；当前不再缺“入口存在但边界语义不可解释”的 semantic-fidelity blocker。
 - ✅ `ABI-P3-002`: FFI metadata / additional-scalar 已从“最小稳定摘要”升级为逐索引可解释 contract；HNSW / IVF / ScaNN / Sparse 的 capability/semantics/unsupported_reason 已具备 focused FFI 回归覆盖，当前不再是活跃 P3 blocker。

@@ -102,11 +102,12 @@ Objective:
 
 Active scoped tasks:
 
-- `IVFPQ-P1-002`: audit and strengthen IVF/PQ search reality (ADC/centroid path), explicitly classify IVF base as rewrite candidate or non-core placeholder, and produce a focused benchmark artifact that can decide whether IVF/PQ becomes the next core performance lane.
 - `DISKANN-P1-003`: fix Rust DiskANN’s distance-path issues and honestly classify the current `PQCode` simplification before using it in any leadership claim.
-- `PERF-P3-005`: once HNSW recall is trustworthy or IVF/PQ proves to be the better route, generate the first recall-gated native-vs-rs baseline for a single core path (current default priority: `clustered_l2 + HNSW`).
+- `PERF-P3-005`: once HNSW recall is trustworthy or a core path becomes recall-credible, generate the first recall-gated native-vs-rs baseline for a single core path (current default priority: `clustered_l2 + HNSW`).
 
 Recently closed milestones:
+
+- `IVFPQ-P1-002`: IVF/PQ reality audit is now closed with an honest no-go artifact. `src/faiss/ivf.rs` has been explicitly classified as a placeholder coarse-assignment scaffold, while the real Rust IVF-PQ hot path remains `src/faiss/ivfpq.rs` (centroid search + residual ADC). The focused artifact `benchmark_results/ivfpq_p1_002_focused.json` reports recall@10 ≈ 0.442 with `confidence=recheck required`, so IVF/PQ does not yet qualify as the next performance-lead lane.
 
 - `HNSW-P1-001`: first remote x86 HNSW before/after artifact chain is now landed and honest about its outcome: recall stayed roughly flat (`0.217 -> 0.215`) while qps jumped (`~1621 -> ~19235`), so the result is archived as `recheck required / no-go` evidence rather than a leadership claim.
 - `CORE-P0-001`: remote x86 SIMD verification lane 已恢复；远端 x86 focused SIMD required gates 已重新通过，`default+simd` 不再因旧 toolchain/脚本漂移缺少可信证据。

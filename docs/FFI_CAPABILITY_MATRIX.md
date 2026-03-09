@@ -57,6 +57,7 @@ Document the capability matrix for all FFI-exposed index types, showing which op
 - Only indexes that store raw data (Flat, IVF-Flat variants) can fully support
 - Quantization indexes (SQ8, PQ, RaBitQ) cannot return original vectors
 - HNSW-PQ is intentionally constrained: `has_raw_data=false`, and `get_vector_by_ids` returns a stable `Unsupported` contract because PQ storage is lossy
+- DiskANN currently exposes `get_vector_by_ids` only under its raw-data metric gate (`L2` / `Cosine`). Its `PQCode` branch in `src/faiss/diskann.rs` is still an explicit placeholder rather than native-comparable PQ compression, so capability support here should be read as API semantics, not proof of production-grade DiskANN parity.
 
 ### Serialization
 - `PERSIST-P3-003` 已把 `file_save_load` / `memory_serialize` / `deserialize_from_file` 的 supported / constrained / unsupported 语义重新拉齐到 audit 基线。
