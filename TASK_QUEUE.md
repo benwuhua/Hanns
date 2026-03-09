@@ -3,22 +3,17 @@
 
 ## 待办 (TODO)
 
-- [x] **PERSIST-P3-003**: 补齐 persistence / deserialize-from-file 语义矩阵与回归 (2026-03-09)
-  - 背景: `ABI-P3-002` 已把 FFI metadata / additional-scalar 从最小摘要提升到逐索引可解释 contract，但生产级替代仍缺一块更直接的落地语义：各索引 `save/load`、内存序列化以及 `DeserializeFromFile` 对齐边界还没有系统化矩阵。
-  - 计划侧收口 (2026-03-09 12:02): 当前 `src/ffi.rs` 已按 HNSW / IVF / ScaNN / Sparse 输出 per-index capability + semantics，并有 `ffi::tests::test_ffi_abi_metadata_contract` 兜底；继续保留 `ABI-P3-002` 只会让 exec 重复进入已完成范围。
-  - 本轮完成 (2026-03-09 12:13):
-    - [x] **PERSIST-P3-003A**: 对照原生 `Serialize/Deserialize/DeserializeFromFile` 路径，整理 Flat / HNSW / IVF / ScaNN / Sparse / MinHash 的 persistence 支持矩阵与受限边界
-    - [x] **PERSIST-P3-003B**: 让 FFI / audit / capability docs 对 `file_save_load`、`memory_serialize`、`deserialize_from_file` 的 supported / constrained / unsupported 语义口径一致
-    - [x] **PERSIST-P3-003C**: 补 persistence roundtrip / deserialize-from-file focused regressions，覆盖“支持成功”“受限拒绝”“空文件失败”三类场景
-  - 验收: persistence 能力矩阵完整、受限边界明确，生产替代时不会因 save/load 语义漂移产生隐藏风险。
 - [ ] **OBS-P3-005**: 建立最小生产可观测性与运行时治理基线
-  - 背景: 当前已有基础 `tracing`，但还没有生产级 metrics / trace 透传 / 资源估算 / 远端真实环境门禁的统一闭环；这会直接影响“生产级平替”的可信度。
+  - 背景: `PERSIST-P3-003` 已把 `file_save_load` / `memory_serialize` / `deserialize_from_file` 语义矩阵收口，当前更直接的生产替代缺口已切换为“运行中如何被观察、诊断和估算资源”。代码里虽已有零散 `tracing::*` 与 benchmark 内存估算 helper，但还没有统一、可回归、可经 FFI 暴露的 runtime governance contract。
   - 当前收口切片:
-    - [ ] **OBS-P3-005A**: 为核心 build/search/load 路径补稳定 metrics 接口，优先覆盖 latency / recall-gated benchmark metadata / mmap-load 关键事件
-    - [ ] **OBS-P3-005B**: 统一 trace/span 透传入口，确保 FFI 与 gate runner 能把 trace context 带进关键路径
-    - [ ] **OBS-P3-005C**: 增加最小资源估算 contract（内存/磁盘/mmap_supported），为后续 `EstimateLoadResource` 等生产 API 收口铺路
-  - 说明: 这一任务不等于现在就铺满 Prometheus/OpenTelemetry 全家桶，而是先建立最小生产可观测性骨架。
-  - 验收: 关键路径具备可抓取、可回归、可解释的最小 observability / resource contract，远端门禁结果不再只依赖文本日志。
+    - [ ] **OBS-P3-005A**: 抽出最小 `RuntimeObservability`/event schema，统一 build/search/load 路径可记录字段，优先覆盖 latency、topk/query_count、recall artifact metadata、mmap load 关键事件
+    - [ ] **OBS-P3-005B**: 为 FFI 与 gate runner 定义稳定 trace/span 透传入口，确保远端回归能把 trace context 带进核心路径，而不是只落文本日志
+    - [ ] **OBS-P3-005C**: 把现有 memory estimate / legality `mmap_supported` 零散能力收敛为最小 resource contract（memory_bytes/disk_bytes/mmap_supported/unsupported_reason），形成可审计基线
+  - 计划说明: 本轮不是直接铺满 Prometheus/OpenTelemetry，而是先把“可记录什么、通过哪里透传、最小资源估算如何表达”收敛成稳定 contract，便于后续 exec 做最小实现与 focused regression。
+  - 验收:
+    - 关键路径 observability/resource schema 具备明确字段定义与最小调用边界
+    - queue/roadmap/gap/audit 对 Phase 5 主缺口统一切换到 observability baseline
+    - required gate 只保留文档/接口级 smoke，真正远端 build/test/perf 验证延后到专项轮次
 - [ ] **PERF-P3-004**: 建立 native knowhere vs knowhere-rs 的关键路径性能领先基线
   - 背景: 当前项目目标不是停在 parity 收口，而是成为生产级平替并在关键路径上具备绝对性能优势。
   - 目标:
@@ -330,7 +325,8 @@
 ### P3 (语义对齐 / 生产硬化 / 性能领先)
 - [x] **SEM-P3-001**: 对齐 `GetVectorByIds` / `HasRawData` 的跨索引语义矩阵 (2026-03-09)
 - [x] **ABI-P3-002**: 提升 FFI metadata / additional-scalar 契约，从最小摘要走向逐模块真实语义 (2026-03-09)
-- [ ] **PERSIST-P3-003**: 补齐 persistence / deserialize-from-file 语义矩阵与回归
+- [x] **PERSIST-P3-003**: 补齐 persistence / deserialize-from-file 语义矩阵与回归 (2026-03-09)
+- [ ] **OBS-P3-005**: 建立最小生产可观测性与运行时治理基线
 - [ ] **PERF-P3-004**: 建立 native knowhere vs knowhere-rs 的关键路径性能领先基线
 
 ## 归档
@@ -347,6 +343,12 @@
     - [x] HNSW / IVF / ScaNN / Sparse 的 additional-scalar 支持矩阵与 unsupported_reason 已形成稳定 per-index contract
     - [x] `ffi::tests::test_ffi_abi_metadata_contract` 已覆盖 null-safe、unsupported、partial-supported 与 per-index 差异场景
   - 验收: ✅ ABI metadata / capability contract 已可解释、可回归、可审计，下一阶段应转入 persistence 语义矩阵。
+- [x] **PERSIST-P3-003**: 补齐 persistence / deserialize-from-file 语义矩阵与回归 (2026-03-09)
+  - 完成情况:
+    - [x] Flat / HNSW / IVF / ScaNN / Sparse / MinHash 的 `file_save_load` / `memory_serialize` / `deserialize_from_file` 边界已整理为可审计矩阵
+    - [x] `docs/PARITY_AUDIT.md` / `docs/FFI_CAPABILITY_MATRIX.md` 对 supported / constrained / unsupported 语义口径已统一
+    - [x] focused regressions 已覆盖成功 roundtrip、受限拒绝、空文件失败三类 persistence 边界
+  - 验收: ✅ persistence 语义矩阵完整，生产替代时不会再因 save/load 语义漂移留下隐性 blocker；下一阶段转入 observability/runtime governance baseline。
 - [x] **DOCS-BASELINE-002**: 创建 FFI 能力矩阵文档 `docs/FFI_CAPABILITY_MATRIX.md` (2026-03-05)
 - [x] **PARITY-P0-003**: 添加 AnnIterator trait 定义到 `src/index.rs` (2026-03-05)
 - [x] **DOCS-BASELINE-001**: 重建 GAP/ROADMAP/TASK_QUEUE/PARITY_AUDIT 文档基线（2026-03-05）

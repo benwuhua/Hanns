@@ -1,10 +1,12 @@
 # FFI Capability Matrix
 
-Last updated: 2026-03-08 20:05
+Last updated: 2026-03-09 12:30
 
 ## Purpose
 
 Document the capability matrix for all FFI-exposed index types, showing which operations are supported.
+
+> Note: `docs/PARITY_AUDIT.md` is the authoritative audit log. This matrix is a condensed operator-facing view and must stay consistent with the audit’s `supported / constrained / unsupported` wording.
 
 ## Capability Legend
 
@@ -29,7 +31,7 @@ Document the capability matrix for all FFI-exposed index types, showing which op
 | BinFlat | ✅ | ✅ | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | BinaryHNSW | ✅ | ✅ | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | BinIVF-Flat | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| SparseWand | ❌ | ✅ | ✅ | ❌ | ✅ | ⚠️ | ❌ | ❌ | ❌ |
+| SparseWand | ❌ | ✅ | ✅ | ❌ | ✅ | ⚠️ | ✅ | ❌ | ✅ |
 | SparseWandCC | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | MinHashLSH | ❌ | ✅ | ✅ | ❌ | ✅ | ⚠️ | ✅ | ❌ | ✅ |
 
@@ -57,9 +59,10 @@ Document the capability matrix for all FFI-exposed index types, showing which op
 - HNSW-PQ is intentionally constrained: `has_raw_data=false`, and `get_vector_by_ids` returns a stable `Unsupported` contract because PQ storage is lossy
 
 ### Serialization
-- Basic file-based serialization implemented
-- BinarySet-based memory serialization needs more work for some index types
-- HNSW-PQ currently returns stable `Unsupported` for file save/load; persistence is intentionally out of scope for this index until real persistence is implemented
+- `PERSIST-P3-003` 已把 `file_save_load` / `memory_serialize` / `deserialize_from_file` 的 supported / constrained / unsupported 语义重新拉齐到 audit 基线。
+- 当前矩阵里 `File Save/Load` 与 `DeserializeFromFile` 表示“FFI/运行时已有稳定 contract”，不要求所有索引都支持内存序列化。
+- `HNSW-PQ` 继续维持稳定 `Unsupported`：`has_raw_data=false`，`get_vector_by_ids` 与 persistence 都是显式受限语义，而不是待补实现。
+- `SparseWand` 现已具备文件级 save/load 与 `DeserializeFromFile` contract；`SparseWandCC` 仍不纳入统一 persistence 承诺。
 
 ## Priority for Completion
 

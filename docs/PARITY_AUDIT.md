@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-09 12:02
+Last updated: 2026-03-09 12:30
 Sync baseline: 4f60908fc9ad7438b4b8ff64210481ab281009b0 from origin/main
 
 ## 轮次记录
+- 2026-03-09 12:30: **计划轮次：关闭 `PERSIST-P3-003` 并切换 `OBS-P3-005`（builder-plan）**
+  1. 复核输入：`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`memory/DEV_RESULT.json`、`memory/VERIFY_RESULT.json`、`TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`、`docs/FFI_CAPABILITY_MATRIX.md`。
+  2. 调度判断：最新 `EXEC_RESULT.updated_at=2026-03-09T04:13:22Z` 晚于 `PLAN_RESULT.updated_at=2026-03-09T04:02:00Z`，因此本轮必须重新 planning，不能 skip。
+  3. 收口结论：`PERSIST-P3-003` 已由 exec 完成；queue 顶部任务与实际状态已脱节，若不主动切换会让后续 exec 围绕已收口的 persistence 文档/回归范围空转。
+  4. 差距重估：当前 Phase 5 最小高价值缺口不再是 persistence，而是 observability/runtime governance baseline——代码里已有零散 `tracing::*`、benchmark memory estimator、legality `mmap_supported`，但仍缺统一 schema、FFI/runner trace 透传边界与最小资源估算 contract。
+  5. 治理动作：同步更新 `TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`，将当前任务切换为 `OBS-P3-005`，并把 `PERSIST-P3-003` 转入已完成归档；同时计划在后续文档轮次重写 `docs/FFI_CAPABILITY_MATRIX.md` 以消除旧矩阵口径漂移。
+  状态：Phase 5 Active（persistence semantics closed；observability/runtime governance promoted）。
 - 2026-03-09 12:02: **计划轮次：关闭 `ABI-P3-002` 并切换 `PERSIST-P3-003`（builder-plan）**
   1. 复核输入：`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`memory/DEV_RESULT.json`、`memory/VERIFY_RESULT.json`、`TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`、`src/ffi.rs`、`src/index.rs`。
   2. 调度判断：最新 `EXEC_RESULT.updated_at=2026-03-09T03:21:00Z` 晚于 `PLAN_RESULT.updated_at=2026-03-09T02:46:00Z`，因此本轮必须重新 planning，不能 skip。

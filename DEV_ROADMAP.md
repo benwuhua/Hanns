@@ -101,14 +101,14 @@ Objective:
 
 Active scoped tasks:
 
-- `PERSIST-P3-003`: build a complete persistence / deserialize-from-file semantics matrix and regression set; immediate next slice is to scope per-index `file_save_load` / `memory_serialize` / `deserialize_from_file` boundaries and add focused roundtrip regressions.
-- `OBS-P3-005`: establish the minimum production observability / runtime-governance baseline (metrics, trace propagation, resource-estimation contract) so remote gates and deployment diagnostics are trustworthy.
+- `OBS-P3-005`: establish the minimum production observability / runtime-governance baseline. Immediate next slice: define the smallest stable observability/resource contract across build/search/load, trace propagation entrypoints for FFI + gate runner, and a minimal resource-estimation schema (`memory_bytes` / `disk_bytes` / `mmap_supported` / `unsupported_reason`).
 - `PERF-P3-004`: establish recall-gated native-vs-rs performance leadership baseline on selected non-GPU paths.
 
 Recently closed milestones:
 
 - `SEM-P3-001`: HNSW / IVF / Sparse / ScaNN 的 `GetVectorByIds` / `HasRawData` 语义尾项已完成 focused 收敛；missing-id、empty-index、lossy-index、reorder/raw-data gate 等边界现已具备可审计回归证据。
 - `ABI-P3-002`: FFI metadata / additional-scalar 已从最小稳定摘要提升为逐索引可解释 contract；HNSW / IVF / ScaNN / Sparse 的 capability / unsupported_reason / semantics 字段现已具备 focused FFI 回归覆盖。
+- `PERSIST-P3-003`: persistence / deserialize-from-file 语义矩阵与 focused regressions 已闭环；`file_save_load` / `memory_serialize` / `deserialize_from_file` 三类边界已在 queue/audit/capability docs 中统一为 stable contract。
 
 Exit criteria:
 
