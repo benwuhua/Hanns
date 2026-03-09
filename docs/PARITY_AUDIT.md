@@ -297,7 +297,7 @@ Risk levels:
 | HNSW-PQ | - | `src/faiss/hnsw_pq.rs` | Done | P2 | ✅ AnnIterator (2026-03-05); ✅ `has_raw_data=false`（lossy PQ）; ✅ `get_vector_by_ids` 显式稳定返回 Unsupported；✅ `save/load` 当前在 persistence scope 内显式稳定返回 Unsupported |
 | Sparse | `src/index/sparse/sparse_index_node.cc`, `src/index/sparse/sparse_inverted_index.h` | `src/faiss/sparse_inverted.rs`, `src/faiss/sparse_wand.rs`, `src/faiss/sparse_wand_cc.rs` | Done | P1 | ✅ `SparseInverted`/`SparseWand` 已接入 `create_ann_iterator` + `save/load`；✅ bitset + iterator + persistence 回归已覆盖；ℹ️ `SparseWandCC` 仍为并发包装层，当前未纳入统一 `Index` trait / 持久化承诺（不影响本模块 parity 收口） |
 | MinHash | `src/index/minhash/minhash_index_node.cc`, `src/index/minhash/minhash_lsh_config.h` | `src/index/minhash_lsh.rs`, `src/index/minhash_lsh_index_trait.rs`, `src/ffi/minhash_lsh_ffi.rs`, `src/api/index.rs` | Done | P1 | ✅ 参数别名映射已补齐；✅ FFI query 长度已对齐 `mh_vec_length * mh_vec_element_size`；✅ `MinHashLSHIndex` 已接入 `Index trait`；✅ `knowhere_get_index_type`/`create_ann_iterator` 已补齐 MinHashLSH 分支；✅ `add_binary` 按 `dim(bits)` 做字节/对齐校验；全量回归问题已归属 BUG-P1-001 |
-| FFI ABI | C++ factory + index runtime behavior | `src/ffi.rs`, `docs/FFI_CAPABILITY_MATRIX.md` | Done | P1 | ✅ capability matrix documented; ✅ consistent error handling (19 NotImplemented returns); ✅ `IsAdditionalScalarSupported` / `GetIndexMeta` 统一入口已补齐并具备回归覆盖 |
+| FFI ABI | C++ factory + index runtime behavior | `src/ffi.rs`, `docs/FFI_CAPABILITY_MATRIX.md` | Done | P1 | ✅ capability matrix documented; ✅ consistent error handling (19 NotImplemented returns); ✅ `IsAdditionalScalarSupported` / `GetIndexMeta` 统一入口已补齐并具备回归覆盖；✅ persistence 语义现区分 `file_save_load` / `memory_serialize` / `deserialize_from_file` |
 
 ## 4. Validation Policy
 

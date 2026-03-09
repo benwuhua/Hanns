@@ -208,6 +208,7 @@ struct AdditionalScalarMeta<'a> {
     runtime_supported: bool,
     mv_only_query: bool,
     support_mode: &'a str,
+    unsupported_reason: &'a str,
 }
 
 #[derive(Serialize)]
@@ -215,6 +216,22 @@ struct IndexCapabilitySummary<'a> {
     get_vector_by_ids: &'a str,
     ann_iterator: &'a str,
     persistence: &'a str,
+}
+
+#[derive(Serialize)]
+struct PersistenceSemantics<'a> {
+    file_save_load: &'a str,
+    memory_serialize: &'a str,
+    deserialize_from_file: &'a str,
+}
+
+#[derive(Serialize)]
+struct IndexMetaSemantics<'a> {
+    family: &'a str,
+    raw_data_gate: &'a str,
+    persistence_mode: &'a str,
+    persistence: PersistenceSemantics<'a>,
+    metadata_granularity: &'a str,
 }
 
 #[derive(Serialize)]
@@ -227,6 +244,7 @@ struct IndexMetaSummary<'a> {
     additional_scalar_supported: bool,
     additional_scalar: AdditionalScalarMeta<'a>,
     capabilities: IndexCapabilitySummary<'a>,
+    semantics: IndexMetaSemantics<'a>,
 }
 
 /// 包装索引对象 - 支持 Flat, HNSW, ScaNN, HNSW-PRQ, IVF-RaBitQ, HNSW-SQ, HNSW-PQ, BinFlat, BinaryHnsw, IVF-SQ8, BinIvfFlat, SparseWand, SparseWandCC, MinHashLSH
@@ -1285,6 +1303,19 @@ impl IndexWrapper {
         }
     }
 
+    fn additional_scalar_unsupported_reason(&self) -> &'static str {
+        match self.additional_scalar_support_mode() {
+            "supported" => "",
+            "partial" => "only sparse indexes expose MV-only additional-scalar filtering via the current Rust FFI",
+            _ if self.hnsw.is_some() => "HNSW does not expose additional-scalar filtering through the current Rust FFI",
+            _ if self.ivf_sq8.is_some() || self.ivf_rabitq.is_some() => {
+                "IVF variants do not expose additional-scalar filtering through the current Rust FFI"
+            }
+            _ if self.scann.is_some() => "ScaNN does not expose additional-scalar filtering through the current Rust FFI",
+            _ => "additional-scalar filtering is unsupported for this index type in the current Rust FFI",
+        }
+    }
+
     fn is_additional_scalar_supported(&self, is_mv_only: bool) -> bool {
         matches!(self.additional_scalar_support_mode(), "partial" | "supported") && is_mv_only
     }
@@ -1306,7 +1337,7 @@ impl IndexWrapper {
             IndexCapabilitySummary {
                 get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
                 ann_iterator: "supported",
-                persistence: "unsupported",
+                persistence: "supported",
             }
         } else if self.hnsw_prq.is_some() {
             IndexCapabilitySummary {
@@ -1371,11 +1402,97 @@ impl IndexWrapper {
         }
     }
 
+    fn persistence_semantics(&self) -> PersistenceSemantics<'static> {
+        if self.flat.is_some() {
+            PersistenceSemantics {
+                file_save_load: "supported",
+                memory_serialize: "supported",
+                deserialize_from_file: "supported",
+            }
+        } else if self.hnsw.is_some() || self.scann.is_some() || self.hnsw_prq.is_some() || self.minhash_lsh.is_some() {
+            PersistenceSemantics {
+                file_save_load: "supported",
+                memory_serialize: "unsupported",
+                deserialize_from_file: "supported",
+            }
+        } else if self.ivf_sq8.is_some() {
+            PersistenceSemantics {
+                file_save_load: "constrained",
+                memory_serialize: "unsupported",
+                deserialize_from_file: "unsupported",
+            }
+        } else {
+            PersistenceSemantics {
+                file_save_load: "unsupported",
+                memory_serialize: "unsupported",
+                deserialize_from_file: "unsupported",
+            }
+        }
+    }
+
+    fn meta_semantics(&self) -> IndexMetaSemantics<'static> {
+        let persistence = self.persistence_semantics();
+        let persistence_mode = if persistence.file_save_load == "supported" && persistence.memory_serialize == "supported" {
+            "file_save_load+memory_serialize"
+        } else if persistence.file_save_load == "supported" {
+            "file_save_load"
+        } else if persistence.file_save_load == "constrained" {
+            "constrained_file_save_load"
+        } else if persistence.memory_serialize == "supported" {
+            "memory_serialize"
+        } else {
+            "unsupported"
+        };
+
+        if self.hnsw.is_some() || self.hnsw_prq.is_some() || self.hnsw_sq.is_some() || self.hnsw_pq.is_some() {
+            IndexMetaSemantics {
+                family: "hnsw",
+                raw_data_gate: if self.has_raw_data() { "raw_vectors_retained" } else { "compressed_or_graph_only" },
+                persistence_mode,
+                persistence,
+                metadata_granularity: "per-index-capability",
+            }
+        } else if self.ivf_sq8.is_some() || self.ivf_rabitq.is_some() {
+            IndexMetaSemantics {
+                family: "ivf",
+                raw_data_gate: if self.has_raw_data() { "raw_vectors_retained" } else { "quantized_or_codebook_only" },
+                persistence_mode,
+                persistence,
+                metadata_granularity: "per-index-capability",
+            }
+        } else if self.scann.is_some() {
+            IndexMetaSemantics {
+                family: "scann",
+                raw_data_gate: if self.has_raw_data() { "raw_vectors_retained" } else { "partition_or_reorder_only" },
+                persistence_mode,
+                persistence,
+                metadata_granularity: "per-index-capability",
+            }
+        } else if self.sparse_wand.is_some() || self.sparse_wand_cc.is_some() {
+            IndexMetaSemantics {
+                family: "sparse",
+                raw_data_gate: if self.has_raw_data() { "sparse_postings_retained" } else { "wand_state_only" },
+                persistence_mode,
+                persistence,
+                metadata_granularity: "per-index-capability",
+            }
+        } else {
+            IndexMetaSemantics {
+                family: "generic",
+                raw_data_gate: if self.has_raw_data() { "raw_vectors_retained" } else { "not_retained" },
+                persistence_mode,
+                persistence,
+                metadata_granularity: "uniform-summary",
+            }
+        }
+    }
+
     fn get_index_meta_json(&self) -> Result<String, CError> {
         let additional_scalar = AdditionalScalarMeta {
             runtime_supported: self.is_additional_scalar_supported(true),
             mv_only_query: true,
             support_mode: self.additional_scalar_support_mode(),
+            unsupported_reason: self.additional_scalar_unsupported_reason(),
         };
         let summary = IndexMetaSummary {
             index_type: self.index_type(),
@@ -1386,6 +1503,7 @@ impl IndexWrapper {
             additional_scalar_supported: additional_scalar.runtime_supported,
             additional_scalar,
             capabilities: self.capability_summary(),
+            semantics: self.meta_semantics(),
         };
 
         serde_json::to_string(&summary).map_err(|_| CError::Internal)
@@ -1478,9 +1596,9 @@ impl IndexWrapper {
             idx.save(path).map_err(|_| CError::Internal)
         } else if let Some(ref idx) = self.hnsw {
             idx.save(path).map_err(|_| CError::Internal)
-        } else if let Some(ref _idx) = self.scann {
-            // ScaNN 暂不支持文件保存
-            Err(CError::NotImplemented)
+        } else if let Some(ref idx) = self.scann {
+            idx.save(path.to_str().unwrap())
+                .map_err(|_| CError::Internal)
         } else if let Some(ref idx) = self.hnsw_prq {
             idx.save(path.to_str().unwrap())
                 .map_err(|_| CError::Internal)
@@ -1502,8 +1620,9 @@ impl IndexWrapper {
             idx.load(path).map_err(|_| CError::Internal)
         } else if let Some(ref mut idx) = self.hnsw {
             idx.load(path).map_err(|_| CError::Internal)
-        } else if let Some(ref _idx) = self.scann {
-            Err(CError::NotImplemented)
+        } else if let Some(ref mut idx) = self.scann {
+            idx.load(path.to_str().unwrap())
+                .map_err(|_| CError::Internal)
         } else if let Some(ref mut idx) = self.hnsw_prq {
             idx.load(path.to_str().unwrap())
                 .map_err(|_| CError::Internal)
@@ -3993,12 +4112,102 @@ mod tests {
         assert_eq!(flat_meta_json["additional_scalar_supported"], false);
         assert_eq!(flat_meta_json["additional_scalar"]["support_mode"], "unsupported");
         assert_eq!(flat_meta_json["additional_scalar"]["mv_only_query"], true);
+        assert_eq!(flat_meta_json["additional_scalar"]["unsupported_reason"], "additional-scalar filtering is unsupported for this index type in the current Rust FFI");
         assert_eq!(flat_meta_json["capabilities"]["get_vector_by_ids"], "supported");
         assert_eq!(flat_meta_json["capabilities"]["ann_iterator"], "unsupported");
         assert_eq!(flat_meta_json["capabilities"]["persistence"], "supported");
+        assert_eq!(flat_meta_json["semantics"]["family"], "generic");
+        assert_eq!(flat_meta_json["semantics"]["raw_data_gate"], "raw_vectors_retained");
+        assert_eq!(flat_meta_json["semantics"]["persistence_mode"], "file_save_load+memory_serialize");
+        assert_eq!(flat_meta_json["semantics"]["persistence"]["file_save_load"], "supported");
+        assert_eq!(flat_meta_json["semantics"]["persistence"]["memory_serialize"], "supported");
+        assert_eq!(flat_meta_json["semantics"]["persistence"]["deserialize_from_file"], "supported");
 
         knowhere_free_cstring(flat_meta_ptr);
         knowhere_free_index(flat);
+
+        let hnsw = knowhere_create_index(CIndexConfig {
+            index_type: CIndexType::Hnsw,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            ..Default::default()
+        });
+        assert!(!hnsw.is_null());
+        assert_eq!(knowhere_is_additional_scalar_supported(hnsw, false), 0);
+        assert_eq!(knowhere_is_additional_scalar_supported(hnsw, true), 0);
+        let hnsw_meta_ptr = knowhere_get_index_meta(hnsw);
+        assert!(!hnsw_meta_ptr.is_null());
+        let hnsw_meta_str = unsafe { std::ffi::CStr::from_ptr(hnsw_meta_ptr) }
+            .to_str()
+            .unwrap();
+        let hnsw_meta_json: serde_json::Value = serde_json::from_str(hnsw_meta_str).unwrap();
+        assert_eq!(hnsw_meta_json["index_type"], "HNSW");
+        assert_eq!(hnsw_meta_json["semantics"]["family"], "hnsw");
+        assert_eq!(hnsw_meta_json["semantics"]["raw_data_gate"], "raw_vectors_retained");
+        assert_eq!(hnsw_meta_json["semantics"]["persistence_mode"], "file_save_load");
+        assert_eq!(hnsw_meta_json["semantics"]["persistence"]["file_save_load"], "supported");
+        assert_eq!(hnsw_meta_json["semantics"]["persistence"]["memory_serialize"], "unsupported");
+        assert_eq!(hnsw_meta_json["semantics"]["persistence"]["deserialize_from_file"], "supported");
+        assert_eq!(hnsw_meta_json["capabilities"]["ann_iterator"], "supported");
+        assert_eq!(hnsw_meta_json["capabilities"]["persistence"], "supported");
+        assert_eq!(hnsw_meta_json["additional_scalar"]["unsupported_reason"], "HNSW does not expose additional-scalar filtering through the current Rust FFI");
+        knowhere_free_cstring(hnsw_meta_ptr);
+        knowhere_free_index(hnsw);
+
+        let ivf = knowhere_create_index(CIndexConfig {
+            index_type: CIndexType::IvfSq8,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            ..Default::default()
+        });
+        assert!(!ivf.is_null());
+        assert_eq!(knowhere_is_additional_scalar_supported(ivf, true), 0);
+        let ivf_meta_ptr = knowhere_get_index_meta(ivf);
+        assert!(!ivf_meta_ptr.is_null());
+        let ivf_meta_str = unsafe { std::ffi::CStr::from_ptr(ivf_meta_ptr) }
+            .to_str()
+            .unwrap();
+        let ivf_meta_json: serde_json::Value = serde_json::from_str(ivf_meta_str).unwrap();
+        assert_eq!(ivf_meta_json["index_type"], "IVF_SQ8");
+        assert_eq!(ivf_meta_json["semantics"]["family"], "ivf");
+        assert_eq!(ivf_meta_json["semantics"]["raw_data_gate"], "quantized_or_codebook_only");
+        assert_eq!(ivf_meta_json["semantics"]["persistence_mode"], "constrained_file_save_load");
+        assert_eq!(ivf_meta_json["semantics"]["persistence"]["file_save_load"], "constrained");
+        assert_eq!(ivf_meta_json["semantics"]["persistence"]["memory_serialize"], "unsupported");
+        assert_eq!(ivf_meta_json["semantics"]["persistence"]["deserialize_from_file"], "unsupported");
+        assert_eq!(ivf_meta_json["capabilities"]["get_vector_by_ids"], "unsupported");
+        assert_eq!(ivf_meta_json["additional_scalar"]["unsupported_reason"], "IVF variants do not expose additional-scalar filtering through the current Rust FFI");
+        knowhere_free_cstring(ivf_meta_ptr);
+        knowhere_free_index(ivf);
+
+        #[cfg(feature = "scann")]
+        {
+            let scann = knowhere_create_index(CIndexConfig {
+                index_type: CIndexType::Scann,
+                metric_type: CMetricType::L2,
+                dim: 16,
+                ..Default::default()
+            });
+            assert!(!scann.is_null());
+            assert_eq!(knowhere_is_additional_scalar_supported(scann, true), 0);
+            let scann_meta_ptr = knowhere_get_index_meta(scann);
+            assert!(!scann_meta_ptr.is_null());
+            let scann_meta_str = unsafe { std::ffi::CStr::from_ptr(scann_meta_ptr) }
+                .to_str()
+                .unwrap();
+            let scann_meta_json: serde_json::Value = serde_json::from_str(scann_meta_str).unwrap();
+            assert_eq!(scann_meta_json["index_type"], "ScaNN");
+            assert_eq!(scann_meta_json["semantics"]["family"], "scann");
+            assert_eq!(scann_meta_json["semantics"]["persistence_mode"], "file_save_load");
+            assert_eq!(scann_meta_json["semantics"]["persistence"]["file_save_load"], "supported");
+            assert_eq!(scann_meta_json["semantics"]["persistence"]["memory_serialize"], "unsupported");
+            assert_eq!(scann_meta_json["semantics"]["persistence"]["deserialize_from_file"], "supported");
+            assert_eq!(scann_meta_json["capabilities"]["ann_iterator"], "supported");
+            assert_eq!(scann_meta_json["capabilities"]["persistence"], "supported");
+            assert_eq!(scann_meta_json["additional_scalar"]["unsupported_reason"], "ScaNN does not expose additional-scalar filtering through the current Rust FFI");
+            knowhere_free_cstring(scann_meta_ptr);
+            knowhere_free_index(scann);
+        }
 
         let sparse = knowhere_create_index(CIndexConfig {
             index_type: CIndexType::SparseWand,
@@ -4021,14 +4230,106 @@ mod tests {
         assert_eq!(sparse_meta_json["index_type"], "SparseWand");
         assert_eq!(sparse_meta_json["additional_scalar_supported"], true);
         assert_eq!(sparse_meta_json["additional_scalar"]["support_mode"], "partial");
+        assert_eq!(sparse_meta_json["additional_scalar"]["unsupported_reason"], "only sparse indexes expose MV-only additional-scalar filtering via the current Rust FFI");
         assert_eq!(sparse_meta_json["capabilities"]["ann_iterator"], "supported");
         assert_eq!(sparse_meta_json["capabilities"]["persistence"], "unsupported");
+        assert_eq!(sparse_meta_json["semantics"]["family"], "sparse");
+        assert_eq!(sparse_meta_json["semantics"]["persistence_mode"], "unsupported");
+        assert_eq!(sparse_meta_json["semantics"]["persistence"]["file_save_load"], "unsupported");
+        assert_eq!(sparse_meta_json["semantics"]["persistence"]["memory_serialize"], "unsupported");
+        assert_eq!(sparse_meta_json["semantics"]["persistence"]["deserialize_from_file"], "unsupported");
 
         knowhere_free_cstring(sparse_meta_ptr);
         knowhere_free_index(sparse);
 
         assert_eq!(knowhere_is_additional_scalar_supported(std::ptr::null(), true), 0);
         assert!(knowhere_get_index_meta(std::ptr::null()).is_null());
+    }
+
+    #[cfg(feature = "scann")]
+    #[test]
+    fn test_ffi_persistence_scann_file_roundtrip() {
+        use std::ffi::CString;
+
+        let config = CIndexConfig {
+            index_type: CIndexType::Scann,
+            metric_type: CMetricType::L2,
+            dim: 8,
+            num_partitions: 4,
+            num_centroids: 8,
+            reorder_k: 16,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        let vectors: Vec<f32> = (0..64).map(|i| i as f32 * 0.125).collect();
+        assert_eq!(knowhere_train_index(index, vectors.as_ptr(), 8, 8), CError::Success as i32);
+        assert_eq!(knowhere_add_index(index, vectors.as_ptr(), std::ptr::null(), 8, 8), CError::Success as i32);
+
+        let path = std::env::temp_dir().join(format!(
+            "knowhere_rs_scann_persistence_{}.bin",
+            std::process::id()
+        ));
+        let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+        assert_eq!(knowhere_save_index(index, path_c.as_ptr()), CError::Success as i32);
+
+        let loaded = knowhere_create_index(config);
+        assert!(!loaded.is_null());
+        assert_eq!(knowhere_load_index(loaded, path_c.as_ptr()), CError::Success as i32);
+        assert_eq!(knowhere_get_index_count(loaded), 8);
+
+        let _ = std::fs::remove_file(&path);
+        knowhere_free_index(loaded);
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_ffi_persistence_ivf_sq8_reports_constrained_deserialize_from_file() {
+        let ivf = knowhere_create_index(CIndexConfig {
+            index_type: CIndexType::IvfSq8,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            ..Default::default()
+        });
+        assert!(!ivf.is_null());
+
+        let meta_ptr = knowhere_get_index_meta(ivf);
+        assert!(!meta_ptr.is_null());
+        let meta_str = unsafe { std::ffi::CStr::from_ptr(meta_ptr) }
+            .to_str()
+            .unwrap();
+        let meta_json: serde_json::Value = serde_json::from_str(meta_str).unwrap();
+        assert_eq!(meta_json["semantics"]["persistence"]["file_save_load"], "constrained");
+        assert_eq!(meta_json["semantics"]["persistence"]["deserialize_from_file"], "unsupported");
+
+        knowhere_free_cstring(meta_ptr);
+        knowhere_free_index(ivf);
+    }
+
+    #[test]
+    fn test_ffi_persistence_flat_empty_file_load_fails() {
+        use std::ffi::CString;
+
+        let flat = knowhere_create_index(CIndexConfig {
+            index_type: CIndexType::Flat,
+            metric_type: CMetricType::L2,
+            dim: 8,
+            ..Default::default()
+        });
+        assert!(!flat.is_null());
+
+        let path = std::env::temp_dir().join(format!(
+            "knowhere_rs_empty_persistence_{}.bin",
+            std::process::id()
+        ));
+        std::fs::write(&path, []).unwrap();
+        let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+        assert_eq!(knowhere_load_index(flat, path_c.as_ptr()), CError::Internal as i32);
+
+        let _ = std::fs::remove_file(&path);
+        knowhere_free_index(flat);
     }
 
     #[test]

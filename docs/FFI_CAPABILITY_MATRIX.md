@@ -1,6 +1,6 @@
 # FFI Capability Matrix
 
-Last updated: 2026-03-06 01:35
+Last updated: 2026-03-08 20:05
 
 ## Purpose
 
@@ -15,25 +15,23 @@ Document the capability matrix for all FFI-exposed index types, showing which op
 
 ## Index Type Capabilities
 
-| Index Type | Train | Add | Search | Range Search | Ann Iterator | Get By ID | Serialize | Deserialize |
-|---|---|---|---|---|---|---|---|---|
-| Flat | ✅ | ✅ | ✅ | ⚠️ | ❌ | ✅ | ✅ | ✅ |
-| HNSW | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ |
-| ScaNN | ✅ | ✅ | ✅ | ❌ | ✅ | ⚠️ | ⚠️ | ⚠️ |
-| HNSW-PRQ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ⚠️ | ⚠️ |
-| IVF-RaBitQ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ⚠️ | ⚠️ |
-| HNSW-SQ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ⚠️ | ⚠️ |
-| HNSW-PQ | ✅ | ✅ | ✅ | ❌ | ✅ | ❌ | ⚠️ | ⚠️ |
-| DiskANN | ✅ | ✅ | ✅ | ❌ | ✅ | ⚠️ | ⚠️ | ⚠️ |
-| IVF-SQ8 | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ⚠️ | ⚠️ |
-| BinFlat | ✅ | ✅ | ✅ | ⚠️ | ❌ | ❌ | ✅ | ✅ |
-| BinaryHNSW | ✅ | ✅ | ✅ | ⚠️ | ❌ | ❌ | ⚠️ | ⚠️ |
-| BinIVF-Flat | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ⚠️ | ⚠️ |
-| SparseWand | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ⚠️ | ⚠️ |
-| SparseWandCC | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ⚠️ | ⚠️ |
-| MinHashLSH | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ⚠️ | ⚠️ |
-| IVF-Flat-CC | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ⚠️ | ⚠️ |
-| IVF-SQ-CC | ✅ | ✅ | ✅ | ❌ | ❌ | ⚠️ | ⚠️ | ⚠️ |
+| Index Type | Train | Add | Search | Range Search | Ann Iterator | Get By ID | File Save/Load | Memory Serialize | DeserializeFromFile |
+|---|---|---|---|---|---|---|---|---|---|
+| Flat | ✅ | ✅ | ✅ | ⚠️ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| HNSW | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| ScaNN | ✅ | ✅ | ✅ | ❌ | ✅ | ⚠️ | ✅ | ❌ | ✅ |
+| HNSW-PRQ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ |
+| IVF-RaBitQ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| HNSW-SQ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| HNSW-PQ | ✅ | ✅ | ✅ | ❌ | ✅ | ⚠️ | ❌ | ❌ | ❌ |
+| DiskANN | ✅ | ✅ | ✅ | ❌ | ✅ | ⚠️ | ❌ | ❌ | ❌ |
+| IVF-SQ8 | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ⚠️ | ❌ | ❌ |
+| BinFlat | ✅ | ✅ | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| BinaryHNSW | ✅ | ✅ | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| BinIVF-Flat | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| SparseWand | ❌ | ✅ | ✅ | ❌ | ✅ | ⚠️ | ❌ | ❌ | ❌ |
+| SparseWandCC | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| MinHashLSH | ❌ | ✅ | ✅ | ❌ | ✅ | ⚠️ | ✅ | ❌ | ✅ |
 
 ## Notes
 
@@ -56,10 +54,12 @@ Document the capability matrix for all FFI-exposed index types, showing which op
 ### Get Vector By ID
 - Only indexes that store raw data (Flat, IVF-Flat variants) can fully support
 - Quantization indexes (SQ8, PQ, RaBitQ) cannot return original vectors
+- HNSW-PQ is intentionally constrained: `has_raw_data=false`, and `get_vector_by_ids` returns a stable `Unsupported` contract because PQ storage is lossy
 
 ### Serialization
 - Basic file-based serialization implemented
 - BinarySet-based memory serialization needs more work for some index types
+- HNSW-PQ currently returns stable `Unsupported` for file save/load; persistence is intentionally out of scope for this index until real persistence is implemented
 
 ## Priority for Completion
 
@@ -96,4 +96,5 @@ cargo test serialize --lib
 
 - 2026-03-06 01:35: Added FFI AnnIterator interface (`knowhere_create_ann_iterator`/`knowhere_ann_iterator_next`/`knowhere_free_ann_iterator`), supports HNSW/ScaNN/HNSW-PQ
 - 2026-03-06: Updated AnnIterator status for HNSW/ScaNN/HNSW-PQ/DiskANN (now ✅); HNSW GetByID ✅; ScaNN GetByID ⚠️
+- 2026-03-08: Marked HNSW-PQ advanced-path semantics as constrained and stable: AnnIterator ✅, `get_vector_by_ids` ⚠️ (stable Unsupported due to lossy PQ), save/load ⚠️ (stable Unsupported pending persistence)
 - 2026-03-05: Initial matrix creation, added AnnIterator interface

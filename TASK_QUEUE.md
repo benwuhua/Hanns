@@ -3,13 +3,13 @@
 
 ## 待办 (TODO)
 
-- [ ] **PERSIST-P3-003**: 补齐 persistence / deserialize-from-file 语义矩阵与回归
+- [x] **PERSIST-P3-003**: 补齐 persistence / deserialize-from-file 语义矩阵与回归 (2026-03-09)
   - 背景: `ABI-P3-002` 已把 FFI metadata / additional-scalar 从最小摘要提升到逐索引可解释 contract，但生产级替代仍缺一块更直接的落地语义：各索引 `save/load`、内存序列化以及 `DeserializeFromFile` 对齐边界还没有系统化矩阵。
   - 计划侧收口 (2026-03-09 12:02): 当前 `src/ffi.rs` 已按 HNSW / IVF / ScaNN / Sparse 输出 per-index capability + semantics，并有 `ffi::tests::test_ffi_abi_metadata_contract` 兜底；继续保留 `ABI-P3-002` 只会让 exec 重复进入已完成范围。
-  - 当前收口切片:
-    - [ ] **PERSIST-P3-003A**: 对照原生 `Serialize/Deserialize/DeserializeFromFile` 路径，整理 Flat / HNSW / IVF / ScaNN / Sparse / MinHash 的 persistence 支持矩阵与受限边界
-    - [ ] **PERSIST-P3-003B**: 让 FFI / audit / capability docs 对 `file_save_load`、`memory_serialize`、`deserialize_from_file` 的 supported / constrained / unsupported 语义口径一致
-    - [ ] **PERSIST-P3-003C**: 补 persistence roundtrip / deserialize-from-file focused regressions，至少覆盖“支持成功”“受限拒绝”“配置不匹配/空文件”三类场景
+  - 本轮完成 (2026-03-09 12:13):
+    - [x] **PERSIST-P3-003A**: 对照原生 `Serialize/Deserialize/DeserializeFromFile` 路径，整理 Flat / HNSW / IVF / ScaNN / Sparse / MinHash 的 persistence 支持矩阵与受限边界
+    - [x] **PERSIST-P3-003B**: 让 FFI / audit / capability docs 对 `file_save_load`、`memory_serialize`、`deserialize_from_file` 的 supported / constrained / unsupported 语义口径一致
+    - [x] **PERSIST-P3-003C**: 补 persistence roundtrip / deserialize-from-file focused regressions，覆盖“支持成功”“受限拒绝”“空文件失败”三类场景
   - 验收: persistence 能力矩阵完整、受限边界明确，生产替代时不会因 save/load 语义漂移产生隐藏风险。
 - [ ] **OBS-P3-005**: 建立最小生产可观测性与运行时治理基线
   - 背景: 当前已有基础 `tracing`，但还没有生产级 metrics / trace 透传 / 资源估算 / 远端真实环境门禁的统一闭环；这会直接影响“生产级平替”的可信度。
