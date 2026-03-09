@@ -41,8 +41,8 @@ Evaluation dimensions:
 - ✅ `ABI-P3-002`: FFI metadata / additional-scalar 已从“最小稳定摘要”升级为逐索引可解释 contract；HNSW / IVF / ScaNN / Sparse 的 capability/semantics/unsupported_reason 已具备 focused FFI 回归覆盖，当前不再是活跃 P3 blocker。
 - ✅ `PERSIST-P3-003`: persistence / `DeserializeFromFile` 语义矩阵已系统化，`file_save_load` / `memory_serialize` / `deserialize_from_file` 的 supported / constrained / unsupported 边界现已可审计且具备 focused regressions。
 - ✅ `OBS-P3-005`: 最小 runtime governance contract 已收口到 `knowhere_get_index_meta`，统一暴露 `observability` / `trace_propagation` / `resource_contract` 三组字段；当前不再缺“缺少稳定 schema/透传入口/资源口径”的 P3 blocker。
-- 🚧 `PERF-P3-004`: 当前首要缺口已进一步收敛为“远端 benchmark 构建链路在 `find_package(GTest REQUIRED)` 失败，导致 `benchmark_float_qps` 仍不可执行”；这已不再是宽泛的 harness-unavailable，而是明确的 benchmark CMake / dependency discovery 修补任务。
-- 🚧 `PERF-P3-005`: 在 harness 可用后，仍需为 `clustered_l2 + HNSW` 生成 native-vs-rs 的 recall-gated 对照基线，并据此判断是否已具备性能领先。
+- ✅ `PERF-P3-004`: native benchmark harness 缺口已关闭；远端 x86 现已可构建 `benchmark_float_qps`、执行 `--gtest_list_tests`，且输出字段与 Rust parser 保持兼容。
+- 🚧 `PERF-P3-005`: 当前首要缺口已切换为 `clustered_l2 + HNSW` 的 native-vs-rs recall-gated 对照基线；项目仍缺第一条可复现的“领先 / parity / 落后”性能判定。
 
 ## 3. Validation Gaps
 

@@ -1,22 +1,27 @@
 # Builder 任务队列
-> 最后更新: 2026-03-09 12:47 | 优先级: BUG > SEMANTIC/PROD > PERF
+> 最后更新: 2026-03-09 15:03 | 优先级: BUG > SEMANTIC/PROD > PERF
 
 ## 待办 (TODO)
 
-- [x] **PERF-P3-004**: 修通 native benchmark 的 GTest/CMake 发现链路，拿到 `benchmark_float_qps` 可执行入口 (2026-03-09)
-  - 进展:
-    - ✅ `scripts/remote/native_benchmark_probe.sh` 支持在远端缺少 `/usr/src/googletest` 时自动 shallow clone `googletest v1.14.0` 并安装到 `/tmp/gtest-install`
-    - ✅ probe 改为使用实际安装产物 `lib/cmake/GTest/GTestConfig.cmake` + `libgtest.a/libgtest_main.a`，`WITH_BENCHMARK=ON` 配置与 `benchmark_float_qps` 构建均已成功
-    - ✅ probe 运行阶段自动补齐 Conan 运行时库路径（`folly`/`gflags`），`benchmark_float_qps --gtest_list_tests` 已成功产生日志 artifact
-    - ✅ native 输出字段映射保持与 `src/bin/native_benchmark_qps_parser.rs` 约定一致
-  - 验收: `benchmark_float_qps` 在远端 x86 上已可配置、可构建、可执行到 `--gtest_list_tests`；blocker 已从“依赖发现失败”推进到真正运行数据/fixture 阶段。
-
 - [ ] **PERF-P3-005**: 产出 clustered-l2 / HNSW 的 native-vs-rs recall-gated 对照基线并判定是否已领先
-  - 背景: `PERF-P3-004` 解决的是“能不能同口径跑”，本任务才解决“是否真的领先”。
+  - 背景: `PERF-P3-004` 已解决“能不能同口径跑”——远端 x86 现已能构建 `benchmark_float_qps` 并跑到 `--gtest_list_tests`；本任务才解决“是否真的领先”。
+  - 代码/文档接缝:
+    - 远端 native probe / artifact：`scripts/remote/native_benchmark_probe.sh`、`docs/PERF_P3_004_NATIVE_HARNESS.md`
+    - Rust baseline / parser：`benchmark_results/recall_gated_baseline.json`、`benchmark_results/cross_dataset_sampling.json`、`src/bin/native_benchmark_qps_parser.rs`
+    - 治理同步：`TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`
   - 目标:
     - [ ] 在同一数据分布、参数与 recall gate 下，生成 native knowhere 与 knowhere-rs 的并排结果
     - [ ] 输出 `recall_at_10` / `qps` / `runtime_seconds` / 资源占用的对照结论
     - [ ] 给出“已领先 / 仅 parity / 落后但可优化”的明确判定，并在必要时拆出最小 optimization follow-up
+  - required_checks:
+    - [ ] 远端 native 路径至少产出一份可解析的 recall-gated 结果 artifact（优先 `clustered_l2 + HNSW`）
+    - [ ] 同口径 knowhere-rs 结果可与 native 按 `recall_at_10` / `qps` / `runtime_seconds` 对齐比较
+    - [ ] 对照结论明确写出 `领先 / parity / 落后`，且低 recall 条目按现有可信度规则标记
+  - deferred_checks:
+    - [ ] 多索引批量 sweep 与大规模 profiling
+    - [ ] 若判定落后，再拆最小 optimization follow-up 并在后续轮次进入实现
+    - [ ] `cargo test --tests -q`
+    - [ ] `cargo test -q`
   - 验收: 至少一条核心非 GPU 路径拿到可复现、recall-gated、native 对照的性能结论；若未领先，也必须沉淀出下一条最小优化任务。
 
 ### P0 (紧急)
@@ -324,7 +329,8 @@
 - [x] **ABI-P3-002**: 提升 FFI metadata / additional-scalar 契约，从最小摘要走向逐模块真实语义 (2026-03-09)
 - [x] **PERSIST-P3-003**: 补齐 persistence / deserialize-from-file 语义矩阵与回归 (2026-03-09)
 - [x] **OBS-P3-005**: 建立最小生产可观测性与运行时治理基线 (2026-03-09)
-- [ ] **PERF-P3-004**: 建立 native knowhere vs knowhere-rs 的关键路径性能领先基线
+- [x] **PERF-P3-004**: 修通 native benchmark 的 GTest/CMake 发现链路并拿到 `benchmark_float_qps` 可执行入口 (2026-03-09)
+- [ ] **PERF-P3-005**: 产出 clustered-l2 / HNSW 的 native-vs-rs recall-gated 对照基线并判定是否已领先
 
 ## 归档
 - [x] **SEM-P3-001**: 收敛 `GetVectorByIds` / `HasRawData` 剩余语义尾项（HNSW / IVF / Sparse / ScaNN） (2026-03-09)
@@ -353,6 +359,12 @@
     - [x] 同一 JSON contract 已补齐 `resource_contract`：`memory_bytes` / `disk_bytes` / `mmap_supported` / `unsupported_reason` 形成最小可审计资源基线
     - [x] `ffi::tests::test_ffi_abi_metadata_contract` 已扩展覆盖 observability / trace propagation / resource contract 字段
   - 验收: ✅ Phase 5 的最小 observability/runtime governance contract 已具备明确字段定义、最小透传边界与 focused FFI regression 证据；后续远端 tracing integration 与 production metrics 落地转入专项性能/运维轮次。
+- [x] **PERF-P3-004**: 修通 native benchmark 的 GTest/CMake 发现链路并拿到 `benchmark_float_qps` 可执行入口 (2026-03-09)
+  - 完成情况:
+    - [x] `scripts/remote/native_benchmark_probe.sh` 已支持缺失 `/usr/src/googletest` 时自动 clone + 安装临时 GTest，并改走真实 `GTestConfig.cmake`
+    - [x] 远端 x86 `WITH_BENCHMARK=ON` 配置与 `benchmark_float_qps` 构建已成功
+    - [x] `benchmark_float_qps --gtest_list_tests` 已成功产生日志 artifact，native 输出字段映射仍与 `src/bin/native_benchmark_qps_parser.rs` 一致
+  - 验收: ✅ native benchmark binary surface 已存在，Phase 5 性能主线可从“修链路”切到“跑对照”。
 - [x] **DOCS-BASELINE-002**: 创建 FFI 能力矩阵文档 `docs/FFI_CAPABILITY_MATRIX.md` (2026-03-05)
 - [x] **PARITY-P0-003**: 添加 AnnIterator trait 定义到 `src/index.rs` (2026-03-05)
 - [x] **DOCS-BASELINE-001**: 重建 GAP/ROADMAP/TASK_QUEUE/PARITY_AUDIT 文档基线（2026-03-05）

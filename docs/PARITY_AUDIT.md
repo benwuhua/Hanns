@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-09 12:39
+Last updated: 2026-03-09 15:03
 Sync baseline: 4f60908fc9ad7438b4b8ff64210481ab281009b0 from origin/main
 
 ## 轮次记录
+- 2026-03-09 15:03: **计划轮次：关闭 `PERF-P3-004` 并切换 `PERF-P3-005`（builder-plan）**
+  1. 复核输入：`TASK_QUEUE.md`、`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`。
+  2. 调度判断：最新 `EXEC_RESULT.updated_at=2026-03-09T06:34:30Z` 晚于 `PLAN_RESULT.updated_at=2026-03-09T06:07:00Z`，且 exec 已完成 queue 顶部 `PERF-P3-004`，因此本轮不能 skip。
+  3. 收口结论：远端 x86 已成功构建 `benchmark_float_qps`，`--gtest_list_tests` artifact 已产出，GTest/CMake/Conan runtime 依赖链不再是活跃 blocker；`PERF-P3-004` 验收达成。
+  4. 阶段决策：Phase 5 的最小高价值缺口切换为 `PERF-P3-005`——在 `clustered_l2 + HNSW` 上生成第一条 recall-gated native-vs-rs 对照，并给出 `领先 / parity / 落后` 的明确判定；若未领先，再拆最小 optimization follow-up。
+  5. 治理动作：同步更新 `TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md` 与 `memory/PLAN_RESULT.json`，将 active task 从“修链路”切到“跑对照”。
+  状态：Phase 5 Active（native benchmark harness closed；leadership proof promoted）。
 - 2026-03-09 14:07: **计划轮次：将 `PERF-P3-004` 从“harness enablement”继续收窄到 GTest/CMake 构建链路修复（builder-plan）**
   1. 复核输入：`TASK_QUEUE.md`、`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`、`docs/PERF_P3_004_NATIVE_HARNESS.md`、`scripts/remote/native_benchmark_probe.sh`。
   2. 调度判断：最新 `EXEC_RESULT.updated_at=2026-03-09T06:15:00Z` 晚于 `PLAN_RESULT.updated_at=2026-03-09T05:08:00Z`，因此本轮 plan 已失效，不能 skip。

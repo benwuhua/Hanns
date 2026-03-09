@@ -101,11 +101,11 @@ Objective:
 
 Active scoped tasks:
 
-- `PERF-P3-004`: unblock the native benchmark build itself by fixing the remote x86 GTest/CMake discovery chain until `benchmark_float_qps --gtest_list_tests` is runnable.
-- `PERF-P3-005`: once the binary surface exists, generate the first recall-gated native-vs-rs baseline and decide whether the path already leads or needs a narrow optimization follow-up.
+- `PERF-P3-005`: now that `benchmark_float_qps --gtest_list_tests` is runnable on remote x86, generate the first recall-gated native-vs-rs baseline for `clustered_l2 + HNSW` and decide whether the Rust path already leads or needs a narrow optimization follow-up.
 
 Recently closed milestones:
 
+- `PERF-P3-004`: remote x86 native benchmark harness 已打通；`scripts/remote/native_benchmark_probe.sh` 现可补齐 GTest/CMake/Conan runtime 依赖，并成功构建 `benchmark_float_qps`、执行 `--gtest_list_tests`、保持 parser schema 对齐。
 - `SEM-P3-001`: HNSW / IVF / Sparse / ScaNN 的 `GetVectorByIds` / `HasRawData` 语义尾项已完成 focused 收敛；missing-id、empty-index、lossy-index、reorder/raw-data gate 等边界现已具备可审计回归证据。
 - `ABI-P3-002`: FFI metadata / additional-scalar 已从最小稳定摘要提升为逐索引可解释 contract；HNSW / IVF / ScaNN / Sparse 的 capability / unsupported_reason / semantics 字段现已具备 focused FFI 回归覆盖。
 - `PERSIST-P3-003`: persistence / deserialize-from-file 语义矩阵与 focused regressions 已闭环；`file_save_load` / `memory_serialize` / `deserialize_from_file` 三类边界已在 queue/audit/capability docs 中统一为 stable contract。
