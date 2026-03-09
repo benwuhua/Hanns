@@ -4,7 +4,7 @@ Last updated: 2026-03-09
 
 ## Goal
 
-Deliver production-grade non-GPU parity with C++ knowhere while maintaining measurable performance advantage under valid recall constraints.
+Deliver a production-grade non-GPU Rust replacement for native knowhere, with first-priority investment in `DISKANN / HNSW / IVF / PQ`, and establish measurable performance advantage on at least one credible recall-gated core path.
 
 ## Phase Plan
 
@@ -92,16 +92,21 @@ Success criteria:
 
 Any claimed completion must update all three files coherently.
 
-## Phase 5: Semantic Fidelity, Production Hardening, Performance Leadership (P3) — 🚧 Active
+## Phase 5: Core Implementation Excellence, Semantic Fidelity, Production Hardening, Performance Leadership (P3) — 🚧 Active
 
 Objective:
 
 - Move beyond entry-level parity closure and make `knowhere-rs` a production-grade non-GPU replacement for native knowhere.
-- Prove not only contract stability, but also semantic fidelity and at least one clear non-GPU performance advantage over native knowhere.
+- Put first-priority engineering effort into the core implementation paths that actually determine competitiveness: `DISKANN / HNSW / IVF / PQ`.
+- Prove not only contract stability, but also at least one clear non-GPU performance advantage over native knowhere on a credible core path.
 
 Active scoped tasks:
 
-- `PERF-P3-005`: now that `benchmark_float_qps --gtest_list_tests` is runnable on remote x86, generate the first recall-gated native-vs-rs baseline for `clustered_l2 + HNSW` and decide whether the Rust path already leads or needs a narrow optimization follow-up.
+- `CORE-P0-001`: close x86 `default+simd` build semantics (`unsafe` / `target_feature`) and re-establish SIMD as a credible default execution path before any performance claim on `DISKANN / HNSW / IVF / PQ`.
+- `HNSW-P1-001`: reduce HNSW hot-path engineering gaps (`visited` allocation, distance reuse, layout inefficiency) and turn HNSW into the first serious performance-lead candidate.
+- `IVFPQ-P1-002`: audit and strengthen IVF/PQ search reality (ADC/centroid path), and explicitly classify IVF base as rewrite candidate or non-core placeholder.
+- `DISKANN-P1-003`: fix Rust DiskANN’s distance-path issues and honestly classify the current `PQCode` simplification before using it in any leadership claim.
+- `PERF-P3-005`: once core-path correctness is trustworthy, generate the first recall-gated native-vs-rs baseline for a single core path (priority: `clustered_l2 + HNSW`).
 
 Recently closed milestones:
 
@@ -113,6 +118,8 @@ Recently closed milestones:
 
 Exit criteria:
 
+- x86 SIMD correctness no longer blocks trust in core-path measurements.
+- `DISKANN / HNSW / IVF / PQ` each have an honest implementation status: production-candidate, functional-but-not-leading, or simplified/not-comparable.
 - Semantic-conformance gaps are documented and either aligned or explicitly constrained with regression evidence.
 - Production-relevant persistence / FFI metadata semantics are stable and auditable.
 - At least one core non-GPU path shows repeatable, recall-gated performance leadership over native knowhere.

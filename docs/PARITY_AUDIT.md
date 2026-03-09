@@ -4,6 +4,13 @@ Last updated: 2026-03-09 15:03
 Sync baseline: 4f60908fc9ad7438b4b8ff64210481ab281009b0 from origin/main
 
 ## 轮次记录
+- 2026-03-09 16:14: **计划轮次：将 `CORE-P0-001` 从泛 SIMD 正确性收窄为 x86 default+simd 构建语义修复（builder-plan）**
+  1. 复核输入：`TASK_QUEUE.md`、`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`。
+  2. 调度判断：queue 首个 TODO 与 `PLAN_RESULT.task_id` 形式上一致，但最新 exec 已把 blocker 收敛为 `remote_x86_default_simd_build`，且 `next_action=plan`；原 plan 中“修 SIMD correctness + default policy”的宽目标已失效，因此本轮不能 skip。
+  3. 现状复核：exec 已完成 SSE/AVX2 L2 reduction 最小修复、补 irregular-input focused regression，并将 `simd` 纳入 default；但远端 x86 `default+simd` 构建暴露 `src/simd.rs` 大量既有 intrinsic 调用仍缺 `unsafe` / `target_feature` 边界，导致当前拿不到可信 x86 required gate。
+  4. 阶段决策：保留 `CORE-P0-001` 作为当前任务，但将其 scope 收窄为“先恢复 x86 default+simd build + focused correctness gate”，避免 exec 继续围绕过宽的泛 SIMD 叙事空转；`HNSW-P1-001` / `IVFPQ-P1-002` / `DISKANN-P1-003` / `PERF-P3-005` 继续排在其后。
+  5. 治理动作：同步更新 `TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md` 与 `memory/PLAN_RESULT.json`，把当前 blocker 写成可执行的 scoped task，并要求 required checks 明确落在远端 x86。
+  状态：Phase 5 Active（core-path SIMD foundation still blocking; scope narrowed to concrete x86 build semantics）。
 - 2026-03-09 15:03: **计划轮次：关闭 `PERF-P3-004` 并切换 `PERF-P3-005`（builder-plan）**
   1. 复核输入：`TASK_QUEUE.md`、`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`。
   2. 调度判断：最新 `EXEC_RESULT.updated_at=2026-03-09T06:34:30Z` 晚于 `PLAN_RESULT.updated_at=2026-03-09T06:07:00Z`，且 exec 已完成 queue 顶部 `PERF-P3-004`，因此本轮不能 skip。

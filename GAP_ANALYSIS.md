@@ -8,7 +8,7 @@ Scope: Non-GPU production parity against C++ knowhere
 - Rust repo: `/Users/ryan/.openclaw/workspace-builder/knowhere-rs`
 - C++ repo: `/Users/ryan/Code/vectorDB/knowhere`
 - Source of truth for parity status: `docs/PARITY_AUDIT.md`
-- Priority order: BUG > PARITY > OPT > BENCH
+- Priority order: BUG > CORE(IMPL/PERF) > SEMANTIC/PROD > BENCH
 
 Evaluation dimensions:
 
@@ -35,14 +35,19 @@ Evaluation dimensions:
 - ✅ recall-gated baseline 覆盖面缺口已收口：已覆盖 ScaNN/RaBitQ/Sparse，并统一输出 `confidence_explanation`。
 - ✅ cross-dataset（SIFT/GIST/随机）抽样已形成稳定 artifact 流水线（`benchmark_results/cross_dataset_sampling.json`）。
 
-## P3 (Semantic Fidelity / Production Readiness / Performance Advantage)
+## P3 (Core Implementation / Semantic Fidelity / Production Readiness / Performance Advantage)
+
+- 🚧 `CORE-P0-001`: 当前最高优先级已进一步收敛为恢复 x86 `default+simd` 构建语义可信度。L2 reduction 最小修复和 `simd` 默认化已经开始落地，但远端 x86 gate 证明 `src/simd.rs` 仍有大量既有 intrinsic 调用缺少正确 `unsafe` / `target_feature` 边界；在这一步闭环前，`DISKANN / HNSW / IVF / PQ` 的性能和正确性结论都不稳。
+- 🚧 `HNSW-P1-001`: HNSW 是当前最接近生产级且最可能先跑出“绝对性能优势”的路径，但热路径仍有工程差距（`visited` 分配、结果距离二次计算、邻居布局不紧凑）。
+- 🚧 `IVFPQ-P1-002`: IVF/PQ 需要从“接口存在”切到“实现真实性和热点路径可信”。IVF base 当前更像占位实现，IVF-PQ/ScaNN 则需要 focused 审计和 benchmark 证明。
+- 🚧 `DISKANN-P1-003`: Rust DiskANN 当前仍是“简化 Vamana + 简化 PQ”边界，需先修距离路径并明确工程边界，避免误把它当原生 DiskANN 同级实现。
 
 - ✅ `SEM-P3-001`: `DiskANN` / `AISAQ` / `HNSW` / `IVF` / `Sparse` / `ScaNN` 的 `GetVectorByIds` / `HasRawData` Phase-5 语义尾项已完成 focused 收敛；当前不再缺“入口存在但边界语义不可解释”的 semantic-fidelity blocker。
 - ✅ `ABI-P3-002`: FFI metadata / additional-scalar 已从“最小稳定摘要”升级为逐索引可解释 contract；HNSW / IVF / ScaNN / Sparse 的 capability/semantics/unsupported_reason 已具备 focused FFI 回归覆盖，当前不再是活跃 P3 blocker。
 - ✅ `PERSIST-P3-003`: persistence / `DeserializeFromFile` 语义矩阵已系统化，`file_save_load` / `memory_serialize` / `deserialize_from_file` 的 supported / constrained / unsupported 边界现已可审计且具备 focused regressions。
 - ✅ `OBS-P3-005`: 最小 runtime governance contract 已收口到 `knowhere_get_index_meta`，统一暴露 `observability` / `trace_propagation` / `resource_contract` 三组字段；当前不再缺“缺少稳定 schema/透传入口/资源口径”的 P3 blocker。
 - ✅ `PERF-P3-004`: native benchmark harness 缺口已关闭；远端 x86 现已可构建 `benchmark_float_qps`、执行 `--gtest_list_tests`，且输出字段与 Rust parser 保持兼容。
-- 🚧 `PERF-P3-005`: 当前首要缺口已切换为 `clustered_l2 + HNSW` 的 native-vs-rs recall-gated 对照基线；项目仍缺第一条可复现的“领先 / parity / 落后”性能判定。
+- 🚧 `PERF-P3-005`: 当前性能基线任务仍保留，但它不再压过核心实现修补；只有在 `CORE-P0-001` 与 HNSW 热路径可信后，native-vs-rs 对照结论才值得当作主证据。
 
 ## 3. Validation Gaps
 
@@ -67,4 +72,4 @@ Parity/governance tail-closure is closed, but the project as a whole is not:
 
 1. `PARITY-P2-001` 已完成：HNSW-PQ 的高级接口/持久化语义已被稳定约束。
 2. `OPT-P2-004` 已完成：`Index factory/legality` 的状态在 queue/gap/audit 中一致，不再因历史残留被误判为活跃缺口。
-3. 下一阶段不再是“补入口”，而是“semantic fidelity + production hardening + performance advantage”。
+3. 下一阶段不再是“补入口”，而是“先把 `DISKANN / HNSW / IVF / PQ` 的核心实现做实，再谈 semantic fidelity / production hardening / performance advantage 的高质量收口”。

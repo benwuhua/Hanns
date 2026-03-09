@@ -1,28 +1,76 @@
 # Builder 任务队列
-> 最后更新: 2026-03-09 15:03 | 优先级: BUG > SEMANTIC/PROD > PERF
+> 最后更新: 2026-03-09 18:05 | 优先级: BUG > CORE(IMPL/PERF) > SEMANTIC/PROD > BENCH
 
 ## 待办 (TODO)
 
-- [ ] **PERF-P3-005**: 产出 clustered-l2 / HNSW 的 native-vs-rs recall-gated 对照基线并判定是否已领先
-  - 背景: `PERF-P3-004` 已解决“能不能同口径跑”——远端 x86 现已能构建 `benchmark_float_qps` 并跑到 `--gtest_list_tests`；本任务才解决“是否真的领先”。
+- [ ] **CORE-P0-001**: 收敛 x86 default+simd 构建语义，使 SIMD 成为可信核心默认路径
+  - 背景: exec 已完成 SSE/AVX2 L2 reduction 最小修复，并将 `simd` 纳入 default；当前真实阻塞点已收敛为远端 x86 `default+simd` 构建失败：`src/simd.rs` 存在大量既有 intrinsic 调用未置于正确 `unsafe` / `target_feature` 上下文，导致 `DISKANN / HNSW / IVF / PQ` 无法拿到可信的 x86 SIMD 正向门禁与性能结论。
   - 代码/文档接缝:
-    - 远端 native probe / artifact：`scripts/remote/native_benchmark_probe.sh`、`docs/PERF_P3_004_NATIVE_HARNESS.md`
-    - Rust baseline / parser：`benchmark_results/recall_gated_baseline.json`、`benchmark_results/cross_dataset_sampling.json`、`src/bin/native_benchmark_qps_parser.rs`
-    - 治理同步：`TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`
+    - `Cargo.toml`
+    - `src/simd.rs`
+    - `scripts/remote/*.sh`（仅用于远端 x86 gate 复核）
+    - `TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`
   - 目标:
-    - [ ] 在同一数据分布、参数与 recall gate 下，生成 native knowhere 与 knowhere-rs 的并排结果
-    - [ ] 输出 `recall_at_10` / `qps` / `runtime_seconds` / 资源占用的对照结论
-    - [ ] 给出“已领先 / 仅 parity / 落后但可优化”的明确判定，并在必要时拆出最小 optimization follow-up
+    - [ ] 系统梳理 `src/simd.rs` 中 x86 intrinsic 调用点，补齐最小必要的 `unsafe` 边界与 `#[target_feature]` / 调度包装，恢复 default+simd x86 可编译性
+    - [ ] 保持已修复的 SSE/AVX2 `l2_*` 水平求和正确性，不因安全语义重构引入数值回退
+    - [ ] 补 focused x86 SIMD correctness regressions，至少覆盖 irregular input 上 scalar vs SSE/AVX2 一致性
+    - [ ] 在远端 x86 上重新拿到一条可信 required gate，证明 default SIMD 路径可构建、可执行、可对齐标量结果
   - required_checks:
-    - [ ] 远端 native 路径至少产出一份可解析的 recall-gated 结果 artifact（优先 `clustered_l2 + HNSW`）
-    - [ ] 同口径 knowhere-rs 结果可与 native 按 `recall_at_10` / `qps` / `runtime_seconds` 对齐比较
-    - [ ] 对照结论明确写出 `领先 / parity / 落后`，且低 recall 条目按现有可信度规则标记
+    - [ ] 远端 x86：`cargo test --features simd simd::tests -- --nocapture`
+    - [ ] 远端 x86：至少一条 focused 回归证明 SIMD 与标量 `l2` 结果一致
+    - [ ] 本地/远端其一：`cargo test --lib -q`
   - deferred_checks:
-    - [ ] 多索引批量 sweep 与大规模 profiling
-    - [ ] 若判定落后，再拆最小 optimization follow-up 并在后续轮次进入实现
+    - [ ] 跨全部索引的大规模 perf sweep
     - [ ] `cargo test --tests -q`
     - [ ] `cargo test -q`
-  - 验收: 至少一条核心非 GPU 路径拿到可复现、recall-gated、native 对照的性能结论；若未领先，也必须沉淀出下一条最小优化任务。
+    - [ ] native-vs-rs recall-gated leadership benchmark
+  - 验收: x86 `default+simd` 构建恢复、focused correctness 证据成立，SIMD 可作为 `DISKANN / HNSW / IVF / PQ` 后续性能工作的可信默认底座。
+
+- [ ] **HNSW-P1-001**: 收紧 HNSW 热路径工程实现，建立第一条可冲击 native 的核心路径
+  - 背景: HNSW 是当前最接近生产级且最有机会建立性能领先证据的实现，但热路径仍有 `visited` 分配、结果距离二次计算、邻居布局不紧凑等工程缺口。
+  - 代码/文档接缝:
+    - `src/faiss/hnsw.rs`
+    - `src/faiss/hnsw_search.rs`
+    - `benchmark_results/recall_gated_baseline.json`
+  - 目标:
+    - [ ] 引入 visited list 复用
+    - [ ] 消除搜索结果出堆后的距离二次计算
+    - [ ] 评估/重构邻居表紧凑布局，并补必要 benchmark 证据
+  - required_checks:
+    - [ ] `cargo test --lib hnsw -- --nocapture`
+    - [ ] 远端 recall-gated HNSW 基线至少产出一份前后对比 artifact
+  - 验收: HNSW 形成第一条可信的 recall-gated native-vs-rs 对照主线。
+
+- [ ] **IVFPQ-P1-002**: 审核并强化 IVF / PQ 核心搜索路径（以 ADC 和 centroid search 为中心）
+  - 背景: IVF base 仍偏占位，IVF-PQ/ScaNN 虽已有 ADC 代码路径，但当前还缺一轮“实现真实性 + 核心搜索路径”的审计与 targeted benchmark。
+  - 代码/文档接缝:
+    - `src/faiss/ivf.rs`
+    - `src/faiss/ivfpq.rs`
+    - `src/faiss/scann.rs`
+  - 目标:
+    - [ ] 明确标记 IVF base 的角色（重写或降级为非主战场）
+    - [ ] 审核 IVF-PQ ADC / centroid search 真实热点，补 focused benchmark
+    - [ ] 形成 `IVF/PQ` 是否可作为性能主线的 go/no-go 结论
+  - required_checks:
+    - [ ] `cargo test --lib ivf -- --nocapture`
+    - [ ] `cargo test --lib ivfpq -- --nocapture`
+    - [ ] 至少一份 IVF/PQ focused benchmark artifact
+  - 验收: IVF/PQ 主线的实现真实性和优化优先级被收敛成明确结论。
+
+- [ ] **DISKANN-P1-003**: 诚实收敛 Rust DiskANN 的实现边界，并修掉核心距离/压缩假实现问题
+  - 背景: 当前 `diskann.rs` 更接近“简化 Vamana + 假 PQ”，不宜直接拿来对标原生 DiskANN；需先收敛实现边界，再决定是补真 PQ 还是明确降级说明。
+  - 代码/文档接缝:
+    - `src/faiss/diskann.rs`
+    - `docs/PARITY_AUDIT.md`
+    - `docs/FFI_CAPABILITY_MATRIX.md`
+  - 目标:
+    - [ ] 修复 `l2_sqr` 的多余 sqrt 反模式
+    - [ ] 审核 `PQCode` 简化实现，形成“真补完/明确降级”结论
+    - [ ] 明确 Rust `DiskANN` 当前是否进入性能主线，还是暂列为简化实现
+  - required_checks:
+    - [ ] `cargo test --lib diskann -- --nocapture`
+    - [ ] 相关 capability/audit 文档与实际实现边界一致
+  - 验收: Rust DiskANN 的工程边界被诚实定义，避免继续拿假 PQ/纯内存实现做错误对比。
 
 ### P0 (紧急)
 - [x] **BUG-P0-001**: 修复 `mini_batch_kmeans` SIMD 长度不匹配导致的测试失败 (2026-03-05)
