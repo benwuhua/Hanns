@@ -3,14 +3,22 @@
 
 ## 待办 (TODO)
 
-- [ ] **PERF-P3-004**: 建立 native knowhere vs knowhere-rs 的关键路径性能领先基线
-  - 背景: `OBS-P3-005` 已把最小 observability / trace / resource contract 收口，Phase 5 当前唯一活跃缺口已切换为性能领先证据，而不是继续停留在治理基线。
+- [ ] **PERF-P3-004**: 打通 native knowhere vs knowhere-rs 的同口径 benchmark harness（clustered-l2 / HNSW 首条主线）
+  - 背景: 最新 exec 已基于 `recall_gated_baseline` 与 `cross_dataset_sampling` 将最有胜算路径收敛为 `clustered_l2 + HNSW`，但远端 x86 环境缺少可直接运行、可复用的 native knowhere benchmark binary / harness，导致“性能领先证明”无法进入可判定状态。
   - 目标:
-    - [ ] 先基于现有 recall-gated artifact 与 bench 入口，选定 1 条最有胜算的非 GPU 主战场（优先 HNSW / IVF / DiskANN）作为本轮唯一主线，避免同时铺开多条路径
-    - [ ] 为该路径补齐 native knowhere vs knowhere-rs 的同口径 baseline：统一数据集、参数、ground truth 来源、R@10/QPS 与资源占用字段
-    - [ ] 输出分段 profiling / hotspot 归因，明确当前是“已领先”“仅 parity”还是“落后但有可执行优化切口”
-    - [ ] 若本轮仍未形成绝对优势，继续拆出最小 optimization follow-up，而不是关闭 queue
-  - 验收: 至少一条核心非 GPU 路径具备可重复、recall-gated、native 对照的性能领先证据；若未领先，也必须沉淀出可直接执行的下一条优化任务。
+    - [ ] 在既有 x86 远端上确认并固化 1 条可重复运行的 native knowhere benchmark 入口（可执行文件、构建脚本或统一 runner），避免后续每轮重新手工探路
+    - [ ] 让该入口与 knowhere-rs 现有 benchmark 方法学对齐：统一数据集（`clustered_l2`）、参数（`m=16, ef_construction=200, ef_search=128`）、ground truth 来源与输出字段（至少含 `recall_at_10` / `qps` / `runtime_seconds`）
+    - [ ] 产出最小 artifact 或 runner 文档，明确 native / rs 两侧命令、输入、输出路径与失败模式，保证下轮可以直接进入 same-methodology 对比
+    - [ ] 若远端现有源码/构建系统无法直接提供该入口，明确最小补齐切口（例如新增 benchmark target、wrapper script 或 artifact converter），并把缺口写成紧随其后的 scoped follow-up
+  - 验收: `clustered_l2 + HNSW` 路径具备可重复执行的 native 同口径 benchmark harness，且 exec 能给出至少一次可解析输出或明确、可执行的最小补齐方案；只有在 harness 可用后，才进入“性能领先证明”主任务。
+
+- [ ] **PERF-P3-005**: 产出 clustered-l2 / HNSW 的 native-vs-rs recall-gated 对照基线并判定是否已领先
+  - 背景: `PERF-P3-004` 解决的是“能不能同口径跑”，本任务才解决“是否真的领先”。
+  - 目标:
+    - [ ] 在同一数据分布、参数与 recall gate 下，生成 native knowhere 与 knowhere-rs 的并排结果
+    - [ ] 输出 `recall_at_10` / `qps` / `runtime_seconds` / 资源占用的对照结论
+    - [ ] 给出“已领先 / 仅 parity / 落后但可优化”的明确判定，并在必要时拆出最小 optimization follow-up
+  - 验收: 至少一条核心非 GPU 路径拿到可复现、recall-gated、native 对照的性能结论；若未领先，也必须沉淀出下一条最小优化任务。
 
 ### P0 (紧急)
 - [x] **BUG-P0-001**: 修复 `mini_batch_kmeans` SIMD 长度不匹配导致的测试失败 (2026-03-05)
@@ -137,7 +145,7 @@
     - ✅ 新增回归测试：`ffi::tests::test_index_type_hnsw_pq`、`ffi::tests::test_index_type_sparse_wand`
     - ✅ 本轮补齐 MinHash FFI add_binary 维度/字节对齐校验：按 `dim(bits)` 推导 `vector_bytes` 与 `mh_vec_length`，拒绝非 u64 元素对齐输入
     - ✅ 新增回归测试 `ffi::tests::test_minhash_add_binary_rejects_invalid_dim_alignment`
-    - ⚠️ `cargo test` / `cargo test --lib` / `cargo test --tests` 仍存在既有失败（`ivf_sq_cc` / `ivf_flat_cc` / `quantization::kmeans`），导致任务未达成“全量回归通过”验收
+    - ⚠️ `cargo test` / `cargo test --lib` / `cargo test --tests` 仍存在既有失败（`ivf_sq_cc` / `ivf_flat_cc` / `quantization::kmeans`），导致任务未达成"全量回归通过"验收
   - 进展 (2026-03-07 14:30):
     - ✅ MinHashLSHIndex 已接入统一 Index trait wrapper（`src/index/minhash_lsh_index_trait.rs`）
     - ✅ C++ `mh_*` 参数命名/字节语义已对齐（alias + FFI `vector_byte_size` + `add_binary` 对齐校验）
@@ -191,7 +199,7 @@
     - ✅ dev 已将 30 个 debug/diagnose/opt/perf/pq/adaptive 长跑 integration tests 置于 `feature=long-tests` 下，默认 `cargo test --tests -q` 可稳定返回退出码
     - ✅ verify 复核：`cargo test --tests -q` 在约 42s 内稳定结束，不再出现 no_stable_exit
     - ❌ verify 阻塞项已切换为 required check 失败：`cargo test --lib -q` 失败于 `quantization::kmeans::tests::test_kmeans_convergence`
-    - 🔁 结论：当前主阻塞从“门禁不可判定”转为“功能回归（kmeans 收敛稳定性）”，继续 BUG-P1-001
+    - 🔁 结论：当前主阻塞从"门禁不可判定"转为"功能回归（kmeans 收敛稳定性）"，继续 BUG-P1-001
   - 进展 (2026-03-07 21:42):
     - ✅ verify 复核：`cargo test --lib -q` 已恢复全绿（504 passed, 0 failed, 2 ignored）
     - ✅ `cargo test --tests -q` / `cargo test -q` 均可稳定返回退出码（已消除 no_stable_exit）
@@ -200,7 +208,7 @@
   - 进展 (2026-03-08 01:05):
     - ✅ verify 按 fast_bugfix 门禁复核通过：`cargo test --lib -q`、`cargo test --test test_rabitq_ground_truth test_rabitq_with_true_ground_truth -q`
     - ✅ 非阻塞补充：`cargo test --tests -q` 通过，`test_rabitq_with_true_ground_truth` 从 fail 收敛为 pass
-    - ⏳ 剩余缺口：尚需在当前工作树补齐 `cargo test -q` 的可放行证据，才能关闭“全量门禁恢复”验收项
+    - ⏳ 剩余缺口：尚需在当前工作树补齐 `cargo test -q` 的可放行证据，才能关闭"全量门禁恢复"验收项
   - 进展 (2026-03-08 01:34):
     - ❌ verify 在 `cargo test -q` 发现新的 required gate 失败：`src/interrupt.rs` 文档示例 doctest 报 E0308（示例 `return Err("Operation interrupted")` 与返回类型不匹配）
     - ✅ `cargo test --lib -q`、`cargo test --tests -q` 均通过，主阻塞已从 RaBitQ 阈值回归切换为单点 doctest 正确性问题
@@ -236,7 +244,7 @@
     - [x] 建立自动化性能回归检测
   - 验收: ✅ 核心索引性能报告包含完整的可信度标记，R@10 < 80% 标记为"不可信"。
 - [x] **OPT-P1-001**: 统一 benchmark 报告质量标准（收敛剩余缺口）
-  - 背景: schema/必填校验已落地，但“可信度分级规则”与审计策略仍不一致，且缺少独立可复用的自动化生成入口。
+  - 背景: schema/必填校验已落地，但"可信度分级规则"与审计策略仍不一致，且缺少独立可复用的自动化生成入口。
   - 当前状态 (2026-03-08 13:35):
     - [x] 已有统一报告 schema（`src/benchmark/report_schema.rs`）
     - [x] 已强制字段校验（`ground_truth_source`/`recall_at_10`/`qps`/`confidence`）
@@ -249,7 +257,7 @@
   - 背景: `docs/PARITY_AUDIT.md` 旧结论停留在 Sparse=Partial；本轮复核并修正 `SparseInverted` 显式 doc id 检索路径，完成文档/回归闭环。
   - 完成情况:
     - [x] 明确 `SparseInverted`/`SparseWand` 在 Rust 与 C++ 对应能力的支持矩阵，并写回 `docs/PARITY_AUDIT.md`
-    - [x] `create_ann_iterator` / `save` / `load` 能力完成统一复核；`SparseWandCC` 保持“并发包装层，不承诺统一 Index trait / persistence parity”的受限边界
+    - [x] `create_ann_iterator` / `save` / `load` 能力完成统一复核；`SparseWandCC` 保持"并发包装层，不承诺统一 Index trait / persistence parity"的受限边界
     - [x] 修复 `SparseInverted` 将显式 `doc_id` 误当连续行号导致分数丢失的问题，确保 persistence + iterator 回归可成立
     - [x] 补齐/确认覆盖 bitset + iterator + persistence 的最小回归集
   - 验收: ✅ Sparse 模块状态已从 Partial 收敛为 Done（带受限边界说明），审计文档可追溯，required checks 通过。
@@ -267,7 +275,7 @@
   - 完成日期: 2026-03-08 20:36
   - 进展:
     - ✅ 复核 `src/api/index.rs`、`src/api/legal_matrix.rs`、`src/ffi.rs`，确认 API `IndexConfig::validate()` 与 FFI `IndexWrapper::new()` 均已统一走 legality matrix 入口
-    - ✅ `docs/PARITY_AUDIT.md` 中 `Index factory/legality` 已收敛为 `Done`，并补充“原 Partial 属历史残留”的审计说明
+    - ✅ `docs/PARITY_AUDIT.md` 中 `Index factory/legality` 已收敛为 `Done`，并补充"原 Partial 属历史残留"的审计说明
     - ✅ `GAP_ANALYSIS.md` / `DEV_ROADMAP.md` / `TASK_QUEUE.md` 已同步到无活跃 governance tail 的一致状态
   - 验收: ✅ queue/roadmap/gap/audit 对 legality 状态一致；后续 plan 不会再因历史残留状态误判需要回切 P1。
 - [x] **PARITY-P2-001**: 收口 HNSW-PQ 高级接口与持久化语义
@@ -275,7 +283,7 @@
   - 进展:
     - ✅ `src/faiss/hnsw_pq.rs` 已将 `has_raw_data=false`、`get_vector_by_ids` Unsupported、`save/load` Unsupported 显式固化为稳定 contract
     - ✅ 新增定向回归，覆盖 HNSW-PQ 高级接口/持久化路径的受限语义
-    - ✅ `docs/PARITY_AUDIT.md` / `docs/FFI_CAPABILITY_MATRIX.md` 已同步收口为“显式受限但状态 Done”
+    - ✅ `docs/PARITY_AUDIT.md` / `docs/FFI_CAPABILITY_MATRIX.md` 已同步收口为"显式受限但状态 Done"
   - 验收: ✅ 高级接口语义已稳定，不再依赖隐含行为。
 
 - [x] **OPT-P2-003**: 固化分层门禁（default/full/long-tests）与可复用执行入口
@@ -288,7 +296,7 @@
   - 目标:
     - [x] 在 `scripts/` 或 `xtask` 中提供统一入口（如 `default_regression` / `full_regression` / `long_regression`）
     - [x] 将 profile 与 `memory/*_RESULT.json` 的 `gate_profile` 字段做一一映射，减少策略漂移
-    - [x] 为 long-tests 增加最小 smoke 子集，避免“全量太重、默认太轻”中间层缺失
+    - [x] 为 long-tests 增加最小 smoke 子集，避免"全量太重、默认太轻"中间层缺失
   - 验收: ✅ default/full/long 三类门禁均可一条命令执行并稳定返回退出码，verify 报告不再出现 profile 歧义。
 
 - [x] **BENCH-P2-002**: recall-gated baseline 扩展到 ScaNN/RaBitQ/Sparse 并补齐可信度解释

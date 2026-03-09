@@ -4,6 +4,13 @@ Last updated: 2026-03-09 12:39
 Sync baseline: 4f60908fc9ad7438b4b8ff64210481ab281009b0 from origin/main
 
 ## 轮次记录
+- 2026-03-09 13:08: **计划轮次：将 `PERF-P3-004` 从宽泛“性能领先证明”收窄为先打通 native benchmark harness（builder-plan）**
+  1. 复核输入：`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`memory/DEV_RESULT.json`、`memory/VERIFY_RESULT.json`、`TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`、`benchmark_results/recall_gated_baseline.json`、`benchmark_results/cross_dataset_sampling.json`。
+  2. 调度判断：最新 `EXEC_RESULT.updated_at=2026-03-09T04:52:30Z` 晚于 `PLAN_RESULT.updated_at=2026-03-09T04:47:00Z`，且 exec 已将 blocker 明确为 `native_benchmark_harness_unavailable`，因此本轮必须重做 planning，不能 skip。
+  3. 现状复核：现有 artifact 已足以把首条主线收敛到 `clustered_l2 + HNSW`，不再缺“选路”；真正缺的是远端 x86 上缺少 native knowhere 可直接复用的 benchmark binary / runner，导致 same-methodology native-vs-rs 对照无法进入可判定状态。
+  4. 阶段决策：将 `PERF-P3-004` 重写为“先打通 harness + schema 对齐”的 benchmark 基础设施任务，并拆出紧随其后的 `PERF-P3-005` 负责真正的 native-vs-rs 对照与领先判定，避免 exec 在过宽目标上反复空转。
+  5. 治理动作：同步更新 `TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md` 与 `memory/PLAN_RESULT.json`，把当前 Phase 5 活跃任务收敛到可执行的远端 harness 打通。
+  状态：Phase 5 Active（route chosen; harness enablement promoted before leadership proof）。
 - 2026-03-09 12:39: **OBS-P3-005 收口：定义最小 observability / trace propagation / resource contract（builder-exec）**
   1. 复核输入：`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`TASK_QUEUE.md`，确认当前轮满足 direct exec turn 条件，且 `OBS-P3-005` 为 queue 顶部任务。
   2. 代码收口：在 `src/ffi.rs` 的 `knowhere_get_index_meta` JSON contract 中新增 `observability` / `trace_propagation` / `resource_contract` 三个稳定 section，统一 build/search/load 事件名、trace context 透传入口与最小资源估算/mmap 审计字段。
