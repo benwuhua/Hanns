@@ -3,22 +3,13 @@
 
 ## 待办 (TODO)
 
-- [ ] **PERF-P3-004**: 修通 native benchmark 的 GTest/CMake 发现链路，拿到 `benchmark_float_qps` 可执行入口
-  - 背景: 最新 exec 已证明远端并非“没有 native harness”，而是已经定位到真实 target `benchmark/benchmark_float_qps.cpp`，并通过 `scripts/remote/native_benchmark_probe.sh` 将 blocker 固化为 benchmark 配置阶段的 `find_package(GTest REQUIRED)` 失败；若不先修通这条依赖发现链路，后续所有 native-vs-rs 对照都会继续空转在构建期。
-  - 目标:
-    - [ ] 在远端 x86 上让 `WITH_BENCHMARK=ON` 的 native knowhere 配置/构建链路真正识别 probe 已准备好的 GTest（临时安装或等价系统路径），不再报 `missing: GTEST_LIBRARY/GTEST_INCLUDE_DIR/GTEST_MAIN_LIBRARY`
-    - [ ] 成功构建 `benchmark_float_qps`，并拿到 `--gtest_list_tests` 可执行日志，证明 binary surface 已稳定存在而非仅停留在 CMake target 声明
-    - [ ] 把最小修复切口收敛成可复用形式：优先是 `benchmark/CMakeLists.txt` / 顶层 CMake 的依赖发现修补；若仍需额外变量注入，也必须沉淀到统一 runner / runbook，而不是依赖手工命令
-    - [ ] 保持与现有 schema mapping 对齐：确认 `benchmark_float_qps` 输出仍可映射到 `recall_at_10` / `qps` / `runtime_seconds`
-  - required_checks:
-    - [ ] `scripts/remote/native_benchmark_probe.sh` 或等价远端命令不再失败于 GTest 发现阶段
-    - [ ] `/data/work/knowhere-build-benchmark/benchmark/benchmark_float_qps --gtest_list_tests` 成功并产生日志 artifact
-    - [ ] native 输出字段映射仍与 `src/bin/native_benchmark_qps_parser.rs` 约定一致
-  - deferred_checks:
-    - [ ] `clustered_l2` synthetic fixture / adapter
-    - [ ] 首个 native-vs-rs recall-gated baseline 生成
-    - [ ] 大规模远端 profiling 与多索引 sweep
-  - 验收: `benchmark_float_qps` 在远端 x86 上可配置、可构建、可执行到 `--gtest_list_tests`，且 blocker 从“依赖发现失败”推进到真正运行数据/fixture 阶段；只有在该入口稳定后，才进入 `PERF-P3-005` 的性能领先判定。
+- [x] **PERF-P3-004**: 修通 native benchmark 的 GTest/CMake 发现链路，拿到 `benchmark_float_qps` 可执行入口 (2026-03-09)
+  - 进展:
+    - ✅ `scripts/remote/native_benchmark_probe.sh` 支持在远端缺少 `/usr/src/googletest` 时自动 shallow clone `googletest v1.14.0` 并安装到 `/tmp/gtest-install`
+    - ✅ probe 改为使用实际安装产物 `lib/cmake/GTest/GTestConfig.cmake` + `libgtest.a/libgtest_main.a`，`WITH_BENCHMARK=ON` 配置与 `benchmark_float_qps` 构建均已成功
+    - ✅ probe 运行阶段自动补齐 Conan 运行时库路径（`folly`/`gflags`），`benchmark_float_qps --gtest_list_tests` 已成功产生日志 artifact
+    - ✅ native 输出字段映射保持与 `src/bin/native_benchmark_qps_parser.rs` 约定一致
+  - 验收: `benchmark_float_qps` 在远端 x86 上已可配置、可构建、可执行到 `--gtest_list_tests`；blocker 已从“依赖发现失败”推进到真正运行数据/fixture 阶段。
 
 - [ ] **PERF-P3-005**: 产出 clustered-l2 / HNSW 的 native-vs-rs recall-gated 对照基线并判定是否已领先
   - 背景: `PERF-P3-004` 解决的是“能不能同口径跑”，本任务才解决“是否真的领先”。

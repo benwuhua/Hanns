@@ -8,20 +8,21 @@ Last updated: 2026-03-09 13:12 Asia/Shanghai
 
 ## Current conclusion
 
-本轮把 blocker 继续压缩成**可复现的远端 benchmark probe**，并确认 native harness 已不是“找不到入口”，而是**稳定卡在 benchmark 依赖发现链路**：
+本轮已把 PERF-P3-004 从“定位 blocker”推进到**实际拿到 native benchmark executable surface**：
 
 - 远端源码存在 benchmark 源：`/data/work/knowhere-src/benchmark/hdf5/benchmark_float_qps.cpp`
-- 仓内新增统一探针：`scripts/remote/native_benchmark_probe.sh`
-- 该探针会在远端先从 `/usr/src/googletest` 构建临时 GTest 安装，再用现成 Conan toolchain 重配 `WITH_BENCHMARK=ON`
-- 当前 probe 输出已固定为：
-  - `build_dir=/data/work/knowhere-build-benchmark`
-  - `configure_log=/data/work/knowhere-build-benchmark/configure.log`
-  - `build_log=/data/work/knowhere-build-benchmark/build.log`
-  - `gtest_config=/tmp/gtest-install/lib/x86_64-linux-gnu/cmake/GTest/GTestConfig.cmake`
-  - `build_exit_code=2`
-- `configure.log` 现稳定复现 `benchmark/CMakeLists.txt` 里的 `find_package(GTest REQUIRED)` 失败；即使系统已装 `libgtest-dev/googletest`，远端 knowhere benchmark 这一条配置路径仍拿不到 `GTEST_LIBRARY/GTEST_INCLUDE_DIR/GTEST_MAIN_LIBRARY`
+- 统一探针 `scripts/remote/native_benchmark_probe.sh` 现已具备两段 bootstrap：
+  - 若远端存在 `/usr/src/googletest`，直接本地构建/安装临时 GTest
+  - 若不存在，则自动 shallow clone `googletest v1.14.0` 到 `/tmp/googletest-src` 后构建/安装到 `/tmp/gtest-install`
+- probe 现使用实际安装产物路径：
+  - `gtest_config=/tmp/gtest-install/lib/cmake/GTest/GTestConfig.cmake`
+  - `GTEST_LIBRARY=/tmp/gtest-install/lib/libgtest.a`
+  - `GTEST_MAIN_LIBRARY=/tmp/gtest-install/lib/libgtest_main.a`
+- `WITH_BENCHMARK=ON` 的远端配置与 `benchmark_float_qps` 构建现已成功
+- 运行 `benchmark_float_qps --gtest_list_tests` 时，还需补齐 Conan 产物的运行时库搜索路径；probe 已自动从 `/root/.conan/data/{folly,gflags}` 解析对应 package lib 目录并注入 `LD_LIBRARY_PATH`
+- 当前 probe 已成功产出 `gtest_list.log`，证明 binary surface 真正可执行，而不是只停留在 target 声明或 link 阶段
 
-因此当前最小 concrete patch target 已进一步明确为：**修 benchmark 配置链路，让远端 knowhere benchmark 消费临时/系统 GTest，而不是继续停在模块发现失败**。
+因此本任务的 blocker 已从“GTest 发现失败”推进为**native benchmark 入口已打通，可进入数据/fixture 与基线生成阶段**。
 
 ## Remote native command path
 
@@ -79,21 +80,14 @@ ssh root@knowhere-x86-hk-proxy '
 - knowhere-rs candidate-path artifact: `benchmark_results/cross_dataset_sampling.json`
 - Field-mapping helper: `src/bin/native_benchmark_qps_parser.rs`
 
-## Verified blocker from this round
+## Verified result from this round
 
-Observed tail from `/data/work/knowhere-build-benchmark/configure.log`:
+Probe 已验证以下事实：
 
-```text
--- Found HDF5: /usr/lib/x86_64-linux-gnu/hdf5/serial/libhdf5.so ...
-CMake Error at /usr/share/cmake-3.28/Modules/FindPackageHandleStandardArgs.cmake:230 (message):
-  Could NOT find GTest (missing: GTEST_LIBRARY GTEST_INCLUDE_DIR GTEST_MAIN_LIBRARY)
-```
-
-Meaning:
-
-1. `benchmark_float_qps` is a **real native target**, not a missing-source problem.
-2. Reusing `build/Release/generators` already fixes the earlier `folly` discovery failure.
-3. The next minimal step is **GTest availability**, not broad remote cleanup.
+1. 远端初始失败根因不是 benchmark target 缺失，而是 **`/usr/src/googletest` 在当前 x86 环境中不存在**，导致临时 GTest bootstrap 直接失败。
+2. 在缺少系统源码目录时，改为 clone `googletest v1.14.0` 并安装到 `/tmp/gtest-install` 后，`WITH_BENCHMARK=ON` 的配置与 `benchmark_float_qps` 构建均可成功完成。
+3. 构建成功后，`benchmark_float_qps` 的第一层运行时失败来自 Conan 依赖的动态库搜索路径（例如 `libfolly_exception_tracer_base.so.0.58.0-dev`、`libgflags_nothreads.so.2.2`）；补齐 `LD_LIBRARY_PATH` 后，`--gtest_list_tests` 可以正常输出。
+4. 因此 native benchmark 入口已经打通，下一步不再是修 benchmark/CMake 的发现链路，而是进入数据/fixture 与 baseline 生成。
 
 ## Output schema mapping
 

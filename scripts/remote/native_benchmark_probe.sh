@@ -18,13 +18,24 @@ build=/data/work/knowhere-build-benchmark
 log_dir="${build}"
 gtest_build=/tmp/gtest-build
 ngtest_install=/tmp/gtest-install
+gtest_src=/tmp/googletest-src
+gtest_config="${ngtest_install}/lib/cmake/GTest/GTestConfig.cmake"
+gtest_lib_dir="${ngtest_install}/lib"
 
 rm -rf "${build}"
 mkdir -p "${build}"
 
-if [[ ! -f "${ngtest_install}/lib/x86_64-linux-gnu/cmake/GTest/GTestConfig.cmake" ]]; then
+if [[ ! -f "${gtest_config}" ]]; then
   rm -rf "${gtest_build}" "${ngtest_install}"
-  cmake -S /usr/src/googletest -B "${gtest_build}" \
+  if [[ -d /usr/src/googletest ]]; then
+    gtest_source=/usr/src/googletest
+  else
+    rm -rf "${gtest_src}"
+    git clone --depth=1 --branch v1.14.0 https://github.com/google/googletest.git "${gtest_src}" \
+      > "${log_dir}/gtest-clone.log" 2>&1
+    gtest_source="${gtest_src}"
+  fi
+  cmake -S "${gtest_source}" -B "${gtest_build}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="${ngtest_install}" \
     > "${log_dir}/gtest-configure.log" 2>&1
@@ -47,9 +58,9 @@ cmake -S "${src}" -B "${build}" \
   -Dopentelemetry-cpp_DIR="${base}/generators" \
   -Dopentelemetry-proto_DIR="${base}/generators" \
   -DCMAKE_PREFIX_PATH="${ngtest_install}" \
-  -DGTest_DIR="${ngtest_install}/lib/x86_64-linux-gnu/cmake/GTest" \
-  -DGTEST_LIBRARY="${ngtest_install}/lib/x86_64-linux-gnu/libgtest.so" \
-  -DGTEST_MAIN_LIBRARY="${ngtest_install}/lib/x86_64-linux-gnu/libgtest_main.so" \
+  -DGTest_DIR="${ngtest_install}/lib/cmake/GTest" \
+  -DGTEST_LIBRARY="${gtest_lib_dir}/libgtest.a" \
+  -DGTEST_MAIN_LIBRARY="${gtest_lib_dir}/libgtest_main.a" \
   -DGTEST_INCLUDE_DIR="${ngtest_install}/include" \
   -DWITH_BENCHMARK=ON \
   -DWITH_UT=OFF \
@@ -65,10 +76,16 @@ set -e
 printf 'build_dir=%s\n' "${build}"
 printf 'configure_log=%s\n' "${log_dir}/configure.log"
 printf 'build_log=%s\n' "${log_dir}/build.log"
-printf 'gtest_config=%s\n' "${ngtest_install}/lib/x86_64-linux-gnu/cmake/GTest/GTestConfig.cmake"
+printf 'gtest_config=%s\n' "${gtest_config}"
 printf 'build_exit_code=%s\n' "${build_rc}"
 
 if [[ ${build_rc} -eq 0 ]]; then
+  conan_runtime_libs="$(find /root/.conan/data -type d -path '*/package/*/lib' | sort -u | paste -sd ':' -)"
+  if [[ -z "${conan_runtime_libs}" ]]; then
+    echo 'failed to resolve Conan runtime library directories for benchmark_float_qps' >&2
+    exit 127
+  fi
+  export LD_LIBRARY_PATH="${conan_runtime_libs}:${LD_LIBRARY_PATH:-}"
   "${build}/benchmark/benchmark_float_qps" --gtest_list_tests \
     > "${log_dir}/gtest_list.log" 2>&1
   printf 'gtest_list_log=%s\n' "${log_dir}/gtest_list.log"
