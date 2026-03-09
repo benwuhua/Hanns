@@ -1,9 +1,15 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-09 12:30
+Last updated: 2026-03-09 12:39
 Sync baseline: 4f60908fc9ad7438b4b8ff64210481ab281009b0 from origin/main
 
 ## 轮次记录
+- 2026-03-09 12:39: **OBS-P3-005 收口：定义最小 observability / trace propagation / resource contract（builder-exec）**
+  1. 复核输入：`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`TASK_QUEUE.md`，确认当前轮满足 direct exec turn 条件，且 `OBS-P3-005` 为 queue 顶部任务。
+  2. 代码收口：在 `src/ffi.rs` 的 `knowhere_get_index_meta` JSON contract 中新增 `observability` / `trace_propagation` / `resource_contract` 三个稳定 section，统一 build/search/load 事件名、trace context 透传入口与最小资源估算/mmap 审计字段。
+  3. 回归更新：扩展 `ffi::tests::test_ffi_abi_metadata_contract`，覆盖 Flat/HNSW/IVF/Sparse（以及 ScaNN 条件分支）的 observability/resource/trace 字段断言，保持 required gate 仍为单一 focused FFI smoke。
+  4. 治理同步：`TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/FFI_CAPABILITY_MATRIX.md` 已统一收口 `OBS-P3-005`，后续主缺口切换为 `PERF-P3-004`。
+  状态：Phase 5 Active（observability baseline closed；performance leadership promoted）。
 - 2026-03-09 12:30: **计划轮次：关闭 `PERSIST-P3-003` 并切换 `OBS-P3-005`（builder-plan）**
   1. 复核输入：`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`memory/DEV_RESULT.json`、`memory/VERIFY_RESULT.json`、`TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`、`docs/FFI_CAPABILITY_MATRIX.md`。
   2. 调度判断：最新 `EXEC_RESULT.updated_at=2026-03-09T04:13:22Z` 晚于 `PLAN_RESULT.updated_at=2026-03-09T04:02:00Z`，因此本轮必须重新 planning，不能 skip。

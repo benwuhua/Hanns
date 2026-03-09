@@ -1,6 +1,6 @@
 # FFI Capability Matrix
 
-Last updated: 2026-03-09 12:30
+Last updated: 2026-03-09 12:39
 
 ## Purpose
 
@@ -63,6 +63,14 @@ Document the capability matrix for all FFI-exposed index types, showing which op
 - 当前矩阵里 `File Save/Load` 与 `DeserializeFromFile` 表示“FFI/运行时已有稳定 contract”，不要求所有索引都支持内存序列化。
 - `HNSW-PQ` 继续维持稳定 `Unsupported`：`has_raw_data=false`，`get_vector_by_ids` 与 persistence 都是显式受限语义，而不是待补实现。
 - `SparseWand` 现已具备文件级 save/load 与 `DeserializeFromFile` contract；`SparseWandCC` 仍不纳入统一 persistence 承诺。
+
+### Observability / Trace / Resource Contract
+- `OBS-P3-005` 已把最小 runtime governance contract 收口到 `knowhere_get_index_meta` 返回 JSON。
+- 新增三个稳定 section：
+  - `observability`: 声明统一的 `knowhere.index.build` / `knowhere.index.search` / `knowhere.index.load` 事件名，以及 `latency_ms`、`topk`、`query_count`、`ground_truth_source`、`recall_at_10`、`artifact_path`、`mmap_load` 等字段口径。
+  - `trace_propagation`: 固定 FFI 透传入口 `index_meta.trace_context_json`、gate runner 环境变量 `OPENCLAW_TRACE_CONTEXT_JSON`、以及 `w3c-traceparent-json` 编码约定。
+  - `resource_contract`: 固定 `memory_bytes` / `disk_bytes` / `mmap_supported` / `unsupported_reason` 四元组，作为后续远端 build/test/perf gate 的最小资源审计基线。
+- 本轮定义的是 contract，不等于已经接通完整 OpenTelemetry/Prometheus；真正的远端 tracing integration 与 production metrics 仍应在后续专项轮次落地。
 
 ## Priority for Completion
 

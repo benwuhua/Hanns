@@ -235,6 +235,33 @@ struct IndexMetaSemantics<'a> {
 }
 
 #[derive(Serialize)]
+struct RuntimeObservabilitySummary<'a> {
+    schema_version: &'a str,
+    build_event: &'a str,
+    search_event: &'a str,
+    load_event: &'a str,
+    required_fields: &'a [&'a str],
+    optional_fields: &'a [&'a str],
+}
+
+#[derive(Serialize)]
+struct TracePropagationSummary<'a> {
+    ffi_entrypoint: &'a str,
+    gate_runner_entrypoint: &'a str,
+    context_encoding: &'a str,
+    propagation_mode: &'a str,
+}
+
+#[derive(Serialize)]
+struct ResourceContractSummary<'a> {
+    schema_version: &'a str,
+    memory_bytes: &'a str,
+    disk_bytes: &'a str,
+    mmap_supported: bool,
+    unsupported_reason: &'a str,
+}
+
+#[derive(Serialize)]
 struct IndexMetaSummary<'a> {
     index_type: &'a str,
     dim: usize,
@@ -245,6 +272,9 @@ struct IndexMetaSummary<'a> {
     additional_scalar: AdditionalScalarMeta<'a>,
     capabilities: IndexCapabilitySummary<'a>,
     semantics: IndexMetaSemantics<'a>,
+    observability: RuntimeObservabilitySummary<'a>,
+    trace_propagation: TracePropagationSummary<'a>,
+    resource_contract: ResourceContractSummary<'a>,
 }
 
 /// 包装索引对象 - 支持 Flat, HNSW, ScaNN, HNSW-PRQ, IVF-RaBitQ, HNSW-SQ, HNSW-PQ, BinFlat, BinaryHnsw, IVF-SQ8, BinIvfFlat, SparseWand, SparseWandCC, MinHashLSH
@@ -1487,6 +1517,64 @@ impl IndexWrapper {
         }
     }
 
+    fn runtime_observability_summary(&self) -> RuntimeObservabilitySummary<'static> {
+        RuntimeObservabilitySummary {
+            schema_version: "runtime_observability.v1",
+            build_event: "knowhere.index.build",
+            search_event: "knowhere.index.search",
+            load_event: "knowhere.index.load",
+            required_fields: &["index_type", "dim", "count", "latency_ms"],
+            optional_fields: &[
+                "topk",
+                "query_count",
+                "trace_id",
+                "span_id",
+                "ground_truth_source",
+                "recall_at_10",
+                "artifact_path",
+                "mmap_load",
+            ],
+        }
+    }
+
+    fn trace_propagation_summary(&self) -> TracePropagationSummary<'static> {
+        TracePropagationSummary {
+            ffi_entrypoint: "index_meta.trace_context_json",
+            gate_runner_entrypoint: "OPENCLAW_TRACE_CONTEXT_JSON",
+            context_encoding: "w3c-traceparent-json",
+            propagation_mode: "optional_passthrough",
+        }
+    }
+
+    fn resource_contract_summary(&self) -> ResourceContractSummary<'static> {
+        let capability = self.capability_summary();
+        let persistence = self.persistence_semantics();
+        let mmap_supported = matches!(persistence.file_save_load, "supported" | "constrained");
+        let unsupported_reason = if mmap_supported {
+            ""
+        } else if capability.persistence == "unsupported" {
+            "this index family does not expose a stable file-backed persistence contract, so mmap load is not auditable"
+        } else {
+            "mmap support remains undefined until a stable file-backed load contract exists"
+        };
+
+        ResourceContractSummary {
+            schema_version: "resource_contract.v1",
+            memory_bytes: if self.has_raw_data() {
+                "estimated_runtime_memory_bytes"
+            } else {
+                "estimated_runtime_memory_bytes_or_codebook_only"
+            },
+            disk_bytes: if mmap_supported {
+                "estimated_file_bytes"
+            } else {
+                "unsupported"
+            },
+            mmap_supported,
+            unsupported_reason,
+        }
+    }
+
     fn get_index_meta_json(&self) -> Result<String, CError> {
         let additional_scalar = AdditionalScalarMeta {
             runtime_supported: self.is_additional_scalar_supported(true),
@@ -1504,6 +1592,9 @@ impl IndexWrapper {
             additional_scalar,
             capabilities: self.capability_summary(),
             semantics: self.meta_semantics(),
+            observability: self.runtime_observability_summary(),
+            trace_propagation: self.trace_propagation_summary(),
+            resource_contract: self.resource_contract_summary(),
         };
 
         serde_json::to_string(&summary).map_err(|_| CError::Internal)
@@ -4122,6 +4213,18 @@ mod tests {
         assert_eq!(flat_meta_json["semantics"]["persistence"]["file_save_load"], "supported");
         assert_eq!(flat_meta_json["semantics"]["persistence"]["memory_serialize"], "supported");
         assert_eq!(flat_meta_json["semantics"]["persistence"]["deserialize_from_file"], "supported");
+        assert_eq!(flat_meta_json["observability"]["schema_version"], "runtime_observability.v1");
+        assert_eq!(flat_meta_json["observability"]["build_event"], "knowhere.index.build");
+        assert_eq!(flat_meta_json["observability"]["search_event"], "knowhere.index.search");
+        assert_eq!(flat_meta_json["observability"]["load_event"], "knowhere.index.load");
+        assert_eq!(flat_meta_json["trace_propagation"]["ffi_entrypoint"], "index_meta.trace_context_json");
+        assert_eq!(flat_meta_json["trace_propagation"]["gate_runner_entrypoint"], "OPENCLAW_TRACE_CONTEXT_JSON");
+        assert_eq!(flat_meta_json["trace_propagation"]["context_encoding"], "w3c-traceparent-json");
+        assert_eq!(flat_meta_json["resource_contract"]["schema_version"], "resource_contract.v1");
+        assert_eq!(flat_meta_json["resource_contract"]["memory_bytes"], "estimated_runtime_memory_bytes");
+        assert_eq!(flat_meta_json["resource_contract"]["disk_bytes"], "estimated_file_bytes");
+        assert_eq!(flat_meta_json["resource_contract"]["mmap_supported"], true);
+        assert_eq!(flat_meta_json["resource_contract"]["unsupported_reason"], "");
 
         knowhere_free_cstring(flat_meta_ptr);
         knowhere_free_index(flat);
@@ -4151,6 +4254,8 @@ mod tests {
         assert_eq!(hnsw_meta_json["capabilities"]["ann_iterator"], "supported");
         assert_eq!(hnsw_meta_json["capabilities"]["persistence"], "supported");
         assert_eq!(hnsw_meta_json["additional_scalar"]["unsupported_reason"], "HNSW does not expose additional-scalar filtering through the current Rust FFI");
+        assert_eq!(hnsw_meta_json["resource_contract"]["mmap_supported"], true);
+        assert_eq!(hnsw_meta_json["resource_contract"]["disk_bytes"], "estimated_file_bytes");
         knowhere_free_cstring(hnsw_meta_ptr);
         knowhere_free_index(hnsw);
 
@@ -4177,6 +4282,9 @@ mod tests {
         assert_eq!(ivf_meta_json["semantics"]["persistence"]["deserialize_from_file"], "unsupported");
         assert_eq!(ivf_meta_json["capabilities"]["get_vector_by_ids"], "unsupported");
         assert_eq!(ivf_meta_json["additional_scalar"]["unsupported_reason"], "IVF variants do not expose additional-scalar filtering through the current Rust FFI");
+        assert_eq!(ivf_meta_json["resource_contract"]["memory_bytes"], "estimated_runtime_memory_bytes_or_codebook_only");
+        assert_eq!(ivf_meta_json["resource_contract"]["disk_bytes"], "estimated_file_bytes");
+        assert_eq!(ivf_meta_json["resource_contract"]["mmap_supported"], true);
         knowhere_free_cstring(ivf_meta_ptr);
         knowhere_free_index(ivf);
 
@@ -4205,6 +4313,8 @@ mod tests {
             assert_eq!(scann_meta_json["capabilities"]["ann_iterator"], "supported");
             assert_eq!(scann_meta_json["capabilities"]["persistence"], "supported");
             assert_eq!(scann_meta_json["additional_scalar"]["unsupported_reason"], "ScaNN does not expose additional-scalar filtering through the current Rust FFI");
+            assert_eq!(scann_meta_json["trace_propagation"]["propagation_mode"], "optional_passthrough");
+            assert_eq!(scann_meta_json["resource_contract"]["mmap_supported"], true);
             knowhere_free_cstring(scann_meta_ptr);
             knowhere_free_index(scann);
         }
@@ -4238,6 +4348,12 @@ mod tests {
         assert_eq!(sparse_meta_json["semantics"]["persistence"]["file_save_load"], "unsupported");
         assert_eq!(sparse_meta_json["semantics"]["persistence"]["memory_serialize"], "unsupported");
         assert_eq!(sparse_meta_json["semantics"]["persistence"]["deserialize_from_file"], "unsupported");
+        assert_eq!(sparse_meta_json["observability"]["required_fields"][0], "index_type");
+        assert_eq!(sparse_meta_json["trace_propagation"]["context_encoding"], "w3c-traceparent-json");
+        assert_eq!(sparse_meta_json["resource_contract"]["memory_bytes"], "estimated_runtime_memory_bytes");
+        assert_eq!(sparse_meta_json["resource_contract"]["disk_bytes"], "unsupported");
+        assert_eq!(sparse_meta_json["resource_contract"]["mmap_supported"], false);
+        assert_eq!(sparse_meta_json["resource_contract"]["unsupported_reason"], "this index family does not expose a stable file-backed persistence contract, so mmap load is not auditable");
 
         knowhere_free_cstring(sparse_meta_ptr);
         knowhere_free_index(sparse);

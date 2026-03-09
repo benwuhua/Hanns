@@ -40,7 +40,7 @@ Evaluation dimensions:
 - ✅ `SEM-P3-001`: `DiskANN` / `AISAQ` / `HNSW` / `IVF` / `Sparse` / `ScaNN` 的 `GetVectorByIds` / `HasRawData` Phase-5 语义尾项已完成 focused 收敛；当前不再缺“入口存在但边界语义不可解释”的 semantic-fidelity blocker。
 - ✅ `ABI-P3-002`: FFI metadata / additional-scalar 已从“最小稳定摘要”升级为逐索引可解释 contract；HNSW / IVF / ScaNN / Sparse 的 capability/semantics/unsupported_reason 已具备 focused FFI 回归覆盖，当前不再是活跃 P3 blocker。
 - ✅ `PERSIST-P3-003`: persistence / `DeserializeFromFile` 语义矩阵已系统化，`file_save_load` / `memory_serialize` / `deserialize_from_file` 的 supported / constrained / unsupported 边界现已可审计且具备 focused regressions。
-- 🚧 `OBS-P3-005`: 当前已有基础 tracing，但生产级 metrics / trace 透传 / 资源估算 contract 仍缺位；代码中现存的是零散 `tracing::*` 调用、benchmark memory estimator 与 legality `mmap_supported`，尚未收敛为统一 runtime governance contract。
+- ✅ `OBS-P3-005`: 最小 runtime governance contract 已收口到 `knowhere_get_index_meta`，统一暴露 `observability` / `trace_propagation` / `resource_contract` 三组字段；当前不再缺“缺少稳定 schema/透传入口/资源口径”的 P3 blocker。
 - 🚧 `PERF-P3-004`: 项目目标已明确升级为“生产级平替 + 绝对性能优势”；仍需建立 native-vs-rs 的 recall-gated 优势基线。
 
 ## 3. Validation Gaps
