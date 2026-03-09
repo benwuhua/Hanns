@@ -680,36 +680,38 @@ impl ScaNNIndex {
 
     /// Get vectors by their IDs
     pub fn get_vector_by_ids(&self, ids: &[i64]) -> Result<Vec<f32>, ScannError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        if !self.has_raw_data() {
+            return Err(ScannError::InvalidConfig(
+                "GetVectorByIds not implemented".to_string(),
+            ));
+        }
+
         let vectors = self.vectors.read().unwrap();
         let stored_ids = self.ids.read().unwrap();
 
-        if vectors.is_empty() {
+        if vectors.is_empty() || stored_ids.is_empty() {
             return Err(ScannError::NotTrained);
         }
 
-        // Build ID to index mapping
         let id_to_idx: HashMap<i64, usize> = stored_ids
             .iter()
             .enumerate()
             .map(|(i, &id)| (id, i))
             .collect();
 
-        // Collect vectors in the order of requested IDs
         let mut result = Vec::with_capacity(ids.len() * self.dim);
-        let mut found_count = 0;
-
         for &id in ids {
-            if let Some(&idx) = id_to_idx.get(&id) {
-                let start = idx * self.dim;
-                result.extend_from_slice(&vectors[start..start + self.dim]);
-                found_count += 1;
-            }
-        }
-
-        if found_count == 0 {
-            return Err(ScannError::InvalidConfig(
-                "none of the requested IDs found".to_string(),
-            ));
+            let Some(&idx) = id_to_idx.get(&id) else {
+                return Err(ScannError::InvalidConfig(format!(
+                    "requested id {} not found",
+                    id
+                )));
+            };
+            let start = idx * self.dim;
+            result.extend_from_slice(&vectors[start..start + self.dim]);
         }
 
         Ok(result)

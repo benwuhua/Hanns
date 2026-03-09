@@ -117,12 +117,18 @@ impl Index for SparseWandIndex {
     }
 
     fn get_vector_by_ids(&self, ids: &[i64]) -> Result<Vec<f32>, IndexError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
         let dim = self.dim();
+        if dim == 0 || self.count() == 0 {
+            return Err(IndexError::Empty);
+        }
         let mut out = Vec::with_capacity(ids.len() * dim);
         for &id in ids {
-            let Some(sparse) = self.get_vector_by_id(id) else {
-                continue;
-            };
+            let sparse = self.get_vector_by_id(id).ok_or_else(|| {
+                IndexError::Unsupported(format!("GetVectorByIds failed: id {} not found", id))
+            })?;
             let mut dense = vec![0.0f32; dim];
             for elem in sparse.elements {
                 if (elem.dim as usize) < dim {
@@ -130,9 +136,6 @@ impl Index for SparseWandIndex {
                 }
             }
             out.extend_from_slice(&dense);
-        }
-        if out.is_empty() {
-            return Err(IndexError::Empty);
         }
         Ok(out)
     }
@@ -260,6 +263,16 @@ mod tests {
         let first = it.next().expect("iterator should return at least one item");
 
         assert_eq!(first.0, search_result.ids[0]);
+    }
+
+    #[test]
+    fn test_sparse_wand_get_vector_by_ids_missing_id_errors() {
+        let mut index = SparseWandIndex::new(SparseMetricType::Ip);
+        let base = Dataset::from_vectors(vec![1.0, 0.0, 1.0, 0.0], 4);
+        Index::add(&mut index, &base).unwrap();
+
+        let err = Index::get_vector_by_ids(&index, &[0, 9]).unwrap_err();
+        assert!(matches!(err, IndexError::Unsupported(_)));
     }
 
     #[test]

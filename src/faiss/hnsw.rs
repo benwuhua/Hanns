@@ -2460,6 +2460,9 @@ impl IndexTrait for HnswIndex {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
+        if self.ids.is_empty() || self.vectors.is_empty() {
+            return Err(IndexError::Empty);
+        }
 
         let mut result = Vec::with_capacity(ids.len() * self.dim);
         for &id in ids {
@@ -2983,6 +2986,21 @@ mod tests {
         assert_eq!(result_filtered.ids.len(), 2);
         // Should only contain IDs 12 and 13 (indices 2 and 3)
         assert!(result_filtered.ids.contains(&12) || result_filtered.ids.contains(&13));
+    }
+
+    #[test]
+    fn test_hnsw_get_vector_by_ids_empty_index_returns_empty_error() {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 4,
+                    data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        };
+
+        let index = HnswIndex::new(&config).unwrap();
+        let err = crate::index::Index::get_vector_by_ids(&index, &[0]).unwrap_err();
+        assert!(matches!(err, crate::index::IndexError::Empty));
     }
 
     #[test]

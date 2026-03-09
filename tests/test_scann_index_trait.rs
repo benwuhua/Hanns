@@ -73,17 +73,11 @@ fn test_scann_index_trait_get_vector_by_ids() {
     let ids = vec![0, 5, 10];
     let result = Index::get_vector_by_ids(&index, &ids);
 
-    // ScaNN uses quantization, so this might return Unsupported or partial data
-    match result {
-        Ok(vectors) => {
-            // If supported, verify dimensions
-            assert!(vectors.len() > 0, "Should return some data if supported");
-        }
-        Err(e) => {
-            // Expected for quantization-based indexes
-            println!("get_vector_by_ids returned error (expected for quantization): {:?}", e);
-        }
-    }
+    let vectors = result.expect("reorder/raw-data enabled ScaNN should reconstruct stored vectors");
+    assert_eq!(vectors.len(), ids.len() * 8);
+
+    let missing = Index::get_vector_by_ids(&index, &[0, 9999]);
+    assert!(missing.is_err(), "missing ids should fail instead of returning partial data");
 }
 
 #[test]
@@ -149,6 +143,19 @@ fn test_scann_index_trait_save_load() {
             println!("save/load not fully implemented: {:?}", e);
         }
     }
+}
+
+#[test]
+fn test_scann_index_trait_without_raw_data_rejects_get_vector_by_ids() {
+    let config = ScaNNConfig::new(2, 16, 0);
+    let mut index = ScaNNIndex::new(8, config).unwrap();
+
+    let train_data = create_test_dataset(20, 8);
+    Index::train(&mut index, &train_data).unwrap();
+    Index::add(&mut index, &train_data).unwrap();
+
+    assert!(!Index::has_raw_data(&index));
+    assert!(Index::get_vector_by_ids(&index, &[0]).is_err());
 }
 
 #[test]

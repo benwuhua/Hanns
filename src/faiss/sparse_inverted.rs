@@ -794,12 +794,18 @@ impl Index for SparseInvertedIndex {
     }
 
     fn get_vector_by_ids(&self, ids: &[i64]) -> Result<Vec<f32>, IndexError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
         let dim = self.dim();
+        if dim == 0 || self.count() == 0 {
+            return Err(IndexError::Empty);
+        }
         let mut out = Vec::with_capacity(ids.len() * dim);
         for &id in ids {
-            let Some(sparse) = self.get_vector_by_id(id) else {
-                continue;
-            };
+            let sparse = self.get_vector_by_id(id).ok_or_else(|| {
+                IndexError::Unsupported(format!("GetVectorByIds failed: id {} not found", id))
+            })?;
             let mut dense = vec![0.0f32; dim];
             for elem in sparse.elements {
                 if (elem.dim as usize) < dim {
@@ -807,9 +813,6 @@ impl Index for SparseInvertedIndex {
                 }
             }
             out.extend_from_slice(&dense);
-        }
-        if out.is_empty() {
-            return Err(IndexError::Empty);
         }
         Ok(out)
     }
@@ -1191,6 +1194,17 @@ mod tests {
             .search(&query, 3, Some(&bitset));
 
         assert_eq!(wand, taat);
+    }
+
+    #[test]
+    fn test_sparse_inverted_get_vector_by_ids_missing_id_errors() {
+        let mut index = SparseInvertedIndex::new(SparseMetricType::Ip);
+        index
+            .add(&SparseVector::from_pairs(&[(1, 1.0), (5, 2.0)]), 10)
+            .unwrap();
+
+        let err = Index::get_vector_by_ids(&index, &[10, 11]).unwrap_err();
+        assert!(matches!(err, IndexError::Unsupported(_)));
     }
 
     #[test]

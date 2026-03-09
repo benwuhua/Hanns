@@ -27,7 +27,7 @@ fn test_ivf_sq8_index_trait_metadata() {
     assert_eq!(Index::dim(&index), 4);
     assert_eq!(Index::count(&index), 0);
     assert!(!Index::is_trained(&index));
-    assert!(Index::has_raw_data(&index));
+    assert!(!Index::has_raw_data(&index));
 }
 
 #[test]
@@ -65,8 +65,8 @@ fn test_ivf_sq8_index_trait_lifecycle() {
     assert_eq!(result.ids.len(), 2);
 
     // Test get_vector_by_ids
-    let vecs = Index::get_vector_by_ids(&index, &[0]).unwrap();
-    assert_eq!(vecs.len(), 4); // dim=4
+    let result = Index::get_vector_by_ids(&index, &[0]);
+    assert!(result.is_err());
 }
 
 #[test]

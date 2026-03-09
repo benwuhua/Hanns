@@ -615,40 +615,13 @@ impl IndexTrait for IvfSq8Index {
     }
 
     fn has_raw_data(&self) -> bool {
-        true // IVF-SQ8 stores raw vectors
+        false
     }
 
-    fn get_vector_by_ids(&self, ids: &[i64]) -> std::result::Result<Vec<f32>, IndexError> {
-        if ids.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut result = Vec::with_capacity(ids.len() * self.dim);
-        for &id in ids {
-            // Find position in self.ids
-            let idx = self.ids.iter().position(|&x| x == id).ok_or_else(|| {
-                IndexError::Unsupported(format!("ID {} not found in index", id))
-            })?;
-
-            if idx >= self.ids.len() {
-                return Err(IndexError::Unsupported(format!(
-                    "ID {} out of range (max {})",
-                    id,
-                    self.ids.len()
-                )));
-            }
-
-            let start = idx * self.dim;
-            let end = start + self.dim;
-            if end > self.vectors.len() {
-                return Err(IndexError::Unsupported(format!(
-                    "Vector data corrupted for ID {}",
-                    id
-                )));
-            }
-            result.extend_from_slice(&self.vectors[start..end]);
-        }
-        Ok(result)
+    fn get_vector_by_ids(&self, _ids: &[i64]) -> std::result::Result<Vec<f32>, IndexError> {
+        Err(IndexError::Unsupported(
+            "get_vector_by_ids not supported for IVF-SQ8 (lossy compression)".into(),
+        ))
     }
 
     fn create_ann_iterator(
@@ -771,6 +744,27 @@ mod tests {
         assert_eq!(result.ids.len(), 2);
         // Should find the closest vectors (ids 0 and 1)
         assert!(result.ids[0] == 0 || result.ids[0] == 1);
+    }
+
+    #[test]
+    fn test_ivf_sq8_get_vector_by_ids_unsupported() {
+        let config = IndexConfig {
+            index_type: IndexType::IvfSq8,
+            metric_type: MetricType::L2,
+            dim: 4,
+                    data_type: crate::api::DataType::Float,
+            params: IndexParams::ivf_sq8(4, 2),
+        };
+
+        let mut index = IvfSq8Index::new(&config).unwrap();
+        let vectors = vec![
+            0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0,
+        ];
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        assert!(!crate::index::Index::has_raw_data(&index));
+        assert!(crate::index::Index::get_vector_by_ids(&index, &[0]).is_err());
     }
 
     #[test]
