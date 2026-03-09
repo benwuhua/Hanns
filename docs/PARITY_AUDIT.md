@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-09 15:03
+Last updated: 2026-03-09 18:03
 Sync baseline: 4f60908fc9ad7438b4b8ff64210481ab281009b0 from origin/main
 
 ## 轮次记录
+- 2026-03-09 18:03: **计划轮次：关闭 `CORE-P0-001` 后切换到 `HNSW-P1-001`（builder-plan）**
+  1. 复核输入：`TASK_QUEUE.md`、`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`。
+  2. 调度判断：queue 首个 TODO 已切到 `HNSW-P1-001`，且最新 `EXEC_RESULT.updated_at=2026-03-09T09:35:00Z` 晚于旧 `PLAN_RESULT.updated_at=2026-03-09T09:03:00Z`；旧 plan 仍指向已完成的 `CORE-P0-001`，因此本轮不能 skip。
+  3. 收口结论：远端 x86 SIMD verification lane 已恢复并具备新鲜 required-check 证据，`CORE-P0-001` 不再是活跃 blocker；Phase 5 主缺口已回到核心实现优先级最高的 HNSW 热路径工程化。
+  4. 阶段决策：将当前唯一活动任务切换为 `HNSW-P1-001`，聚焦 visited list 复用、结果距离复用、邻居布局/benchmark 证据三件事；`IVFPQ-P1-002` 与 `DISKANN-P1-003` 继续保留为后继 scoped tasks，`PERF-P3-005` 暂不前移。
+  5. 治理动作：queue/roadmap/gap 已与该阶段切换保持一致；本轮仅更新 planning 结论与审计记录，避免 exec 继续围绕已关闭的 SIMD blocker 空转。
+  状态：Phase 5 Active（core-path performance engineering promoted; HNSW first）。
 - 2026-03-09 17:05: **计划轮次：将 `CORE-P0-001` 从代码语义修复继续收窄为远端 x86 toolchain unblock（builder-plan）**
   1. 复核输入：`TASK_QUEUE.md`、`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`。
   2. 调度判断：queue 首个 TODO 仍与 `PLAN_RESULT.task_id=CORE-P0-001` 一致，但最新 `EXEC_RESULT.updated_at` 已晚于 plan，且 blocker 已由 `src/simd.rs` 代码语义推进为 `remote_x86_toolchain`，因此本轮不能 skip。
