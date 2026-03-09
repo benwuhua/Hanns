@@ -102,7 +102,6 @@ Objective:
 
 Active scoped tasks:
 
-- `CORE-P0-001`: restore the remote x86 SIMD verification lane (toolchain compatibility + fresh required gates) so `default+simd` is again a credible default execution path before any performance claim on `DISKANN / HNSW / IVF / PQ`.
 - `HNSW-P1-001`: reduce HNSW hot-path engineering gaps (`visited` allocation, distance reuse, layout inefficiency) and turn HNSW into the first serious performance-lead candidate.
 - `IVFPQ-P1-002`: audit and strengthen IVF/PQ search reality (ADC/centroid path), and explicitly classify IVF base as rewrite candidate or non-core placeholder.
 - `DISKANN-P1-003`: fix Rust DiskANN’s distance-path issues and honestly classify the current `PQCode` simplification before using it in any leadership claim.
@@ -110,6 +109,7 @@ Active scoped tasks:
 
 Recently closed milestones:
 
+- `CORE-P0-001`: remote x86 SIMD verification lane 已恢复；远端 x86 focused SIMD required gates 已重新通过，`default+simd` 不再因旧 toolchain/脚本漂移缺少可信证据。
 - `PERF-P3-004`: remote x86 native benchmark harness 已打通；`scripts/remote/native_benchmark_probe.sh` 现可补齐 GTest/CMake/Conan runtime 依赖，并成功构建 `benchmark_float_qps`、执行 `--gtest_list_tests`、保持 parser schema 对齐。
 - `SEM-P3-001`: HNSW / IVF / Sparse / ScaNN 的 `GetVectorByIds` / `HasRawData` 语义尾项已完成 focused 收敛；missing-id、empty-index、lossy-index、reorder/raw-data gate 等边界现已具备可审计回归证据。
 - `ABI-P3-002`: FFI metadata / additional-scalar 已从最小稳定摘要提升为逐索引可解释 contract；HNSW / IVF / ScaNN / Sparse 的 capability / unsupported_reason / semantics 字段现已具备 focused FFI 回归覆盖。

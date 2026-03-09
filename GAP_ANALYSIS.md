@@ -37,7 +37,7 @@ Evaluation dimensions:
 
 ## P3 (Core Implementation / Semantic Fidelity / Production Readiness / Performance Advantage)
 
-- 🚧 `CORE-P0-001`: 当前最高优先级已进一步收敛为恢复远端 x86 SIMD 验证链的可执行性。L2 reduction 最小修复与 `simd` 默认化已落地，但最新 exec 证明真正阻塞点已切到远端 Rust/Cargo toolchain 失配（cargo 1.75 无法解析 `getrandom 0.4.1` 的 edition2024 manifest），导致 x86 `default+simd` required gate 无法获得新鲜证据；在这一步闭环前，`DISKANN / HNSW / IVF / PQ` 的性能和正确性结论都不稳。
+- ✅ `CORE-P0-001`: 远端 x86 SIMD 验证链已恢复可执行并取得新鲜证据。最新复核中，本地 `cargo test --lib -q`、远端 `cargo test --features simd simd::tests -- --nocapture`、远端 `cargo test --lib --features simd test_x86_simd_l2_reduction_matches_scalar_on_irregular_input -- --nocapture` 均已通过；`default+simd` 不再因 toolchain/脚本漂移阻断后续核心路径工作。
 - 🚧 `HNSW-P1-001`: HNSW 是当前最接近生产级且最可能先跑出“绝对性能优势”的路径，但热路径仍有工程差距（`visited` 分配、结果距离二次计算、邻居布局不紧凑）。
 - 🚧 `IVFPQ-P1-002`: IVF/PQ 需要从“接口存在”切到“实现真实性和热点路径可信”。IVF base 当前更像占位实现，IVF-PQ/ScaNN 则需要 focused 审计和 benchmark 证明。
 - 🚧 `DISKANN-P1-003`: Rust DiskANN 当前仍是“简化 Vamana + 简化 PQ”边界，需先修距离路径并明确工程边界，避免误把它当原生 DiskANN 同级实现。
@@ -47,7 +47,7 @@ Evaluation dimensions:
 - ✅ `PERSIST-P3-003`: persistence / `DeserializeFromFile` 语义矩阵已系统化，`file_save_load` / `memory_serialize` / `deserialize_from_file` 的 supported / constrained / unsupported 边界现已可审计且具备 focused regressions。
 - ✅ `OBS-P3-005`: 最小 runtime governance contract 已收口到 `knowhere_get_index_meta`，统一暴露 `observability` / `trace_propagation` / `resource_contract` 三组字段；当前不再缺“缺少稳定 schema/透传入口/资源口径”的 P3 blocker。
 - ✅ `PERF-P3-004`: native benchmark harness 缺口已关闭；远端 x86 现已可构建 `benchmark_float_qps`、执行 `--gtest_list_tests`，且输出字段与 Rust parser 保持兼容。
-- 🚧 `PERF-P3-005`: 当前性能基线任务仍保留，但它不再压过核心实现修补；只有在 `CORE-P0-001` 与 HNSW 热路径可信后，native-vs-rs 对照结论才值得当作主证据。
+- 🚧 `PERF-P3-005`: 当前性能基线任务仍保留，但它不再压过核心实现修补；现在 `CORE-P0-001` 已关闭，下一步应在 HNSW 热路径可信化后产出 native-vs-rs 主证据。
 
 ## 3. Validation Gaps
 
