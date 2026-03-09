@@ -204,6 +204,20 @@ pub struct CGetVectorResult {
 }
 
 #[derive(Serialize)]
+struct AdditionalScalarMeta<'a> {
+    runtime_supported: bool,
+    mv_only_query: bool,
+    support_mode: &'a str,
+}
+
+#[derive(Serialize)]
+struct IndexCapabilitySummary<'a> {
+    get_vector_by_ids: &'a str,
+    ann_iterator: &'a str,
+    persistence: &'a str,
+}
+
+#[derive(Serialize)]
 struct IndexMetaSummary<'a> {
     index_type: &'a str,
     dim: usize,
@@ -211,6 +225,8 @@ struct IndexMetaSummary<'a> {
     is_trained: bool,
     has_raw_data: bool,
     additional_scalar_supported: bool,
+    additional_scalar: AdditionalScalarMeta<'a>,
+    capabilities: IndexCapabilitySummary<'a>,
 }
 
 /// 包装索引对象 - 支持 Flat, HNSW, ScaNN, HNSW-PRQ, IVF-RaBitQ, HNSW-SQ, HNSW-PQ, BinFlat, BinaryHnsw, IVF-SQ8, BinIvfFlat, SparseWand, SparseWandCC, MinHashLSH
@@ -1261,19 +1277,115 @@ impl IndexWrapper {
         }
     }
 
+    fn additional_scalar_support_mode(&self) -> &'static str {
+        if self.sparse_wand.is_some() || self.sparse_wand_cc.is_some() {
+            "partial"
+        } else {
+            "unsupported"
+        }
+    }
+
     fn is_additional_scalar_supported(&self, is_mv_only: bool) -> bool {
-        let _ = is_mv_only;
-        false
+        matches!(self.additional_scalar_support_mode(), "partial" | "supported") && is_mv_only
+    }
+
+    fn capability_summary(&self) -> IndexCapabilitySummary<'static> {
+        if self.flat.is_some() {
+            IndexCapabilitySummary {
+                get_vector_by_ids: "supported",
+                ann_iterator: "unsupported",
+                persistence: "supported",
+            }
+        } else if self.hnsw.is_some() {
+            IndexCapabilitySummary {
+                get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
+                ann_iterator: "supported",
+                persistence: "supported",
+            }
+        } else if self.scann.is_some() {
+            IndexCapabilitySummary {
+                get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
+                ann_iterator: "supported",
+                persistence: "unsupported",
+            }
+        } else if self.hnsw_prq.is_some() {
+            IndexCapabilitySummary {
+                get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
+                ann_iterator: "unsupported",
+                persistence: "supported",
+            }
+        } else if self.ivf_rabitq.is_some() {
+            IndexCapabilitySummary {
+                get_vector_by_ids: "unsupported",
+                ann_iterator: "unsupported",
+                persistence: "unsupported",
+            }
+        } else if self.hnsw_sq.is_some() {
+            IndexCapabilitySummary {
+                get_vector_by_ids: "unsupported",
+                ann_iterator: "unsupported",
+                persistence: "unsupported",
+            }
+        } else if self.hnsw_pq.is_some() {
+            IndexCapabilitySummary {
+                get_vector_by_ids: "unsupported",
+                ann_iterator: "supported",
+                persistence: "unsupported",
+            }
+        } else if self.bin_flat.is_some() || self.binary_hnsw.is_some() || self.bin_ivf_flat.is_some() {
+            IndexCapabilitySummary {
+                get_vector_by_ids: "unsupported",
+                ann_iterator: "unsupported",
+                persistence: "unsupported",
+            }
+        } else if self.ivf_sq8.is_some() {
+            IndexCapabilitySummary {
+                get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
+                ann_iterator: "unsupported",
+                persistence: "unsupported",
+            }
+        } else if self.sparse_wand.is_some() {
+            IndexCapabilitySummary {
+                get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
+                ann_iterator: "supported",
+                persistence: "unsupported",
+            }
+        } else if self.sparse_wand_cc.is_some() {
+            IndexCapabilitySummary {
+                get_vector_by_ids: "unsupported",
+                ann_iterator: "unsupported",
+                persistence: "unsupported",
+            }
+        } else if self.minhash_lsh.is_some() {
+            IndexCapabilitySummary {
+                get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
+                ann_iterator: "supported",
+                persistence: "supported",
+            }
+        } else {
+            IndexCapabilitySummary {
+                get_vector_by_ids: "unsupported",
+                ann_iterator: "unsupported",
+                persistence: "unsupported",
+            }
+        }
     }
 
     fn get_index_meta_json(&self) -> Result<String, CError> {
+        let additional_scalar = AdditionalScalarMeta {
+            runtime_supported: self.is_additional_scalar_supported(true),
+            mv_only_query: true,
+            support_mode: self.additional_scalar_support_mode(),
+        };
         let summary = IndexMetaSummary {
             index_type: self.index_type(),
             dim: self.dim(),
             count: self.count(),
             is_trained: self.is_trained(),
             has_raw_data: self.has_raw_data(),
-            additional_scalar_supported: self.is_additional_scalar_supported(true),
+            additional_scalar_supported: additional_scalar.runtime_supported,
+            additional_scalar,
+            capabilities: self.capability_summary(),
         };
 
         serde_json::to_string(&summary).map_err(|_| CError::Internal)
@@ -3855,33 +3967,65 @@ mod tests {
 
     #[test]
     fn test_ffi_abi_metadata_contract() {
-        let index = knowhere_create_index(CIndexConfig {
+        let flat = knowhere_create_index(CIndexConfig {
             index_type: CIndexType::Flat,
             metric_type: CMetricType::L2,
             dim: 16,
             ..Default::default()
         });
-        assert!(!index.is_null());
+        assert!(!flat.is_null());
 
-        assert_eq!(knowhere_is_additional_scalar_supported(index, false), 0);
-        assert_eq!(knowhere_is_additional_scalar_supported(index, true), 0);
+        assert_eq!(knowhere_is_additional_scalar_supported(flat, false), 0);
+        assert_eq!(knowhere_is_additional_scalar_supported(flat, true), 0);
 
-        let meta_ptr = knowhere_get_index_meta(index);
-        assert!(!meta_ptr.is_null());
+        let flat_meta_ptr = knowhere_get_index_meta(flat);
+        assert!(!flat_meta_ptr.is_null());
 
-        let meta_str = unsafe { std::ffi::CStr::from_ptr(meta_ptr) }
+        let flat_meta_str = unsafe { std::ffi::CStr::from_ptr(flat_meta_ptr) }
             .to_str()
             .unwrap();
-        let meta_json: serde_json::Value = serde_json::from_str(meta_str).unwrap();
-        assert_eq!(meta_json["index_type"], "Flat");
-        assert_eq!(meta_json["dim"], 16);
-        assert_eq!(meta_json["count"], 0);
-        assert_eq!(meta_json["is_trained"], false);
-        assert_eq!(meta_json["has_raw_data"], true);
-        assert_eq!(meta_json["additional_scalar_supported"], false);
+        let flat_meta_json: serde_json::Value = serde_json::from_str(flat_meta_str).unwrap();
+        assert_eq!(flat_meta_json["index_type"], "Flat");
+        assert_eq!(flat_meta_json["dim"], 16);
+        assert_eq!(flat_meta_json["count"], 0);
+        assert_eq!(flat_meta_json["is_trained"], false);
+        assert_eq!(flat_meta_json["has_raw_data"], true);
+        assert_eq!(flat_meta_json["additional_scalar_supported"], false);
+        assert_eq!(flat_meta_json["additional_scalar"]["support_mode"], "unsupported");
+        assert_eq!(flat_meta_json["additional_scalar"]["mv_only_query"], true);
+        assert_eq!(flat_meta_json["capabilities"]["get_vector_by_ids"], "supported");
+        assert_eq!(flat_meta_json["capabilities"]["ann_iterator"], "unsupported");
+        assert_eq!(flat_meta_json["capabilities"]["persistence"], "supported");
 
-        knowhere_free_cstring(meta_ptr);
-        knowhere_free_index(index);
+        knowhere_free_cstring(flat_meta_ptr);
+        knowhere_free_index(flat);
+
+        let sparse = knowhere_create_index(CIndexConfig {
+            index_type: CIndexType::SparseWand,
+            metric_type: CMetricType::Ip,
+            dim: 16,
+            data_type: 104,
+            ..Default::default()
+        });
+        assert!(!sparse.is_null());
+
+        assert_eq!(knowhere_is_additional_scalar_supported(sparse, false), 0);
+        assert_eq!(knowhere_is_additional_scalar_supported(sparse, true), 1);
+
+        let sparse_meta_ptr = knowhere_get_index_meta(sparse);
+        assert!(!sparse_meta_ptr.is_null());
+        let sparse_meta_str = unsafe { std::ffi::CStr::from_ptr(sparse_meta_ptr) }
+            .to_str()
+            .unwrap();
+        let sparse_meta_json: serde_json::Value = serde_json::from_str(sparse_meta_str).unwrap();
+        assert_eq!(sparse_meta_json["index_type"], "SparseWand");
+        assert_eq!(sparse_meta_json["additional_scalar_supported"], true);
+        assert_eq!(sparse_meta_json["additional_scalar"]["support_mode"], "partial");
+        assert_eq!(sparse_meta_json["capabilities"]["ann_iterator"], "supported");
+        assert_eq!(sparse_meta_json["capabilities"]["persistence"], "unsupported");
+
+        knowhere_free_cstring(sparse_meta_ptr);
+        knowhere_free_index(sparse);
 
         assert_eq!(knowhere_is_additional_scalar_supported(std::ptr::null(), true), 0);
         assert!(knowhere_get_index_meta(std::ptr::null()).is_null());
