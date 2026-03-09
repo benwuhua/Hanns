@@ -1,23 +1,24 @@
 # Builder 任务队列
-> 最后更新: 2026-03-09 10:34 | 优先级: BUG > SEMANTIC > ABI/PERSIST > PERF
+> 最后更新: 2026-03-09 10:46 | 优先级: BUG > SEMANTIC > ABI/PERSIST > PERF
 
 ## 待办 (TODO)
 
-- [ ] **ABI-P3-002**: 提升 FFI metadata / additional-scalar 契约，从最小摘要走向逐模块真实语义
-  - 背景: `SEM-P3-001` 已收口，当前 `knowhere_is_additional_scalar_supported` / `knowhere_get_index_meta` 虽已有统一入口，但更多是稳定的最小 JSON contract，不是逐模块真实元数据语义。
-  - 背景: 当前 `knowhere_is_additional_scalar_supported` / `knowhere_get_index_meta` 已有统一入口，但更多是稳定的最小 JSON contract，不是逐模块真实元数据语义。
-  - 目标:
-    - [ ] 对照原生 `Index::IsAdditionalScalarSupported` / `Index::GetIndexMeta` 路径，建立 per-index 语义矩阵
-    - [ ] 在 `src/ffi.rs` 与 `src/index.rs` 收敛更真实的 metadata / capability 语义
-    - [ ] 为 null-safe、unsupported、partial-supported 场景补 focused FFI 回归
-  - 验收: FFI metadata / capability 不再只返回保守统一摘要，而是形成稳定、可验证、逐模块可解释的 contract。
 - [ ] **PERSIST-P3-003**: 补齐 persistence / deserialize-from-file 语义矩阵与回归
-  - 背景: 目前 save/load 在多个模块上已“有入口”，但对照原生 knowhere 的 `Serialize/Deserialize/DeserializeFromFile`，Rust 侧仍缺少系统化的 persistence 语义矩阵。
-  - 目标:
-    - [ ] 对照原生 `Serialize/Deserialize/DeserializeFromFile` 路径，整理 Rust 各索引支持矩阵
-    - [ ] 把“支持 / 受限支持 / Unsupported”的边界写回审计与能力矩阵
-    - [ ] 补 persistence roundtrip / deserialize-from-file focused tests
+  - 背景: `ABI-P3-002` 已把 FFI metadata / additional-scalar 从最小摘要提升到逐索引可解释 contract，但生产级替代仍缺一块更直接的落地语义：各索引 `save/load`、内存序列化以及 `DeserializeFromFile` 对齐边界还没有系统化矩阵。
+  - 计划侧收口 (2026-03-09 12:02): 当前 `src/ffi.rs` 已按 HNSW / IVF / ScaNN / Sparse 输出 per-index capability + semantics，并有 `ffi::tests::test_ffi_abi_metadata_contract` 兜底；继续保留 `ABI-P3-002` 只会让 exec 重复进入已完成范围。
+  - 当前收口切片:
+    - [ ] **PERSIST-P3-003A**: 对照原生 `Serialize/Deserialize/DeserializeFromFile` 路径，整理 Flat / HNSW / IVF / ScaNN / Sparse / MinHash 的 persistence 支持矩阵与受限边界
+    - [ ] **PERSIST-P3-003B**: 让 FFI / audit / capability docs 对 `file_save_load`、`memory_serialize`、`deserialize_from_file` 的 supported / constrained / unsupported 语义口径一致
+    - [ ] **PERSIST-P3-003C**: 补 persistence roundtrip / deserialize-from-file focused regressions，至少覆盖“支持成功”“受限拒绝”“配置不匹配/空文件”三类场景
   - 验收: persistence 能力矩阵完整、受限边界明确，生产替代时不会因 save/load 语义漂移产生隐藏风险。
+- [ ] **OBS-P3-005**: 建立最小生产可观测性与运行时治理基线
+  - 背景: 当前已有基础 `tracing`，但还没有生产级 metrics / trace 透传 / 资源估算 / 远端真实环境门禁的统一闭环；这会直接影响“生产级平替”的可信度。
+  - 当前收口切片:
+    - [ ] **OBS-P3-005A**: 为核心 build/search/load 路径补稳定 metrics 接口，优先覆盖 latency / recall-gated benchmark metadata / mmap-load 关键事件
+    - [ ] **OBS-P3-005B**: 统一 trace/span 透传入口，确保 FFI 与 gate runner 能把 trace context 带进关键路径
+    - [ ] **OBS-P3-005C**: 增加最小资源估算 contract（内存/磁盘/mmap_supported），为后续 `EstimateLoadResource` 等生产 API 收口铺路
+  - 说明: 这一任务不等于现在就铺满 Prometheus/OpenTelemetry 全家桶，而是先建立最小生产可观测性骨架。
+  - 验收: 关键路径具备可抓取、可回归、可解释的最小 observability / resource contract，远端门禁结果不再只依赖文本日志。
 - [ ] **PERF-P3-004**: 建立 native knowhere vs knowhere-rs 的关键路径性能领先基线
   - 背景: 当前项目目标不是停在 parity 收口，而是成为生产级平替并在关键路径上具备绝对性能优势。
   - 目标:
@@ -328,7 +329,7 @@
 
 ### P3 (语义对齐 / 生产硬化 / 性能领先)
 - [x] **SEM-P3-001**: 对齐 `GetVectorByIds` / `HasRawData` 的跨索引语义矩阵 (2026-03-09)
-- [ ] **ABI-P3-002**: 提升 FFI metadata / additional-scalar 契约，从最小摘要走向逐模块真实语义
+- [x] **ABI-P3-002**: 提升 FFI metadata / additional-scalar 契约，从最小摘要走向逐模块真实语义 (2026-03-09)
 - [ ] **PERSIST-P3-003**: 补齐 persistence / deserialize-from-file 语义矩阵与回归
 - [ ] **PERF-P3-004**: 建立 native knowhere vs knowhere-rs 的关键路径性能领先基线
 
@@ -340,6 +341,12 @@
     - [x] Sparse missing-id 与显式 doc_id 路径语义已收敛并可审计
     - [x] ScaNN reorder/raw-data gate 已收敛为稳定 contract
   - 验收: ✅ Phase 5 第一条 semantic-fidelity 尾项关闭，queue 不再保留已完成 umbrella 任务。
+- [x] **ABI-P3-002**: 提升 FFI metadata / additional-scalar 契约，从最小摘要走向逐模块真实语义 (2026-03-09)
+  - 完成情况:
+    - [x] `src/ffi.rs` 已按索引族输出 `additional_scalar` / `capabilities` / `semantics` 三层 metadata，不再停留在保守统一摘要
+    - [x] HNSW / IVF / ScaNN / Sparse 的 additional-scalar 支持矩阵与 unsupported_reason 已形成稳定 per-index contract
+    - [x] `ffi::tests::test_ffi_abi_metadata_contract` 已覆盖 null-safe、unsupported、partial-supported 与 per-index 差异场景
+  - 验收: ✅ ABI metadata / capability contract 已可解释、可回归、可审计，下一阶段应转入 persistence 语义矩阵。
 - [x] **DOCS-BASELINE-002**: 创建 FFI 能力矩阵文档 `docs/FFI_CAPABILITY_MATRIX.md` (2026-03-05)
 - [x] **PARITY-P0-003**: 添加 AnnIterator trait 定义到 `src/index.rs` (2026-03-05)
 - [x] **DOCS-BASELINE-001**: 重建 GAP/ROADMAP/TASK_QUEUE/PARITY_AUDIT 文档基线（2026-03-05）

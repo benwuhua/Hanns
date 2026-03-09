@@ -38,8 +38,9 @@ Evaluation dimensions:
 ## P3 (Semantic Fidelity / Production Readiness / Performance Advantage)
 
 - ✅ `SEM-P3-001`: `DiskANN` / `AISAQ` / `HNSW` / `IVF` / `Sparse` / `ScaNN` 的 `GetVectorByIds` / `HasRawData` Phase-5 语义尾项已完成 focused 收敛；当前不再缺“入口存在但边界语义不可解释”的 semantic-fidelity blocker。
-- 🚧 `ABI-P3-002`: FFI metadata / additional-scalar 目前仍偏“最小稳定摘要”，需要向逐模块真实语义提升；这是最小且最高价值的下一条 production-readiness 缺口。
-- 🚧 `PERSIST-P3-003`: persistence / `DeserializeFromFile` 语义矩阵尚未系统化，不足以直接宣称生产级替代完成。
+- ✅ `ABI-P3-002`: FFI metadata / additional-scalar 已从“最小稳定摘要”升级为逐索引可解释 contract；HNSW / IVF / ScaNN / Sparse 的 capability/semantics/unsupported_reason 已具备 focused FFI 回归覆盖，当前不再是活跃 P3 blocker。
+- 🚧 `PERSIST-P3-003`: persistence / `DeserializeFromFile` 语义矩阵尚未系统化，现已成为最直接的 production-readiness 缺口。
+- 🚧 `OBS-P3-005`: 当前已有基础 tracing，但生产级 metrics / trace 透传 / 资源估算 contract 仍缺位；在远端真实环境门禁已经启用后，这一缺口会直接影响可运维性与可信诊断。
 - 🚧 `PERF-P3-004`: 项目目标已明确升级为“生产级平替 + 绝对性能优势”；仍需建立 native-vs-rs 的 recall-gated 优势基线。
 
 ## 3. Validation Gaps

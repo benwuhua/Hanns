@@ -1,9 +1,23 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-09 02:34
+Last updated: 2026-03-09 12:02
 Sync baseline: 4f60908fc9ad7438b4b8ff64210481ab281009b0 from origin/main
 
 ## 轮次记录
+- 2026-03-09 12:02: **计划轮次：关闭 `ABI-P3-002` 并切换 `PERSIST-P3-003`（builder-plan）**
+  1. 复核输入：`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`memory/DEV_RESULT.json`、`memory/VERIFY_RESULT.json`、`TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`、`src/ffi.rs`、`src/index.rs`。
+  2. 调度判断：最新 `EXEC_RESULT.updated_at=2026-03-09T03:21:00Z` 晚于 `PLAN_RESULT.updated_at=2026-03-09T02:46:00Z`，因此本轮必须重新 planning，不能 skip。
+  3. 收口结论：`src/ffi.rs` 已形成逐索引 `additional_scalar` / `capabilities` / `semantics` contract，且 `ffi::tests::test_ffi_abi_metadata_contract` 已覆盖 null-safe、unsupported、partial-supported 与 per-index 差异场景；`ABI-P3-002` 当前验收已达成。
+  4. 阶段决策：按 Phase 5 的生产硬化目标，下一最小高价值缺口切换为 `PERSIST-P3-003`，先收敛 `file_save_load` / `memory_serialize` / `deserialize_from_file` 的支持矩阵与 focused regressions，而不是继续在已完成 ABI 范围空转。
+  5. 治理动作：同步更新 `TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md` 与 `memory/PLAN_RESULT.json`，将当前任务切换为更窄的 persistence 子切片。
+  状态：Phase 5 Active（ABI metadata hardening closed；persistence semantics hardening promoted）。
+- 2026-03-09 02:46: **计划轮次：ABI-P3-002 重新收口，清除陈旧 blocker 叙事（builder-plan）**
+  1. 复核输入：`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`memory/DEV_RESULT.json`、`memory/VERIFY_RESULT.json`、`TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`、`src/ffi.rs`。
+  2. 调度判断：最新 `EXEC_RESULT.updated_at=2026-03-09T02:42:05Z` 晚于 `PLAN_RESULT.updated_at=2026-03-09T02:34:00Z`，且 exec 摘要声称 required lib gate 被 HNSW parallel compatibility failure 阻塞，因此本轮不能 skip，必须先做直接调度自检与现状复核。
+  3. 现状复核：计划侧实测 `cargo test --lib -q` 在当前工作树通过（524 passed, 0 failed, 2 ignored），未复现“required lib gate 被 HNSW parallel 失败阻塞”的结论；说明 blocker 已消失或结果文件已陈旧，当前真正缺口仍是 ABI 语义矩阵未收口。
+  4. 阶段决策：不回切到新的 BUG，而是把 `ABI-P3-002` 拆成更窄的 per-index ABI 子矩阵（HNSW / IVF / ScaNN / Sparse 的 additional-scalar + index_meta 字段语义 + focused FFI regressions），避免 exec 围绕陈旧 blocker 空转。
+  5. 治理动作：同步更新 `TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md` 与 `memory/PLAN_RESULT.json`，将当前任务重写为可执行的 ABI 子切片，并把 required checks 重新绑定到现状实测通过的 gate。
+  状态：Phase 5 Active（ABI metadata hardening 继续；stale gate blocker cleared at planning layer）。
 - 2026-03-09 02:34: **计划轮次：关闭 `SEM-P3-001` 并切换 `ABI-P3-002`（builder-plan）**
   1. 复核输入：`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`memory/DEV_RESULT.json`、`memory/VERIFY_RESULT.json`、`TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`。
   2. 调度判断：最新 `EXEC_RESULT.updated_at=2026-03-09T02:14:52Z` 晚于 `PLAN_RESULT.updated_at=2026-03-09T02:02:00Z`，且 queue 首个 TODO 仍指向旧 umbrella `SEM-P3-001`，因此当前 plan 已失效，不能 skip。
