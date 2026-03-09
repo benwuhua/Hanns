@@ -8,12 +8,20 @@ Last updated: 2026-03-09 13:12 Asia/Shanghai
 
 ## Current conclusion
 
-本轮已把 blocker 从“native benchmark harness unavailable”缩小到**远端 native knowhere benchmark 重新配置时缺少 GTest package config**：
+本轮把 blocker 继续压缩成**可复现的远端 benchmark probe**，并确认 native harness 已不是“找不到入口”，而是**稳定卡在 benchmark 依赖发现链路**：
 
 - 远端源码存在 benchmark 源：`/data/work/knowhere-src/benchmark/hdf5/benchmark_float_qps.cpp`
-- 远端已有 Conan generators，可复用：`/data/work/knowhere-src/build/Release/generators`
-- 使用该 generators/toolchain 重配 `WITH_BENCHMARK=ON` 后，不再卡在 `folly`，而是继续推进到 `find_package(GTest REQUIRED)` 失败
-- 因此当前最小 concrete patch target 已明确为：**给远端 native knowhere benchmark build 补齐 GTest 发现链路**（系统包、Conan profile、或显式 `GTest_DIR`）
+- 仓内新增统一探针：`scripts/remote/native_benchmark_probe.sh`
+- 该探针会在远端先从 `/usr/src/googletest` 构建临时 GTest 安装，再用现成 Conan toolchain 重配 `WITH_BENCHMARK=ON`
+- 当前 probe 输出已固定为：
+  - `build_dir=/data/work/knowhere-build-benchmark`
+  - `configure_log=/data/work/knowhere-build-benchmark/configure.log`
+  - `build_log=/data/work/knowhere-build-benchmark/build.log`
+  - `gtest_config=/tmp/gtest-install/lib/x86_64-linux-gnu/cmake/GTest/GTestConfig.cmake`
+  - `build_exit_code=2`
+- `configure.log` 现稳定复现 `benchmark/CMakeLists.txt` 里的 `find_package(GTest REQUIRED)` 失败；即使系统已装 `libgtest-dev/googletest`，远端 knowhere benchmark 这一条配置路径仍拿不到 `GTEST_LIBRARY/GTEST_INCLUDE_DIR/GTEST_MAIN_LIBRARY`
+
+因此当前最小 concrete patch target 已进一步明确为：**修 benchmark 配置链路，让远端 knowhere benchmark 消费临时/系统 GTest，而不是继续停在模块发现失败**。
 
 ## Remote native command path
 
@@ -64,9 +72,10 @@ ssh root@knowhere-x86-hk-proxy '
 
 ## Logs / artifacts
 
+- Remote probe runner: `scripts/remote/native_benchmark_probe.sh`
 - Native configure log: `/data/work/knowhere-build-benchmark/configure.log`
 - Native build log: `/data/work/knowhere-build-benchmark/build.log`
-- Native gtest listing log: `/data/work/knowhere-build-benchmark/gtest_list.log`
+- Native gtest listing log: `/data/work/knowhere-build-benchmark/gtest_list.log`（仅当 build 成功时生成）
 - knowhere-rs candidate-path artifact: `benchmark_results/cross_dataset_sampling.json`
 - Field-mapping helper: `src/bin/native_benchmark_qps_parser.rs`
 
@@ -138,6 +147,7 @@ cargo run --bin native_benchmark_qps_parser -- \
 
 ## Recommended next exec/plan target
 
-1. 在远端 x86 上补齐 `GTest` 发现链路
-2. 拿到 `benchmark_float_qps --gtest_list_tests` 成功日志
-3. 再决定是补 `clustered_l2` fixture，还是先用原生 HDF5 harness 打首个 native-vs-rs schema-aligned baseline
+1. 优先修 `benchmark/CMakeLists.txt` / 顶层 benchmark 配置，使其能消费 probe 已准备好的 `/tmp/gtest-install`（或等价的系统/Conan GTest）
+2. 拿到 `benchmark_float_qps --gtest_list_tests` 成功日志，确认 binary surface 已真正可执行
+3. 若随后仍卡在 link/build，再收敛 BLAS/OpenBLAS 链接路径，而不是重新回到“入口不可用”的宽泛描述
+4. 只有在以上两步完成后，再决定是补 `clustered_l2` fixture，还是先用原生 HDF5 harness 打首个 native-vs-rs schema-aligned baseline
