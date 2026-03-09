@@ -4,6 +4,13 @@ Last updated: 2026-03-09 12:39
 Sync baseline: 4f60908fc9ad7438b4b8ff64210481ab281009b0 from origin/main
 
 ## 轮次记录
+- 2026-03-09 14:07: **计划轮次：将 `PERF-P3-004` 从“harness enablement”继续收窄到 GTest/CMake 构建链路修复（builder-plan）**
+  1. 复核输入：`TASK_QUEUE.md`、`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`、`docs/PERF_P3_004_NATIVE_HARNESS.md`、`scripts/remote/native_benchmark_probe.sh`。
+  2. 调度判断：最新 `EXEC_RESULT.updated_at=2026-03-09T06:15:00Z` 晚于 `PLAN_RESULT.updated_at=2026-03-09T05:08:00Z`，因此本轮 plan 已失效，不能 skip。
+  3. 现状复核：exec 已证明 native side 真实 target 存在（`benchmark_float_qps`），schema mapping 也仍有效；当前失败点不再是“找不到 harness”，而是 benchmark 配置链路稳定卡在 `find_package(GTest REQUIRED)`。
+  4. 阶段决策：将 `PERF-P3-004` 继续收窄为修通 benchmark 的 GTest/CMake 发现链路，并以 `benchmark_float_qps --gtest_list_tests` 作为本轮唯一可判定出口；只有 binary surface 真正存在后，才进入 `PERF-P3-005` 的 native-vs-rs 对照。
+  5. 治理动作：同步更新 `TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md` 与 `memory/PLAN_RESULT.json`，消除 queue 中仍停留在宽泛 harness 叙事的漂移。
+  状态：Phase 5 Active（route chosen; native benchmark blocker narrowed to concrete CMake/GTest fix）。
 - 2026-03-09 13:08: **计划轮次：将 `PERF-P3-004` 从宽泛“性能领先证明”收窄为先打通 native benchmark harness（builder-plan）**
   1. 复核输入：`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`memory/DEV_RESULT.json`、`memory/VERIFY_RESULT.json`、`TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`、`benchmark_results/recall_gated_baseline.json`、`benchmark_results/cross_dataset_sampling.json`。
   2. 调度判断：最新 `EXEC_RESULT.updated_at=2026-03-09T04:52:30Z` 晚于 `PLAN_RESULT.updated_at=2026-03-09T04:47:00Z`，且 exec 已将 blocker 明确为 `native_benchmark_harness_unavailable`，因此本轮必须重做 planning，不能 skip。

@@ -41,7 +41,7 @@ Evaluation dimensions:
 - ✅ `ABI-P3-002`: FFI metadata / additional-scalar 已从“最小稳定摘要”升级为逐索引可解释 contract；HNSW / IVF / ScaNN / Sparse 的 capability/semantics/unsupported_reason 已具备 focused FFI 回归覆盖，当前不再是活跃 P3 blocker。
 - ✅ `PERSIST-P3-003`: persistence / `DeserializeFromFile` 语义矩阵已系统化，`file_save_load` / `memory_serialize` / `deserialize_from_file` 的 supported / constrained / unsupported 边界现已可审计且具备 focused regressions。
 - ✅ `OBS-P3-005`: 最小 runtime governance contract 已收口到 `knowhere_get_index_meta`，统一暴露 `observability` / `trace_propagation` / `resource_contract` 三组字段；当前不再缺“缺少稳定 schema/透传入口/资源口径”的 P3 blocker。
-- 🚧 `PERF-P3-004`: 当前首要缺口已收敛为“远端缺少可直接运行的 native knowhere 同口径 benchmark harness”；若不先补齐这一层，性能领先结论无法进入可判定状态。
+- 🚧 `PERF-P3-004`: 当前首要缺口已进一步收敛为“远端 benchmark 构建链路在 `find_package(GTest REQUIRED)` 失败，导致 `benchmark_float_qps` 仍不可执行”；这已不再是宽泛的 harness-unavailable，而是明确的 benchmark CMake / dependency discovery 修补任务。
 - 🚧 `PERF-P3-005`: 在 harness 可用后，仍需为 `clustered_l2 + HNSW` 生成 native-vs-rs 的 recall-gated 对照基线，并据此判断是否已具备性能领先。
 
 ## 3. Validation Gaps

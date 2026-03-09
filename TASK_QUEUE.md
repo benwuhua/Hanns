@@ -3,14 +3,22 @@
 
 ## 待办 (TODO)
 
-- [ ] **PERF-P3-004**: 打通 native knowhere vs knowhere-rs 的同口径 benchmark harness（clustered-l2 / HNSW 首条主线）
-  - 背景: 最新 exec 已基于 `recall_gated_baseline` 与 `cross_dataset_sampling` 将最有胜算路径收敛为 `clustered_l2 + HNSW`，但远端 x86 环境缺少可直接运行、可复用的 native knowhere benchmark binary / harness，导致“性能领先证明”无法进入可判定状态。
+- [ ] **PERF-P3-004**: 修通 native benchmark 的 GTest/CMake 发现链路，拿到 `benchmark_float_qps` 可执行入口
+  - 背景: 最新 exec 已证明远端并非“没有 native harness”，而是已经定位到真实 target `benchmark/benchmark_float_qps.cpp`，并通过 `scripts/remote/native_benchmark_probe.sh` 将 blocker 固化为 benchmark 配置阶段的 `find_package(GTest REQUIRED)` 失败；若不先修通这条依赖发现链路，后续所有 native-vs-rs 对照都会继续空转在构建期。
   - 目标:
-    - [ ] 在既有 x86 远端上确认并固化 1 条可重复运行的 native knowhere benchmark 入口（可执行文件、构建脚本或统一 runner），避免后续每轮重新手工探路
-    - [ ] 让该入口与 knowhere-rs 现有 benchmark 方法学对齐：统一数据集（`clustered_l2`）、参数（`m=16, ef_construction=200, ef_search=128`）、ground truth 来源与输出字段（至少含 `recall_at_10` / `qps` / `runtime_seconds`）
-    - [ ] 产出最小 artifact 或 runner 文档，明确 native / rs 两侧命令、输入、输出路径与失败模式，保证下轮可以直接进入 same-methodology 对比
-    - [ ] 若远端现有源码/构建系统无法直接提供该入口，明确最小补齐切口（例如新增 benchmark target、wrapper script 或 artifact converter），并把缺口写成紧随其后的 scoped follow-up
-  - 验收: `clustered_l2 + HNSW` 路径具备可重复执行的 native 同口径 benchmark harness，且 exec 能给出至少一次可解析输出或明确、可执行的最小补齐方案；只有在 harness 可用后，才进入“性能领先证明”主任务。
+    - [ ] 在远端 x86 上让 `WITH_BENCHMARK=ON` 的 native knowhere 配置/构建链路真正识别 probe 已准备好的 GTest（临时安装或等价系统路径），不再报 `missing: GTEST_LIBRARY/GTEST_INCLUDE_DIR/GTEST_MAIN_LIBRARY`
+    - [ ] 成功构建 `benchmark_float_qps`，并拿到 `--gtest_list_tests` 可执行日志，证明 binary surface 已稳定存在而非仅停留在 CMake target 声明
+    - [ ] 把最小修复切口收敛成可复用形式：优先是 `benchmark/CMakeLists.txt` / 顶层 CMake 的依赖发现修补；若仍需额外变量注入，也必须沉淀到统一 runner / runbook，而不是依赖手工命令
+    - [ ] 保持与现有 schema mapping 对齐：确认 `benchmark_float_qps` 输出仍可映射到 `recall_at_10` / `qps` / `runtime_seconds`
+  - required_checks:
+    - [ ] `scripts/remote/native_benchmark_probe.sh` 或等价远端命令不再失败于 GTest 发现阶段
+    - [ ] `/data/work/knowhere-build-benchmark/benchmark/benchmark_float_qps --gtest_list_tests` 成功并产生日志 artifact
+    - [ ] native 输出字段映射仍与 `src/bin/native_benchmark_qps_parser.rs` 约定一致
+  - deferred_checks:
+    - [ ] `clustered_l2` synthetic fixture / adapter
+    - [ ] 首个 native-vs-rs recall-gated baseline 生成
+    - [ ] 大规模远端 profiling 与多索引 sweep
+  - 验收: `benchmark_float_qps` 在远端 x86 上可配置、可构建、可执行到 `--gtest_list_tests`，且 blocker 从“依赖发现失败”推进到真正运行数据/fixture 阶段；只有在该入口稳定后，才进入 `PERF-P3-005` 的性能领先判定。
 
 - [ ] **PERF-P3-005**: 产出 clustered-l2 / HNSW 的 native-vs-rs recall-gated 对照基线并判定是否已领先
   - 背景: `PERF-P3-004` 解决的是“能不能同口径跑”，本任务才解决“是否真的领先”。

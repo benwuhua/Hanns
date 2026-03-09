@@ -101,8 +101,8 @@ Objective:
 
 Active scoped tasks:
 
-- `PERF-P3-004`: first make the `clustered_l2 + HNSW` native-vs-rs benchmark harness runnable and schema-aligned on the remote x86 environment.
-- `PERF-P3-005`: once the harness exists, generate the first recall-gated native-vs-rs baseline and decide whether the path already leads or needs a narrow optimization follow-up.
+- `PERF-P3-004`: unblock the native benchmark build itself by fixing the remote x86 GTest/CMake discovery chain until `benchmark_float_qps --gtest_list_tests` is runnable.
+- `PERF-P3-005`: once the binary surface exists, generate the first recall-gated native-vs-rs baseline and decide whether the path already leads or needs a narrow optimization follow-up.
 
 Recently closed milestones:
 
