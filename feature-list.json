@@ -19,8 +19,9 @@
       "title": "Remote x86 bootstrap and sync authority",
       "description": "Make the existing remote x86 machine the only authoritative execution surface for long-task work. The feature is complete when session bootstrap prints the resolved remote configuration and syncs the current workspace to the remote repo directory without relying on local cargo results.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
+        "python3 -m unittest tests/test_remote_bootstrap_init.py",
         "bash init.sh",
         "bash scripts/remote/sync.sh --mode rsync",
         "bash -lc 'source scripts/remote/common.sh && load_remote_config && print_config_summary'"

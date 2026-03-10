@@ -13,13 +13,23 @@ ensure_local_command rsync
 load_remote_config
 require_remote_config REMOTE_HOST REMOTE_USER REMOTE_REPO_DIR REMOTE_TARGET_DIR REMOTE_LOG_DIR
 
+SYNC_CMD_OVERRIDE="${KNOWHERE_RS_INIT_SYNC_CMD:-}"
+PROBE_CMD_OVERRIDE="${KNOWHERE_RS_INIT_PROBE_CMD:-}"
+
 echo "=== knowhere-rs remote bootstrap ==="
 print_config_summary
 
 echo "=== syncing workspace to remote authority ==="
-bash "${REPO_ROOT}/scripts/remote/sync.sh" --mode rsync
+if [[ -n "${SYNC_CMD_OVERRIDE}" ]]; then
+    bash -lc "${SYNC_CMD_OVERRIDE}"
+else
+    bash "${REPO_ROOT}/scripts/remote/sync.sh" --mode rsync
+fi
 
 echo "=== probing remote toolchain ==="
+if [[ -n "${PROBE_CMD_OVERRIDE}" ]]; then
+    bash -lc "${PROBE_CMD_OVERRIDE}"
+else
 run_remote_script "${REMOTE_REPO_DIR}" "${REMOTE_CARGO_ENV_FILE}" "${REMOTE_RUSTUP_TOOLCHAIN}" <<'EOF'
 set -euo pipefail
 
@@ -43,5 +53,6 @@ echo "remote_branch=$(git rev-parse --abbrev-ref HEAD)"
 cargo --version
 rustc --version
 EOF
+fi
 
 echo "=== remote authority ready ==="

@@ -11,13 +11,33 @@
 
 ## Current State
 
-- Phase: worker-ready
-- Current focus: initialize durable workflow around remote x86 authority
-- Next feature: `baseline-remote-bootstrap`
+- Phase: worker-active
+- Current focus: remote x86 baseline lane
+- Next feature: `baseline-remote-rs-lib-smoke`
 - Last updated: 2026-03-10
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 
 ## Session Log
+
+### Session 1 - 2026-03-10
+- Focus: `baseline-remote-bootstrap`
+- Completed:
+  - added an automated bootstrap test for `init.sh` override injection
+  - added test-friendly sync/probe command overrides to `init.sh` without changing default remote behavior
+  - narrowed `scripts/remote/sync.sh` rsync scope to exclude heavyweight local-only directories such as `data/`, `cpp_bench_build/`, `.tmp*`, and native benchmark logs
+  - re-ran remote bootstrap and verified remote authority connectivity after the sync scope change
+- Verification:
+  - `python3 -m unittest tests/test_remote_bootstrap_init.py` -> `OK`
+  - `bash init.sh` -> success
+  - `bash scripts/remote/sync.sh --mode rsync` -> `sync_mode=rsync`
+  - `bash -lc 'source scripts/remote/common.sh && load_remote_config && print_config_summary'` -> success
+- Result:
+  - `baseline-remote-bootstrap` is now `passing`
+  - next unlocked feature is `baseline-remote-rs-lib-smoke`
+- Notes:
+  - the main bootstrap drag was rsync pulling `data/` into the authority workspace; excluding non-essential heavy directories restored fast bootstrap
+  - remote authority remained `/data/work/knowhere-rs-src` on `knowhere-x86-hk-proxy`
+- Git Commits: pending
 
 ### Session 0 - 2026-03-10
 - Focus: project initialization
