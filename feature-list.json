@@ -1,0 +1,508 @@
+{
+  "project": "knowhere-rs-non-gpu-production",
+  "created": "2026-03-10",
+  "authority_environment": "existing remote x86 machine only",
+  "requirement_docs": [
+    "TASK_QUEUE.md",
+    "DEV_ROADMAP.md",
+    "GAP_ANALYSIS.md",
+    "docs/PARITY_AUDIT.md",
+    "docs/FFI_CAPABILITY_MATRIX.md"
+  ],
+  "design_doc": "docs/superpowers/specs/2026-03-10-knowhere-rs-long-task-design.md",
+  "plan_doc": "docs/superpowers/plans/2026-03-10-knowhere-rs-long-task-init.md",
+  "selection_rule": "Pick the highest-priority failing feature whose dependencies are all passing. Performance, benchmark, and stop-go claims only count when verified on the remote x86 authority environment.",
+  "features": [
+    {
+      "id": "baseline-remote-bootstrap",
+      "category": "baseline",
+      "title": "Remote x86 bootstrap and sync authority",
+      "description": "Make the existing remote x86 machine the only authoritative execution surface for long-task work. The feature is complete when session bootstrap prints the resolved remote configuration and syncs the current workspace to the remote repo directory without relying on local cargo results.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash init.sh",
+        "bash scripts/remote/sync.sh --mode rsync",
+        "bash -lc 'source scripts/remote/common.sh && load_remote_config && print_config_summary'"
+      ],
+      "dependencies": []
+    },
+    {
+      "id": "baseline-remote-rs-lib-smoke",
+      "category": "baseline",
+      "title": "Remote Rust library smoke on authority machine",
+      "description": "Prove that the remote x86 environment can build and execute the current knowhere-rs library tests after bootstrap. This is the minimum smoke gate before any algorithmic feature is allowed to claim progress.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash init.sh",
+        "bash scripts/remote/test.sh --command \"cargo test --lib -q\"",
+        "bash scripts/remote/build.sh --no-all-targets"
+      ],
+      "dependencies": [
+        "baseline-remote-bootstrap"
+      ]
+    },
+    {
+      "id": "baseline-native-benchmark-smoke",
+      "category": "baseline",
+      "title": "Native benchmark harness smoke on remote x86",
+      "description": "Keep the upstream/native benchmark harness reachable on the remote x86 machine so later parity and leadership claims can compare against a live native baseline rather than stale logs.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/native_bootstrap.sh",
+        "bash scripts/remote/native_benchmark_probe.sh",
+        "bash scripts/remote/native_hnsw_qps_capture.sh --gtest-filter Benchmark_float_qps.TEST_HNSW"
+      ],
+      "dependencies": [
+        "baseline-remote-bootstrap"
+      ]
+    },
+    {
+      "id": "baseline-same-schema-artifact",
+      "category": "baseline",
+      "title": "Same-schema native-vs-rs artifact chain",
+      "description": "Produce a repeatable artifact chain where native and Rust benchmark rows are emitted in compatible schema so comparisons can be reviewed and replayed later sessions.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo test --bin native_benchmark_qps_parser -- --nocapture\"",
+        "bash scripts/remote/native_benchmark_probe.sh",
+        "bash scripts/remote/native_hnsw_qps_capture.sh --gtest-filter Benchmark_float_qps.TEST_HNSW"
+      ],
+      "dependencies": [
+        "baseline-remote-rs-lib-smoke",
+        "baseline-native-benchmark-smoke"
+      ]
+    },
+    {
+      "id": "baseline-recall-gate-policy-lock",
+      "category": "baseline",
+      "title": "Recall gate policy and methodology lock",
+      "description": "Lock the benchmark methodology so recall@k, search top-k, confidence tags, and ground-truth provenance cannot drift silently between sessions or between native and Rust runs.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo build --features hdf5 --bin generate_hdf5_hnsw_baseline --verbose\"",
+        "bash scripts/remote/test.sh --command \"cargo test --bin native_benchmark_qps_parser -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_recall_gated_baseline -q\""
+      ],
+      "dependencies": [
+        "baseline-same-schema-artifact"
+      ]
+    },
+    {
+      "id": "baseline-stop-go-verdict-refresh",
+      "category": "baseline",
+      "title": "Refresh baseline stop-go verdict from remote evidence",
+      "description": "Rebuild the current baseline stop-go verdict from remote x86 evidence only, so later family-level work depends on a fresh and replayable benchmark truth set.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/native_benchmark_probe.sh",
+        "bash scripts/remote/test.sh --command \"cargo build --features hdf5 --bin generate_hdf5_hnsw_baseline --verbose\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_recall_gated_baseline -q\""
+      ],
+      "dependencies": [
+        "baseline-recall-gate-policy-lock"
+      ]
+    },
+    {
+      "id": "hnsw-faiss-neighbor-selection-audit",
+      "category": "hnsw",
+      "title": "Audit HNSW neighbor selection against FAISS",
+      "description": "Pinpoint the concrete differences between the Rust HNSW build path and the FAISS/native neighbor selection heuristic, with the current remote baseline as the authoritative reference.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo test --lib hnsw -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test debug_hnsw_recall -- --nocapture\"",
+        "bash scripts/remote/native_hnsw_qps_capture.sh --gtest-filter Benchmark_float_qps.TEST_HNSW"
+      ],
+      "dependencies": [
+        "baseline-stop-go-verdict-refresh"
+      ]
+    },
+    {
+      "id": "hnsw-build-regression-tests",
+      "category": "hnsw",
+      "title": "Add HNSW build-quality regressions",
+      "description": "Add remote-verifiable regressions that fail when neighbor selection, graph connectivity, or recall-sensitive build behavior drifts again.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo test --lib hnsw -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test test_hnsw_advanced_paths -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test debug_graph_connectivity -- --nocapture\""
+      ],
+      "dependencies": [
+        "hnsw-faiss-neighbor-selection-audit"
+      ]
+    },
+    {
+      "id": "hnsw-layer0-neighbor-selection-fix",
+      "category": "hnsw",
+      "title": "Repair HNSW layer-0 neighbor quality",
+      "description": "Implement and prove the specific HNSW construction change that materially improves graph quality on the remote x86 benchmark lane without regressing correctness contracts.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo test --lib hnsw -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_cpp_compare -q\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_recall -q\""
+      ],
+      "dependencies": [
+        "hnsw-build-regression-tests"
+      ]
+    },
+    {
+      "id": "hnsw-remote-recall-benchmark",
+      "category": "hnsw",
+      "title": "Remote recall-gated HNSW benchmark refresh",
+      "description": "Re-run the HNSW benchmark lane on the remote x86 authority machine and produce an updated recall-gated artifact after any build-path repair.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo build --features hdf5 --bin generate_hdf5_hnsw_baseline --verbose\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_cpp_compare -q\"",
+        "bash scripts/remote/native_hnsw_qps_capture.sh --gtest-filter Benchmark_float_qps.TEST_HNSW"
+      ],
+      "dependencies": [
+        "hnsw-layer0-neighbor-selection-fix"
+      ]
+    },
+    {
+      "id": "hnsw-ffi-persistence-contract",
+      "category": "hnsw",
+      "title": "HNSW FFI and persistence production contract",
+      "description": "Lock the HNSW production-facing contract on the remote authority lane, including file save/load, get-by-id semantics, and metadata surfaces used by external callers.",
+      "priority": "medium",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo test --lib ffi -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test test_hnsw_advanced_paths -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --tests -q test_hnsw_high_params\""
+      ],
+      "dependencies": [
+        "hnsw-remote-recall-benchmark"
+      ]
+    },
+    {
+      "id": "hnsw-performance-lead-verdict",
+      "category": "hnsw",
+      "title": "HNSW leadership or no-go verdict",
+      "description": "End the HNSW lane with a remote-only, recall-gated verdict: production-candidate with leadership evidence, functional-but-not-leading, or no-go.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/native_hnsw_qps_capture.sh --gtest-filter Benchmark_float_qps.TEST_HNSW",
+        "bash scripts/remote/test.sh --command \"cargo build --features hdf5 --bin generate_hdf5_hnsw_baseline --verbose\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_cpp_compare -q\""
+      ],
+      "dependencies": [
+        "hnsw-remote-recall-benchmark",
+        "hnsw-ffi-persistence-contract"
+      ]
+    },
+    {
+      "id": "ivfpq-hot-path-audit",
+      "category": "ivfpq",
+      "title": "Audit real IVF-PQ hot path",
+      "description": "Separate placeholder IVF scaffolding from the real IVF-PQ hot path and define exactly which code path is eligible for parity and performance evaluation on the remote authority lane.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo test --lib ivf -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --lib ivfpq -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test debug_ivf_pq_recall -- --nocapture\""
+      ],
+      "dependencies": [
+        "baseline-stop-go-verdict-refresh"
+      ]
+    },
+    {
+      "id": "ivfpq-coarse-quantizer-regression",
+      "category": "ivfpq",
+      "title": "Coarse quantizer regressions for IVF-PQ",
+      "description": "Add remote-verifiable regressions that catch centroid search and coarse assignment mistakes before they pollute IVF-PQ recall conclusions.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo test --lib ivf -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test diagnose_ivf_cluster -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test ivf_nprobe_tradeoff -- --nocapture\""
+      ],
+      "dependencies": [
+        "ivfpq-hot-path-audit"
+      ]
+    },
+    {
+      "id": "ivfpq-adc-quality-regression",
+      "category": "ivfpq",
+      "title": "ADC and residual quality regressions for IVF-PQ",
+      "description": "Add remote regressions around PQ training, residual encoding, and ADC quality so the IVF-PQ lane has trustworthy recall diagnostics instead of ad-hoc interpretation.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo test --lib ivfpq -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test pq_perf_test -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test pq_diagnostic_test -- --nocapture\""
+      ],
+      "dependencies": [
+        "ivfpq-hot-path-audit"
+      ]
+    },
+    {
+      "id": "ivfpq-remote-recall-benchmark",
+      "category": "ivfpq",
+      "title": "Remote recall-gated IVF-PQ benchmark",
+      "description": "Run IVF-PQ on the remote x86 authority lane with ground truth and confidence tags, so the family can exit with evidence rather than impressions.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_ivf_pq_perf -q\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_recall_gated_baseline -q\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_cross_dataset_sampling -q\""
+      ],
+      "dependencies": [
+        "ivfpq-coarse-quantizer-regression",
+        "ivfpq-adc-quality-regression"
+      ]
+    },
+    {
+      "id": "ivfpq-ffi-persistence-contract",
+      "category": "ivfpq",
+      "title": "IVF-PQ production contract closure",
+      "description": "Define and verify the supported, constrained, and unsupported production-facing semantics for IVF-PQ across FFI, persistence, and metadata surfaces.",
+      "priority": "medium",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo test --lib ffi -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --tests -q test_ivf_index_trait\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_json_export -q\""
+      ],
+      "dependencies": [
+        "ivfpq-remote-recall-benchmark"
+      ]
+    },
+    {
+      "id": "ivfpq-stop-go-verdict",
+      "category": "ivfpq",
+      "title": "IVF-PQ leadership or no-go verdict",
+      "description": "End the IVF-PQ family with a remote-only verdict that is technically honest about parity, confidence, and production suitability.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_ivf_pq_perf -q\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_recall_gated_baseline -q\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_cross_dataset_sampling -q\""
+      ],
+      "dependencies": [
+        "ivfpq-remote-recall-benchmark",
+        "ivfpq-ffi-persistence-contract"
+      ]
+    },
+    {
+      "id": "diskann-scope-boundary-audit",
+      "category": "diskann",
+      "title": "Audit true DiskANN scope and comparability",
+      "description": "Define exactly which parts of the Rust DiskANN implementation are real, which are simplified, and what is allowed to participate in parity and benchmark claims on the remote authority lane.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo test --lib diskann -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test test_diskann_aisaq -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_diskann_1m -q\""
+      ],
+      "dependencies": [
+        "baseline-stop-go-verdict-refresh"
+      ]
+    },
+    {
+      "id": "diskann-placeholder-pq-regression",
+      "category": "diskann",
+      "title": "Lock placeholder PQ and simplified path boundaries",
+      "description": "Add remote-verifiable regressions that keep the current DiskANN simplifications honest, especially around placeholder PQ behavior and unsupported native-comparable claims.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo test --lib diskann -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test test_diskann_aisaq -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_compare -q\""
+      ],
+      "dependencies": [
+        "diskann-scope-boundary-audit"
+      ]
+    },
+    {
+      "id": "diskann-remote-benchmark-gate",
+      "category": "diskann",
+      "title": "Remote benchmark gate for DiskANN family",
+      "description": "Run the DiskANN family through the remote benchmark gate only after its comparability boundaries are explicit, so results can exit as credible evidence or explicit no-go.",
+      "priority": "medium",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_diskann_1m -q\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_recall_gated_baseline -q\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_cross_dataset_sampling -q\""
+      ],
+      "dependencies": [
+        "diskann-placeholder-pq-regression"
+      ]
+    },
+    {
+      "id": "diskann-stop-go-verdict",
+      "category": "diskann",
+      "title": "DiskANN parity or constrained verdict",
+      "description": "End the DiskANN family with a remote-only verdict: production-candidate, constrained, or no-go. The result must reflect the actual simplified boundary rather than API surface alone.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo test --lib diskann -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_diskann_1m -q\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_compare -q\""
+      ],
+      "dependencies": [
+        "diskann-remote-benchmark-gate"
+      ]
+    },
+    {
+      "id": "prod-feature-gated-bins-hygiene",
+      "category": "cross-cutting-prod",
+      "title": "Feature-gated bins and all-target build hygiene",
+      "description": "Fix bin-target and feature-gate hygiene so remote all-target builds do not fail on missing mains, stale feature gates, or incompatible target combinations.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/build.sh",
+        "bash scripts/remote/test.sh --command \"cargo test --tests -q\"",
+        "bash scripts/remote/test.sh --command \"cargo build --all-targets --features hdf5 --verbose\""
+      ],
+      "dependencies": [
+        "baseline-remote-rs-lib-smoke"
+      ]
+    },
+    {
+      "id": "prod-remote-full-regression",
+      "category": "cross-cutting-prod",
+      "title": "Remote full regression lane",
+      "description": "Restore a credible remote x86 full regression lane that can be reused by future worker sessions as the minimum production smoke before and after feature work.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"scripts/gate_profile_runner.sh --profile full_regression\"",
+        "bash scripts/remote/test.sh --command \"scripts/gate_profile_runner.sh --profile long_regression\"",
+        "bash scripts/remote/test.sh --command \"cargo test --lib -q\""
+      ],
+      "dependencies": [
+        "baseline-remote-rs-lib-smoke"
+      ]
+    },
+    {
+      "id": "prod-all-targets-clippy-fmt",
+      "category": "cross-cutting-prod",
+      "title": "Remote fmt and clippy gate closure",
+      "description": "Close style and lint drift on the remote authority machine so production acceptance does not rely on local-only formatting or lint checks.",
+      "priority": "medium",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo fmt --all -- --check\"",
+        "bash scripts/remote/test.sh --command \"cargo clippy --all-targets --all-features -- -D warnings\"",
+        "bash scripts/remote/build.sh"
+      ],
+      "dependencies": [
+        "prod-feature-gated-bins-hygiene",
+        "prod-remote-full-regression"
+      ]
+    },
+    {
+      "id": "prod-ffi-observability-persistence-gate",
+      "category": "cross-cutting-prod",
+      "title": "Remote FFI, observability, and persistence gate",
+      "description": "Keep the cross-cutting production contracts honest on the remote x86 lane: FFI metadata, observability schema, persistence semantics, and deserialize behavior.",
+      "priority": "medium",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo test --lib ffi -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --lib serialize -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_json_export -q\""
+      ],
+      "dependencies": [
+        "prod-remote-full-regression"
+      ]
+    },
+    {
+      "id": "prod-readme-remote-workflow-docs",
+      "category": "cross-cutting-prod",
+      "title": "Remote-first operator documentation",
+      "description": "Align README and operator-facing docs with the actual remote-x86 workflow, current benchmark truth, and long-task durable state so future sessions and humans do not follow stale instructions.",
+      "priority": "medium",
+      "status": "failing",
+      "verification_steps": [
+        "bash init.sh",
+        "python3 scripts/validate_features.py feature-list.json",
+        "bash scripts/remote/build.sh --no-all-targets"
+      ],
+      "dependencies": [
+        "prod-feature-gated-bins-hygiene"
+      ]
+    },
+    {
+      "id": "final-core-path-classification",
+      "category": "final-acceptance",
+      "title": "Classify all core CPU paths honestly",
+      "description": "Produce the final classification of HNSW, IVF-PQ, and DiskANN as production-candidate, functional-but-not-leading, constrained, or no-go, based only on remote x86 evidence.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "python3 scripts/validate_features.py feature-list.json",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_recall_gated_baseline -q\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_cross_dataset_sampling -q\""
+      ],
+      "dependencies": [
+        "hnsw-performance-lead-verdict",
+        "ivfpq-stop-go-verdict",
+        "diskann-stop-go-verdict"
+      ]
+    },
+    {
+      "id": "final-performance-leadership-proof",
+      "category": "final-acceptance",
+      "title": "Prove at least one remote performance leadership lane",
+      "description": "Demonstrate at least one core CPU path that beats native on the same remote x86 benchmark surface at the same recall gate, or explicitly fail the project completion criteria.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/native_hnsw_qps_capture.sh --gtest-filter Benchmark_float_qps.TEST_HNSW",
+        "bash scripts/remote/test.sh --command \"cargo build --features hdf5 --bin generate_hdf5_hnsw_baseline --verbose\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_cpp_compare -q\""
+      ],
+      "dependencies": [
+        "hnsw-performance-lead-verdict",
+        "final-core-path-classification"
+      ]
+    },
+    {
+      "id": "final-production-acceptance",
+      "category": "final-acceptance",
+      "title": "Final non-GPU production acceptance gate",
+      "description": "Accept the project only when remote x86 evidence shows non-GPU CPU-path replaceability, production engineering closure, and at least one credible leadership result over native.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash scripts/remote/test.sh --command \"cargo fmt --all -- --check\"",
+        "bash scripts/remote/test.sh --command \"cargo clippy --all-targets --all-features -- -D warnings\"",
+        "bash scripts/remote/test.sh --command \"scripts/gate_profile_runner.sh --profile full_regression\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "prod-all-targets-clippy-fmt",
+        "prod-ffi-observability-persistence-gate",
+        "prod-readme-remote-workflow-docs",
+        "final-core-path-classification",
+        "final-performance-leadership-proof"
+      ]
+    }
+  ]
+}

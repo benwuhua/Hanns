@@ -34,3 +34,10 @@
 - Keep commits focused by subsystem (example: `feat(idx-24): SPARSE_WAND ...`).
 - PRs should include: purpose, key changes, test commands/results, and linked task/issue IDs (`IDX-*`, `BENCH-*`, `FFI-*`) when applicable.
 - If changes affect performance or FFI behavior, attach benchmark notes and compatibility impact in the PR description.
+
+
+<!-- long-task-codex -->
+## Long Task for Codex
+This project uses a multi-session Codex workflow.
+At the start of every session, read `long-task-guide.md`, then `task-progress.md`, `feature-list.json`, and recent git history before making changes.
+<!-- /long-task-codex -->
