@@ -21,6 +21,15 @@ The existing remote x86 machine is the only authoritative execution surface.
 - Stop-go verdicts count only when backed by remote x86 artifacts.
 - Local cargo results are allowed for quick smoke or file-level iteration, but they do not justify marking a feature `passing`.
 
+## Default Autonomy Rule
+
+Future Codex sessions should continue autonomously by default.
+
+- If a documented choice already has a recommended option, take the recommended option without asking the user again.
+- If multiple paths are possible, prefer the smallest change that preserves the project goal and keeps the remote-x86 evidence chain trustworthy.
+- Only stop to ask the user when blocked by missing external information, a requirement conflict, or a materially destructive or scope-changing action.
+- Do not ask for confirmation just to continue the next queued feature.
+
 ## Session Workflow
 
 ### 1. Orient

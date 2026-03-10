@@ -15,6 +15,7 @@
 - Current focus: initialize durable workflow around remote x86 authority
 - Next feature: `baseline-remote-bootstrap`
 - Last updated: 2026-03-10
+- Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 
 ## Session Log
 

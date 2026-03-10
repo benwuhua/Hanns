@@ -11,6 +11,7 @@
 
 ### Changed
 - Long-task workflow now treats the existing remote x86 machine as the sole authority for verification and performance claims
+- Future Codex sessions now default to autonomous continuation and should only interrupt for real blockers or scope-changing decisions
 
 ### Fixed
 - None yet
