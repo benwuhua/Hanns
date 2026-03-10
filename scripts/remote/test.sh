@@ -54,15 +54,9 @@ profile="${7:-}"
 from_result="${8:-}"
 command_override="${9:-}"
 
-if [[ -f "${cargo_env_file}" ]]; then
-    # shellcheck disable=SC1090
-    source "${cargo_env_file}"
-fi
-
+source "${repo_dir}/scripts/remote/remote_env.sh"
+load_remote_cargo_env "${cargo_env_file}" "${rustup_toolchain}"
 export CARGO_TARGET_DIR="${target_dir}"
-if [[ -n "${rustup_toolchain}" ]]; then
-    export RUSTUP_TOOLCHAIN="${rustup_toolchain}"
-fi
 
 mkdir -p "${log_dir}"
 log_file="${log_dir}/test_${run_id}.log"
@@ -101,6 +95,10 @@ printf "status=running\nrun_id=%s\nstarted_at=%s\n" \
 {
     cd "${TEST_REPO_DIR}"
     git config --global --add safe.directory "${TEST_REPO_DIR}" || true
+    if [[ ! -f Cargo.toml || ! -f src/lib.rs ]]; then
+        echo "[test] invalid repo baseline: expected Cargo.toml and src/lib.rs under ${TEST_REPO_DIR}"
+        exit 92
+    fi
     if ! command -v cargo >/dev/null 2>&1; then
         echo "[test] missing cargo on remote PATH=${PATH}"
         exit 127
@@ -109,9 +107,18 @@ printf "status=running\nrun_id=%s\nstarted_at=%s\n" \
     echo "[test] cwd=$(pwd)"
     echo "[test] command=${TEST_COMMAND}"
     echo "[test] started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    runner_script="$(mktemp /tmp/knowhere-rs-test-run.XXXXXX.sh)"
+    cat >"${runner_script}" <<RUNNER
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${TEST_REPO_DIR}"
+eval "${TEST_COMMAND}"
+RUNNER
+    chmod +x "${runner_script}"
     set +e
-    bash -lc "${TEST_COMMAND}"
+    bash "${runner_script}"
     rc=$?
+    rm -f "${runner_script}"
     set -e
     printf "status=%s\nrun_id=%s\nexit_code=%s\nfinished_at=%s\nlog=%s\n" \
         "$([[ ${rc} -eq 0 ]] && printf ok || printf failed)" \

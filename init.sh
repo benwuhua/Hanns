@@ -37,14 +37,8 @@ repo_dir="${1:-}"
 cargo_env_file="${2:-$HOME/.cargo/env}"
 rustup_toolchain="${3:-}"
 
-if [[ -f "${cargo_env_file}" ]]; then
-  # shellcheck disable=SC1090
-  source "${cargo_env_file}"
-fi
-
-if [[ -n "${rustup_toolchain}" ]]; then
-  export RUSTUP_TOOLCHAIN="${rustup_toolchain}"
-fi
+source "${repo_dir}/scripts/remote/remote_env.sh"
+load_remote_cargo_env "${cargo_env_file}" "${rustup_toolchain}"
 
 cd "${repo_dir}"
 echo "remote_pwd=$(pwd)"

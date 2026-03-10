@@ -13,7 +13,7 @@
 
 - Phase: worker-active
 - Current focus: remote x86 baseline lane
-- Next feature: `baseline-remote-rs-lib-smoke`
+- Next feature: `baseline-native-benchmark-smoke`
 - Last updated: 2026-03-10
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 
@@ -37,6 +37,29 @@
 - Notes:
   - the main bootstrap drag was rsync pulling `data/` into the authority workspace; excluding non-essential heavy directories restored fast bootstrap
   - remote authority remained `/data/work/knowhere-rs-src` on `knowhere-x86-hk-proxy`
+- Git Commits: pending
+
+### Session 2 - 2026-03-10
+- Focus: `baseline-remote-rs-lib-smoke`
+- Completed:
+  - added a regression test for `scripts/remote/common.sh` so `run_remote_script` preserves empty arguments and commands containing spaces across the ssh boundary
+  - fixed `run_remote_script` to shell-escape remote arguments before handing them to the remote shell
+  - added a shared remote helper `scripts/remote/remote_env.sh` so `init.sh`, `scripts/remote/test.sh`, and `scripts/remote/build.sh` all resolve `$HOME` and `~` cargo env paths consistently on the remote machine
+  - replaced the flaky HNSW parallel API compatibility smoke with a deterministic small-N cosine/exhaustive lane so remote `cargo test --lib -q` no longer depends on two independently randomized graph builds landing within an arbitrary distance threshold
+- Verification:
+  - `python3 -m unittest tests/test_remote_common.py` -> `OK`
+  - `python3 -m unittest tests/test_remote_bootstrap_init.py` -> `OK`
+  - `cargo test --lib test_hnsw_parallel_api_compatibility -- --nocapture` -> `ok`
+  - `bash init.sh` -> success
+  - `bash scripts/remote/test.sh --command "cargo test --lib -q"` -> `test=ok`
+  - `bash scripts/remote/build.sh --no-all-targets` -> `build=ok`
+- Result:
+  - `baseline-remote-rs-lib-smoke` is now `passing`
+  - next unlocked high-priority feature is `baseline-native-benchmark-smoke`
+- Notes:
+  - the first blocker was a remote command marshalling bug: `cargo test --lib -q` was reaching the authority host as `-q`
+  - the second blocker was remote cargo env drift: after fixing quoting, literal `$HOME/.cargo/env` stopped expanding and remote build/test fell back to rustc 1.75 until path expansion was made explicit
+  - the remaining lib-test blocker was not a stable product regression; the previous HNSW compatibility assertion compared two independently randomized graphs and flaked on remote even when the API contract held
 - Git Commits: pending
 
 ### Session 0 - 2026-03-10

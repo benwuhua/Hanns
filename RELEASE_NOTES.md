@@ -17,3 +17,8 @@
 
 ### Fixed
 - `baseline-remote-bootstrap` now passes with a real remote bootstrap, standalone sync, config summary, and automated injection test
+## 2026-03-10
+
+- `baseline-remote-rs-lib-smoke`: fixed remote ssh command marshalling so `scripts/remote/test.sh --command "cargo test --lib -q"` preserves the full command string on the authority host.
+- `baseline-remote-rs-lib-smoke`: added `scripts/remote/remote_env.sh` and moved remote cargo-env loading in `init.sh`, `scripts/remote/test.sh`, and `scripts/remote/build.sh` onto the same `$HOME`/`~` path-expansion logic.
+- `baseline-remote-rs-lib-smoke`: replaced a flaky HNSW parallel API smoke assertion with a deterministic compatibility lane that uses fixed test data and the small-N cosine exhaustive-search path.

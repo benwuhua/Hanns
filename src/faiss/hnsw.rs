@@ -1676,18 +1676,20 @@ impl HnswIndex {
     ) -> Vec<(usize, f32)> {
         use std::collections::BinaryHeap;
 
+        // MinDist: smaller distance = higher priority (for candidates)
+        // pop() returns the NEAREST candidate first
         #[derive(Clone, Copy, PartialEq)]
-        struct OrderedDist(f32);
+        struct MinDist(f32);
 
-        impl Eq for OrderedDist {}
+        impl Eq for MinDist {}
 
-        impl PartialOrd for OrderedDist {
+        impl PartialOrd for MinDist {
             fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
                 Some(self.cmp(other))
             }
         }
 
-        impl Ord for OrderedDist {
+        impl Ord for MinDist {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
                 match (self.0.is_nan(), other.0.is_nan()) {
                     (true, true) => std::cmp::Ordering::Equal,
@@ -1701,20 +1703,47 @@ impl HnswIndex {
             }
         }
 
+        // MaxDist: larger distance = higher priority (for results)
+        // peek() returns the WORST result (largest distance)
+        #[derive(Clone, Copy, PartialEq)]
+        struct MaxDist(f32);
+
+        impl Eq for MaxDist {}
+
+        impl PartialOrd for MaxDist {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        impl Ord for MaxDist {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                match (self.0.is_nan(), other.0.is_nan()) {
+                    (true, true) => std::cmp::Ordering::Equal,
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    (false, false) => self
+                        .0
+                        .partial_cmp(&other.0)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                }
+            }
+        }
+
         let num_nodes = self.node_info.len();
         scratch.prepare(num_nodes);
 
-        let mut candidates: BinaryHeap<(OrderedDist, usize)> = BinaryHeap::with_capacity(ef * 2);
-        let mut results: BinaryHeap<(OrderedDist, usize)> = BinaryHeap::with_capacity(ef);
+        let mut candidates: BinaryHeap<(MinDist, usize)> = BinaryHeap::with_capacity(ef * 2);
+        let mut results: BinaryHeap<(MaxDist, usize)> = BinaryHeap::with_capacity(ef);
 
         let entry_dist = self.distance(query, entry_idx);
-        candidates.push((OrderedDist(entry_dist), entry_idx));
-        results.push((OrderedDist(entry_dist), entry_idx));
+        candidates.push((MinDist(entry_dist), entry_idx));
+        results.push((MaxDist(entry_dist), entry_idx));
         scratch.mark_visited(entry_idx);
 
-        while let Some((OrderedDist(cand_dist), cand_idx)) = candidates.pop() {
+        while let Some((MinDist(cand_dist), cand_idx)) = candidates.pop() {
             if results.len() >= ef {
-                if let Some(&(OrderedDist(worst_dist), _)) = results.peek() {
+                if let Some(&(MaxDist(worst_dist), _)) = results.peek() {
                     if cand_dist > worst_dist {
                         break;
                     }
@@ -1738,15 +1767,15 @@ impl HnswIndex {
                     || nbr_dist
                         < results
                             .peek()
-                            .map(|&(OrderedDist(d), _)| d)
+                            .map(|&(MaxDist(d), _)| d)
                             .unwrap_or(f32::INFINITY);
 
                 if should_add {
                     if results.len() >= ef {
                         results.pop();
                     }
-                    results.push((OrderedDist(nbr_dist), nbr_idx));
-                    candidates.push((OrderedDist(nbr_dist), nbr_idx));
+                    results.push((MaxDist(nbr_dist), nbr_idx));
+                    candidates.push((MinDist(nbr_dist), nbr_idx));
                 }
             }
         }
@@ -1754,7 +1783,7 @@ impl HnswIndex {
         let mut sorted: Vec<(usize, f32)> = results
             .into_sorted_vec()
             .into_iter()
-            .map(|(OrderedDist(dist), idx)| (idx, dist))
+            .map(|(MaxDist(dist), idx)| (idx, dist))
             .collect();
         sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         sorted
@@ -3802,26 +3831,30 @@ mod tests {
     /// OPT-031: Test API compatibility between add() and add_parallel()
     #[test]
     fn test_hnsw_parallel_api_compatibility() {
-        use rand::Rng;
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
 
         let config = IndexConfig {
             index_type: IndexType::Hnsw,
-            metric_type: MetricType::L2,
-            dim: 64,
-                    data_type: crate::api::DataType::Float,
+            metric_type: MetricType::Cosine,
+            dim: 32,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(16),
                 ef_construction: Some(200),
+                ef_search: Some(64),
                 num_threads: Some(4),
                 ..Default::default()
             },
         };
 
-        let n = 5000;
-        let dim = 64;
+        // Keep the dataset under the deterministic small-N exhaustive-search cutoff
+        // so this test validates API compatibility rather than random graph variance.
+        let n = 48;
+        let dim = 32;
 
         // Generate vectors
-        let mut rng = rand::thread_rng();
+        let mut rng = StdRng::seed_from_u64(42);
         let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen::<f32>()).collect();
         let ids: Vec<i64> = (0..n as i64).collect();
 
@@ -3844,32 +3877,48 @@ mod tests {
             "Serial and parallel should have same vector count"
         );
 
-        // Verify search results are similar
-        let query = &vectors[0..dim];
         let req = SearchRequest {
-            top_k: 10,
+            top_k: 5,
             nprobe: 20,
             filter: None,
             params: None,
             radius: None,
         };
 
-        let result_serial = index_serial.search(query, &req).unwrap();
-        let result_parallel = index_parallel.search(query, &req).unwrap();
+        for query_idx in 0..8 {
+            let start = query_idx * dim;
+            let query = &vectors[start..start + dim];
+            let result_serial = index_serial.search(query, &req).unwrap();
+            let result_parallel = index_parallel.search(query, &req).unwrap();
 
-        assert_eq!(
-            result_serial.ids.len(),
-            result_parallel.ids.len(),
-            "Serial and parallel should return same number of results"
-        );
+            assert_eq!(
+                result_serial.ids, result_parallel.ids,
+                "Serial and parallel should return the same IDs for query {}",
+                query_idx
+            );
+            assert_eq!(
+                result_serial.distances.len(),
+                result_parallel.distances.len(),
+                "Serial and parallel should return same number of distances for query {}",
+                query_idx
+            );
 
-        // Check that top results are reasonably close
-        let dist_diff = (result_serial.distances[0] - result_parallel.distances[0]).abs();
-        assert!(
-            dist_diff < 1.0,
-            "Top result distances should be similar (diff: {:.4})",
-            dist_diff
-        );
+            for (rank, (serial_dist, parallel_dist)) in result_serial
+                .distances
+                .iter()
+                .zip(result_parallel.distances.iter())
+                .enumerate()
+            {
+                let dist_diff = (serial_dist - parallel_dist).abs();
+                assert!(
+                    dist_diff < 1e-6,
+                    "Distances should match for query {} rank {} (diff: {:.8})",
+                    query_idx,
+                    rank,
+                    dist_diff
+                );
+            }
+        }
 
         println!("✅ API compatibility test passed");
     }

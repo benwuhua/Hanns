@@ -34,7 +34,7 @@
       "title": "Remote Rust library smoke on authority machine",
       "description": "Prove that the remote x86 environment can build and execute the current knowhere-rs library tests after bootstrap. This is the minimum smoke gate before any algorithmic feature is allowed to claim progress.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash init.sh",
         "bash scripts/remote/test.sh --command \"cargo test --lib -q\"",
