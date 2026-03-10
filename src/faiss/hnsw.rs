@@ -35,21 +35,69 @@ const REFERENCE_M_FOR_LEVEL: usize = 16;
 /// This eliminates all HashMap/linear search overhead in the hot path.
 #[derive(Clone, Debug)]
 pub struct LayerNeighbors {
-    /// Neighbor IDs and their distances at this layer
-    pub neighbors: Vec<(i64, f32)>,
+    /// Neighbor IDs at this layer. Kept densely packed because search hot paths only need IDs.
+    pub ids: Vec<i64>,
+    /// Distances used for insertion-time pruning and stable persistence layout.
+    pub dists: Vec<f32>,
 }
 
 impl LayerNeighbors {
     #[allow(dead_code)]
     fn new() -> Self {
         Self {
-            neighbors: Vec::new(),
+            ids: Vec::new(),
+            dists: Vec::new(),
         }
     }
 
     fn with_capacity(capacity: usize) -> Self {
         Self {
-            neighbors: Vec::with_capacity(capacity),
+            ids: Vec::with_capacity(capacity),
+            dists: Vec::with_capacity(capacity),
+        }
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    #[inline]
+    fn push(&mut self, id: i64, dist: f32) {
+        self.ids.push(id);
+        self.dists.push(dist);
+    }
+
+    fn truncate_to_best(&mut self, keep: usize) {
+        if self.ids.len() <= keep {
+            return;
+        }
+        let mut order: Vec<usize> = (0..self.ids.len()).collect();
+        order.sort_by(|&a, &b| self.dists[a].partial_cmp(&self.dists[b]).unwrap());
+        order.truncate(keep);
+
+        let mut new_ids = Vec::with_capacity(keep);
+        let mut new_dists = Vec::with_capacity(keep);
+        for idx in order {
+            new_ids.push(self.ids[idx]);
+            new_dists.push(self.dists[idx]);
+        }
+        self.ids = new_ids;
+        self.dists = new_dists;
+    }
+
+    /// Get neighbors as (id, dist) pairs for heuristic processing
+    fn as_pairs(&self) -> Vec<(i64, f32)> {
+        self.ids.iter().zip(self.dists.iter()).map(|(&id, &dist)| (id, dist)).collect()
+    }
+
+    /// Set neighbors from (id, dist) pairs after heuristic processing
+    fn set_from_pairs(&mut self, pairs: &[(i64, f32)]) {
+        self.ids.clear();
+        self.dists.clear();
+        for &(id, dist) in pairs {
+            self.ids.push(id);
+            self.dists.push(dist);
         }
     }
 }
@@ -84,6 +132,45 @@ impl NodeInfo {
 /// IDs are stored in order, so idx = id for sequential case (most common).
 /// For custom IDs, we maintain a separate ids Vec for lookup only when needed.
 /// OPT-024: Added num_threads for parallel build configuration.
+struct SearchScratch {
+    visited_epoch: Vec<u32>,
+    touched: Vec<usize>,
+    epoch: u32,
+}
+
+impl SearchScratch {
+    fn new() -> Self {
+        Self {
+            visited_epoch: Vec::new(),
+            touched: Vec::new(),
+            epoch: 1,
+        }
+    }
+
+    fn prepare(&mut self, len: usize) {
+        if self.visited_epoch.len() < len {
+            self.visited_epoch.resize(len, 0);
+        }
+        if self.epoch == u32::MAX {
+            self.visited_epoch.fill(0);
+            self.epoch = 1;
+        } else {
+            self.epoch += 1;
+        }
+        self.touched.clear();
+    }
+
+    #[inline]
+    fn mark_visited(&mut self, idx: usize) -> bool {
+        if self.visited_epoch[idx] == self.epoch {
+            return false;
+        }
+        self.visited_epoch[idx] = self.epoch;
+        self.touched.push(idx);
+        true
+    }
+}
+
 pub struct HnswIndex {
     config: IndexConfig,
     entry_point: Option<i64>,
@@ -673,25 +760,19 @@ impl HnswIndex {
 
         {
             let node_info = &mut self.node_info[new_idx];
-            let layer_nbrs = &mut node_info.layer_neighbors[level].neighbors;
+            let layer_nbrs = &mut node_info.layer_neighbors[level];
             for (i, &(_nbr_idx, dist)) in neighbors.iter().enumerate() {
-                layer_nbrs.push((nbr_ids[i], dist));
+                layer_nbrs.push(nbr_ids[i], dist);
             }
-            if layer_nbrs.len() > m_max {
-                layer_nbrs.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-                layer_nbrs.truncate(m_max);
-            }
+            layer_nbrs.truncate_to_best(m_max);
         }
 
         for &(nbr_idx, dist) in neighbors {
             let nbr_node_info = &mut self.node_info[nbr_idx];
             if level <= nbr_node_info.max_layer {
-                let nbr_layer_nbrs = &mut nbr_node_info.layer_neighbors[level].neighbors;
-                nbr_layer_nbrs.push((new_id, dist));
-                if nbr_layer_nbrs.len() > m_max {
-                    nbr_layer_nbrs.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-                    nbr_layer_nbrs.truncate(m_max);
-                }
+                let nbr_layer_nbrs = &mut nbr_node_info.layer_neighbors[level];
+                nbr_layer_nbrs.push(new_id, dist);
+                nbr_layer_nbrs.truncate_to_best(m_max);
             }
         }
     }
@@ -878,7 +959,10 @@ impl HnswIndex {
                 self.search_layer_idx(new_vec, curr_ep_idx, level, self.ef_construction);
 
             // Select best M neighbors using heuristic (index-based)
-            let selected = self.select_neighbors_heuristic_idx(new_vec, &candidates, self.m);
+            // Layer 0 must use the denser base-layer degree (m_max0), otherwise bulk-build
+            // under-connects the main search layer and recall collapses on larger datasets.
+            let m = if level == 0 { self.m_max0 } else { self.m };
+            let selected = self.select_neighbors_heuristic_idx(new_vec, &candidates, m);
 
             // Add bidirectional connections (uses indices directly)
             self.add_bidirectional_connections_idx(new_idx, new_id, level, &selected);
@@ -895,6 +979,7 @@ impl HnswIndex {
     /// 2. Use get_idx_from_id_fast to avoid Option overhead
     /// 3. Removed BUG-001 duplicate search extension (BUG-006 fix makes it unnecessary)
     /// 4. Early termination when candidate exceeds worst result
+    /// OPT-036: Fixed heap ordering bug - use separate types for candidates vs results
     fn search_layer_idx(
         &self,
         query: &[f32],
@@ -904,28 +989,39 @@ impl HnswIndex {
     ) -> Vec<(usize, f32)> {
         use std::collections::BinaryHeap;
 
+        /// For candidates: smaller distance = higher priority (pop returns nearest first)
+        /// This matches FAISS NodeDistFarther behavior
         #[derive(Clone, Copy, PartialEq)]
-        struct OrderedDist(f32);
+        struct MinDist(f32);
 
-        impl Eq for OrderedDist {}
-
-        impl PartialOrd for OrderedDist {
+        impl Eq for MinDist {}
+        impl PartialOrd for MinDist {
             fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
                 Some(self.cmp(other))
             }
         }
-
-        impl Ord for OrderedDist {
+        impl Ord for MinDist {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                match (self.0.is_nan(), other.0.is_nan()) {
-                    (true, true) => std::cmp::Ordering::Equal,
-                    (true, false) => std::cmp::Ordering::Greater,
-                    (false, true) => std::cmp::Ordering::Less,
-                    (false, false) => other
-                        .0
-                        .partial_cmp(&self.0)
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                }
+                // Reverse: smaller distance = "greater" in heap = popped first
+                other.0.partial_cmp(&self.0).unwrap_or(std::cmp::Ordering::Equal)
+            }
+        }
+
+        /// For results: larger distance = higher priority (peek returns worst/farthest)
+        /// This matches FAISS NodeDistCloser behavior
+        #[derive(Clone, Copy, PartialEq)]
+        struct MaxDist(f32);
+
+        impl Eq for MaxDist {}
+        impl PartialOrd for MaxDist {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+        impl Ord for MaxDist {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                // Normal: larger distance = "greater" in heap = peek returns worst
+                self.0.partial_cmp(&other.0).unwrap_or(std::cmp::Ordering::Equal)
             }
         }
 
@@ -933,18 +1029,18 @@ impl HnswIndex {
         let num_nodes = self.node_info.len();
         let mut visited = vec![false; num_nodes];
 
-        let mut candidates: BinaryHeap<(OrderedDist, usize)> = BinaryHeap::with_capacity(ef * 2);
-        let mut results: BinaryHeap<(OrderedDist, usize)> = BinaryHeap::with_capacity(ef);
+        let mut candidates: BinaryHeap<(MinDist, usize)> = BinaryHeap::with_capacity(ef * 2);
+        let mut results: BinaryHeap<(MaxDist, usize)> = BinaryHeap::with_capacity(ef);
 
         let entry_dist = self.distance(query, entry_idx);
-        candidates.push((OrderedDist(entry_dist), entry_idx));
-        results.push((OrderedDist(entry_dist), entry_idx));
+        candidates.push((MinDist(entry_dist), entry_idx));
+        results.push((MaxDist(entry_dist), entry_idx));
         visited[entry_idx] = true;
 
-        while let Some((OrderedDist(cand_dist), cand_idx)) = candidates.pop() {
-            // OPT-009: Early termination when candidate is worse than worst in results
+        while let Some((MinDist(cand_dist), cand_idx)) = candidates.pop() {
+            // OPT-036: Correct early termination - peek returns WORST (largest) distance
             if results.len() >= ef {
-                if let Some(&(OrderedDist(worst_dist), _)) = results.peek() {
+                if let Some(&(MaxDist(worst_dist), _)) = results.peek() {
                     if cand_dist > worst_dist {
                         break;
                     }
@@ -957,7 +1053,7 @@ impl HnswIndex {
             }
 
             // OPT-009: Use fast ID→Index conversion and avoid Option overhead
-            for &(nbr_id, _) in &node_info.layer_neighbors[level].neighbors {
+            for &nbr_id in &node_info.layer_neighbors[level].ids {
                 let nbr_idx = self.get_idx_from_id_fast(nbr_id);
 
                 // OPT-009: Bounds check once, then direct array access
@@ -969,30 +1065,30 @@ impl HnswIndex {
                     visited[nbr_idx] = true;
                     let nbr_dist = self.distance(query, nbr_idx);
 
-                    // OPT-009: Simplified condition check
+                    // OPT-036: Compare against WORST result (largest distance)
                     let should_add = results.len() < ef
                         || nbr_dist
                             < results
                                 .peek()
-                                .map(|&(OrderedDist(d), _)| d)
+                                .map(|&(MaxDist(d), _)| d)
                                 .unwrap_or(f32::INFINITY);
 
                     if should_add {
                         if results.len() >= ef {
                             results.pop();
                         }
-                        results.push((OrderedDist(nbr_dist), nbr_idx));
-                        candidates.push((OrderedDist(nbr_dist), nbr_idx));
+                        results.push((MaxDist(nbr_dist), nbr_idx));
+                        candidates.push((MinDist(nbr_dist), nbr_idx));
                     }
                 }
             }
         }
 
-        // Convert to sorted vector of (idx, dist)
+        // Convert to sorted vector of (idx, dist) without recomputing distances.
         let mut sorted: Vec<(usize, f32)> = results
             .into_sorted_vec()
             .into_iter()
-            .map(|(_, idx)| (idx, self.distance(query, idx)))
+            .map(|(MaxDist(dist), idx)| (idx, dist))
             .collect();
         sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         sorted
@@ -1041,6 +1137,7 @@ impl HnswIndex {
         }
 
         let mut selected: Vec<(usize, f32)> = Vec::with_capacity(m);
+        let mut pruned: Vec<(usize, f32)> = Vec::new();
 
         // Candidates are already sorted by distance (closest first)
         for &(cand_idx, cand_dist) in candidates {
@@ -1066,8 +1163,12 @@ impl HnswIndex {
             if good {
                 selected.push((cand_idx, cand_dist));
             }
+            // OPT-037: REMOVED backfill mechanism - hnswlib does NOT backfill pruned candidates
+            // Backfill was adding redundant (too similar) neighbors back, reducing graph diversity
         }
 
+        // NOTE: We do NOT backfill from pruned - hnswlib allows fewer than M neighbors
+        // when heuristic rejects candidates. This preserves graph diversity.
         selected
     }
 
@@ -1087,6 +1188,7 @@ impl HnswIndex {
         }
 
         let mut selected: Vec<(i64, f32)> = Vec::with_capacity(m);
+        let mut pruned: Vec<(i64, f32)> = Vec::new();
 
         // Candidates are already sorted by distance (closest first)
         for &(cand_id, cand_dist) in candidates {
@@ -1111,9 +1213,89 @@ impl HnswIndex {
             if good {
                 selected.push((cand_id, cand_dist));
             }
+            // OPT-037: REMOVED backfill - see select_neighbors_heuristic_idx for rationale
         }
 
+        // NOTE: No backfill - match hnswlib behavior
         selected
+    }
+
+    /// Shrink a node's layer neighbors using the heuristic algorithm.
+    ///
+    /// This is the FAISS-style approach: when a neighbor's connection list exceeds M_max,
+    /// we re-apply the heuristic (diversification) rather than just keeping the closest.
+    ///
+    /// OPT-035: This fixes the recall gap caused by truncate_to_best which only kept
+    /// closest neighbors without considering diversity.
+    fn shrink_layer_neighbors_heuristic_idx(
+        &mut self,
+        node_idx: usize,
+        level: usize,
+        m_max: usize,
+    ) {
+        let node_info = &self.node_info[node_idx];
+        if level > node_info.max_layer {
+            return;
+        }
+
+        // Get current neighbors as (idx, dist) pairs
+        let current: Vec<(usize, f32)> = node_info.layer_neighbors[level]
+            .ids
+            .iter()
+            .zip(node_info.layer_neighbors[level].dists.iter())
+            .map(|(&id, &dist)| (self.get_idx_from_id_fast(id), dist))
+            .collect();
+
+        if current.len() <= m_max {
+            return; // No need to shrink
+        }
+
+        // Sort by distance (closest first)
+        let mut sorted: Vec<(usize, f32)> = current;
+        sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+        // Apply diversification heuristic from THIS node's perspective
+        let mut selected: Vec<(usize, f32)> = Vec::with_capacity(m_max);
+        let mut pruned: Vec<(usize, f32)> = Vec::new();
+
+        for (cand_idx, cand_dist) in sorted {
+            if selected.len() >= m_max {
+                break;
+            }
+
+            // Check if candidate is diverse enough
+            let mut good = true;
+            for &(sel_idx, _sel_dist) in &selected {
+                let dist_between = self.distance_between_nodes_idx(cand_idx, sel_idx);
+                // Reject if candidate is closer to an already-selected neighbor than to this node
+                if dist_between < cand_dist {
+                    good = false;
+                    break;
+                }
+            }
+
+            if good {
+                selected.push((cand_idx, cand_dist));
+            }
+            // OPT-037: REMOVED backfill - match hnswlib behavior for better diversity
+        }
+
+        // NOTE: No backfill - this is correct hnswlib behavior
+
+        // Pre-compute IDs before mutable borrow
+        let new_neighbors: Vec<(i64, f32)> = selected
+            .iter()
+            .map(|&(idx, dist)| (self.get_id_from_idx(idx), dist))
+            .collect();
+
+        // Update the node's neighbors
+        let node_info = &mut self.node_info[node_idx];
+        let layer_nbrs = &mut node_info.layer_neighbors[level];
+        layer_nbrs.ids.clear();
+        layer_nbrs.dists.clear();
+        for (id, dist) in new_neighbors {
+            layer_nbrs.push(id, dist);
+        }
     }
 
     /// BUG-006: Calculate distance between two nodes (by index)
@@ -1160,6 +1342,7 @@ impl HnswIndex {
     /// Add bidirectional connections between nodes at a specific layer
     ///
     /// OPT-021: Neighbors store (id, dist) - convert indices to IDs when storing.
+    /// OPT-035: Use heuristic shrink instead of truncate_to_best for reverse connections.
     fn add_bidirectional_connections_idx(
         &mut self,
         new_idx: usize,
@@ -1168,6 +1351,15 @@ impl HnswIndex {
         neighbors: &[(usize, f32)],
     ) {
         let m_max = self.max_connections_for_layer(level);
+
+        // Collect nodes that may need shrinking after adding connections
+        let mut nodes_to_shrink: Vec<usize> = Vec::new();
+
+        // Pre-compute distances from neighbors to new node (to avoid borrow issues later)
+        let nbr_dists_from_nbr: Vec<f32> = neighbors
+            .iter()
+            .map(|&(nbr_idx, _)| self.distance_between_nodes_idx(nbr_idx, new_idx))
+            .collect();
 
         // Add forward connections from new node (store IDs, not indices)
         // OPT-021: Collect IDs first to avoid borrow checker issues
@@ -1178,34 +1370,41 @@ impl HnswIndex {
 
         {
             let node_info = &mut self.node_info[new_idx];
-            let layer_nbrs = &mut node_info.layer_neighbors[level].neighbors;
+            let layer_nbrs = &mut node_info.layer_neighbors[level];
 
             for (nbr_id, dist) in forward_connections {
-                layer_nbrs.push((nbr_id, dist));
+                layer_nbrs.push(nbr_id, dist);
             }
 
-            // Prune if too many connections
-            if layer_nbrs.len() > m_max {
-                layer_nbrs.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-                layer_nbrs.truncate(m_max);
+            // Check if we need shrinking
+            if layer_nbrs.ids.len() > m_max {
+                nodes_to_shrink.push(new_idx);
             }
         }
 
         // Add reverse connections
-        for &(nbr_idx, dist) in neighbors {
+        for (i, &(nbr_idx, _dist)) in neighbors.iter().enumerate() {
+            let dist_from_nbr = nbr_dists_from_nbr[i];
+
             let nbr_node_info = &mut self.node_info[nbr_idx];
 
             // Only add if this layer exists for the neighbor
             if level <= nbr_node_info.max_layer {
-                let nbr_layer_nbrs = &mut nbr_node_info.layer_neighbors[level].neighbors;
-                nbr_layer_nbrs.push((new_id, dist));
+                let nbr_layer_nbrs = &mut nbr_node_info.layer_neighbors[level];
+                nbr_layer_nbrs.push(new_id, dist_from_nbr);
 
-                // Prune if too many connections
-                if nbr_layer_nbrs.len() > m_max {
-                    nbr_layer_nbrs.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-                    nbr_layer_nbrs.truncate(m_max);
+                // Track for shrinking
+                if nbr_layer_nbrs.ids.len() > m_max {
+                    if !nodes_to_shrink.contains(&nbr_idx) {
+                        nodes_to_shrink.push(nbr_idx);
+                    }
                 }
             }
+        }
+
+        // Apply heuristic shrink to all affected nodes
+        for node_idx in nodes_to_shrink {
+            self.shrink_layer_neighbors_heuristic_idx(node_idx, level, m_max);
         }
     }
 
@@ -1467,6 +1666,100 @@ impl HnswIndex {
         all
     }
 
+    fn search_layer_idx_with_scratch(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+        ef: usize,
+        scratch: &mut SearchScratch,
+    ) -> Vec<(usize, f32)> {
+        use std::collections::BinaryHeap;
+
+        #[derive(Clone, Copy, PartialEq)]
+        struct OrderedDist(f32);
+
+        impl Eq for OrderedDist {}
+
+        impl PartialOrd for OrderedDist {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        impl Ord for OrderedDist {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                match (self.0.is_nan(), other.0.is_nan()) {
+                    (true, true) => std::cmp::Ordering::Equal,
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    (false, false) => other
+                        .0
+                        .partial_cmp(&self.0)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                }
+            }
+        }
+
+        let num_nodes = self.node_info.len();
+        scratch.prepare(num_nodes);
+
+        let mut candidates: BinaryHeap<(OrderedDist, usize)> = BinaryHeap::with_capacity(ef * 2);
+        let mut results: BinaryHeap<(OrderedDist, usize)> = BinaryHeap::with_capacity(ef);
+
+        let entry_dist = self.distance(query, entry_idx);
+        candidates.push((OrderedDist(entry_dist), entry_idx));
+        results.push((OrderedDist(entry_dist), entry_idx));
+        scratch.mark_visited(entry_idx);
+
+        while let Some((OrderedDist(cand_dist), cand_idx)) = candidates.pop() {
+            if results.len() >= ef {
+                if let Some(&(OrderedDist(worst_dist), _)) = results.peek() {
+                    if cand_dist > worst_dist {
+                        break;
+                    }
+                }
+            }
+
+            let node_info = &self.node_info[cand_idx];
+            if level > node_info.max_layer {
+                continue;
+            }
+
+            let neighbors = &node_info.layer_neighbors[level].ids;
+            for &nbr_id in neighbors {
+                let nbr_idx = self.get_idx_from_id_fast(nbr_id);
+                if nbr_idx >= num_nodes || !scratch.mark_visited(nbr_idx) {
+                    continue;
+                }
+
+                let nbr_dist = self.distance(query, nbr_idx);
+                let should_add = results.len() < ef
+                    || nbr_dist
+                        < results
+                            .peek()
+                            .map(|&(OrderedDist(d), _)| d)
+                            .unwrap_or(f32::INFINITY);
+
+                if should_add {
+                    if results.len() >= ef {
+                        results.pop();
+                    }
+                    results.push((OrderedDist(nbr_dist), nbr_idx));
+                    candidates.push((OrderedDist(nbr_dist), nbr_idx));
+                }
+            }
+        }
+
+        let mut sorted: Vec<(usize, f32)> = results
+            .into_sorted_vec()
+            .into_iter()
+            .map(|(OrderedDist(dist), idx)| (idx, dist))
+            .collect();
+        sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        sorted
+    }
+
     fn search_single(
         &self,
         query: &[f32],
@@ -1494,54 +1787,44 @@ impl HnswIndex {
         }
 
         // OPT-021: Multi-layer search with improved layer descent
-        // Start from top layer and greedily search down
-        let mut curr_ep = self.entry_point.unwrap();
-        let mut best_ep = curr_ep;
-        // OPT-015: Use fast indexing
-        let mut best_ep_dist = self.distance(query, self.get_idx_from_id_fast(curr_ep));
+        // Start from top layer and greedily search down.
+        let mut scratch = SearchScratch::new();
+        let mut curr_ep_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
+        let mut best_ep_idx = curr_ep_idx;
+        let mut best_ep_dist = self.distance(query, curr_ep_idx);
 
-        // OPT-021: Use adaptive ef for layer descent
-        // Higher ef at each layer ensures we find better entry points for lower layers
         for level in (1..=self.max_level).rev() {
-            // OPT-021: Use larger ef during layer descent for better candidate exploration
-            // This is crucial for recall - don't skimp on ef during descent
             let descent_ef = ef.max(64).min(ef * 2);
+            let results =
+                self.search_layer_idx_with_scratch(query, curr_ep_idx, level, descent_ef, &mut scratch);
 
-            let results = self.search_layer(query, curr_ep, level, descent_ef);
-
-            // OPT-021: Find the best (closest) valid result for layer descent
-            // Don't just take the first one - search all results for the closest valid entry point
-            let mut best_valid_id: Option<i64> = None;
+            let mut best_valid_idx: Option<usize> = None;
             let mut best_valid_dist = f32::MAX;
 
-            for (id, dist) in &results {
-                if filter_fn(*id)
-                    && *dist < best_valid_dist {
-                        best_valid_dist = *dist;
-                        best_valid_id = Some(*id);
-                    }
+            for (idx, dist) in &results {
+                let id = self.get_id_from_idx(*idx);
+                if filter_fn(id) && *dist < best_valid_dist {
+                    best_valid_dist = *dist;
+                    best_valid_idx = Some(*idx);
+                }
             }
 
-            // Update entry point if we found a valid result
-            if let Some(best_id) = best_valid_id {
-                curr_ep = best_id;
+            if let Some(best_idx) = best_valid_idx {
+                curr_ep_idx = best_idx;
                 if best_valid_dist < best_ep_dist {
-                    best_ep = best_id;
+                    best_ep_idx = best_idx;
                     best_ep_dist = best_valid_dist;
                 }
-            } else if !results.is_empty() {
-                // No valid result found, use the first result anyway (might lead to valid ones below)
-                curr_ep = results[0].0;
+            } else if let Some((fallback_idx, _)) = results.first() {
+                curr_ep_idx = *fallback_idx;
             }
         }
 
-        // OPT-021: Final search at layer 0 with full ef
-        // Use the best entry point found during descent
-        let results = self.search_layer(query, best_ep, 0, ef);
+        let results = self.search_layer_idx_with_scratch(query, best_ep_idx, 0, ef, &mut scratch);
 
-        // Apply filter and return top k
         let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
-        for (id, dist) in results {
+        for (idx, dist) in results {
+            let id = self.get_id_from_idx(idx);
             if filter_fn(id) {
                 final_results.push((id, dist));
                 if final_results.len() >= k {
@@ -1706,7 +1989,7 @@ impl HnswIndex {
                 continue;
             }
 
-            for &(nbr_id, _) in &node_info.layer_neighbors[level].neighbors {
+            for &nbr_id in &node_info.layer_neighbors[level].ids {
                 if visited.insert(nbr_id) {
                     // Check bitset early to prune filtered nodes
                     // OPT-015: Use fast indexing
@@ -1769,7 +2052,7 @@ impl HnswIndex {
 
             // Count layer 0 neighbors
             if !node_info.layer_neighbors.is_empty() {
-                total_neighbors_l0 += node_info.layer_neighbors[0].neighbors.len();
+                total_neighbors_l0 += node_info.layer_neighbors[0].len();
             }
         }
 
@@ -1823,10 +2106,10 @@ impl HnswIndex {
 
             // Connections for each layer
             for layer_idx in 0..=node_info.max_layer {
-                let layer_nbrs = &node_info.layer_neighbors[layer_idx].neighbors;
+                let layer_nbrs = &node_info.layer_neighbors[layer_idx];
                 file.write_all(&(layer_nbrs.len() as u32).to_le_bytes())?;
 
-                for &(nbr_id, dist) in layer_nbrs {
+                for (&nbr_id, &dist) in layer_nbrs.ids.iter().zip(layer_nbrs.dists.iter()) {
                     file.write_all(&nbr_id.to_le_bytes())?;
                     file.write_all(&dist.to_le_bytes())?;
                 }
@@ -1941,9 +2224,7 @@ impl HnswIndex {
 
                     let nbr_id = i64::from_le_bytes(id_buf);
                     let dist = f32::from_le_bytes(dist_buf);
-                    node_info.layer_neighbors[layer_idx]
-                        .neighbors
-                        .push((nbr_id, dist));
+                    node_info.layer_neighbors[layer_idx].push(nbr_id, dist);
                 }
             }
 
@@ -2050,8 +2331,8 @@ impl HnswIndex {
                     }
 
                     // Get neighbors at this layer
-                    let neighbors = &node_info.layer_neighbors[level].neighbors;
-                    for &(nbr_id, _) in neighbors {
+                    let neighbors = &node_info.layer_neighbors[level].ids;
+                    for &nbr_id in neighbors {
                         // OPT-021: Use helper method instead of HashMap lookup
                         if let Some(nbr_idx) = self.get_idx_from_id(nbr_id) {
                             if !visited[nbr_idx] {
@@ -2151,8 +2432,8 @@ impl HnswIndex {
                     break;
                 }
 
-                let neighbors = &node_info.layer_neighbors[level_above].neighbors;
-                for &(nbr_id, _) in neighbors {
+                let neighbors = &node_info.layer_neighbors[level_above].ids;
+                for &nbr_id in neighbors {
                     // OPT-021: Use helper method instead of HashMap lookup
                     if let Some(nbr_idx) = self.get_idx_from_id(nbr_id) {
                         let d = self.distance(unreachable_vec, nbr_idx);
@@ -2189,11 +2470,11 @@ impl HnswIndex {
                 let nbr_max_layer = self.node_info[nbr_idx].max_layer;
                 if level <= nbr_max_layer {
                     let nbr_layer_nbrs =
-                        &mut self.node_info[nbr_idx].layer_neighbors[level].neighbors;
+                        &mut self.node_info[nbr_idx].layer_neighbors[level];
 
                     // Check if edge already exists
-                    if !nbr_layer_nbrs.iter().any(|&(id, _)| id == unreachable_id) {
-                        nbr_layer_nbrs.push((unreachable_id, 0.0));
+                    if !nbr_layer_nbrs.ids.iter().any(|&id| id == unreachable_id) {
+                        nbr_layer_nbrs.push(unreachable_id, 0.0);
                         add_count += 1;
                     }
                 }
@@ -2272,7 +2553,7 @@ impl HnswIndex {
                 continue;
             }
 
-            for &(nbr_id, _) in &node_info.layer_neighbors[level].neighbors {
+            for &nbr_id in &node_info.layer_neighbors[level].ids {
                 // OPT-021: Use helper method instead of HashMap lookup
                 if let Some(nbr_idx) = self.get_idx_from_id(nbr_id) {
                     if visited.insert(nbr_idx) {
@@ -3591,5 +3872,47 @@ mod tests {
         );
 
         println!("✅ API compatibility test passed");
+    }
+
+    #[test]
+    fn test_select_neighbors_heuristic_no_backfill_matches_hnswlib() {
+        // OPT-037: Verify that heuristic does NOT backfill pruned candidates
+        // This matches hnswlib behavior - preserve diversity by not adding redundant neighbors
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(2),
+                ef_construction: Some(8),
+                ..Default::default()
+            },
+        };
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0, 0.0, // candidate 0
+            0.1, 0.0, // candidate 1, close to candidate 0
+            0.2, 0.0, // candidate 2, also close enough to be pruned in diversification pass
+        ];
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        // Candidates where 1 and 2 are too close to each other (both near query)
+        let candidates = vec![(0usize, 0.1f32), (1usize, 0.2f32), (2usize, 5.0f32)];
+        let selected = index.select_neighbors_heuristic_idx(&[0.0, 0.0], &candidates, 2);
+
+        // OPT-037: hnswlib does NOT backfill, so we may get fewer than M neighbors
+        // when heuristic rejects candidates for being too similar
+        assert!(
+            selected.len() <= 2,
+            "heuristic should not exceed M, but may return fewer if candidates are too similar"
+        );
+        assert!(
+            selected.len() >= 1,
+            "heuristic should always select at least the nearest candidate"
+        );
+        assert_eq!(selected[0].0, 0, "nearest good candidate should stay selected");
     }
 }
