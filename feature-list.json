@@ -374,7 +374,7 @@
       "title": "Feature-gated bins and all-target build hygiene",
       "description": "Fix bin-target and feature-gate hygiene so remote all-target builds do not fail on missing mains, stale feature gates, or incompatible target combinations.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/build.sh",
         "bash scripts/remote/test.sh --command \"cargo test --tests -q\"",

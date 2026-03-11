@@ -217,11 +217,13 @@ impl HnswIndex {
         // OPT-029: Higher default ef_construction for better graph quality
         let ef_construction = config.params.ef_construction.unwrap_or(400).max(1);
 
-        // BUG-006 FIX: Use standard HNSW level multiplier = 1/ln(M), same as C++ hnswlib.
-        // This ensures consistent layer distribution with the reference implementation.
-        // For M=16: level_multiplier = 1/ln(16) ≈ 0.361
-        // This results in ~94% nodes at layer 0, which is the expected behavior.
-        let level_multiplier = 1.0 / (m as f32).ln();
+        // BUG-001 FIX: keep the default layer distribution stable across M values.
+        // High-M builds collapse into a near-single-layer graph when we derive ml from the
+        // runtime M value. Allow explicit overrides, otherwise use the reference distribution.
+        let level_multiplier = config
+            .params
+            .ml
+            .unwrap_or_else(|| 1.0 / (REFERENCE_M_FOR_LEVEL as f32).ln());
 
         // OPT-024: Get number of threads from config or use default (num_cpus)
         let num_threads = config.params.num_threads.unwrap_or_else(|| {
