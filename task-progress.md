@@ -12,9 +12,9 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: remote x86 baseline lane
-- Next feature: `baseline-native-benchmark-smoke`
-- Last updated: 2026-03-10
+- Current focus: `baseline-native-benchmark-smoke`
+- Next feature: `baseline-native-benchmark-smoke` (blocked on official native benchmark runtime/build instability)
+- Last updated: 2026-03-11
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 
 ## Session Log
@@ -38,6 +38,43 @@
   - the main bootstrap drag was rsync pulling `data/` into the authority workspace; excluding non-essential heavy directories restored fast bootstrap
   - remote authority remained `/data/work/knowhere-rs-src` on `knowhere-x86-hk-proxy`
 - Git Commits: pending
+
+### Session 3 - 2026-03-11
+- Focus: `HNSW-P3-002` local level-multiplier repair
+- Completed:
+  - added `tests/test_hnsw_level_multiplier.rs` to prove that high-M default layer distribution had collapsed locally and that `IndexParams.ml` override was being ignored
+  - fixed `src/faiss/hnsw.rs` so `HnswIndex::new()` now honors `config.params.ml` and otherwise defaults to the reference-M layer distribution already documented in BUG-001 artifacts
+- Verification:
+  - `cargo test --test test_hnsw_level_multiplier -- --nocapture` -> `2 passed`
+  - `cargo test --lib test_random_level_distribution -- --nocapture` -> `ok`
+  - `cargo test --lib test_multilayer_structure -- --nocapture` -> `ok`
+- Result:
+  - local regression for HNSW level distribution and `ml` override is now fixed
+  - no remote benchmark verdict claimed; next session must re-run the remote recall-gated HNSW lane before treating this as parity progress
+- Notes:
+  - pre-fix local regression showed `M=64 avg_level≈0.015`, consistent with a collapsed multi-layer graph
+  - this session intentionally stopped after the minimum implementation repair plus local evidence, because remote x86 remains the authority surface
+
+### Session 4 - 2026-03-11
+- Focus: `baseline-native-benchmark-smoke`
+- Completed:
+  - re-ran the official native bootstrap/probe flow on the remote x86 authority and confirmed the active upstream/native workspace is `/data/work/knowhere-native-src` at commit `bc613be25bee42c7dfdb9d62501db9bdbabcfda7`
+  - reproduced a fresh-runtime abort from the rebuilt official `benchmark_float_qps` binary for both `--gtest_list_tests` and `Benchmark_float_qps.TEST_HNSW`
+  - ran a non-destructive `WITH_LIGHT` experiment in an isolated remote worktree to test whether the telemetry crash could be bypassed without touching the official checkout
+  - narrowed the light-mode failure chain to three upstream blockers: `KNOHWERE_WITH_LIGHT` typos in `src/index/sparse/sparse_inverted_index.h`, missing `#include "knowhere/comp/task.h"` in `src/index/sparse/sparse_index_node.cc`, and an unconditional `find_package(opentelemetry-cpp)` from fetched `milvus-common` even after `conan install -o with_light=True`
+- Verification:
+  - `bash init.sh` -> success
+  - `bash scripts/remote/native_bootstrap.sh` -> success (`conan=Conan version 1.66.0`)
+  - `bash scripts/remote/native_benchmark_probe.sh` -> build succeeded, then `/data/work/knowhere-native-logs/gtest_list.log` aborted with `Metric name grpc.xds_client.resource_updates_valid has already been registered.`
+  - `bash scripts/remote/native_hnsw_qps_capture.sh --gtest-filter Benchmark_float_qps.TEST_HNSW` -> nonzero exit (`134`), same duplicate-metric abort in `/data/work/knowhere-native-logs/native_hnsw_qps_20260311T003259Z.log`
+  - isolated `WITH_LIGHT` worktree experiment -> `/data/work/knowhere-native-logs/light2-build.log` failed on `WaitAllSuccess`; `/data/work/knowhere-native-logs/light3-configure.log` failed because `milvus-common` still required `opentelemetry-cpp`
+- Result:
+  - `baseline-native-benchmark-smoke` remains `failing`
+  - older claims that the native harness was "available" are stale for the freshly rebuilt official upstream binary; the earlier successful HNSW log came from a pre-rebuild binary, not the current official build output
+  - the next session should either carry an explicit, auditable temporary patch set in the remote probe flow or treat official native benchmark smoke on commit `bc613be25bee42c7dfdb9d62501db9bdbabcfda7` as an upstream blocker
+- Notes:
+  - the active runtime abort happens before benchmark body execution and is therefore not a dataset-methodology issue yet
+  - `WITH_LIGHT` is not currently a clean escape hatch because the upstream source tree and fetched `milvus-common` dependency graph are not internally consistent under light mode
 
 ### Session 2 - 2026-03-10
 - Focus: `baseline-remote-rs-lib-smoke`

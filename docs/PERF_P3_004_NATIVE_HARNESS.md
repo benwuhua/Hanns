@@ -2,6 +2,20 @@
 
 Last updated: 2026-03-09 13:12 Asia/Shanghai
 
+## 2026-03-11 update
+
+The "harness enabled" conclusion below is stale for the freshly rebuilt official upstream binary.
+
+- On the active official native workspace `/data/work/knowhere-native-src` at commit `bc613be25bee42c7dfdb9d62501db9bdbabcfda7`, both `benchmark_float_qps --gtest_list_tests` and `Benchmark_float_qps.TEST_HNSW` now abort before entering the benchmark body with `Metric name grpc.xds_client.resource_updates_valid has already been registered.`
+- The earlier successful HNSW capture came from a pre-rebuild binary and must not be treated as evidence that the current official harness is still available.
+- A follow-up isolated `WITH_LIGHT` probe narrowed a possible workaround path, but it did not unblock the harness:
+  - `src/index/sparse/sparse_inverted_index.h` still contains `KNOHWERE_WITH_LIGHT` typo guards
+  - `src/index/sparse/sparse_index_node.cc` misses `#include "knowhere/comp/task.h"` for `WaitAllSuccess`
+  - even with `conan install -o with_light=True`, fetched `milvus-common` still fails configure because it unconditionally requires `opentelemetry-cpp`
+- Current truth: PERF-P3-004 should be treated as regressed/blocked on current official upstream until either a minimal patch set is carried explicitly in the remote harness or upstream fixes the native dependency graph.
+
+See also `docs/PERF_P3_005_NATIVE_VS_RS.md` for the up-to-date blocker chain.
+
 ## Goal
 
 把 `clustered_l2 + HNSW` 的 native knowhere 侧 benchmark 入口收敛成一个**可重复执行、可映射到 knowhere-rs schema** 的最小 runbook；如果本轮仍不能直接跑通，则必须把 blocker 缩成具体依赖/补丁目标，而不是停留在“native harness unavailable”的宽泛表述。
@@ -10,7 +24,8 @@ Last updated: 2026-03-09 13:12 Asia/Shanghai
 
 本轮已把 PERF-P3-004 从“定位 blocker”推进到**实际拿到 native benchmark executable surface**：
 
-- 远端源码存在 benchmark 源：`/data/work/knowhere-src/benchmark/hdf5/benchmark_float_qps.cpp`
+- 远端源码现在应固定在**隔离 native workspace**：`/data/work/knowhere-native-src/benchmark/hdf5/benchmark_float_qps.cpp`
+- native baseline 源默认使用 **Zilliz 官方 knowhere**：`https://github.com/zilliztech/knowhere.git`
 - 统一探针 `scripts/remote/native_benchmark_probe.sh` 现已具备两段 bootstrap：
   - 若远端存在 `/usr/src/googletest`，直接本地构建/安装临时 GTest
   - 若不存在，则自动 shallow clone `googletest v1.14.0` 到 `/tmp/googletest-src` 后构建/安装到 `/tmp/gtest-install`
@@ -31,9 +46,9 @@ Last updated: 2026-03-09 13:12 Asia/Shanghai
 ```bash
 ssh root@knowhere-x86-hk-proxy '
 set -euo pipefail
-src=/data/work/knowhere-src
-base=/data/work/knowhere-src/build/Release
-build=/data/work/knowhere-build-benchmark
+src=/data/work/knowhere-native-src
+base=/data/work/knowhere-native-src/build/Release
+build=/data/work/knowhere-native-build-benchmark
 rm -rf "$build"
 mkdir -p "$build"
 cmake -S "$src" -B "$build" \
@@ -57,8 +72,8 @@ cmake -S "$src" -B "$build" \
 
 ```bash
 ssh root@knowhere-x86-hk-proxy '
-cmake --build /data/work/knowhere-build-benchmark --target benchmark_float_qps -j4 \
-  > /data/work/knowhere-build-benchmark/build.log 2>&1
+cmake --build /data/work/knowhere-native-build-benchmark --target benchmark_float_qps -j4 \
+  > /data/work/knowhere-native-build-benchmark/build.log 2>&1
 '
 ```
 
@@ -66,17 +81,17 @@ cmake --build /data/work/knowhere-build-benchmark --target benchmark_float_qps -
 
 ```bash
 ssh root@knowhere-x86-hk-proxy '
-/data/work/knowhere-build-benchmark/benchmark/benchmark_float_qps --gtest_list_tests \
-  > /data/work/knowhere-build-benchmark/gtest_list.log 2>&1
+/data/work/knowhere-native-build-benchmark/benchmark/benchmark_float_qps --gtest_list_tests \
+  > /data/work/knowhere-native-build-benchmark/gtest_list.log 2>&1
 '
 ```
 
 ## Logs / artifacts
 
 - Remote probe runner: `scripts/remote/native_benchmark_probe.sh`
-- Native configure log: `/data/work/knowhere-build-benchmark/configure.log`
-- Native build log: `/data/work/knowhere-build-benchmark/build.log`
-- Native gtest listing log: `/data/work/knowhere-build-benchmark/gtest_list.log`（仅当 build 成功时生成）
+- Native configure log: `/data/work/knowhere-native-logs/configure.log`
+- Native build log: `/data/work/knowhere-native-logs/build.log`
+- Native gtest listing log: `/data/work/knowhere-native-logs/gtest_list.log`（仅当 build 成功时生成）
 - knowhere-rs candidate-path artifact: `benchmark_results/cross_dataset_sampling.json`
 - Field-mapping helper: `src/bin/native_benchmark_qps_parser.rs`
 
@@ -129,7 +144,7 @@ cargo run --bin native_benchmark_qps_parser -- \
 
 ## Methodology note
 
-当前 native knowhere 自带 benchmark 入口偏向 HDF5/ANN benchmark 套件，不直接包含 `clustered_l2` synthetic generator；因此本轮先完成两件事：
+当前 native knowhere 自带 benchmark 入口偏向 HDF5/ANN benchmark 套件，不直接包含 `clustered_l2` synthetic generator；native 基线现在必须运行在**隔离目录**（`/data/work/knowhere-native-*`），避免与 `pipnn` 的远端工作树互相污染。因此本轮先完成两件事：
 
 1. 固化 **native HNSW benchmark entrypoint + log schema**
 2. 把 blocker 缩到 **GTest dependency** 这一层
