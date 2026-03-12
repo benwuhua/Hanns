@@ -1,9 +1,0 @@
-{
-  "continue": true,
-  "reason": "queue_non_empty",
-  "next_task_id": "PARITY-P1-008",
-  "suggested_delay_seconds": 120,
-  "suggested_timeout_seconds": 3600,
-  "failed_stage": "full_regression_tests",
-  "updated_at": "2026-03-07T01:03:45Z"
-}

@@ -27,3 +27,17 @@ cpp_bench_build/
 *.fvecs
 *.ivecs
 *.hdf5
+
+# agent/runtime state
+memory/*.json
+
+# temp probes
+.tmp_*
+
+# python cache
+__pycache__/
+*.pyc
+
+# raw native benchmark logs
+benchmark_results/native_logs/
+benchmark_results/native_hnsw_qps_*.log
