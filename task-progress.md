@@ -11,14 +11,37 @@
 
 ## Current State
 
-- Phase: worker-active
-- Current focus: `hnsw-authority-rerun-and-verdict-refresh` (the first HNSW build-path rework is now landed; the remaining tracked step is to rerun authority evidence and decide whether the historical verdict actually moves)
-- Next feature: `hnsw-authority-rerun-and-verdict-refresh` (this is the last tracked HNSW reopen feature; any follow-up beyond it depends on what the refreshed authority evidence says)
+- Phase: worker-complete
+- Current focus: `none` (all tracked HNSW reopen features are now closed; the first authority refresh improved parts of the build path but did not move the historical HNSW family verdict, so any second iteration must start from a new candidate-search-centered feature inventory)
+- Next feature: `none` (the tracked reopen line is closed at 35/35; if HNSW is reopened again, the next honest target is a candidate-search rework plus a real recall-gated authority rerun rather than more verdict maintenance)
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 34/35 features passing (97%)
+- Progress: 35/35 features passing (100%)
 
 ## Session Log
+
+### Session 43 - 2026-03-12
+- Focus: `hnsw-authority-rerun-and-verdict-refresh`
+- Completed:
+  - reran the authority `bench_hnsw_reopen_profile`, `bench_hnsw_cpp_compare`, and `bench_hnsw_reopen_progress` lanes after the first bulk-build rework, then pulled the refreshed remote `benchmark_results/hnsw_reopen_profile_round1.json` back into the local worktree
+  - recorded the mixed authority result explicitly: profiled build wall clock improved from `17006.687ms` to `16018.719ms` (about `5.8%` faster), while `neighbor_selection`, `connection_update`, and `layer_descent` all shrank, but `candidate_search` grew from `8667.369ms` to `9086.895ms` and sample-search qps fell from `1410.104` to `1329.255`
+  - confirmed that the historical compare lane still passes unchanged, so the current HNSW family verdict remains `functional-but-not-leading`; this first reopen slice produced a useful bottleneck refinement, not enough authority evidence to rewrite `benchmark_results/hnsw_p3_002_final_verdict.json`
+- Verification:
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_profile -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen/test_20260312T072331Z_99668.log`)
+  - first parallel attempts at the compare/progress replays hit the shared remote wrapper lock and returned `status=conflict` (`/data/work/knowhere-rs-logs-hnsw-reopen/test_20260312T072331Z_99669.log`, `/data/work/knowhere-rs-logs-hnsw-reopen/test_20260312T072331Z_99671.log`); final evidence comes from the serialized reruns below
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_cpp_compare -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen/test_20260312T072549Z_118.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_progress -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen/test_20260312T072619Z_220.log`)
+  - `cargo test --test bench_hnsw_cpp_compare -q` -> `ok`
+  - `cargo test --test bench_hnsw_reopen_progress -q` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 35 features (35 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-authority-rerun-and-verdict-refresh` is now `passing`
+  - the tracked HNSW reopen line is fully closed at `35/35`, but the historical HNSW family verdict remains unchanged on current authority evidence
+- Notes:
+  - this feature closes because the refreshed authority evidence is now explicit and replayable, not because HNSW has reclaimed a production-candidate path
+  - if HNSW is reopened again, the next smallest honest algorithm target is `candidate_search`; another family-verdict change would require a fresh recall-gated same-schema authority benchmark, not just these contract/profile lanes
+- Git Commits: pending
 
 ### Session 42 - 2026-03-12
 - Focus: `hnsw-build-quality-rework`

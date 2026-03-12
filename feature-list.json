@@ -575,7 +575,7 @@
       "title": "Refresh authority evidence after HNSW rework",
       "description": "Re-run the remote x86 HNSW compare and reopen progress lanes after the first algorithm rework, then decide whether the HNSW family verdict has materially improved or whether the next reopen iteration must target a different bottleneck.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash init.sh",
         "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen bash scripts/remote/test.sh --command \"cargo test --features long-tests --test bench_hnsw_reopen_profile -- --ignored --nocapture\"",

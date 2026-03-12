@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-12 07:22
+Last updated: 2026-03-12 15:28
 Sync baseline: f841df2955e06eb8c6d6f5e7cb8316941fb9c550 from origin/main
 
 ## 轮次记录
+- 2026-03-12 15:28: **builder-loop：收口 `hnsw-authority-rerun-and-verdict-refresh`，刷新第一轮 HNSW reopen authority 结果并确认历史 verdict 暂不改写（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_profile_round1.json`、`tests/bench_hnsw_reopen_profile.rs`、`tests/bench_hnsw_reopen_progress.rs`、`tests/bench_hnsw_cpp_compare.rs`、`docs/superpowers/plans/2026-03-12-hnsw-reopen-algorithm-line.md`。
+  2. 阶段结论：第一刀 bulk-build rework 需要一个真正的 authority refresh 来回答“历史 HNSW verdict 有没有动”。刷新后的 reopen profile 证明 build path 的 `neighbor_selection` / `connection_update` / `layer_descent` 的确下降了，但 `candidate_search` 不降反升，并且 sample-search qps 也回落，因此这轮最多只能判成“瓶颈更清楚”，不能判成 family-level improvement。
+  3. 本轮执行：重新跑 authority `bench_hnsw_reopen_profile`，再串行回放 `bench_hnsw_cpp_compare -q` 与 `bench_hnsw_reopen_progress -q`；初始并行尝试触发了 remote wrapper 的共享锁冲突，所以最终 evidence 全部来自串行 reruns。随后把远端生成的 `benchmark_results/hnsw_reopen_profile_round1.json` 拉回本地并和 rework 前版本对比，确认 build wall clock 从 `17006.687ms` 降到 `16018.719ms`，但 `candidate_search` 从 `8667.369ms` 升到 `9086.895ms`，sample-search qps 从 `1410.104` 降到 `1329.255`。
+  4. 验证结果：`bash init.sh` 通过；authority `bench_hnsw_reopen_profile` 日志为 `/data/work/knowhere-rs-logs-hnsw-reopen/test_20260312T072331Z_99668.log`；最终串行 authority compare/progress replays 日志为 `/data/work/knowhere-rs-logs-hnsw-reopen/test_20260312T072549Z_118.log` 与 `/data/work/knowhere-rs-logs-hnsw-reopen/test_20260312T072619Z_220.log`；本地 `cargo test --test bench_hnsw_cpp_compare -q`、`cargo test --test bench_hnsw_reopen_progress -q` 与 `python3 scripts/validate_features.py feature-list.json` 均通过。
+  5. 后续主缺口：tracked reopen line 已经没有未关闭 feature，但这不等于 HNSW verdict 变了。若要开启第二轮算法攻关，下一条最小诚实目标应直接是 `candidate_search`，并且只有新的 recall-gated same-schema authority artifact 才有资格改写 `benchmark_results/hnsw_p3_002_final_verdict.json`。
+  状态：Phase 6 Closed（tracked HNSW reopen line closed；historical family verdict unchanged）。
 - 2026-03-12 07:22: **builder-loop：收口 `hnsw-build-quality-rework`，交付第一刀真实 HNSW 算法改动（plan+exec）**
   1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_profile_round1.json`、`src/faiss/hnsw.rs`、`tests/bench_hnsw_reopen_progress.rs`、`tests/bench_hnsw_cpp_compare.rs`。
   2. 阶段结论：round-1 profiler 已经给出明确的“先切 candidate_search”方向，但真正落地前还需要一个语义回归把 bulk path 的弱连接维护钉住。新的 deterministic layer-0 regression 随后证明，当前 `add_parallel()` 会把中心节点的 reverse neighbors 维持成 `{0,1,2}`，而 repeated single-node insertion 的强语义路径会保留 `{1,4,5,6}` 这一组多样化邻居。

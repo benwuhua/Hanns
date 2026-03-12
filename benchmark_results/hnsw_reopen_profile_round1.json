@@ -2,12 +2,12 @@
   "authority_scope": "remote_x86_only",
   "baseline_source": "benchmark_results/hnsw_reopen_baseline.json",
   "benchmark_lane": "hnsw_reopen_build_path_profile_round1",
-  "build_wall_clock_ms": 17006.687167,
+  "build_wall_clock_ms": 16018.719114,
   "call_counts": {
-    "candidate_search_calls": 12804,
-    "connection_update_calls": 12804,
+    "candidate_search_calls": 12793,
+    "connection_update_calls": 12793,
     "layer_descent_calls": 47996,
-    "neighbor_selection_calls": 12804,
+    "neighbor_selection_calls": 12793,
     "repair_calls": 1
   },
   "config": {
@@ -25,51 +25,51 @@
   "family": "HNSW",
   "hotspot_ranking": [
     {
-      "calls": 12804,
-      "milliseconds": 8667.369133999999,
-      "share_of_profiled_time": 0.5108084319390026,
+      "calls": 12793,
+      "milliseconds": 9086.894657,
+      "share_of_profiled_time": 0.5684467001194524,
       "stage": "candidate_search"
     },
     {
-      "calls": 12804,
-      "milliseconds": 5231.719192,
-      "share_of_profiled_time": 0.30832957907925024,
+      "calls": 12793,
+      "milliseconds": 4218.876566999999,
+      "share_of_profiled_time": 0.2639192544039232,
       "stage": "neighbor_selection"
     },
     {
-      "calls": 12804,
-      "milliseconds": 1971.4142639999998,
-      "share_of_profiled_time": 0.11618462457607183,
+      "calls": 12793,
+      "milliseconds": 1709.939051,
+      "share_of_profiled_time": 0.10696824907038625,
       "stage": "connection_update"
     },
     {
       "calls": 47996,
-      "milliseconds": 1096.783806,
-      "share_of_profiled_time": 0.06463857803416259,
+      "milliseconds": 968.872491,
+      "share_of_profiled_time": 0.06060952516063308,
       "stage": "layer_descent"
     },
     {
       "calls": 1,
-      "milliseconds": 0.658125,
-      "share_of_profiled_time": 0.00003878637151279498,
+      "milliseconds": 0.899523,
+      "share_of_profiled_time": 0.00005627124560508154,
       "stage": "repair"
     }
   ],
   "recommended_first_rework_target": "build_time_candidate_search",
   "repair_operations": 1,
   "sample_search": {
-    "qps": 1410.1038213174604,
+    "qps": 1329.2545434595309,
     "query_count": 128,
-    "search_wall_clock_ms": 90.773458
+    "search_wall_clock_ms": 96.294574
   },
   "task_id": "HNSW-REOPEN-PROFILE-ROUND1",
   "timing_buckets": {
-    "candidate_search_ms": 8667.369133999999,
-    "connection_update_ms": 1971.4142639999998,
-    "layer_descent_ms": 1096.783806,
-    "neighbor_selection_ms": 5231.719192,
-    "repair_ms": 0.658125
+    "candidate_search_ms": 9086.894657,
+    "connection_update_ms": 1709.939051,
+    "layer_descent_ms": 968.872491,
+    "neighbor_selection_ms": 4218.876566999999,
+    "repair_ms": 0.899523
   },
-  "total_profiled_ms": 16967.944520999998,
+  "total_profiled_ms": 15985.482289,
   "vectors_added": 12000
 }
