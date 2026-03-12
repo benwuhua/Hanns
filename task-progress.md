@@ -12,13 +12,37 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `hnsw-round4-authority-same-schema-rerun`
-- Next feature: `hnsw-round4-authority-same-schema-rerun` (final remaining round-4 feature)
+- Current focus: `none`
+- Next feature: `none`
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 46/47 features passing (98%)
+- Progress: 47/47 features passing (100%)
 
 ## Session Log
+
+### Session 55 - 2026-03-12
+- Focus: `hnsw-round4-authority-same-schema-rerun`
+- Completed:
+  - tightened `tests/bench_hnsw_reopen_round4.rs` again so round 4 now requires `benchmark_results/hnsw_reopen_round4_authority_summary.json`, then used the missing-artifact failure as the TDD red signal for the final authority closure slice
+  - reran the authoritative round-4 surfaces: fresh Rust same-schema HDF5 row, fresh native HNSW capture via linkfix fallback, and a fresh round-4 synthetic profile; then synced the updated `benchmark_results/rs_hnsw_sift128.full_k100.json` and `benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json` back into the local worktree
+  - created `benchmark_results/hnsw_reopen_round4_authority_summary.json`, which records the honest round-4 outcome: Rust HNSW improved from `553.060` to `819.471` qps while recall rose from `0.9943` to `0.9959`, native also rose from `10792.646` to `12487.076`, and the native-over-Rust gap narrowed from `19.5x` to `15.2x`; that is a real round-4 gain versus the reopen baseline, but it still lands about `2.9%` worse than the already archived historical HNSW verdict band (`~14.8x`), so round 4 closes as `soft_stop` and does not justify a later verdict-refresh feature
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round4 -- --nocapture` -> initial `FAIL` (missing `benchmark_results/hnsw_reopen_round4_authority_summary.json`), then `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round4 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round4 bash scripts/remote/test.sh --command "cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T115946Z_42625.log`)
+  - `bash scripts/remote/native_hnsw_qps_capture.sh --log-dir /data/work/knowhere-rs-logs-hnsw-reopen-round4 --gtest-filter Benchmark_float_qps.TEST_HNSW` -> `exit_code=0` via linkfix fallback (`/data/work/knowhere-rs-logs-hnsw-reopen-round4/native_hnsw_qps_linkfix_20260312T121538Z.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round4 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round4 bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_round4_profile -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T121650Z_45259.log`)
+  - `bash scripts/remote/sync.sh --mode rsync` -> `sync_mode=rsync`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round4 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round4 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round4 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T122210Z_46060.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 47 features (47 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-round4-authority-same-schema-rerun` is now `passing`
+  - all tracked features are now `passing` again
+  - round 4 is archived as `soft_stop`; the historical HNSW family verdict remains `functional-but-not-leading`
+- Notes:
+  - round 4 disproved the harder failure mode for the layer-0 parity hypothesis: same-schema Rust HNSW really did move a lot on the authority lane, not just on synthetic profile surfaces
+  - it still did not beat the historical `functional-but-not-leading` evidence band, so any future HNSW work now requires a new tracked hypothesis rather than an implicit continuation of round 4
+- Git Commits: pending
 
 ### Session 54 - 2026-03-12
 - Focus: `hnsw-layer0-searcher-core-rework`
@@ -44,7 +68,7 @@
 - Notes:
   - this feature deliberately does not claim a same-schema HNSW win; it closes because the Rust layer-0 search core now materially matches the native searcher shape more closely and the authority-backed audit artifact proves the structural change is real
   - the historical HNSW family verdict remains `functional-but-not-leading` until fresh round-4 same-schema Rust/native evidence says otherwise
-- Git Commits: pending
+- Git Commits: `f68a95d`
 
 ### Session 53 - 2026-03-12
 - Focus: `hnsw-layer0-searcher-audit`

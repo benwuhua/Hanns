@@ -8,12 +8,12 @@
       "index": "HNSW(Rust)",
       "params": "M=16 | efConstruction=100, ef=138, top_k=100, recall_at=10",
       "thread_num": 8,
-      "qps": 553.060494112464,
-      "recall_at_10": 0.9942999999999994,
+      "qps": 819.4711142115274,
+      "recall_at_10": 0.9958999999999993,
       "ground_truth_source": "ann_benchmarks_hdf5_neighbors",
       "confidence": "trusted",
       "confidence_explanation": "",
-      "runtime_seconds": 1.808120469,
+      "runtime_seconds": 1.220299267,
       "source": "knowhere_rs_hnsw_hdf5"
     }
   ]

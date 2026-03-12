@@ -153,7 +153,7 @@ Exit criteria:
 - Production-relevant persistence / FFI metadata semantics are stable and auditable.
 - At least one core non-GPU path shows repeatable, recall-gated performance leadership over native knowhere. Not met on the current authority evidence; the final program verdict is therefore archived as `not accepted` in `benchmark_results/final_production_acceptance.json`.
 
-## Phase 6: HNSW Reopen Algorithm Push — 🔄 Active (round 4 layer-0 searcher parity)
+## Phase 6: HNSW Reopen Algorithm Push — ✅ Closed (round 4 soft-stop archived)
 
 Objective:
 
@@ -173,8 +173,8 @@ Active scoped tasks:
 - `hnsw-reopen-round4-activation`: closed; `benchmark_results/hnsw_reopen_round4_baseline.json` now freezes round 3 as a soft-stop baseline and officially activates the fourth HNSW line around `layer0_searcher_parity`
 - `hnsw-layer0-searcher-audit`: closed; `benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json` started by pinning native `NeighborSetDoublePopList + distances_batch_4` against the Rust `dual_binary_heap + scalar_pointer_fast_path` layer-0 search core, and is now refreshed to show the post-rework ordered-pool shape (`layer0_query_distance≈23.185ms`, `layer0_batch4_calls=3960`, `sample-search qps≈2603.588`)
 - `hnsw-layer0-searcher-core-rework`: closed; the Rust `L2 + no-filter` layer-0 search core now uses scratch-owned ordered frontier/result pools plus a batch-4 query-distance helper, while upper layers and filter-bearing paths keep their historical contracts
-- `hnsw-round4-authority-same-schema-rerun`: active; the next step is to rerun the same-schema Rust/native authority lane and decide whether round 4 is another stop or the first reopen line strong enough to justify a verdict-refresh discussion
+- `hnsw-round4-authority-same-schema-rerun`: closed; `benchmark_results/hnsw_reopen_round4_authority_summary.json` now records the final round-4 same-schema result: Rust HNSW improved to `819.471` qps with recall `0.9959`, native rose to `12487.076` qps, and the gap narrowed from `19.5x` to `15.2x`, but that still remains slightly worse than the already archived historical `functional-but-not-leading` evidence band, so round 4 also closes as `soft_stop`
 
 Phase exit criteria:
 
-- HNSW round 4 produces a fresh same-schema authority result after the layer-0 parity cut, and the repo explicitly records whether that result justifies a follow-on verdict-refresh feature or another stop.
+- HNSW round 4 produces a fresh same-schema authority result after the layer-0 parity cut, and the repo explicitly records whether that result justifies a follow-on verdict-refresh feature or another stop. Met; the recorded result is another `soft_stop`, and future HNSW work now requires a new tracked hypothesis.

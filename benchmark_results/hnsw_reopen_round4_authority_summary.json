@@ -1,0 +1,47 @@
+{
+  "task_id": "HNSW-REOPEN-ROUND4-AUTHORITY-SUMMARY",
+  "family": "HNSW",
+  "authority_scope": "remote_x86_only",
+  "round4_target": "layer0_searcher_parity",
+  "historical_verdict_source": "benchmark_results/hnsw_p3_002_final_verdict.json",
+  "round4_baseline_source": "benchmark_results/hnsw_reopen_round4_baseline.json",
+  "round4_audit_source": "benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json",
+  "same_schema_sources": {
+    "rust": "benchmark_results/rs_hnsw_sift128.full_k100.json",
+    "native_log": "/data/work/knowhere-rs-logs-hnsw-reopen-round4/native_hnsw_qps_linkfix_20260312T121538Z.log"
+  },
+  "authority_logs": [
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T115946Z_42625.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round4/native_hnsw_qps_linkfix_20260312T121538Z.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T121650Z_45259.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T122210Z_46060.log"
+  ],
+  "same_schema_current": {
+    "rust_recall_at_10": 0.9958999999999993,
+    "rust_qps": 819.4711142115274,
+    "native_recall_at_10": 0.95,
+    "native_qps": 12487.076,
+    "native_over_rust_qps_ratio": 15.237969689773289
+  },
+  "delta_vs_round4_baseline": {
+    "rust_recall_at_10_delta": 0.0015999999999999348,
+    "rust_qps_pct": 48.170249536009926,
+    "native_qps_pct": 15.699857106403737,
+    "native_over_rust_qps_ratio_pct": -21.914245627098637
+  },
+  "profile_refresh_current": {
+    "sample_search_qps": 2156.639634649071,
+    "layer0_query_distance_ms": 25.630897,
+    "upper_layer_query_distance_ms": 4.834029999999999,
+    "layer0_batch4_calls": 3986,
+    "recommended_next_target": "round4_same_schema_authority_rerun"
+  },
+  "historical_verdict_band_comparison": {
+    "historical_native_over_rust_qps_ratio": 14.803655169580505,
+    "current_ratio_pct_vs_historical": 2.933832997442698
+  },
+  "verdict_refresh_allowed": false,
+  "next_action": "soft_stop",
+  "summary": "Round 4 did produce a materially stronger authority-backed same-schema HNSW row: Rust moved from 553.060494112464 to 819.4711142115274 qps (+48.2%) while recall rose from 0.9942999999999994 to 0.9958999999999993, and the refreshed round-4 synthetic profile also improved (`sample_search_qps` +17.8%, `layer0_query_distance_ms` -17.5%). Native HNSW, however, also rose from 10792.646 to 12487.076 qps, so the native-over-Rust gap only narrowed from 19.5x to 15.2x. That is a real round-4 gain versus the reopen baseline, but it still sits slightly worse than the already archived historical HNSW verdict band (~14.8x native-over-Rust), so this evidence does not justify a later verdict-refresh feature yet.",
+  "action": "Keep benchmark_results/hnsw_p3_002_final_verdict.json unchanged, archive round 4 as a soft-stop on the current authority evidence, and only reopen HNSW again with a new tracked hypothesis if future work can beat the current functional-but-not-leading evidence band rather than merely recover toward it."
+}

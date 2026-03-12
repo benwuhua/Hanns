@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-12 11:52
-Sync baseline: 5fda5e8cc7f54f6bbd7b9971292a2745469bfec4 from main
+Last updated: 2026-03-12 12:22
+Sync baseline: f68a95db959f4a5a24fbec57a2cadb317c6169ae from main
 
 ## 轮次记录
+- 2026-03-12 12:22: **builder-loop：收口 `hnsw-round4-authority-same-schema-rerun`，给第四轮 HNSW reopen 做真实 authority same-schema 终判（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round4_baseline.json`、`benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json`、`tests/bench_hnsw_reopen_round4.rs`、`docs/superpowers/plans/2026-03-12-hnsw-round4-layer0-searcher-parity.md`。
+  2. 阶段结论：round 4 已经拿到真实 layer-0 parity rework，剩下唯一值得回答的问题是：这次 ordered-pool + batch-distance cut 能不能把 authority same-schema Rust row 推到足以重开 HNSW family verdict。没有 fresh Rust/native same-schema evidence，就不能把 round 4 记成成功，也不能把这条 reopen line无限延长。
+  3. 本轮执行：先把 `tests/bench_hnsw_reopen_round4.rs` 再次升级成要求 `benchmark_results/hnsw_reopen_round4_authority_summary.json` 的默认-lane contract，并用缺失 artifact 的失败做 TDD red；随后 authority 侧重跑 Rust same-schema HDF5 benchmark、native HNSW capture、以及 `bench_hnsw_reopen_round4_profile`，再把 fresh `benchmark_results/rs_hnsw_sift128.full_k100.json` 和 `benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json` 回传到本地；最后新增 `benchmark_results/hnsw_reopen_round4_authority_summary.json`，明确记录 round 4 的真实结果是“same-schema 有大幅改善，但仍不足以重开 family verdict”。
+  4. 验证结果：本地 `cargo test --test bench_hnsw_reopen_round4 -- --nocapture` 先因缺失 `benchmark_results/hnsw_reopen_round4_authority_summary.json` 失败再转绿；`bash init.sh` 通过；authority Rust same-schema rerun `generate_hdf5_hnsw_baseline` 通过，日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T115946Z_42625.log`；native capture 通过 linkfix fallback，日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round4/native_hnsw_qps_linkfix_20260312T121538Z.log`；authority round-4 synthetic profile rerun 通过，日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T121650Z_45259.log`；summary artifact 回推远端后，authority contract replay `bench_hnsw_reopen_round4 -q` 通过，日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T122210Z_46060.log`。
+  5. 后续主缺口：当前 tracked reopen line 已经结束，不存在下一条活动 feature。若未来仍要继续 HNSW，必须先提出新的 authority-backed hypothesis，而不是继续默认延长这一轮已经被证据归档为 `soft_stop` 的 layer-0 parity line。
+  状态：Phase 6 Closed（round 4 soft-stop archived；all tracked features passing again）。
 - 2026-03-12 11:52: **builder-loop：收口 `hnsw-layer0-searcher-core-rework`，把 round-4 layer-0 parity 假设落成真正的搜索核心改动（plan+exec）**
   1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json`、`tests/bench_hnsw_reopen_round4.rs`、`tests/bench_hnsw_reopen_round4_profile.rs`、`src/faiss/hnsw.rs`、`src/simd.rs`、`docs/superpowers/plans/2026-03-12-hnsw-round4-layer0-searcher-parity.md`。
   2. 阶段结论：round 4 已经不缺“native-vs-Rust layer-0 形状差异是否存在”的证据，真正该回答的是 Rust 能不能先把自己的 layer-0 search core 改成更像 native 的 ordered-pool + batch-distance 路径，再看 same-schema authority lane 是否买账。继续停留在 `dual_binary_heap + scalar_pointer_fast_path` 已经没有信息增益。

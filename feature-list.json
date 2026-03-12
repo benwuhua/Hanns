@@ -786,7 +786,7 @@
       "title": "Refresh round 4 same-schema authority evidence",
       "description": "Re-run the remote same-schema recall-gated HNSW benchmark after the round-4 layer-0 parity rework and decide whether the historical HNSW family verdict may move or the new line should stop again.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash init.sh",
         "bash scripts/remote/test.sh --command \"cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95\"",

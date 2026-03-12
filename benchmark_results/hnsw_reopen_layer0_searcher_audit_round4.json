@@ -1,8 +1,8 @@
 {
   "authority_scope": "remote_x86_only",
   "batch_distance_call_counts": {
-    "layer0_batch4_calls": 3960,
-    "layer0_scalar_distance_calls": 11202
+    "layer0_batch4_calls": 3986,
+    "layer0_scalar_distance_calls": 11124
   },
   "batch_distance_mode": {
     "native_layer0_query_distance": "distances_batch_4",
@@ -12,20 +12,20 @@
   },
   "benchmark_lane": "hnsw_reopen_layer0_searcher_audit_round4",
   "call_counts": {
-    "distance_calls": 32689,
+    "distance_calls": 33210,
     "entry_descent_calls": 384,
-    "frontier_pops": 20319,
-    "frontier_pushes": 23980,
+    "frontier_pops": 20373,
+    "frontier_pushes": 24088,
     "layer0_candidate_search_calls": 128,
-    "pruned_candidates": 15180,
-    "visited_marks": 27042
+    "pruned_candidates": 15152,
+    "visited_marks": 27068
   },
   "candidate_search_breakdown": {
-    "candidate_pruning_ms": 0.728545,
-    "distance_compute_ms": 29.716988999999998,
-    "entry_descent_ms": 6.689450000000001,
-    "frontier_ops_ms": 3.137418,
-    "visited_ops_ms": 7.205468
+    "candidate_pruning_ms": 1.37476,
+    "distance_compute_ms": 30.464927,
+    "entry_descent_ms": 5.197837000000001,
+    "frontier_ops_ms": 4.09099,
+    "visited_ops_ms": 10.034184999999999
   },
   "config": {
     "ef_construction": 200,
@@ -40,45 +40,45 @@
   },
   "dataset_source": "synthetic_sift_like_128d",
   "distance_compute_breakdown": {
-    "layer0_query_distance_ms": 23.184724,
+    "layer0_query_distance_ms": 25.630897,
     "node_node_distance_ms": 0.0,
-    "upper_layer_query_distance_ms": 6.532265
+    "upper_layer_query_distance_ms": 4.834029999999999
   },
   "distance_compute_call_counts": {
-    "layer0_query_distance_calls": 27042,
+    "layer0_query_distance_calls": 27068,
     "node_node_distance_calls": 0,
-    "upper_layer_query_distance_calls": 5647
+    "upper_layer_query_distance_calls": 6142
   },
   "family": "HNSW",
   "hotspot_ranking": [
     {
-      "calls": 32689,
-      "milliseconds": 29.716988999999998,
-      "share_of_profiled_time": 0.6259124303596603,
+      "calls": 33210,
+      "milliseconds": 30.464927,
+      "share_of_profiled_time": 0.5954519131213152,
       "stage": "distance_compute"
     },
     {
-      "calls": 27042,
-      "milliseconds": 7.205468,
-      "share_of_profiled_time": 0.15176476956527327,
+      "calls": 27068,
+      "milliseconds": 10.034184999999999,
+      "share_of_profiled_time": 0.19612305832419044,
       "stage": "visited_ops"
     },
     {
       "calls": 384,
-      "milliseconds": 6.689450000000001,
-      "share_of_profiled_time": 0.14089616909941413,
+      "milliseconds": 5.197837000000001,
+      "share_of_profiled_time": 0.10159426890281924,
       "stage": "entry_descent"
     },
     {
-      "calls": 44299,
-      "milliseconds": 3.137418,
-      "share_of_profiled_time": 0.06608169237583741,
+      "calls": 44461,
+      "milliseconds": 4.09099,
+      "share_of_profiled_time": 0.07996040240175757,
       "stage": "frontier_ops"
     },
     {
-      "calls": 15180,
-      "milliseconds": 0.728545,
-      "share_of_profiled_time": 0.015344938599815032,
+      "calls": 15152,
+      "milliseconds": 1.37476,
+      "share_of_profiled_time": 0.026870357249917563,
       "stage": "candidate_pruning"
     }
   ],
@@ -94,9 +94,9 @@
     "src/faiss/hnsw.rs"
   ],
   "sample_search": {
-    "qps": 2603.5883916326607,
+    "qps": 2156.639634649071,
     "query_count": 128,
-    "search_wall_clock_ms": 49.162917
+    "search_wall_clock_ms": 59.351594
   },
   "search_core_shape": {
     "native_layer0_candidate_container": "NeighborSetDoublePopList",
@@ -106,5 +106,5 @@
     "rust_scratch_reuse_scope": "visited_epoch_and_layer0_pools"
   },
   "task_id": "HNSW-REOPEN-LAYER0-SEARCHER-AUDIT-ROUND4",
-  "total_profiled_ms": 47.477869999999996
+  "total_profiled_ms": 51.162698999999996
 }

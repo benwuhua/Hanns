@@ -1,6 +1,6 @@
 # Knowhere-RS Gap Analysis (Non-GPU)
 
-Last updated: 2026-03-12 11:52 UTC
+Last updated: 2026-03-12 12:22 UTC
 Scope: Non-GPU production parity against C++ knowhere
 
 ## 1. Baseline and Method
@@ -37,13 +37,13 @@ Evaluation dimensions:
 
 ## P3 (Core Implementation / Semantic Fidelity / Production Readiness / Performance Advantage)
 
-- ✅ `HNSW-REOPEN-001`: round 4 is now active around `layer0_searcher_parity`.
+- ✅ `HNSW-REOPEN-001`: round 4 has now closed as `soft_stop`.
   - `benchmark_results/hnsw_p3_002_final_verdict.json` remains the current historical truth: HNSW is still `functional-but-not-leading`.
   - `benchmark_results/hnsw_reopen_round2_authority_summary.json` still records the round-2 hard stop: the authority lane moved from `710.962` down to `521.031` qps while native BF16 stayed near `10519.683`.
   - `benchmark_results/hnsw_reopen_round3_authority_summary.json` still records the round-3 soft stop: Rust HNSW improved from `521.031` to `553.060` qps while recall improved from `0.9923` to `0.9943`, but native also moved to `10792.646` qps, so the throughput gap only narrowed from `20.2x` to `19.5x`.
-  - `benchmark_results/hnsw_reopen_round4_baseline.json` now freezes that soft-stop outcome as the starting point for a narrower round-4 hypothesis: native-vs-Rust `layer0_searcher_parity`.
-  - `benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json` now records the post-rework synthetic state instead of just the pre-rework gap: native layer-0 still uses `NeighborSetDoublePopList + distances_batch_4`, while the current Rust path now uses `ordered_pool + batch4_pointer_fast_path`, with `layer0_batch4_calls=3960`, `layer0_query_distance≈23.185ms`, and `sample_search.qps≈2603.588`.
-  - The tracked reopen line is therefore no longer waiting on another synthetic parity cut: round 4 now has a real layer-0 search-core rework in place, the historical family verdict is still unchanged, and the next required step is the fresh same-schema authority rerun that decides whether this structural improvement moves the trusted Rust HNSW row.
+  - `benchmark_results/hnsw_reopen_round4_baseline.json` froze that soft-stop outcome as the starting point for a narrower round-4 hypothesis: native-vs-Rust `layer0_searcher_parity`.
+  - `benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json` now records the final round-4 synthetic state after the core rework: native layer-0 still uses `NeighborSetDoublePopList + distances_batch_4`, while the current Rust path uses `ordered_pool + batch4_pointer_fast_path`, with `layer0_batch4_calls=3986`, `layer0_query_distance≈25.631ms`, and `sample_search.qps≈2156.640`.
+  - `benchmark_results/hnsw_reopen_round4_authority_summary.json` records the final round-4 authority outcome: Rust same-schema HNSW improved to `819.471` qps at recall `0.9959`, native rose to `12487.076` qps, and the gap narrowed from `19.5x` to `15.2x`; that is a real gain versus the reopen baseline, but it still sits about `2.9%` worse than the already archived historical HNSW verdict band (`~14.8x`), so round 4 closes as `soft_stop` and does not justify a verdict-refresh feature.
 - ✅ `CORE-P0-001`: 远端 x86 SIMD 验证链已恢复可执行并取得新鲜证据。最新复核中，本地 `cargo test --lib -q`、远端 `cargo test --features simd simd::tests -- --nocapture`、远端 `cargo test --lib --features simd test_x86_simd_l2_reduction_matches_scalar_on_irregular_input -- --nocapture` 均已通过；`default+simd` 不再因 toolchain/脚本漂移阻断后续核心路径工作。
 - ✅ `HNSW-P1-001`: HNSW 已完成首轮远端 before/after artifact 落地；当前证据显示 recall 基本持平（`0.217 -> 0.215`）但 qps 大幅提升（`~1621 -> ~19235`），由于 recall 仍低于可信阈值，这条结果已被诚实归档为 `recheck required / no-go`，不再作为当前活动 blocker。
 - ✅ `IVFPQ-P1-002`: IVF/PQ 已完成 focused reality audit，并留下 `benchmark_results/ivfpq_p1_002_focused.json` 作为可审计 no-go / recheck-required artifact。结论已明确：`src/faiss/ivf.rs` 是 placeholder coarse-assignment scaffold，真实热点路径在 `src/faiss/ivfpq.rs`。
@@ -108,5 +108,5 @@ Primary modules for closure verification:
 Historical final artifacts remain explicit, but the repo is no longer in a pure terminal state:
 
 1. `benchmark_results/final_production_acceptance.json` 仍然是当前项目级历史结论：`not accepted on current remote x86 evidence`。
-2. 当前唯一活动中的 reopen feature 链是 round 4：它围绕 `layer0_searcher_parity` 展开，并且仍然要求新的 authority-backed HNSW artifacts 才能推进 family verdict 叙事。
-3. Round 3 已经完成并归档为 `soft_stop`：same-schema authority evidence 的确改善了 Rust HNSW，但改善幅度仍不足以重开 family-level leadership 或 project-level acceptance 叙事；round 4 只是基于该软停基线重新定义了更窄的下一条假设。
+2. 当前没有活动中的 tracked reopen feature 链；round 4 已经拿到 fresh authority summary 并再次归档为 `soft_stop`。
+3. Round 3 和 round 4 都证明 HNSW 还有真实优化空间，但它们都没有产出足以重开 family-level leadership 或 project-level acceptance 叙事的新证据；如果未来还要继续 HNSW，必须先提出新的 authority-backed hypothesis。

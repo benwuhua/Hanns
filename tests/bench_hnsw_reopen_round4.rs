@@ -4,6 +4,8 @@ use std::fs;
 const HNSW_REOPEN_ROUND4_BASELINE_PATH: &str = "benchmark_results/hnsw_reopen_round4_baseline.json";
 const HNSW_REOPEN_ROUND4_AUDIT_PATH: &str =
     "benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json";
+const HNSW_REOPEN_ROUND4_AUTHORITY_SUMMARY_PATH: &str =
+    "benchmark_results/hnsw_reopen_round4_authority_summary.json";
 
 fn load_hnsw_reopen_round4_baseline() -> Value {
     let content = fs::read_to_string(HNSW_REOPEN_ROUND4_BASELINE_PATH)
@@ -16,6 +18,14 @@ fn load_hnsw_reopen_round4_audit() -> Value {
     let content = fs::read_to_string(HNSW_REOPEN_ROUND4_AUDIT_PATH)
         .expect("HNSW reopen round 4 audit artifact must exist before the audit lane can pass");
     serde_json::from_str(&content).expect("HNSW reopen round 4 audit artifact must be valid JSON")
+}
+
+fn load_hnsw_reopen_round4_authority_summary() -> Value {
+    let content = fs::read_to_string(HNSW_REOPEN_ROUND4_AUTHORITY_SUMMARY_PATH).expect(
+        "HNSW reopen round 4 authority summary artifact must exist before the authority lane can pass",
+    );
+    serde_json::from_str(&content)
+        .expect("HNSW reopen round 4 authority summary artifact must be valid JSON")
 }
 
 #[test]
@@ -86,5 +96,56 @@ fn hnsw_reopen_round4_requires_layer0_audit_artifact() {
             .as_u64()
             .is_some_and(|calls| calls > 0),
         "round 4 audit artifact must record non-zero batch-4 calls after the core rework"
+    );
+}
+
+#[test]
+fn hnsw_reopen_round4_requires_authority_summary_artifact() {
+    let summary = load_hnsw_reopen_round4_authority_summary();
+
+    assert_eq!(summary["task_id"], "HNSW-REOPEN-ROUND4-AUTHORITY-SUMMARY");
+    assert_eq!(summary["family"], "HNSW");
+    assert_eq!(summary["authority_scope"], "remote_x86_only");
+    assert_eq!(summary["round4_target"], "layer0_searcher_parity");
+    assert_eq!(
+        summary["historical_verdict_source"],
+        "benchmark_results/hnsw_p3_002_final_verdict.json"
+    );
+    assert_eq!(
+        summary["round4_baseline_source"],
+        "benchmark_results/hnsw_reopen_round4_baseline.json"
+    );
+    assert_eq!(
+        summary["round4_audit_source"],
+        "benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json"
+    );
+    assert_eq!(
+        summary["same_schema_sources"]["rust"],
+        "benchmark_results/rs_hnsw_sift128.full_k100.json"
+    );
+    assert!(
+        summary["summary"]
+            .as_str()
+            .expect("summary must be a string")
+            .contains("recall"),
+        "summary must mention recall deltas versus the round 4 baseline"
+    );
+    assert!(
+        summary["summary"]
+            .as_str()
+            .expect("summary must be a string")
+            .contains("qps"),
+        "summary must mention qps deltas versus the round 4 baseline"
+    );
+    assert!(
+        summary["verdict_refresh_allowed"].is_boolean(),
+        "authority summary must explicitly record whether a later verdict refresh is justified"
+    );
+    let next_action = summary["next_action"]
+        .as_str()
+        .expect("next_action must be a string");
+    assert!(
+        matches!(next_action, "continue" | "soft_stop" | "hard_stop"),
+        "next_action must be continue, soft_stop, or hard_stop"
     );
 }
