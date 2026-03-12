@@ -16,9 +16,30 @@
 - Next feature: `none`
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 48/48 features passing (100%)
+- Progress: 49/49 features passing (100%)
 
 ## Session Log
+
+### Session 57 - 2026-03-12
+- Focus: `hnsw-round5-authority-same-schema-rerun`
+- Completed:
+  - added `tests/bench_hnsw_reopen_round5.rs` as the round-5 default-lane contract so HNSW reopen work now requires both `benchmark_results/hnsw_reopen_round5_baseline.json` and `benchmark_results/hnsw_reopen_round5_authority_summary.json`
+  - created `benchmark_results/hnsw_reopen_round5_baseline.json`, freezing round-4 authority output as the round-5 start point and explicitly scoping the new hypothesis to `distance_dispatch_cache`
+  - reran the remote round-5 same-schema Rust lane and fresh native HNSW capture, then recorded the authority outcome in `benchmark_results/hnsw_reopen_round5_authority_summary.json`: Rust remained at `819.471` qps with recall `0.9959`, while native moved down to `9342.693` qps at recall `0.95`; ratio improvement therefore comes from native drift, not Rust gain, so verdict refresh remains disallowed and the line is marked `continue` for stability reruns
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round5 -- --nocapture` -> initial `FAIL` (missing round-5 baseline/summary artifacts), then partial `FAIL` (missing authority summary), then `ok`
+  - `bash init.sh` -> first `FAIL` (transient socks5 proxy timeout), second retry `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round5 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round5 bash scripts/remote/test.sh --command "cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round5/test_20260312T132029Z_52370.log`)
+  - `bash scripts/remote/native_hnsw_qps_capture.sh --log-dir /data/work/knowhere-rs-logs-hnsw-reopen-round5 --gtest-filter Benchmark_float_qps.TEST_HNSW` -> `exit_code=0` via linkfix fallback (`/data/work/knowhere-rs-logs-hnsw-reopen-round5/native_hnsw_qps_linkfix_20260312T133650Z.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round5 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round5 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round5 -q"` -> first `FAILED` (summary artifact absent on remote), after `bash scripts/remote/sync.sh --mode rsync` rerun `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round5/test_20260312T134407Z_55268.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 49 features (49 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-round5-authority-same-schema-rerun` is now `passing`
+  - all tracked features are now `passing` again
+- Notes:
+  - this round proves correctness/closure for dispatch caching, but does not yet prove Rust-side same-schema throughput gain on authority
+  - next HNSW action should be repeatable stability-gated reruns (or deeper structural cuts) before using ratio movement as optimization evidence
+- Git Commits: pending
 
 ### Session 56 - 2026-03-12
 - Focus: `hnsw-distance-dispatch-cache-rework`

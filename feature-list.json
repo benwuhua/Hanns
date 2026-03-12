@@ -822,6 +822,26 @@
       "dependencies": [
         "hnsw-round4-authority-same-schema-rerun"
       ]
+    },
+    {
+      "id": "hnsw-round5-authority-same-schema-rerun",
+      "category": "hnsw-reopen",
+      "title": "Refresh round 5 same-schema authority evidence",
+      "description": "Re-run the remote same-schema recall-gated HNSW benchmark after the distance-dispatch cache rework and record whether authority evidence shows a real Rust-side gain or only environment-side movement.",
+      "priority": "high",
+      "status": "passing",
+      "verification_steps": [
+        "bash init.sh",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round5 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round5 bash scripts/remote/test.sh --command \"cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95\"",
+        "bash scripts/remote/native_hnsw_qps_capture.sh --log-dir /data/work/knowhere-rs-logs-hnsw-reopen-round5 --gtest-filter Benchmark_float_qps.TEST_HNSW",
+        "cargo test --test bench_hnsw_reopen_round5 -- --nocapture",
+        "bash scripts/remote/sync.sh --mode rsync",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round5 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round5 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_round5 -q\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "hnsw-distance-dispatch-cache-rework"
+      ]
     }
   ]
 }
