@@ -39,7 +39,7 @@
 - Notes:
   - this round proves correctness/closure for dispatch caching, but does not yet prove Rust-side same-schema throughput gain on authority
   - next HNSW action should be repeatable stability-gated reruns (or deeper structural cuts) before using ratio movement as optimization evidence
-- Git Commits: pending
+- Git Commits: `0477a3e`
 
 ### Session 56 - 2026-03-12
 - Focus: `hnsw-distance-dispatch-cache-rework`
