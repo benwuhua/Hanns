@@ -11,14 +11,33 @@
 
 ## Current State
 
-- Phase: worker-complete
-- Current focus: `none` (all tracked HNSW reopen features are now closed; the first authority refresh improved parts of the build path but did not move the historical HNSW family verdict, so any second iteration must start from a new candidate-search-centered feature inventory)
-- Next feature: `none` (the tracked reopen line is closed at 35/35; if HNSW is reopened again, the next honest target is a candidate-search rework plus a real recall-gated authority rerun rather than more verdict maintenance)
+- Phase: worker-active
+- Current focus: `hnsw-candidate-search-profiler` (round 2 is now active; round 1 closed with mixed evidence, so the next tracked task is to split candidate_search into smaller hotspots before another algorithm cut)
+- Next feature: `hnsw-candidate-search-profiler` (the activation slice is now closed; the next honest step is to profile candidate_search more deeply and use that artifact to drive the round-2 core rework)
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 35/35 features passing (100%)
+- Progress: 36/39 features passing (92%)
 
 ## Session Log
+
+### Session 44 - 2026-03-12
+- Focus: `hnsw-reopen-round2-activation`
+- Completed:
+  - added `tests/bench_hnsw_reopen_round2.rs` as a new default-lane regression for the round-2 candidate-search line, then used the missing `benchmark_results/hnsw_reopen_round2_baseline.json` failure as the TDD red signal for reactivating HNSW after the first reopen line closed
+  - created `benchmark_results/hnsw_reopen_round2_baseline.json`, freezing round 1 as historical input to round 2: same-schema HNSW remains `functional-but-not-leading`, round-1 build wall clock improved about `5.8%`, but sample-search qps regressed about `5.7%` and `candidate_search` remained the dominant hotspot
+  - reopened the durable workflow state for a second HNSW line by adding four new round-2 features and repointing the queue/gap/roadmap/audit docs at `candidate_search_same_schema_qps` as the explicit next hypothesis
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round2 -- --nocapture` -> initial `FAIL` (missing `benchmark_results/hnsw_reopen_round2_baseline.json`), then `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round2 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round2 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round2 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T075654Z_4565.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 39 features (36 passing, 3 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-reopen-round2-activation` is now `passing`
+  - round 2 is active, and the next tracked feature is `hnsw-candidate-search-profiler`
+- Notes:
+  - this activation feature does not claim any new performance win; it only formalizes round 2 around the candidate-search hypothesis and prevents the repo from drifting back into a terminal `35/35` narrative while new HNSW work is active
+  - the historical HNSW family verdict remains unchanged until the round-2 same-schema authority rerun says otherwise
+- Git Commits: pending
 
 ### Session 43 - 2026-03-12
 - Focus: `hnsw-authority-rerun-and-verdict-refresh`

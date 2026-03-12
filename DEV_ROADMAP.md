@@ -1,6 +1,6 @@
 # Knowhere-RS Development Roadmap (Non-GPU)
 
-Last updated: 2026-03-12 06:47 UTC
+Last updated: 2026-03-12 15:54 UTC
 
 ## Goal
 
@@ -162,12 +162,12 @@ Objective:
 
 Active scoped tasks:
 
-- `hnsw-reopen-baseline-freeze`: freeze a new reopen baseline and reactivate durable workflow state
-- `hnsw-build-path-profiler`: closed; round-1 profiling artifact now ranks `candidate_search` first, `neighbor_selection` second, and `connection_update` third on the reopen lane
-- `hnsw-build-quality-rework`: closed; scratch-friendly insertion and deferred layer-0 bulk shrink now preserve the new deterministic build-quality regression while keeping the 10K parallel-build smoke in a practical range
-- `hnsw-authority-rerun-and-verdict-refresh`: re-run the authority lane and decide whether HNSW still deserves `functional-but-not-leading`
+- `hnsw-reopen-round2-activation`: closed; round 1 is now frozen into `benchmark_results/hnsw_reopen_round2_baseline.json`, and the second HNSW reopen line is officially active
+- `hnsw-candidate-search-profiler`: active; split `candidate_search` into smaller hotspots so round 2 can target the real same-schema QPS blocker instead of a monolithic timing bucket
+- `hnsw-candidate-search-core-rework`: pending; rework the shared candidate-search core only after the round-2 profile has made the bottleneck explicit
+- `hnsw-round2-authority-same-schema-rerun`: pending; rerun the real recall-gated same-schema lane and decide whether round 2 may rewrite the historical HNSW family verdict
 
 Phase exit criteria:
 
-- HNSW has at least one fresh authority-backed reopen iteration that materially improves on `benchmark_results/hnsw_reopen_baseline.json` without recall regression, or
-- two consecutive core-logic reworks fail to improve the authority lane and the repo explicitly re-archives HNSW as still `functional-but-not-leading`.
+- HNSW round 2 produces a fresh same-schema authority result that materially improves on `benchmark_results/hnsw_reopen_baseline.json` without recall regression, or
+- the round-2 candidate-search hypothesis fails and the repo explicitly records a continue/soft-stop/hard-stop outcome instead of drifting back into untracked reopen work.

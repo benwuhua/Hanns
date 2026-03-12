@@ -4,10 +4,10 @@
 ## 当前大任务面板
 
 - [ ] **HNSW-REOPEN-001**: 重开 HNSW 核心算法攻关线
-  - 当前子阶段: `authority_rerun_and_verdict_refresh` 🔄
-  - 当前结论: 2026-03-12 的 HNSW family verdict 继续保留为历史基线，但不再作为停止优化的理由；当前唯一活动目标是继续优化 `src/faiss/hnsw.rs` 的核心建图路径，并用新的 authority artifact 去挑战 `functional-but-not-leading`
-  - 当前证据: `benchmark_results/hnsw_reopen_baseline.json` + `benchmark_results/hnsw_reopen_profile_round1.json`
-  - 下一步: 执行 `hnsw-authority-rerun-and-verdict-refresh`，用 fresh remote replay 刷新 reopen profile 与 compare lane，再判断这次 build-path rework 是否足以改写历史 HNSW verdict
+  - 当前子阶段: `candidate_search_profiler` 🔄
+  - 当前结论: 第一轮 HNSW reopen 已经用 authority evidence 证明“build path 有局部改善，但 family verdict 未动”；第二轮现已明确聚焦 `candidate_search_same_schema_qps`，目标是用新的 candidate-search profile 和 same-schema authority rerun 去挑战历史 `functional-but-not-leading`
+  - 当前证据: `benchmark_results/hnsw_reopen_round2_baseline.json` + `benchmark_results/hnsw_reopen_profile_round1.json`
+  - 下一步: 执行 `hnsw-candidate-search-profiler`，把当前 `candidate_search` 大桶拆成更小的热点，再决定 round-2 core rework 的最小切口
   - 范围约束: 只重开 HNSW；IVF-PQ、DiskANN、以及项目级 final acceptance 继续保持 archived state，直到 HNSW 真的拿到更强 authority evidence
 
 - [x] **BASELINE-P3-001**: 建立可信的 native-vs-rs recall-gated 基线

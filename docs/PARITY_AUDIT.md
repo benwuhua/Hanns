@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-12 15:28
-Sync baseline: f841df2955e06eb8c6d6f5e7cb8316941fb9c550 from origin/main
+Last updated: 2026-03-12 15:54
+Sync baseline: d586788295e093c6599d8456c54d8d161b1c6f12 from origin/main
 
 ## 轮次记录
+- 2026-03-12 15:54: **builder-loop：收口 `hnsw-reopen-round2-activation`，把 HNSW 第二轮 candidate-search 攻关线正式挂回 durable workflow（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_baseline.json`、`benchmark_results/hnsw_reopen_profile_round1.json`、`tests/bench_hnsw_cpp_compare.rs`、`docs/superpowers/specs/2026-03-12-hnsw-reopen-round2-candidate-search-design.md`、`docs/superpowers/plans/2026-03-12-hnsw-reopen-round2-candidate-search.md`。
+  2. 阶段结论：round 1 已经诚实结束，但 repo 不能继续停在“35/35 全部关闭”的终态叙事里，否则第二轮 candidate-search 攻关会再次变成隐式 work。激活 round 2 的真正目的，不是宣称 HNSW 变快了，而是把新的假设、工单边界和 authority acceptance 面固定下来。
+  3. 本轮执行：新增 `tests/bench_hnsw_reopen_round2.rs`，并先用缺失 `benchmark_results/hnsw_reopen_round2_baseline.json` 的失败做 TDD red；随后新增该 baseline artifact，明确把 round 1 的 mixed result 冻结成 round 2 起点：build wall clock 约快 `5.8%`，但 sample-search qps 约慢 `5.7%`，`candidate_search` 仍然是主热点。然后扩展 `feature-list.json`、`task-progress.md`、`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`DEV_ROADMAP.md`、`RELEASE_NOTES.md`，把项目从 `35/35 passing` 的结束态切到新的 `39-feature` round-2 reopen line。
+  4. 验证结果：本地 `cargo test --test bench_hnsw_reopen_round2 -- --nocapture` 先红后绿；`bash init.sh` 通过；authority replay `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round2 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round2 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round2 -q"` 返回 `test=ok`，日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T075654Z_4565.log`；`python3 scripts/validate_features.py feature-list.json` 返回 `VALID - 39 features (36 passing, 3 failing); workflow/doc checks passed`。
+  5. 后续主缺口：当前不再缺“round 2 有没有启动”的治理动作，真正的下一条 feature 是 `hnsw-candidate-search-profiler`。只有当新 profiler 把 `candidate_search` 拆成更小的可解释热点之后，第二轮 core rework 才值得开始。
+  状态：Phase 6 Active（round 2 activated；candidate-search profiler is next）。
 - 2026-03-12 15:28: **builder-loop：收口 `hnsw-authority-rerun-and-verdict-refresh`，刷新第一轮 HNSW reopen authority 结果并确认历史 verdict 暂不改写（plan+exec）**
   1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_profile_round1.json`、`tests/bench_hnsw_reopen_profile.rs`、`tests/bench_hnsw_reopen_progress.rs`、`tests/bench_hnsw_cpp_compare.rs`、`docs/superpowers/plans/2026-03-12-hnsw-reopen-algorithm-line.md`。
   2. 阶段结论：第一刀 bulk-build rework 需要一个真正的 authority refresh 来回答“历史 HNSW verdict 有没有动”。刷新后的 reopen profile 证明 build path 的 `neighbor_selection` / `connection_update` / `layer_descent` 的确下降了，但 `candidate_search` 不降反升，并且 sample-search qps 也回落，因此这轮最多只能判成“瓶颈更清楚”，不能判成 family-level improvement。

@@ -586,6 +586,76 @@
       "dependencies": [
         "hnsw-build-quality-rework"
       ]
+    },
+    {
+      "id": "hnsw-reopen-round2-activation",
+      "category": "hnsw-reopen",
+      "title": "Activate HNSW reopen round 2",
+      "description": "Freeze the mixed round-1 reopen result into a new round-2 baseline, reactivate durable workflow state, and explicitly retarget HNSW improvement work at candidate-search-driven same-schema QPS gains.",
+      "priority": "high",
+      "status": "passing",
+      "verification_steps": [
+        "bash init.sh",
+        "cargo test --test bench_hnsw_reopen_round2 -- --nocapture",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round2 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round2 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_round2 -q\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "hnsw-authority-rerun-and-verdict-refresh"
+      ]
+    },
+    {
+      "id": "hnsw-candidate-search-profiler",
+      "category": "hnsw-reopen",
+      "title": "Profile HNSW round 2 candidate search",
+      "description": "Split the current candidate_search hotspot into smaller measurable buckets so the next HNSW algorithm cut is driven by real authority-backed evidence rather than by a single monolithic timing bucket.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash init.sh",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round2 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round2 bash scripts/remote/test.sh --command \"cargo test --features long-tests --test bench_hnsw_reopen_round2_profile -- --ignored --nocapture\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round2 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round2 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_round2 -q\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "hnsw-reopen-round2-activation"
+      ]
+    },
+    {
+      "id": "hnsw-candidate-search-core-rework",
+      "category": "hnsw-reopen",
+      "title": "Rework the shared HNSW candidate-search core",
+      "description": "Refactor scratch reuse, visited-state resets, and queue behavior in the shared HNSW candidate-search core so both build and query paths can pursue same-schema QPS gains without recall regression.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash init.sh",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round2 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round2 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_cpp_compare -q\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round2 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round2 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_round2 -q\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "hnsw-candidate-search-profiler"
+      ]
+    },
+    {
+      "id": "hnsw-round2-authority-same-schema-rerun",
+      "category": "hnsw-reopen",
+      "title": "Refresh round 2 same-schema authority evidence",
+      "description": "Re-run the remote same-schema recall-gated HNSW benchmark after the round-2 candidate-search rework and decide whether the historical HNSW family verdict may be rewritten or the reopen line should continue or stop.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash init.sh",
+        "bash scripts/remote/test.sh --command \"cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95\"",
+        "bash scripts/remote/native_hnsw_qps_capture.sh --gtest-filter Benchmark_float_qps.TEST_HNSW",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round2 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round2 bash scripts/remote/test.sh --command \"cargo test --features long-tests --test bench_hnsw_reopen_round2_profile -- --ignored --nocapture\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round2 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round2 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_round2 -q\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "hnsw-candidate-search-core-rework"
+      ]
     }
   ]
 }
