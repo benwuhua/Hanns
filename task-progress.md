@@ -11,14 +11,33 @@
 
 ## Current State
 
-- Phase: worker-complete
-- Current focus: `none` (all tracked features are closed; project verdict archived as `not accepted`)
-- Next feature: `none` (reopen only if new remote authority evidence materially changes the final verdict chain)
+- Phase: worker-active
+- Current focus: `hnsw-build-path-profiler` (HNSW has been intentionally reopened as the only active algorithm line; the 2026-03-12 final verdict remains historical baseline truth)
+- Next feature: `hnsw-build-quality-rework` (after the profiler closes, the next step is a direct build-path algorithm rework in `src/faiss/hnsw.rs`)
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 31/31 features passing (100%)
+- Progress: 32/35 features passing (91%)
 
 ## Session Log
+
+### Session 40 - 2026-03-12
+- Focus: `hnsw-reopen-baseline-freeze`
+- Completed:
+  - reopened only the HNSW line in durable workflow state instead of reopening the whole project, keeping the archived 2026-03-12 final verdict chain as historical baseline truth rather than deleting or weakening it
+  - added `tests/bench_hnsw_reopen_progress.rs` as a new default-lane progress regression, then used the missing `benchmark_results/hnsw_reopen_baseline.json` failure as the TDD red signal for the reopen baseline slice
+  - added `benchmark_results/hnsw_reopen_baseline.json`, extended `feature-list.json` with the first four HNSW reopen features, and rewrote the queue/gap/roadmap/audit handoff so future sessions optimize HNSW again instead of treating `functional-but-not-leading` as an untouchable terminal state
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_progress -- --nocapture` -> initial `FAIL` (missing `benchmark_results/hnsw_reopen_baseline.json`), then `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-baseline KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-baseline bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_progress -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-baseline/test_20260312T064856Z_93162.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 35 features (32 passing, 3 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-reopen-baseline-freeze` is the only reopen feature already closed; HNSW is now back to an active improvement line
+  - the next active feature is `hnsw-build-path-profiler`
+- Notes:
+  - historical project-level verdict artifacts remain in place and still mean what they meant on 2026-03-12; the reopen line merely treats them as baseline evidence rather than as a permanent stop signal
+  - IVF-PQ, DiskANN, and final acceptance remain archived and are not part of the reopened work scope
+- Git Commits: pending
 
 ### Session 39 - 2026-03-12
 - Focus: `post-close-sift1m-layout-hygiene`

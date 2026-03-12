@@ -1,7 +1,14 @@
 # Builder 任务队列
-> 最后更新: 2026-03-12 05:56 UTC | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
+> 最后更新: 2026-03-12 06:47 UTC | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
 
-## 当前五个大任务
+## 当前大任务面板
+
+- [ ] **HNSW-REOPEN-001**: 重开 HNSW 核心算法攻关线
+  - 当前子阶段: `build_path_profiler` 🔄
+  - 当前结论: 2026-03-12 的 HNSW family verdict 继续保留为历史基线，但不再作为停止优化的理由；当前唯一活动目标是继续优化 `src/faiss/hnsw.rs` 的核心建图路径，并用新的 authority artifact 去挑战 `functional-but-not-leading`
+  - 当前证据: `benchmark_results/hnsw_reopen_baseline.json`
+  - 下一步: 完成 `hnsw-build-path-profiler`，把 layer descent / candidate search / shrink / repair 的 build-path 热点拆清，再决定第一刀算法改动落在哪个热路径
+  - 范围约束: 只重开 HNSW；IVF-PQ、DiskANN、以及项目级 final acceptance 继续保持 archived state，直到 HNSW 真的拿到更强 authority evidence
 
 - [x] **BASELINE-P3-001**: 建立可信的 native-vs-rs recall-gated 基线
   - 子阶段: `stop_go_verdict_formed` ✅
@@ -17,7 +24,7 @@
   - 当前状态: layer-0 邻居回填修复、authority HDF5 refresh、以及 HNSW FFI / persistence contract 已完成；family 级最终结论已归档为 `functional-but-not-leading`
   - 当前工作单: `memory/CURRENT_WORK_ORDER.json`
   - 完成标准: 基于当前 authority benchmark truth set 形成诚实的 leadership-or-no-go verdict
-  - 当前结论: Rust HNSW 已关闭 recall 与生产契约缺口，但当前 trusted same-schema HDF5 lane 上 native 仍约快 `14.8x`；因此 HNSW 保持可用但不得宣称 performance leadership
+  - 当前结论: Rust HNSW 已关闭 recall 与生产契约缺口，但当前 trusted same-schema HDF5 lane 上 native 仍约快 `14.8x`；因此这条 archived verdict 现在只作为 HNSW reopen line 的历史基线，而不是永久停止信号
 
 - [x] **IVFPQ-P3-003**: IVF-PQ family 最终 verdict 已归档
   - 当前子阶段: `final_classification_archived` ✅

@@ -1,6 +1,6 @@
 # Knowhere-RS Development Roadmap (Non-GPU)
 
-Last updated: 2026-03-12 05:56 UTC
+Last updated: 2026-03-12 06:47 UTC
 
 ## Goal
 
@@ -92,7 +92,7 @@ Success criteria:
 
 Any claimed completion must update all three files coherently.
 
-## Phase 5: Core Implementation Excellence, Semantic Fidelity, Production Hardening, Performance Leadership (P3) — ✅ Closed (final verdict archived as not accepted)
+## Phase 5: Core Implementation Excellence, Semantic Fidelity, Production Hardening, Performance Leadership (P3) — ✅ Closed (historical final verdict archived as not accepted)
 
 Objective:
 
@@ -152,3 +152,22 @@ Exit criteria:
 - Semantic-conformance gaps are documented and either aligned or explicitly constrained with regression evidence.
 - Production-relevant persistence / FFI metadata semantics are stable and auditable.
 - At least one core non-GPU path shows repeatable, recall-gated performance leadership over native knowhere. Not met on the current authority evidence; the final program verdict is therefore archived as `not accepted` in `benchmark_results/final_production_acceptance.json`.
+
+## Phase 6: HNSW Reopen Algorithm Push — 🔄 Active
+
+Objective:
+
+- Reopen only the HNSW family as an active algorithm-improvement line while preserving the 2026-03-12 final verdict artifacts as historical baseline truth.
+- Re-focus work on `src/faiss/hnsw.rs` core build-path quality and hot-path cost instead of on verdict maintenance.
+
+Active scoped tasks:
+
+- `hnsw-reopen-baseline-freeze`: freeze a new reopen baseline and reactivate durable workflow state
+- `hnsw-build-path-profiler`: profile layer descent, candidate search, shrink, and repair costs on the authority lane
+- `hnsw-build-quality-rework`: ship the first direct core build-path rework
+- `hnsw-authority-rerun-and-verdict-refresh`: re-run the authority lane and decide whether HNSW still deserves `functional-but-not-leading`
+
+Phase exit criteria:
+
+- HNSW has at least one fresh authority-backed reopen iteration that materially improves on `benchmark_results/hnsw_reopen_baseline.json` without recall regression, or
+- two consecutive core-logic reworks fail to improve the authority lane and the repo explicitly re-archives HNSW as still `functional-but-not-leading`.

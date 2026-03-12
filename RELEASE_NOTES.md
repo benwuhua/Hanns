@@ -15,6 +15,8 @@
 - Future Codex sessions now default to autonomous continuation and should only interrupt for real blockers or scope-changing decisions
 - Remote bootstrap sync now excludes heavyweight local-only directories from rsync so Session bootstrap stays fast and predictable
 - `baseline-native-benchmark-smoke` now recovers duplicate-metric aborts by rebuilding `benchmark_float_qps` in an isolated remote linkfix worktree, keeping the official upstream checkout untouched while restoring a reachable native smoke lane
+- HNSW is now reopened as the only active algorithm-improvement line: the archived 2026-03-12 final verdict chain remains historical baseline truth, but durable workflow state now points future sessions at `benchmark_results/hnsw_reopen_baseline.json` and follow-up HNSW build-path work instead of treating `functional-but-not-leading` as a permanent stop signal
+- `hnsw-reopen-baseline-freeze` now passes with a new default-lane progress regression in `tests/bench_hnsw_reopen_progress.rs`, a tracked reopen baseline artifact in `benchmark_results/hnsw_reopen_baseline.json`, and fresh authority replay from `/data/work/knowhere-rs-logs-hnsw-reopen-baseline/test_20260312T064856Z_93162.log`
 
 ### Fixed
 - `baseline-remote-bootstrap` now passes with a real remote bootstrap, standalone sync, config summary, and automated injection test

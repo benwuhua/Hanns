@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-12 05:56
-Sync baseline: 4f60908fc9ad7438b4b8ff64210481ab281009b0 from origin/main
+Last updated: 2026-03-12 06:47
+Sync baseline: f841df2955e06eb8c6d6f5e7cb8316941fb9c550 from origin/main
 
 ## 轮次记录
+- 2026-03-12 06:47: **builder-loop：重开 `hnsw-reopen-baseline-freeze`，把 HNSW 从 archived verdict 重新切回 active algorithm line（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_p3_002_final_verdict.json`、`benchmark_results/baseline_p3_001_stop_go_verdict.json`、`src/faiss/hnsw.rs`、`tests/bench_hnsw_cpp_compare.rs`。
+  2. 阶段结论：当前 repo 的 durable workflow 已经过度偏向“维护 final verdict”，不适合继续做 HNSW 核心算法攻关。重开范围因此被刻意收窄为“只重开 HNSW，不重开全项目 acceptance”，并保留 2026-03-12 的 final artifacts 作为历史基线。
+  3. 本轮执行：新增 `docs/superpowers/specs/2026-03-12-hnsw-reopen-algorithm-line-design.md` 与 `docs/superpowers/plans/2026-03-12-hnsw-reopen-algorithm-line.md`，随后增加 `tests/bench_hnsw_reopen_progress.rs`，用缺失 `benchmark_results/hnsw_reopen_baseline.json` 的失败做 TDD red；再新增该 artifact，并重写 `feature-list.json`、`task-progress.md`、`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`DEV_ROADMAP.md`、`RELEASE_NOTES.md` 以建立新的 HNSW reopen feature chain。
+  4. 验证结果：本地 `cargo test --test bench_hnsw_reopen_progress -- --nocapture` 先红后绿；`bash init.sh` 成功；authority replay `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-baseline KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-baseline bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_progress -q"` 返回 `test=ok`，日志 `/data/work/knowhere-rs-logs-hnsw-reopen-baseline/test_20260312T064856Z_93162.log`。
+  5. 后续主缺口：HNSW reopen line 已从“结论归档”切回“算法攻关”，下一条活动 feature 是 `hnsw-build-path-profiler`。在新的 authority HNSW artifact 真正改善之前，IVF-PQ、DiskANN 与项目级 final acceptance 继续保持 archived state。
+  状态：Phase 6 Active（HNSW reopen baseline frozen；build-path profiler is next）。
 - 2026-03-12 05:56: **builder-loop：收口 `final-production-acceptance`，归档项目级 `not accepted` verdict（plan+exec）**
   1. 复核输入：`feature-list.json`、`benchmark_results/final_core_path_classification.json`、`benchmark_results/final_performance_leadership_proof.json`、`scripts/gate_profile_runner.sh`、`tests/bench_hnsw_cpp_compare.rs`、`README.md`。
   2. 阶段结论：所有 prerequisite gates 都已经关闭，当前剩下的不是“继续补工程项”，而是把项目级最终 verdict 明确归档。由于 leadership criterion 已被 authority evidence 明确判成未满足，最终收口必须是 `production_accepted=false`，而不是悬空保留一个 failing feature。

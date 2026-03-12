@@ -517,6 +517,75 @@
         "final-core-path-classification",
         "final-performance-leadership-proof"
       ]
+    },
+    {
+      "id": "hnsw-reopen-baseline-freeze",
+      "category": "hnsw-reopen",
+      "title": "Reopen HNSW with a fresh baseline",
+      "description": "Reopen only the HNSW family as an active algorithm-improvement line, freeze the 2026-03-12 authority metrics as a new reopen baseline, and update durable workflow state so future sessions optimize HNSW instead of defending the archived verdict.",
+      "priority": "high",
+      "status": "passing",
+      "verification_steps": [
+        "bash init.sh",
+        "cargo test --test bench_hnsw_reopen_progress -- --nocapture",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-baseline KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-baseline bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_progress -q\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "final-production-acceptance"
+      ]
+    },
+    {
+      "id": "hnsw-build-path-profiler",
+      "category": "hnsw-reopen",
+      "title": "Profile the reopened HNSW build path",
+      "description": "Add a reopen-specific profiling surface for HNSW build/search hot paths so future algorithm work is driven by measured layer-descent, candidate-search, shrink, and repair costs rather than by verdict maintenance.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash init.sh",
+        "cargo test --test bench_hnsw_reopen_progress -- --nocapture",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-profiler KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-profiler bash scripts/remote/test.sh --command \"cargo test --features long-tests --test bench_hnsw_reopen_profile -- --ignored --nocapture\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-profiler KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-profiler bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_progress -q\""
+      ],
+      "dependencies": [
+        "hnsw-reopen-baseline-freeze"
+      ]
+    },
+    {
+      "id": "hnsw-build-quality-rework",
+      "category": "hnsw-reopen",
+      "title": "Rework the HNSW bulk build path",
+      "description": "Perform the first real HNSW algorithm rework on src/faiss/hnsw.rs by aligning the bulk-build connection-update path with the stronger single-node insertion logic and reducing avoidable hot-loop search overhead without breaking contracts.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "cargo test hnsw --lib -- --nocapture",
+        "cargo test --test bench_hnsw_reopen_progress -q",
+        "bash init.sh",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-rework KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-rework bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_cpp_compare -q\""
+      ],
+      "dependencies": [
+        "hnsw-build-path-profiler"
+      ]
+    },
+    {
+      "id": "hnsw-authority-rerun-and-verdict-refresh",
+      "category": "hnsw-reopen",
+      "title": "Refresh authority evidence after HNSW rework",
+      "description": "Re-run the remote x86 HNSW compare and reopen progress lanes after the first algorithm rework, then decide whether the HNSW family verdict has materially improved or whether the next reopen iteration must target a different bottleneck.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash init.sh",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen bash scripts/remote/test.sh --command \"cargo test --features long-tests --test bench_hnsw_reopen_profile -- --ignored --nocapture\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_cpp_compare -q\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_progress -q\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "hnsw-build-quality-rework"
+      ]
     }
   ]
 }

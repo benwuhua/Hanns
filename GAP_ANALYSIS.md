@@ -1,6 +1,6 @@
 # Knowhere-RS Gap Analysis (Non-GPU)
 
-Last updated: 2026-03-12 05:56 UTC
+Last updated: 2026-03-12 06:47 UTC
 Scope: Non-GPU production parity against C++ knowhere
 
 ## 1. Baseline and Method
@@ -37,6 +37,10 @@ Evaluation dimensions:
 
 ## P3 (Core Implementation / Semantic Fidelity / Production Readiness / Performance Advantage)
 
+- 🔄 `HNSW-REOPEN-001`: HNSW has been intentionally reopened as the only active algorithm line.
+  - `benchmark_results/hnsw_p3_002_final_verdict.json` remains historical truth for 2026-03-12, but it is now treated as the baseline to beat rather than as a permanent stop signal.
+  - The active blocker is still the trusted same-schema remote gap: Rust HNSW recall is credible, but native remains about `14.8x` faster on the authoritative lane.
+  - The first reopen milestone is `benchmark_results/hnsw_reopen_baseline.json`, followed by `hnsw-build-path-profiler`, which should isolate build-path hot spots before the next direct algorithm rework in `src/faiss/hnsw.rs`.
 - ✅ `CORE-P0-001`: 远端 x86 SIMD 验证链已恢复可执行并取得新鲜证据。最新复核中，本地 `cargo test --lib -q`、远端 `cargo test --features simd simd::tests -- --nocapture`、远端 `cargo test --lib --features simd test_x86_simd_l2_reduction_matches_scalar_on_irregular_input -- --nocapture` 均已通过；`default+simd` 不再因 toolchain/脚本漂移阻断后续核心路径工作。
 - ✅ `HNSW-P1-001`: HNSW 已完成首轮远端 before/after artifact 落地；当前证据显示 recall 基本持平（`0.217 -> 0.215`）但 qps 大幅提升（`~1621 -> ~19235`），由于 recall 仍低于可信阈值，这条结果已被诚实归档为 `recheck required / no-go`，不再作为当前活动 blocker。
 - ✅ `IVFPQ-P1-002`: IVF/PQ 已完成 focused reality audit，并留下 `benchmark_results/ivfpq_p1_002_focused.json` 作为可审计 no-go / recheck-required artifact。结论已明确：`src/faiss/ivf.rs` 是 placeholder coarse-assignment scaffold，真实热点路径在 `src/faiss/ivfpq.rs`。
@@ -73,6 +77,7 @@ Evaluation dimensions:
 - ✅ `HNSW-P3-002`: **functional-but-not-leading**
   - layer-0 语义差异、same-schema HDF5 refresh、以及 HNSW FFI / persistence contract 均已 authority 收口
   - 当前 family 级最终结论已归档到 `benchmark_results/hnsw_p3_002_final_verdict.json`：Rust HNSW 具备可信 recall 与生产契约，但在当前 trusted same-schema lane 上 native 仍约快 `14.8x`，因此继续阻止 leadership claim
+  - 该 verdict 现已降级为 HNSW reopen line 的历史基线；是否继续保持这一结论，将由新的 authority reopen artifacts 决定
 - ✅ `FINAL-PRODUCTION-ACCEPTANCE`: 项目级最终 verdict 已归档为 `not accepted`
   - `benchmark_results/final_production_acceptance.json` 现已明确记录：production engineering gates 全部关闭，但 project-level acceptance 仍为 `false`
   - authority `fmt/clippy/full_regression` gate 已在最终 verdict feature 下复跑通过，且 `tests/test_final_production_acceptance.rs` 已把该 verdict 锁进默认 `cargo test --tests -q` surface
@@ -97,8 +102,8 @@ Primary modules for closure verification:
 
 ## 5. Completion Definition
 
-All tracked features are now closed, and the final project-level verdict is explicit:
+Historical final artifacts remain explicit, but the repo is no longer in a pure terminal state:
 
-1. queue / roadmap / gap / audit / feature inventory 已全部同步到同一个最终状态。
-2. 当前项目结论不是“待定”，而是 `not accepted on current remote x86 evidence`。
-3. 若未来继续投入，必须由新的 authority artifact 改变 leadership 或 core-path verdict chain，而不是靠文档重述或本地结果翻案。
+1. `benchmark_results/final_production_acceptance.json` 仍然是当前项目级历史结论：`not accepted on current remote x86 evidence`。
+2. 当前唯一被重新打开的工作线是 HNSW；future work must improve HNSW with new authority artifacts rather than by rewriting historical verdict docs.
+3. 只有当 HNSW reopen line 真的拿到新的 authority evidence，才允许重开 family-level leadership 或 project-level acceptance 叙事。

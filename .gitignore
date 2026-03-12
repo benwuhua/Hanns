@@ -36,6 +36,8 @@ benchmark_results/*
 !benchmark_results/hnsw_p1_001_after.remote.json
 !benchmark_results/hnsw_p1_001_compare.json
 !benchmark_results/hnsw_p3_002_final_verdict.json
+!benchmark_results/hnsw_reopen_baseline.json
+!benchmark_results/hnsw_reopen_profile_round1.json
 !benchmark_results/ivfpq_p1_002_focused.json
 !benchmark_results/ivfpq_p3_003_final_verdict.json
 !benchmark_results/native_hnsw_sift128.full.json
