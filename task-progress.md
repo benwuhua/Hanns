@@ -43,7 +43,7 @@
 - Notes:
   - round-6 closes the prefetch-path instrumentation and evidence chain; it does not claim a same-schema Rust-vs-native QPS shift yet
   - the next HNSW action should be an authority same-schema rerun on the round-6 branch to measure whether this prefetch cut moves the trusted throughput row
-- Git Commits: pending
+- Git Commits: `a7afc13`
 
 ### Session 58 - 2026-03-12
 - Focus: `hnsw-round5-stability-gate`
