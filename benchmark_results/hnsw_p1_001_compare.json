@@ -1,0 +1,28 @@
+{
+  "task_id": "HNSW-P1-001",
+  "benchmark": "recall-gated-baseline-hnsw-before-after",
+  "source_before": "benchmark_results/recall_gated_baseline.json",
+  "source_after": "benchmark_results/hnsw_p1_001_after.remote.json",
+  "index": "HNSW",
+  "before": {
+    "qps": 1621.5142510833741,
+    "recall_at_10": 0.217,
+    "ground_truth_source": "flat_exact_l2_bruteforce",
+    "confidence": "recheck required"
+  },
+  "after": {
+    "qps": 33510.59320116979,
+    "recall_at_10": 0.20699999999999993,
+    "ground_truth_source": "flat_exact_l2_bruteforce",
+    "confidence": "recheck required"
+  },
+  "delta": {
+    "qps": 31889.078950086417,
+    "qps_ratio": 20.665649789549865,
+    "recall_at_10": -0.010000000000000064
+  },
+  "notes": [
+    "本轮热路径改动主要命中 visited 复用与结果距离复算消除，因此吞吐明显改善。",
+    "recall 仍未跨过 recall gate，说明邻居布局/图质量仍是后续主战场，本轮只能记录 no-go 结论而不扩大范围。"
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "task_id": "FINAL-PERFORMANCE-LEADERSHIP-PROOF",
+  "verdict_date": "2026-03-12",
+  "authority_scope": "remote_x86_only",
+  "criterion": "at_least_one_core_cpu_path_beats_native_on_same_remote_benchmark_surface_at_same_recall_gate",
+  "criterion_met": false,
+  "baseline_stop_go_source": "benchmark_results/baseline_p3_001_stop_go_verdict.json",
+  "hnsw_family_verdict_source": "benchmark_results/hnsw_p3_002_final_verdict.json",
+  "final_core_path_classification_source": "benchmark_results/final_core_path_classification.json",
+  "families": [
+    {
+      "family": "HNSW",
+      "classification": "functional-but-not-leading",
+      "leadership_claim_allowed": false,
+      "leadership_status": "trusted_but_blocked_by_native_qps_gap",
+      "blocker": "The only trusted same-schema remote compare lane still leaves native about 14.8x faster than Rust HNSW.",
+      "blocker_source": "benchmark_results/baseline_p3_001_stop_go_verdict.json",
+      "evidence": {
+        "rust_recall_at_10": 0.9914999999999993,
+        "native_recall_at_10": 0.95,
+        "rust_qps": 710.9623183892526,
+        "native_qps": 10524.841,
+        "native_over_rust_qps_ratio": 14.803655169580505
+      }
+    },
+    {
+      "family": "IVF-PQ",
+      "classification": "no-go",
+      "leadership_claim_allowed": false,
+      "leadership_status": "family_no_go",
+      "blocker": "IVF-PQ is already archived as no-go, so it cannot satisfy the final performance-leadership criterion.",
+      "blocker_source": "benchmark_results/final_core_path_classification.json"
+    },
+    {
+      "family": "DiskANN",
+      "classification": "constrained",
+      "leadership_claim_allowed": false,
+      "leadership_status": "constrained_non_comparable_lane",
+      "blocker": "DiskANN remains constrained and its benchmark lane is not a trusted native-comparable leadership surface.",
+      "blocker_source": "benchmark_results/final_core_path_classification.json"
+    }
+  ],
+  "summary": "The final performance leadership criterion is not met on the current remote x86 authority surface: no core CPU family can honestly claim leadership, and the only trusted same-schema candidate, HNSW, is still blocked by a roughly 14.8x native throughput advantage.",
+  "action": "Archive the performance-leadership proof as unmet and keep the project out of final completion claims until a new remote authority artifact shows at least one core CPU path beating native on the same recall-gated lane."
+}

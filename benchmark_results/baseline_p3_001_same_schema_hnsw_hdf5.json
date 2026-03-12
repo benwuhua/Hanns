@@ -1,0 +1,50 @@
+{
+  "task_id": "BASELINE-P3-001",
+  "benchmark": "BASELINE-P3-001-same-schema-hnsw-hdf5",
+  "comparison_status": "same_schema_row_generated",
+  "verdict": "no_go_for_leadership_claim",
+  "dataset": "sift-128-euclidean",
+  "methodology": "full_dataset_hdf5_topk100",
+  "rows": {
+    "rust_full_k100": {
+      "dataset": "sift-128-euclidean",
+      "index": "HNSW(Rust)",
+      "params": "M=16 | efConstruction=100, ef=138, top_k=100, recall_at=10",
+      "thread_num": 8,
+      "qps": 710.9623183892526,
+      "recall_at_10": 0.9914999999999993,
+      "ground_truth_source": "ann_benchmarks_hdf5_neighbors",
+      "confidence": "trusted",
+      "confidence_explanation": "",
+      "runtime_seconds": 1.406544305,
+      "source": "knowhere_rs_hnsw_hdf5"
+    },
+    "native_full_k100": {
+      "dataset": "sift-128-euclidean",
+      "index": "HNSW(BF16)",
+      "params": "M=16 | efConstruction=100, ef=138, k=100",
+      "thread_num": 8,
+      "qps": 10524.841,
+      "recall_at_10": 0.95,
+      "ground_truth_source": "native_hdf5_ann_benchmark",
+      "confidence": "trusted",
+      "confidence_explanation": "latest native fallback benchmark row from the isolated linkfix worktree; recall gate >= 0.95 on the same HDF5 methodology used by the refreshed Rust artifact.",
+      "runtime_seconds": 0.95,
+      "source": "knowhere_cpp_benchmark_float_qps"
+    }
+  },
+  "delta": {
+    "qps_ratio_native_over_rust": 14.803655169580505,
+    "recall_gap_native_minus_rust": -0.041499999999999315
+  },
+  "notes": [
+    "本轮已用 authority 上刷新后的 release-mode Rust HDF5 row 与最新 native linkfix fallback log 形成同 schema / full-dataset / k=100 的 HNSW 可比行。",
+    "新的 same-schema 事实不再是 recall 缺口：Rust 在 ef=138 已达到 recall@10≈0.9915，高于当前 trusted native BF16 row 的 0.95。",
+    "当前 no-go 结论转为性能而非召回：在相同 HDF5 methodology 下，native BF16 qps 仍约为 Rust 的 14.8x。",
+    "这份 artifact 只比较 HDF5 methodology；不替代 clustered_l2 路线，也不单独回答生产契约问题。"
+  ],
+  "sources": {
+    "rust": "benchmark_results/rs_hnsw_sift128.full_k100.json",
+    "native": "benchmark_results/native_hnsw_sift128.remote.json"
+  }
+}

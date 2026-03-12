@@ -1,0 +1,45 @@
+{
+  "task_id": "FINAL-PRODUCTION-ACCEPTANCE",
+  "verdict_date": "2026-03-12",
+  "authority_scope": "remote_x86_only",
+  "production_accepted": false,
+  "acceptance_status": "not_accepted",
+  "final_core_path_classification_source": "benchmark_results/final_core_path_classification.json",
+  "final_performance_leadership_proof_source": "benchmark_results/final_performance_leadership_proof.json",
+  "production_gates": [
+    {
+      "gate": "remote_fmt_clippy_build",
+      "status": "closed",
+      "source_feature": "prod-all-targets-clippy-fmt"
+    },
+    {
+      "gate": "ffi_observability_persistence",
+      "status": "closed",
+      "source_feature": "prod-ffi-observability-persistence-gate"
+    },
+    {
+      "gate": "remote_operator_docs",
+      "status": "closed",
+      "source_feature": "prod-readme-remote-workflow-docs"
+    }
+  ],
+  "acceptance_requirements": {
+    "production_engineering_closed": true,
+    "core_path_replaceability_proven": false,
+    "credible_leadership_result_over_native": false
+  },
+  "blocking_reasons": [
+    {
+      "reason": "no_credible_leadership_lane",
+      "source": "benchmark_results/final_performance_leadership_proof.json",
+      "detail": "The project-level leadership criterion is already archived as unmet on the current remote x86 authority surface."
+    },
+    {
+      "reason": "core_path_classifications_remain_non_accepting",
+      "source": "benchmark_results/final_core_path_classification.json",
+      "detail": "The settled cross-family classifications remain HNSW=functional-but-not-leading, IVF-PQ=no-go, and DiskANN=constrained."
+    }
+  ],
+  "summary": "Production engineering gates are closed, but the project is not accepted on the current remote x86 evidence because no core CPU path has a credible leadership win over native and the settled core-path classifications remain non-accepting.",
+  "action": "Archive the project verdict as not accepted. Do not claim final non-GPU production replacement until a new remote authority artifact changes the leadership and core-path evidence."
+}

@@ -1,0 +1,32 @@
+{
+  "task_id": "DISKANN-P3-004",
+  "family": "DiskANN",
+  "classification": "constrained",
+  "leadership_verdict": "no_go_for_native_comparable_benchmark",
+  "leadership_claim_allowed": false,
+  "verdict_date": "2026-03-12",
+  "authority_scope": "remote_x86_only",
+  "methodology": "scope_audit_plus_benchmark_gate_plus_compare_lane_exclusion",
+  "benchmark_gate_source": "benchmark_results/diskann_p3_004_benchmark_gate.json",
+  "recall_gated_baseline_source": "benchmark_results/recall_gated_baseline.json",
+  "cross_dataset_source": "benchmark_results/cross_dataset_sampling.json",
+  "scope_contract_sources": [
+    "/data/work/knowhere-rs-logs-diskann-scope-audit/test_20260311T164705Z_81281.log",
+    "/data/work/knowhere-rs-logs-diskann-scope-audit/test_20260311T164752Z_81653.log",
+    "/data/work/knowhere-rs-logs-diskann-placeholder-regression/test_20260311T165225Z_84943.log",
+    "/data/work/knowhere-rs-logs-diskann-placeholder-regression/test_20260311T165342Z_85226.log"
+  ],
+  "evidence": {
+    "benchmark_gate_verdict": "no_go_for_native_comparable_benchmark",
+    "baseline_recall_gate": 0.8,
+    "baseline_recall_at_10": 0.009,
+    "baseline_confidence": "recheck required",
+    "best_cross_dataset_recall_at_10": 0.015000000000000003,
+    "best_cross_dataset_confidence": "recheck required",
+    "diskann_index_native_comparable": false,
+    "pqflash_index_native_comparable": false,
+    "family_usage_scope": "constrained_functional_non_native_comparable"
+  },
+  "summary": "DiskANN is constrained on the current remote x86 authority lane: Rust exposes functional simplified Vamana and AISAQ skeleton surfaces, but benchmark and compare lanes remain no-go for native-comparable claims.",
+  "action": "Archive DiskANN as constrained rather than benchmark-comparable. Keep the family out of native-comparable benchmark and leadership claims unless a future authority artifact materially changes the implementation boundary."
+}

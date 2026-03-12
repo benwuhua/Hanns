@@ -1,0 +1,20 @@
+{
+  "benchmark": "BASELINE-P3-001-rs-hnsw-hdf5",
+  "dataset": "sift-128-euclidean",
+  "methodology": "rust_hdf5_ann_benchmark",
+  "rows": [
+    {
+      "dataset": "sift-128-euclidean",
+      "index": "HNSW(Rust)",
+      "params": "M=16 | efConstruction=100, ef=138, top_k=100, recall_at=10",
+      "thread_num": 8,
+      "qps": 710.9623183892526,
+      "recall_at_10": 0.9914999999999993,
+      "ground_truth_source": "ann_benchmarks_hdf5_neighbors",
+      "confidence": "trusted",
+      "confidence_explanation": "",
+      "runtime_seconds": 1.406544305,
+      "source": "knowhere_rs_hnsw_hdf5"
+    }
+  ]
+}

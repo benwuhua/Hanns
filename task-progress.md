@@ -20,6 +20,26 @@
 
 ## Session Log
 
+### Session 38 - 2026-03-12
+- Focus: `repo-hygiene-push-readiness`
+- Completed:
+  - audited local ignored/untracked junk after the long-task closure and removed clearly disposable garbage including reject/backup files, cache/build directories, and unreferenced experimental benchmark JSONs
+  - changed `.gitignore` so the durable benchmark verdict chain under `benchmark_results/` is now versionable, then kept only the 19 JSON artifacts actually referenced by tests, scripts, or operator docs
+  - removed the tracked orphan file `src/faiss/hnsw.rs.bak`, leaving `data/` intentionally untouched because those local fixtures are expensive to rebuild and are still meant to stay outside git
+- Verification:
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 31 features (31 passing, 0 failing); workflow/doc checks passed`
+  - `cargo test --test test_final_production_acceptance -- --nocapture` -> `ok`
+  - `cargo test --test bench_recall_gated_baseline -q` -> `ok`
+  - `cargo test --test bench_hnsw_cpp_compare -q` -> `ok`
+  - `git clean -ndX` -> only `data/` remains as preserved local-only fixture state
+- Result:
+  - repo hygiene is improved for git push and fresh clones
+  - the durable benchmark artifacts needed by the current verdict chain are no longer local-only ignored files
+- Notes:
+  - this was a post-close hygiene pass, not a new feature; the project verdict remains `not accepted` on current remote x86 evidence
+  - local dataset fixtures under `data/` were preserved on purpose
+- Git Commits: pending
+
 ### Session 37 - 2026-03-12
 - Focus: `final-production-acceptance`
 - Completed:

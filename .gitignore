@@ -22,7 +22,26 @@ Cargo.lock
 
 # Local benchmark/data artifacts
 data/
-benchmark_results/
+benchmark_results/*
+!benchmark_results/baseline_p3_001_methodology_gap.json
+!benchmark_results/baseline_p3_001_same_schema_hnsw_hdf5.json
+!benchmark_results/baseline_p3_001_stop_go_verdict.json
+!benchmark_results/cross_dataset_sampling.json
+!benchmark_results/diskann_p3_004_benchmark_gate.json
+!benchmark_results/diskann_p3_004_final_verdict.json
+!benchmark_results/final_core_path_classification.json
+!benchmark_results/final_performance_leadership_proof.json
+!benchmark_results/final_production_acceptance.json
+!benchmark_results/hnsw_p1_001_after.remote.json
+!benchmark_results/hnsw_p1_001_compare.json
+!benchmark_results/hnsw_p3_002_final_verdict.json
+!benchmark_results/ivfpq_p1_002_focused.json
+!benchmark_results/ivfpq_p3_003_final_verdict.json
+!benchmark_results/native_hnsw_sift128.full.json
+!benchmark_results/native_hnsw_sift128.remote.json
+!benchmark_results/recall_gated_baseline.json
+!benchmark_results/rs_hnsw_sift128.full_k100.json
+!benchmark_results/rs_hnsw_sift128.local.json
 cpp_bench_build/
 *.fvecs
 *.ivecs

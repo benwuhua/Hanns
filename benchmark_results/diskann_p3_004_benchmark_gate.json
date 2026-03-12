@@ -1,0 +1,31 @@
+{
+  "task_id": "DISKANN-P3-004",
+  "family": "DiskANN",
+  "benchmark_gate_verdict": "no_go_for_native_comparable_benchmark",
+  "comparability_status": "constrained",
+  "native_comparison_allowed": false,
+  "verdict_date": "2026-03-12",
+  "authority_scope": "remote_x86_only",
+  "methodology": "recall_gated_baseline_plus_cross_dataset_sampling_under_constrained_aisaq_scope",
+  "baseline_source": "benchmark_results/recall_gated_baseline.json",
+  "cross_dataset_source": "benchmark_results/cross_dataset_sampling.json",
+  "scope_guard_sources": [
+    "tests/bench_diskann_1m.rs",
+    "tests/bench_compare.rs"
+  ],
+  "evidence": {
+    "baseline_recall_gate": 0.8,
+    "baseline_recall_at_10": 0.009,
+    "baseline_confidence": "recheck required",
+    "cross_dataset_status": "authority_refreshed_2026-03-12T03:19:49Z",
+    "cross_dataset_recalls_at_10": {
+      "random_uniform_l2": 0.015000000000000003,
+      "clustered_l2": 0.009999999999999998,
+      "anisotropic_l2": 0.011
+    },
+    "cross_dataset_confidence": "recheck required",
+    "implementation_scope": "constrained_aisaq_skeleton_not_native_ssd_diskann"
+  },
+  "summary": "DiskANN closes the remote benchmark gate as explicit no-go benchmark evidence under constrained scope: the current implementation is not native-comparable, and the baseline artifact already sits far below the recall gate.",
+  "action": "Keep DiskANN out of native-comparable benchmark and leadership claims. Use the refreshed cross-dataset artifact to archive constrained benchmark evidence, then let the later stop-go verdict feature decide the family-level classification."
+}

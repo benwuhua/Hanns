@@ -1,0 +1,58 @@
+{
+  "benchmark": "BENCH-P1-001-recall-gated-baseline",
+  "dataset": "synthetic-random-l2",
+  "base_size": 5000,
+  "query_size": 100,
+  "dim": 64,
+  "recall_gate": 0.8,
+  "rows": [
+    {
+      "index": "HNSW",
+      "qps": 19235.530024450283,
+      "recall_at_10": 0.21500000000000002,
+      "ground_truth_source": "flat_exact_l2_bruteforce",
+      "confidence": "recheck required",
+      "confidence_explanation": "建议将 ef_search 从 128 提升到 >=256，并在固定随机种子下复跑 3 次对比 recall 漂移。"
+    },
+    {
+      "index": "IVF-Flat",
+      "qps": 8759.621787562002,
+      "recall_at_10": 0.5310000000000001,
+      "ground_truth_source": "flat_exact_l2_bruteforce",
+      "confidence": "unreliable",
+      "confidence_explanation": "建议增大 nprobe（16 -> 32/64）并检查 nlist 与样本规模匹配关系，复跑同一数据集验证 recall。"
+    },
+    {
+      "index": "DiskANN",
+      "qps": 4790.402180131194,
+      "recall_at_10": 0.006999999999999999,
+      "ground_truth_source": "flat_exact_l2_bruteforce",
+      "confidence": "recheck required",
+      "confidence_explanation": "建议提高 search_list_size/beamwidth（128/8 -> 256/16）并复测；当前参数更偏吞吐，召回不足。"
+    },
+    {
+      "index": "ScaNN",
+      "qps": 408.3165940202713,
+      "recall_at_10": 1.0,
+      "ground_truth_source": "flat_exact_l2_bruteforce",
+      "confidence": "trusted",
+      "confidence_explanation": ""
+    },
+    {
+      "index": "RaBitQ",
+      "qps": 381.5156986919032,
+      "recall_at_10": 0.3699999999999999,
+      "ground_truth_source": "flat_exact_l2_bruteforce",
+      "confidence": "recheck required",
+      "confidence_explanation": "RaBitQ 为有损量化，建议提高 nprobe 并开启 refine（fp32/dataview）后复测 recall@10。"
+    },
+    {
+      "index": "SparseWand",
+      "qps": 1796.1593694129901,
+      "recall_at_10": 1.0,
+      "ground_truth_source": "sparse_exact_ip_bruteforce",
+      "confidence": "trusted",
+      "confidence_explanation": ""
+    }
+  ]
+}
