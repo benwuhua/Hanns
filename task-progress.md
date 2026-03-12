@@ -12,13 +12,36 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `hnsw-round3-authority-same-schema-rerun`
-- Next feature: `hnsw-round3-authority-same-schema-rerun`
+- Current focus: `none`
+- Next feature: `none`
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 42/43 features passing (98%)
+- Progress: 43/43 features passing (100%)
 
 ## Session Log
+
+### Session 51 - 2026-03-12
+- Focus: `hnsw-round3-authority-same-schema-rerun`
+- Completed:
+  - tightened `tests/bench_hnsw_reopen_round3.rs` again so round 3 now requires `benchmark_results/hnsw_reopen_round3_authority_summary.json`, then used the missing-artifact failure as the TDD red signal for the real authority closure slice
+  - reran the authoritative round-3 surfaces: fresh same-schema Rust HDF5 row, fresh native HNSW capture via linkfix fallback, and a fresh authority synthetic profile; then synced the updated `benchmark_results/rs_hnsw_sift128.full_k100.json` and `benchmark_results/hnsw_reopen_distance_compute_profile_round3.json` back into the local worktree
+  - created `benchmark_results/hnsw_reopen_round3_authority_summary.json`, which records the honest round-3 outcome: the distance-compute hypothesis improved both synthetic and same-schema Rust evidence (`521.031 -> 553.060` qps, recall `0.9923 -> 0.9943`), but native also rose to `10792.646` qps, so the gap only narrowed from `20.2x` to `19.5x`; that is enough to avoid another hard-stop, but not enough to justify a later verdict-refresh feature, so round 3 closes as `soft_stop`
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round3 -- --nocapture` -> initial `FAIL` (missing `benchmark_results/hnsw_reopen_round3_authority_summary.json`), then `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command "cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T093400Z_21869.log`)
+  - `bash scripts/remote/native_hnsw_qps_capture.sh --log-dir /data/work/knowhere-rs-logs-hnsw-reopen-round3 --gtest-filter Benchmark_float_qps.TEST_HNSW` -> `exit_code=0` via linkfix fallback (`/data/work/knowhere-rs-logs-hnsw-reopen-round3/native_hnsw_qps_linkfix_20260312T094945Z.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_round3_profile -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T095112Z_24204.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round3 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T095502Z_24753.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 43 features (43 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-round3-authority-same-schema-rerun` is now `passing`
+  - all tracked features are now `passing`
+  - round 3 is archived as `soft_stop`; the historical HNSW family verdict remains `functional-but-not-leading`
+- Notes:
+  - round 3 disproved the harder failure mode: the distance-compute hypothesis was not a dead end, and it did improve the authority Rust row
+  - it still did not produce a large enough same-schema delta to justify reopening the family verdict or project-level acceptance chain, so any future HNSW work now requires a new tracked hypothesis rather than an implicit continuation of round 3
+- Git Commits: pending
 
 ### Session 50 - 2026-03-12
 - Focus: `hnsw-distance-l2-fast-path-rework`

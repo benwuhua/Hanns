@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-12 09:29
+Last updated: 2026-03-12 09:56
 Sync baseline: c87ab4915cca1a0ed68252cbf2701352e8cb6af7 from main
 
 ## 轮次记录
+- 2026-03-12 09:56: **builder-loop：收口 `hnsw-round3-authority-same-schema-rerun`，给第三轮 HNSW reopen 做真实 authority same-schema 终判（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round3_baseline.json`、`benchmark_results/hnsw_reopen_distance_compute_profile_round3.json`、`tests/bench_hnsw_reopen_round3.rs`、`docs/superpowers/plans/2026-03-12-hnsw-reopen-round3-distance-compute.md`。
+  2. 阶段结论：round 3 已经拿到 synthetic/profile 改善，剩下唯一值得回答的问题是：这次 distance-compute cut 能不能把 authority same-schema Rust row 真正往前推 enough to justify a later verdict refresh。没有 fresh Rust/native same-schema evidence，就不能把 round 3 记成成功，也不能把它再延长成无穷 reopen line。
+  3. 本轮执行：先把 `tests/bench_hnsw_reopen_round3.rs` 再次升级成要求 `benchmark_results/hnsw_reopen_round3_authority_summary.json` 的默认-lane contract，并用缺失 artifact 的失败做 TDD red；随后 authority 侧重跑 Rust same-schema HDF5 benchmark、native HNSW capture、以及 `bench_hnsw_reopen_round3_profile`，再把 fresh `benchmark_results/rs_hnsw_sift128.full_k100.json` 和 `benchmark_results/hnsw_reopen_distance_compute_profile_round3.json` 回传到本地；最后新增 `benchmark_results/hnsw_reopen_round3_authority_summary.json`，明确记录 round 3 的真实结果是“same-schema 有改善，但改善幅度不足以重开 family verdict”。
+  4. 验证结果：本地 `cargo test --test bench_hnsw_reopen_round3 -- --nocapture` 先因缺失 `benchmark_results/hnsw_reopen_round3_authority_summary.json` 失败再转绿；`bash init.sh` 通过；authority Rust same-schema rerun `generate_hdf5_hnsw_baseline` 通过，日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T093400Z_21869.log`；native capture 通过 linkfix fallback，日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round3/native_hnsw_qps_linkfix_20260312T094945Z.log`；authority round-3 synthetic profile rerun 通过，日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T095112Z_24204.log`；summary artifact 同步回 remote 后，authority contract replay `bench_hnsw_reopen_round3 -q` 通过，日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T095502Z_24753.log`。
+  5. 后续主缺口：当前 tracked reopen line 已经结束，不存在下一条活动 feature。若未来仍要继续 HNSW，必须先提出新的 authority-backed hypothesis，而不是继续默认延长这一轮已经被证据归档为 `soft_stop` 的 distance-compute line。
+  状态：Phase 6 Closed（round 3 soft-stop archived；all tracked features passing）。
 - 2026-03-12 09:29: **builder-loop：收口 `hnsw-distance-l2-fast-path-rework`，把第三轮 HNSW 的 layer-0 L2 热路径真正改成 pointer fast path（plan+exec）**
   1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_distance_compute_profile_round3.json`、`src/faiss/hnsw.rs`、`tests/bench_hnsw_reopen_round3.rs`、`docs/superpowers/plans/2026-03-12-hnsw-reopen-round3-distance-compute.md`。
   2. 阶段结论：round 3 的 profiler 已经明确把主热点缩到 `layer0_query_distance`，因此这轮不该再做宽泛 candidate-search 改写，而应只验证一个更小的假设：把 `L2 + no filter` 搜索内层从 slice-based distance 调度切成 pointer-backed fast path，能不能在不改 API/FFI/持久化边界的前提下，真实降低 distance bucket。

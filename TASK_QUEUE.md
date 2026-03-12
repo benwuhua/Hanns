@@ -1,14 +1,14 @@
 # Builder 任务队列
-> 最后更新: 2026-03-12 09:29 UTC | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
+> 最后更新: 2026-03-12 09:56 UTC | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
 
 ## 当前大任务面板
 
-- [ ] **HNSW-REOPEN-001**: 重开 HNSW 核心算法攻关线
-  - 当前子阶段: `round3_authority_same_schema_rerun` 🔄
-  - 当前结论: 第三轮 HNSW 的 L2 fast path 已经拿到正向 synthetic/profile 证据。刷新后的 `benchmark_results/hnsw_reopen_distance_compute_profile_round3.json` 显示 aggregate `distance_compute` 从 `40.165ms` 降到 `38.528ms`，其中主热点 `layer0_query_distance` 从 `32.500ms` 降到 `31.244ms`，sample-search qps 也从 `2023.694` 升到 `2069.930`。这说明 round-3 的最小 L2 `query -> node` 指针化切口已经有效，但它还没有回答 authority same-schema lane 是否随之改善
-  - 当前证据: `benchmark_results/hnsw_reopen_round3_baseline.json` + `benchmark_results/hnsw_reopen_distance_compute_profile_round3.json` + `benchmark_results/hnsw_reopen_round2_authority_summary.json`
-  - 下一步: 执行 `hnsw-round3-authority-same-schema-rerun`，重跑真实 recall-gated same-schema Rust/native evidence，判断这次 synthetic 改善能否兑现到 authority qps，而不是继续停留在本地/合成 profile 上
-  - 范围约束: 只重开 HNSW；IVF-PQ、DiskANN、以及项目级 final acceptance 继续保持 archived state，直到 HNSW 真的拿到更强 authority evidence
+- [x] **HNSW-REOPEN-001**: 重开 HNSW 核心算法攻关线
+  - 当前子阶段: `round3_soft_stop_archived` ✅
+  - 当前结论: 第三轮 HNSW 的 distance-compute 假设拿到了真实 authority gain，但幅度不足以改写 family verdict。新的 `benchmark_results/hnsw_reopen_round3_authority_summary.json` 记录：same-schema Rust HNSW 从 `521.031` 提升到 `553.060` qps（`+6.1%`），recall 从 `0.9923` 提升到 `0.9943`，而 native HNSW 同时升到 `10792.646` qps，所以 native-over-Rust gap 只从 `20.2x` 缩到 `19.5x`。因此 round 3 诚实归档为 `soft_stop`，历史 HNSW family verdict 继续保持 `functional-but-not-leading`
+  - 当前证据: `benchmark_results/hnsw_reopen_round3_baseline.json` + `benchmark_results/hnsw_reopen_distance_compute_profile_round3.json` + `benchmark_results/hnsw_reopen_round3_authority_summary.json`
+  - 下一步: 无。若未来仍要继续 HNSW，必须先提出新的 authority-backed hypothesis，或明确给出足以支撑 family verdict refresh 的更强 same-schema delta
+  - 范围约束: 当前 reopen line 已关闭；IVF-PQ、DiskANN、以及项目级 final acceptance 继续保持 archived state
 
 - [x] **BASELINE-P3-001**: 建立可信的 native-vs-rs recall-gated 基线
   - 子阶段: `stop_go_verdict_formed` ✅

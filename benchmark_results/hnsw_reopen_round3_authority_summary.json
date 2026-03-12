@@ -1,0 +1,44 @@
+{
+  "task_id": "HNSW-REOPEN-ROUND3-AUTHORITY-SUMMARY",
+  "family": "HNSW",
+  "authority_scope": "remote_x86_only",
+  "round3_target": "distance_compute_inner_loop",
+  "historical_verdict_source": "benchmark_results/hnsw_p3_002_final_verdict.json",
+  "round3_baseline_source": "benchmark_results/hnsw_reopen_round3_baseline.json",
+  "round3_profile_source": "benchmark_results/hnsw_reopen_distance_compute_profile_round3.json",
+  "same_schema_sources": {
+    "rust": "benchmark_results/rs_hnsw_sift128.full_k100.json",
+    "native_log": "/data/work/knowhere-rs-logs-hnsw-reopen-round3/native_hnsw_qps_linkfix_20260312T094945Z.log"
+  },
+  "authority_logs": [
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T093400Z_21869.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round3/native_hnsw_qps_linkfix_20260312T094945Z.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T095112Z_24204.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T095502Z_24753.log"
+  ],
+  "same_schema_current": {
+    "rust_recall_at_10": 0.9942999999999994,
+    "rust_qps": 553.060494112464,
+    "native_recall_at_10": 0.95,
+    "native_qps": 10792.646,
+    "native_over_rust_qps_ratio": 19.514404147270973
+  },
+  "delta_vs_round3_baseline": {
+    "rust_recall_at_10_delta": 0.002000000000000224,
+    "rust_qps_pct": 6.14732264280341,
+    "native_qps_pct": 2.594783512012669,
+    "native_over_rust_qps_ratio_pct": -3.346800505506294
+  },
+  "profile_refresh_current": {
+    "entry_descent_ms": 5.008741,
+    "distance_compute_ms": 35.692076,
+    "layer0_query_distance_ms": 31.050247,
+    "upper_layer_query_distance_ms": 4.641829,
+    "sample_search_qps": 1830.3565491658794,
+    "recommended_next_target": "layer0_query_distance"
+  },
+  "verdict_refresh_allowed": false,
+  "next_action": "soft_stop",
+  "summary": "Round 3 did produce a real authority-backed same-schema improvement: Rust HNSW moved from 521.0310353032352 to 553.060494112464 qps (+6.1%) while recall rose from 0.9922999999999992 to 0.9942999999999994, and the remote synthetic profile also got cheaper. Native HNSW, however, also rose to 10792.646 qps, so the native-over-Rust gap only narrowed from 20.2x to 19.5x. That is enough to reject a hard-stop on the distance-compute hypothesis, but not enough to justify rewriting the historical HNSW family verdict or reopening leadership claims.",
+  "action": "Keep benchmark_results/hnsw_p3_002_final_verdict.json unchanged, archive round 3 as a soft-stop on the current authority evidence, and only reopen HNSW again with a new authority-backed hypothesis or a materially stronger same-schema gain."
+}

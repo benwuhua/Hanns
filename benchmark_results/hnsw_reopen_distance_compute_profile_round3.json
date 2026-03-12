@@ -2,20 +2,20 @@
   "authority_scope": "remote_x86_only",
   "benchmark_lane": "hnsw_reopen_distance_compute_profile_round3",
   "call_counts": {
-    "distance_calls": 33519,
-    "entry_descent_calls": 384,
-    "frontier_pops": 20371,
-    "frontier_pushes": 24074,
+    "distance_calls": 32910,
+    "entry_descent_calls": 512,
+    "frontier_pops": 20370,
+    "frontier_pushes": 24078,
     "layer0_candidate_search_calls": 128,
-    "pruned_candidates": 15174,
-    "visited_marks": 27083
+    "pruned_candidates": 15157,
+    "visited_marks": 27068
   },
   "candidate_search_breakdown": {
-    "candidate_pruning_ms": 0.732915,
-    "distance_compute_ms": 38.527799,
-    "entry_descent_ms": 7.4769179999999995,
-    "frontier_ops_ms": 7.076932,
-    "visited_ops_ms": 7.315738
+    "candidate_pruning_ms": 1.339778,
+    "distance_compute_ms": 35.692076,
+    "entry_descent_ms": 5.008741,
+    "frontier_ops_ms": 9.054670000000002,
+    "visited_ops_ms": 10.859376000000001
   },
   "config": {
     "ef_construction": 200,
@@ -30,56 +30,56 @@
   },
   "dataset_source": "synthetic_sift_like_128d",
   "distance_compute_breakdown": {
-    "layer0_query_distance_ms": 31.244153999999998,
+    "layer0_query_distance_ms": 31.050247,
     "node_node_distance_ms": 0.0,
-    "upper_layer_query_distance_ms": 7.283645
+    "upper_layer_query_distance_ms": 4.641829
   },
   "distance_compute_call_counts": {
-    "layer0_query_distance_calls": 27083,
+    "layer0_query_distance_calls": 27068,
     "node_node_distance_calls": 0,
-    "upper_layer_query_distance_calls": 6436
+    "upper_layer_query_distance_calls": 5842
   },
   "family": "HNSW",
   "hotspot_ranking": [
     {
-      "calls": 33519,
-      "milliseconds": 38.527799,
-      "share_of_profiled_time": 0.6302569714116577,
+      "calls": 32910,
+      "milliseconds": 35.692076,
+      "share_of_profiled_time": 0.5761001181493409,
       "stage": "distance_compute"
     },
     {
-      "calls": 384,
-      "milliseconds": 7.4769179999999995,
-      "share_of_profiled_time": 0.12231115756634083,
-      "stage": "entry_descent"
-    },
-    {
-      "calls": 27083,
-      "milliseconds": 7.315738,
-      "share_of_profiled_time": 0.11967449465569464,
+      "calls": 27068,
+      "milliseconds": 10.859376000000001,
+      "share_of_profiled_time": 0.17527945969374595,
       "stage": "visited_ops"
     },
     {
-      "calls": 44445,
-      "milliseconds": 7.076932,
-      "share_of_profiled_time": 0.11576798688153055,
+      "calls": 44448,
+      "milliseconds": 9.054670000000002,
+      "share_of_profiled_time": 0.14614998737544135,
       "stage": "frontier_ops"
     },
     {
-      "calls": 15174,
-      "milliseconds": 0.732915,
-      "share_of_profiled_time": 0.011989389484776306,
+      "calls": 512,
+      "milliseconds": 5.008741,
+      "share_of_profiled_time": 0.08084529131562557,
+      "stage": "entry_descent"
+    },
+    {
+      "calls": 15157,
+      "milliseconds": 1.339778,
+      "share_of_profiled_time": 0.021625143465846246,
       "stage": "candidate_pruning"
     }
   ],
-  "profiled_distance_hotspot_share": 0.8109509188417433,
+  "profiled_distance_hotspot_share": 0.8699479122480855,
   "recommended_next_target": "layer0_query_distance",
   "round3_baseline_source": "benchmark_results/hnsw_reopen_round3_baseline.json",
   "sample_search": {
-    "qps": 2069.9301983960177,
+    "qps": 1830.3565491658794,
     "query_count": 128,
-    "search_wall_clock_ms": 61.837834
+    "search_wall_clock_ms": 69.93173
   },
   "task_id": "HNSW-REOPEN-DISTANCE-COMPUTE-PROFILE-ROUND3",
-  "total_profiled_ms": 61.130302
+  "total_profiled_ms": 61.954641
 }
