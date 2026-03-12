@@ -1,6 +1,6 @@
 # Knowhere-RS Development Roadmap (Non-GPU)
 
-Last updated: 2026-03-12 15:54 UTC
+Last updated: 2026-03-12 08:09 UTC
 
 ## Goal
 
@@ -163,8 +163,8 @@ Objective:
 Active scoped tasks:
 
 - `hnsw-reopen-round2-activation`: closed; round 1 is now frozen into `benchmark_results/hnsw_reopen_round2_baseline.json`, and the second HNSW reopen line is officially active
-- `hnsw-candidate-search-profiler`: active; split `candidate_search` into smaller hotspots so round 2 can target the real same-schema QPS blocker instead of a monolithic timing bucket
-- `hnsw-candidate-search-core-rework`: pending; rework the shared candidate-search core only after the round-2 profile has made the bottleneck explicit
+- `hnsw-candidate-search-profiler`: closed; `benchmark_results/hnsw_reopen_candidate_search_profile_round2.json` now pins round-2 authority evidence to `entry_descent` first and `distance_compute` second, replacing the old monolithic `candidate_search` bucket
+- `hnsw-candidate-search-core-rework`: active; rework the shared candidate-search core around `entry_descent_level_hopping` without regressing recall or pushing too much cost into `distance_compute`
 - `hnsw-round2-authority-same-schema-rerun`: pending; rerun the real recall-gated same-schema lane and decide whether round 2 may rewrite the historical HNSW family verdict
 
 Phase exit criteria:

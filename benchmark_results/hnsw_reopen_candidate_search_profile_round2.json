@@ -1,0 +1,74 @@
+{
+  "authority_scope": "remote_x86_only",
+  "benchmark_lane": "hnsw_reopen_candidate_search_profile_round2",
+  "call_counts": {
+    "distance_calls": 27154,
+    "entry_descent_calls": 384,
+    "frontier_pops": 20261,
+    "frontier_pushes": 23874,
+    "layer0_candidate_search_calls": 128,
+    "pruned_candidates": 15217,
+    "visited_marks": 27026
+  },
+  "candidate_search_breakdown": {
+    "candidate_pruning_ms": 1.393296,
+    "distance_compute_ms": 43.644337,
+    "entry_descent_ms": 51.021309,
+    "frontier_ops_ms": 9.401527999999999,
+    "visited_ops_ms": 5.189404
+  },
+  "config": {
+    "ef_construction": 200,
+    "ef_search": 64,
+    "m": 16,
+    "top_k": 10
+  },
+  "dataset": {
+    "base_vectors": 12000,
+    "dim": 128,
+    "query_vectors": 128
+  },
+  "dataset_source": "synthetic_sift_like_128d",
+  "family": "HNSW",
+  "hotspot_ranking": [
+    {
+      "calls": 384,
+      "milliseconds": 51.021309,
+      "share_of_profiled_time": 0.46110589335149177,
+      "stage": "entry_descent"
+    },
+    {
+      "calls": 27154,
+      "milliseconds": 43.644337,
+      "share_of_profiled_time": 0.3944363913148243,
+      "stage": "distance_compute"
+    },
+    {
+      "calls": 44135,
+      "milliseconds": 9.401527999999999,
+      "share_of_profiled_time": 0.08496645915746817,
+      "stage": "frontier_ops"
+    },
+    {
+      "calls": 27026,
+      "milliseconds": 5.189404,
+      "share_of_profiled_time": 0.046899321367505575,
+      "stage": "visited_ops"
+    },
+    {
+      "calls": 15217,
+      "milliseconds": 1.393296,
+      "share_of_profiled_time": 0.012591934808710221,
+      "stage": "candidate_pruning"
+    }
+  ],
+  "recommended_next_target": "entry_descent_level_hopping",
+  "round2_baseline_source": "benchmark_results/hnsw_reopen_round2_baseline.json",
+  "sample_search": {
+    "qps": 1033.9900729359633,
+    "query_count": 128,
+    "search_wall_clock_ms": 123.792291
+  },
+  "task_id": "HNSW-REOPEN-CANDIDATE-SEARCH-PROFILE-ROUND2",
+  "total_profiled_ms": 110.649874
+}

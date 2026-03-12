@@ -208,6 +208,52 @@ pub struct HnswBuildProfileReport {
     pub vectors_added: usize,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct HnswCandidateSearchProfileStats {
+    entry_descent: Duration,
+    frontier_ops: Duration,
+    visited_ops: Duration,
+    distance_compute: Duration,
+    candidate_pruning: Duration,
+    entry_descent_calls: u64,
+    layer0_candidate_search_calls: u64,
+    frontier_pushes: u64,
+    frontier_pops: u64,
+    visited_marks: u64,
+    distance_calls: u64,
+    pruned_candidates: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HnswCandidateSearchProfileBreakdown {
+    pub entry_descent_ms: f64,
+    pub frontier_ops_ms: f64,
+    pub visited_ops_ms: f64,
+    pub distance_compute_ms: f64,
+    pub candidate_pruning_ms: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HnswCandidateSearchProfileCallCounts {
+    pub entry_descent_calls: u64,
+    pub layer0_candidate_search_calls: u64,
+    pub frontier_pushes: u64,
+    pub frontier_pops: u64,
+    pub visited_marks: u64,
+    pub distance_calls: u64,
+    pub pruned_candidates: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HnswCandidateSearchProfileReport {
+    pub candidate_search_breakdown: HnswCandidateSearchProfileBreakdown,
+    pub call_counts: HnswCandidateSearchProfileCallCounts,
+    pub hotspot_ranking: Vec<HnswBuildProfileHotspot>,
+    pub recommended_next_target: String,
+    pub total_profiled_ms: f64,
+    pub query_count: usize,
+}
+
 impl HnswBuildProfileStats {
     fn record(&mut self, stage: HnswBuildProfileStage, elapsed: Duration) {
         match stage {
@@ -333,6 +379,141 @@ impl HnswBuildProfileStats {
             total_profiled_ms: self.total_profiled_ms(),
             repair_operations,
             vectors_added,
+        }
+    }
+}
+
+impl HnswCandidateSearchProfileStats {
+    fn record_entry_descent(&mut self, elapsed: Duration) {
+        self.entry_descent += elapsed;
+        self.entry_descent_calls += 1;
+    }
+
+    fn start_layer0_candidate_search(&mut self) {
+        self.layer0_candidate_search_calls += 1;
+    }
+
+    fn record_frontier_ops(&mut self, elapsed: Duration, pushes: u64, pops: u64) {
+        self.frontier_ops += elapsed;
+        self.frontier_pushes += pushes;
+        self.frontier_pops += pops;
+    }
+
+    fn record_visited_ops(&mut self, elapsed: Duration, marks: u64) {
+        self.visited_ops += elapsed;
+        self.visited_marks += marks;
+    }
+
+    fn record_distance_compute(&mut self, elapsed: Duration, calls: u64) {
+        self.distance_compute += elapsed;
+        self.distance_calls += calls;
+    }
+
+    fn record_candidate_pruning(&mut self, elapsed: Duration, pruned: u64) {
+        self.candidate_pruning += elapsed;
+        self.pruned_candidates += pruned;
+    }
+
+    fn breakdown(&self) -> HnswCandidateSearchProfileBreakdown {
+        HnswCandidateSearchProfileBreakdown {
+            entry_descent_ms: self.entry_descent.as_secs_f64() * 1000.0,
+            frontier_ops_ms: self.frontier_ops.as_secs_f64() * 1000.0,
+            visited_ops_ms: self.visited_ops.as_secs_f64() * 1000.0,
+            distance_compute_ms: self.distance_compute.as_secs_f64() * 1000.0,
+            candidate_pruning_ms: self.candidate_pruning.as_secs_f64() * 1000.0,
+        }
+    }
+
+    fn call_counts(&self) -> HnswCandidateSearchProfileCallCounts {
+        HnswCandidateSearchProfileCallCounts {
+            entry_descent_calls: self.entry_descent_calls,
+            layer0_candidate_search_calls: self.layer0_candidate_search_calls,
+            frontier_pushes: self.frontier_pushes,
+            frontier_pops: self.frontier_pops,
+            visited_marks: self.visited_marks,
+            distance_calls: self.distance_calls,
+            pruned_candidates: self.pruned_candidates,
+        }
+    }
+
+    fn total_profiled_ms(&self) -> f64 {
+        self.entry_descent.as_secs_f64() * 1000.0
+            + self.frontier_ops.as_secs_f64() * 1000.0
+            + self.visited_ops.as_secs_f64() * 1000.0
+            + self.distance_compute.as_secs_f64() * 1000.0
+            + self.candidate_pruning.as_secs_f64() * 1000.0
+    }
+
+    fn hotspot_ranking(&self) -> Vec<HnswBuildProfileHotspot> {
+        let total = self.total_profiled_ms();
+        let mut hotspots = vec![
+            (
+                "entry_descent",
+                self.entry_descent.as_secs_f64() * 1000.0,
+                self.entry_descent_calls,
+            ),
+            (
+                "frontier_ops",
+                self.frontier_ops.as_secs_f64() * 1000.0,
+                self.frontier_pushes + self.frontier_pops,
+            ),
+            (
+                "visited_ops",
+                self.visited_ops.as_secs_f64() * 1000.0,
+                self.visited_marks,
+            ),
+            (
+                "distance_compute",
+                self.distance_compute.as_secs_f64() * 1000.0,
+                self.distance_calls,
+            ),
+            (
+                "candidate_pruning",
+                self.candidate_pruning.as_secs_f64() * 1000.0,
+                self.pruned_candidates,
+            ),
+        ];
+
+        hotspots.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+
+        hotspots
+            .into_iter()
+            .map(|(stage, milliseconds, calls)| HnswBuildProfileHotspot {
+                stage: stage.to_string(),
+                milliseconds,
+                calls,
+                share_of_profiled_time: if total > 0.0 {
+                    milliseconds / total
+                } else {
+                    0.0
+                },
+            })
+            .collect()
+    }
+
+    fn recommended_next_target(&self) -> String {
+        let hotspots = self.hotspot_ranking();
+        let stage = hotspots
+            .first()
+            .map(|hotspot| hotspot.stage.as_str())
+            .unwrap_or("distance_compute");
+        match stage {
+            "entry_descent" => "entry_descent_level_hopping".to_string(),
+            "frontier_ops" => "frontier_queue_operations".to_string(),
+            "visited_ops" => "visited_state_reuse".to_string(),
+            "candidate_pruning" => "candidate_pruning_result_heap".to_string(),
+            _ => "distance_compute_inner_loop".to_string(),
+        }
+    }
+
+    fn into_report(self, query_count: usize) -> HnswCandidateSearchProfileReport {
+        HnswCandidateSearchProfileReport {
+            candidate_search_breakdown: self.breakdown(),
+            call_counts: self.call_counts(),
+            hotspot_ranking: self.hotspot_ranking(),
+            recommended_next_target: self.recommended_next_target(),
+            total_profiled_ms: self.total_profiled_ms(),
+            query_count,
         }
     }
 }
@@ -2134,6 +2315,18 @@ impl HnswIndex {
         ef: usize,
         scratch: &mut SearchScratch,
     ) -> Vec<(usize, f32)> {
+        self.search_layer_idx_with_optional_profile(query, entry_idx, level, ef, scratch, None)
+    }
+
+    fn search_layer_idx_with_optional_profile(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+        ef: usize,
+        scratch: &mut SearchScratch,
+        mut profile: Option<&mut HnswCandidateSearchProfileStats>,
+    ) -> Vec<(usize, f32)> {
         use std::collections::BinaryHeap;
 
         // MinDist: smaller distance = higher priority (for candidates)
@@ -2191,23 +2384,60 @@ impl HnswIndex {
         }
 
         let num_nodes = self.node_info.len();
+        let visited_start = Instant::now();
         scratch.prepare(num_nodes);
+        if let Some(stats) = profile.as_deref_mut() {
+            stats.start_layer0_candidate_search();
+            stats.record_visited_ops(visited_start.elapsed(), 0);
+        }
 
         let mut candidates: BinaryHeap<(MinDist, usize)> = BinaryHeap::with_capacity(ef * 2);
         let mut results: BinaryHeap<(MaxDist, usize)> = BinaryHeap::with_capacity(ef);
 
+        let distance_start = Instant::now();
         let entry_dist = self.distance(query, entry_idx);
+        if let Some(stats) = profile.as_deref_mut() {
+            stats.record_distance_compute(distance_start.elapsed(), 1);
+        }
+
+        let frontier_start = Instant::now();
         candidates.push((MinDist(entry_dist), entry_idx));
         results.push((MaxDist(entry_dist), entry_idx));
-        scratch.mark_visited(entry_idx);
+        if let Some(stats) = profile.as_deref_mut() {
+            stats.record_frontier_ops(frontier_start.elapsed(), 2, 0);
+        }
 
-        while let Some((MinDist(cand_dist), cand_idx)) = candidates.pop() {
+        let visited_start = Instant::now();
+        let entry_marked = scratch.mark_visited(entry_idx);
+        if let Some(stats) = profile.as_deref_mut() {
+            stats.record_visited_ops(visited_start.elapsed(), u64::from(entry_marked));
+        }
+
+        loop {
+            let frontier_start = Instant::now();
+            let Some((MinDist(cand_dist), cand_idx)) = candidates.pop() else {
+                if let Some(stats) = profile.as_deref_mut() {
+                    stats.record_frontier_ops(frontier_start.elapsed(), 0, 0);
+                }
+                break;
+            };
+            if let Some(stats) = profile.as_deref_mut() {
+                stats.record_frontier_ops(frontier_start.elapsed(), 0, 1);
+            }
+
+            let pruning_start = Instant::now();
             if results.len() >= ef {
                 if let Some(&(MaxDist(worst_dist), _)) = results.peek() {
                     if cand_dist > worst_dist {
+                        if let Some(stats) = profile.as_deref_mut() {
+                            stats.record_candidate_pruning(pruning_start.elapsed(), 1);
+                        }
                         break;
                     }
                 }
+            }
+            if let Some(stats) = profile.as_deref_mut() {
+                stats.record_candidate_pruning(pruning_start.elapsed(), 0);
             }
 
             let node_info = &self.node_info[cand_idx];
@@ -2218,35 +2448,162 @@ impl HnswIndex {
             let neighbors = &node_info.layer_neighbors[level].ids;
             for &nbr_id in neighbors {
                 let nbr_idx = self.get_idx_from_id_fast(nbr_id);
-                if nbr_idx >= num_nodes || !scratch.mark_visited(nbr_idx) {
+                if nbr_idx >= num_nodes {
                     continue;
                 }
 
+                let visited_start = Instant::now();
+                let marked = scratch.mark_visited(nbr_idx);
+                if let Some(stats) = profile.as_deref_mut() {
+                    stats.record_visited_ops(visited_start.elapsed(), u64::from(marked));
+                }
+                if !marked {
+                    continue;
+                }
+
+                let distance_start = Instant::now();
                 let nbr_dist = self.distance(query, nbr_idx);
+                if let Some(stats) = profile.as_deref_mut() {
+                    stats.record_distance_compute(distance_start.elapsed(), 1);
+                }
+
+                let pruning_start = Instant::now();
                 let should_add = results.len() < ef
                     || nbr_dist
                         < results
                             .peek()
                             .map(|&(MaxDist(d), _)| d)
                             .unwrap_or(f32::INFINITY);
+                if let Some(stats) = profile.as_deref_mut() {
+                    stats.record_candidate_pruning(pruning_start.elapsed(), u64::from(!should_add));
+                }
 
                 if should_add {
+                    let frontier_start = Instant::now();
+                    let mut result_pops = 0;
                     if results.len() >= ef {
                         results.pop();
+                        result_pops = 1;
                     }
                     results.push((MaxDist(nbr_dist), nbr_idx));
                     candidates.push((MinDist(nbr_dist), nbr_idx));
+                    if let Some(stats) = profile.as_deref_mut() {
+                        stats.record_frontier_ops(frontier_start.elapsed(), 2, result_pops);
+                    }
                 }
             }
         }
 
+        let frontier_start = Instant::now();
         let mut sorted: Vec<(usize, f32)> = results
             .into_sorted_vec()
             .into_iter()
             .map(|(MaxDist(dist), idx)| (idx, dist))
             .collect();
         sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        if let Some(stats) = profile.as_deref_mut() {
+            stats.record_frontier_ops(frontier_start.elapsed(), 0, sorted.len() as u64);
+        }
         sorted
+    }
+
+    fn search_single_candidate_profiled(
+        &self,
+        query: &[f32],
+        ef: usize,
+        k: usize,
+        stats: &mut HnswCandidateSearchProfileStats,
+    ) -> Vec<(i64, f32)> {
+        if self.ids.is_empty() || self.entry_point.is_none() {
+            return vec![];
+        }
+
+        let mut scratch = SearchScratch::new();
+        let mut curr_ep_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
+
+        let distance_start = Instant::now();
+        let mut best_ep_dist = self.distance(query, curr_ep_idx);
+        stats.record_distance_compute(distance_start.elapsed(), 1);
+        let mut best_ep_idx = curr_ep_idx;
+
+        for level in (1..=self.max_level).rev() {
+            let descent_ef = ef.max(64).min(ef * 2);
+            let entry_start = Instant::now();
+            let results = self.search_layer_idx_with_scratch(
+                query,
+                curr_ep_idx,
+                level,
+                descent_ef,
+                &mut scratch,
+            );
+
+            let mut best_valid_idx: Option<usize> = None;
+            let mut best_valid_dist = f32::MAX;
+
+            for (idx, dist) in &results {
+                if *dist < best_valid_dist {
+                    best_valid_dist = *dist;
+                    best_valid_idx = Some(*idx);
+                }
+            }
+
+            if let Some(best_idx) = best_valid_idx {
+                curr_ep_idx = best_idx;
+                if best_valid_dist < best_ep_dist {
+                    best_ep_idx = best_idx;
+                    best_ep_dist = best_valid_dist;
+                }
+            } else if let Some((fallback_idx, _)) = results.first() {
+                curr_ep_idx = *fallback_idx;
+            }
+            stats.record_entry_descent(entry_start.elapsed());
+        }
+
+        let results = self.search_layer_idx_with_optional_profile(
+            query,
+            best_ep_idx,
+            0,
+            ef,
+            &mut scratch,
+            Some(stats),
+        );
+
+        let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
+        for (idx, dist) in results {
+            final_results.push((self.get_id_from_idx(idx), dist));
+            if final_results.len() >= k {
+                break;
+            }
+        }
+
+        final_results
+    }
+
+    pub fn candidate_search_profile_report(
+        &self,
+        queries: &[f32],
+        ef: usize,
+        k: usize,
+    ) -> Result<HnswCandidateSearchProfileReport> {
+        if queries.is_empty() || queries.len() % self.dim != 0 {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "profile queries must be a non-empty multiple of the index dimension".to_string(),
+            ));
+        }
+        if self.ids.is_empty() || self.entry_point.is_none() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "candidate-search profiling requires a non-empty HNSW index".to_string(),
+            ));
+        }
+
+        let mut stats = HnswCandidateSearchProfileStats::default();
+        let query_count = queries.len() / self.dim;
+        for i in 0..query_count {
+            let query = &queries[i * self.dim..(i + 1) * self.dim];
+            let _ = self.search_single_candidate_profiled(query, ef, k, &mut stats);
+        }
+
+        Ok(stats.into_report(query_count))
     }
 
     fn search_single(

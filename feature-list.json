@@ -610,7 +610,7 @@
       "title": "Profile HNSW round 2 candidate search",
       "description": "Split the current candidate_search hotspot into smaller measurable buckets so the next HNSW algorithm cut is driven by real authority-backed evidence rather than by a single monolithic timing bucket.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash init.sh",
         "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round2 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round2 bash scripts/remote/test.sh --command \"cargo test --features long-tests --test bench_hnsw_reopen_round2_profile -- --ignored --nocapture\"",

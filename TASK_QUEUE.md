@@ -1,13 +1,13 @@
 # Builder 任务队列
-> 最后更新: 2026-03-12 06:47 UTC | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
+> 最后更新: 2026-03-12 08:09 UTC | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
 
 ## 当前大任务面板
 
 - [ ] **HNSW-REOPEN-001**: 重开 HNSW 核心算法攻关线
-  - 当前子阶段: `candidate_search_profiler` 🔄
-  - 当前结论: 第一轮 HNSW reopen 已经用 authority evidence 证明“build path 有局部改善，但 family verdict 未动”；第二轮现已明确聚焦 `candidate_search_same_schema_qps`，目标是用新的 candidate-search profile 和 same-schema authority rerun 去挑战历史 `functional-but-not-leading`
-  - 当前证据: `benchmark_results/hnsw_reopen_round2_baseline.json` + `benchmark_results/hnsw_reopen_profile_round1.json`
-  - 下一步: 执行 `hnsw-candidate-search-profiler`，把当前 `candidate_search` 大桶拆成更小的热点，再决定 round-2 core rework 的最小切口
+  - 当前子阶段: `candidate_search_core_rework` 🔄
+  - 当前结论: 第一轮 HNSW reopen 已经用 authority evidence 证明“build path 有局部改善，但 family verdict 未动”；第二轮现已把 `candidate_search` 拆成 round-2 authority hotspots，其中 `entry_descent` 约占 `46.1%`、`distance_compute` 约占 `39.4%`，所以当前最小诚实动作已经从“继续测”切到“改共享 candidate-search core”
+  - 当前证据: `benchmark_results/hnsw_reopen_round2_baseline.json` + `benchmark_results/hnsw_reopen_candidate_search_profile_round2.json`
+  - 下一步: 执行 `hnsw-candidate-search-core-rework`，优先切 `entry_descent_level_hopping` 并避免把 `distance_compute` 成本继续推高，然后再决定是否值得重跑 same-schema authority lane
   - 范围约束: 只重开 HNSW；IVF-PQ、DiskANN、以及项目级 final acceptance 继续保持 archived state，直到 HNSW 真的拿到更强 authority evidence
 
 - [x] **BASELINE-P3-001**: 建立可信的 native-vs-rs recall-gated 基线

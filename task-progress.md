@@ -12,13 +12,35 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `hnsw-candidate-search-profiler` (round 2 is now active; round 1 closed with mixed evidence, so the next tracked task is to split candidate_search into smaller hotspots before another algorithm cut)
-- Next feature: `hnsw-candidate-search-profiler` (the activation slice is now closed; the next honest step is to profile candidate_search more deeply and use that artifact to drive the round-2 core rework)
+- Current focus: `hnsw-candidate-search-core-rework` (round 2 profiling is now closed with authority-backed evidence; the active task is to cut the shared candidate-search core around the two real hotspots, `entry_descent` and `distance_compute`)
+- Next feature: `hnsw-candidate-search-core-rework` (the profiler slice is now closed; the next honest step is to rework the shared candidate-search core and then rerun the same-schema authority lane)
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 36/39 features passing (92%)
+- Progress: 37/39 features passing (95%)
 
 ## Session Log
+
+### Session 45 - 2026-03-12
+- Focus: `hnsw-candidate-search-profiler`
+- Completed:
+  - turned `tests/bench_hnsw_reopen_round2.rs` into a true round-2 contract by first requiring `benchmark_results/hnsw_reopen_candidate_search_profile_round2.json` and using the missing-artifact failure as the TDD red signal
+  - added round-2 candidate-search profiling support in `src/faiss/hnsw.rs`, splitting the shared search core into `entry_descent`, `frontier_ops`, `visited_ops`, `distance_compute`, and `candidate_pruning` buckets through `candidate_search_profile_report()`
+  - added `tests/bench_hnsw_reopen_round2_profile.rs`, refreshed the authority artifact, and pulled `benchmark_results/hnsw_reopen_candidate_search_profile_round2.json` back from remote so round 2 now has a replayable hotspot split instead of a monolithic `candidate_search` bucket
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round2 -- --nocapture` -> initial `FAIL` (missing `benchmark_results/hnsw_reopen_candidate_search_profile_round2.json`), then `ok`
+  - `cargo test --features long-tests --test bench_hnsw_reopen_round2_profile -- --ignored --nocapture` -> `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round2 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round2 bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_round2_profile -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T080534Z_6832.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round2 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round2 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round2 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T080615Z_7017.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 39 features (37 passing, 2 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-candidate-search-profiler` is now `passing`
+  - authority round 2 profile now shows `entry_descent` first at about `51.021ms` (~`46.1%`) and `distance_compute` second at about `43.644ms` (~`39.4%`), with `frontier_ops` and `visited_ops` much smaller and `candidate_pruning` negligible
+  - the next tracked feature is `hnsw-candidate-search-core-rework`
+- Notes:
+  - this profiler feature closes because round 2 now has an authority-backed hotspot breakdown and an explicit next target (`entry_descent_level_hopping`), not because the same-schema HNSW verdict has changed
+  - the next rework should cut the shared candidate-search core, not reopen family-level or project-level verdicts prematurely
+- Git Commits: pending
 
 ### Session 44 - 2026-03-12
 - Focus: `hnsw-reopen-round2-activation`
