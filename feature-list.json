@@ -864,6 +864,28 @@
       "dependencies": [
         "hnsw-round5-authority-same-schema-rerun"
       ]
+    },
+    {
+      "id": "hnsw-layer0-prefetch-audit-round6",
+      "category": "hnsw-reopen",
+      "title": "Audit HNSW layer-0 vector prefetch path",
+      "description": "Add layer-0 next-neighbor vector prefetch in the ordered-pool L2 search loop, then generate and gate a round-6 audit artifact that records prefetch mode and call counts before any new authority same-schema verdict move.",
+      "priority": "high",
+      "status": "passing",
+      "verification_steps": [
+        "bash init.sh",
+        "cargo test --features long-tests --test bench_hnsw_reopen_round6_profile -- --ignored --nocapture",
+        "cargo test --test bench_hnsw_reopen_round6_prefetch -- --nocapture",
+        "cargo test --test bench_hnsw_reopen_round5 -- --nocapture",
+        "bash scripts/remote/sync.sh --mode rsync",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round6 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round6 bash scripts/remote/test.sh --command \"cargo test --features long-tests --test bench_hnsw_reopen_round6_profile -- --ignored --nocapture\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round6 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round6 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_round6_prefetch -q\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round6 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round6 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_round5 -q\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "hnsw-round5-stability-gate"
+      ]
     }
   ]
 }

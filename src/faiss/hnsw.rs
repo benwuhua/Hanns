@@ -318,6 +318,7 @@ pub struct HnswCandidateSearchProfileStats {
     node_node_distance_calls: u64,
     pruned_candidates: u64,
     layer0_batch4_calls: u64,
+    layer0_vector_prefetches: u64,
     layer0_ordered_pool_enabled: bool,
 }
 
@@ -379,6 +380,18 @@ pub struct HnswLayer0BatchDistanceCallCounts {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct HnswLayer0PrefetchMode {
+    pub native_layer0_vector_prefetch: String,
+    pub rust_layer0_vector_prefetch: String,
+    pub rust_prefetch_enabled: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HnswLayer0PrefetchCallCounts {
+    pub layer0_vector_prefetches: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct HnswCandidateSearchProfileReport {
     pub candidate_search_breakdown: HnswCandidateSearchProfileBreakdown,
     pub call_counts: HnswCandidateSearchProfileCallCounts,
@@ -387,6 +400,8 @@ pub struct HnswCandidateSearchProfileReport {
     pub search_core_shape: HnswLayer0SearchCoreShape,
     pub batch_distance_mode: HnswLayer0BatchDistanceMode,
     pub batch_distance_call_counts: HnswLayer0BatchDistanceCallCounts,
+    pub prefetch_mode: HnswLayer0PrefetchMode,
+    pub prefetch_call_counts: HnswLayer0PrefetchCallCounts,
     pub hotspot_ranking: Vec<HnswBuildProfileHotspot>,
     pub recommended_next_target: String,
     pub total_profiled_ms: f64,
@@ -569,6 +584,10 @@ impl HnswCandidateSearchProfileStats {
         self.layer0_ordered_pool_enabled = true;
     }
 
+    fn record_layer0_vector_prefetch(&mut self) {
+        self.layer0_vector_prefetches += 1;
+    }
+
     fn record_candidate_pruning(&mut self, elapsed: Duration, pruned: u64) {
         self.candidate_pruning += elapsed;
         self.pruned_candidates += pruned;
@@ -660,6 +679,24 @@ impl HnswCandidateSearchProfileStats {
         }
     }
 
+    fn prefetch_mode(&self) -> HnswLayer0PrefetchMode {
+        HnswLayer0PrefetchMode {
+            native_layer0_vector_prefetch: "next_neighbor_vector_l1".to_string(),
+            rust_layer0_vector_prefetch: if self.layer0_vector_prefetches > 0 {
+                "next_neighbor_vector_l1".to_string()
+            } else {
+                "disabled_or_unsupported".to_string()
+            },
+            rust_prefetch_enabled: self.layer0_vector_prefetches > 0,
+        }
+    }
+
+    fn prefetch_call_counts(&self) -> HnswLayer0PrefetchCallCounts {
+        HnswLayer0PrefetchCallCounts {
+            layer0_vector_prefetches: self.layer0_vector_prefetches,
+        }
+    }
+
     fn total_profiled_ms(&self) -> f64 {
         self.entry_descent.as_secs_f64() * 1000.0
             + self.frontier_ops.as_secs_f64() * 1000.0
@@ -739,6 +776,8 @@ impl HnswCandidateSearchProfileStats {
             search_core_shape: self.search_core_shape(),
             batch_distance_mode: self.batch_distance_mode(),
             batch_distance_call_counts: self.batch_distance_call_counts(),
+            prefetch_mode: self.prefetch_mode(),
+            prefetch_call_counts: self.prefetch_call_counts(),
             hotspot_ranking: self.hotspot_ranking(),
             recommended_next_target: self.recommended_next_target(),
             total_profiled_ms: self.total_profiled_ms(),
@@ -2437,6 +2476,35 @@ impl HnswIndex {
         )
     }
 
+    #[inline(always)]
+    unsafe fn prefetch_l2_vector_idx(&self, base_ptr: *const f32, idx: usize) -> bool {
+        let vec_ptr = base_ptr.add(idx * self.dim);
+        #[cfg(target_arch = "x86_64")]
+        {
+            core::arch::x86_64::_mm_prefetch(vec_ptr as *const i8, core::arch::x86_64::_MM_HINT_T0);
+            true
+        }
+        #[cfg(target_arch = "x86")]
+        {
+            core::arch::x86::_mm_prefetch(vec_ptr as *const i8, core::arch::x86::_MM_HINT_T0);
+            true
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            core::arch::asm!(
+                "prfm pldl1keep, [{addr}]",
+                addr = in(reg) vec_ptr,
+                options(readonly, nostack)
+            );
+            true
+        }
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64")))]
+        {
+            let _ = vec_ptr;
+            true
+        }
+    }
+
     pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<ApiSearchResult> {
         if self.vectors.is_empty() {
             return Err(crate::api::KnowhereError::InvalidArg(
@@ -3281,7 +3349,20 @@ impl HnswIndex {
             let mut batch_indices = [0usize; 4];
             let mut batch_len = 0usize;
 
-            for &nbr_id in neighbors {
+            for (neighbor_offset, &nbr_id) in neighbors.iter().enumerate() {
+                if neighbor_offset + 1 < neighbors.len() {
+                    let next_nbr_idx = self.get_idx_from_id_fast(neighbors[neighbor_offset + 1]);
+                    if next_nbr_idx < num_nodes {
+                        let prefetched =
+                            unsafe { self.prefetch_l2_vector_idx(base_ptr, next_nbr_idx) };
+                        if prefetched {
+                            if let Some(stats) = profile.as_deref_mut() {
+                                stats.record_layer0_vector_prefetch();
+                            }
+                        }
+                    }
+                }
+
                 let nbr_idx = self.get_idx_from_id_fast(nbr_id);
                 if nbr_idx >= num_nodes {
                     continue;

@@ -16,9 +16,34 @@
 - Next feature: `none`
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 50/50 features passing (100%)
+- Progress: 51/51 features passing (100%)
 
 ## Session Log
+
+### Session 59 - 2026-03-12
+- Focus: `hnsw-layer0-prefetch-audit-round6`
+- Completed:
+  - added `tests/bench_hnsw_reopen_round6_prefetch.rs` as a new default-lane contract that requires `benchmark_results/hnsw_reopen_layer0_prefetch_audit_round6.json` and validates the round-6 prefetch metadata/call-count schema
+  - extended `src/faiss/hnsw.rs` candidate-search profiling with round-6 prefetch surfaces (`prefetch_mode`, `prefetch_call_counts`) and wired layer-0 ordered-pool neighbor traversal to issue next-neighbor vector prefetch hints before distance evaluation
+  - added `tests/bench_hnsw_reopen_round6_profile.rs` and generated `benchmark_results/hnsw_reopen_layer0_prefetch_audit_round6.json`; the artifact now records `rust_prefetch_enabled=true`, `rust_layer0_vector_prefetch=next_neighbor_vector_l1`, and non-zero `layer0_vector_prefetches`
+- Verification:
+  - `cargo fmt --all -- --check` -> initial `FAIL` (rustfmt diffs), then `ok` after `cargo fmt --all`
+  - `cargo test --features long-tests --test bench_hnsw_reopen_round6_profile -- --ignored --nocapture` -> initial `FAIL` (prefetch count remained zero before loop wiring), then `ok`
+  - `cargo test --test bench_hnsw_reopen_round6_prefetch -- --nocapture` -> initial `FAIL` (missing artifact), then `ok`
+  - `cargo test --test bench_hnsw_reopen_round5 -- --nocapture` -> `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round6 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round6 bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_round6_profile -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round6/test_20260312T155342Z_93346.log`)
+  - `bash scripts/remote/sync.sh --mode rsync` -> `sync_mode=rsync`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round6 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round6 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round6_prefetch -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round6/test_20260312T155526Z_94186.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round6 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round6 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round5 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round6/test_20260312T155607Z_94525.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 51 features (51 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-layer0-prefetch-audit-round6` is now `passing`
+  - all tracked features remain `passing`
+- Notes:
+  - round-6 closes the prefetch-path instrumentation and evidence chain; it does not claim a same-schema Rust-vs-native QPS shift yet
+  - the next HNSW action should be an authority same-schema rerun on the round-6 branch to measure whether this prefetch cut moves the trusted throughput row
+- Git Commits: pending
 
 ### Session 58 - 2026-03-12
 - Focus: `hnsw-round5-stability-gate`
