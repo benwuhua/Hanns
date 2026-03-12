@@ -571,6 +571,7 @@ impl HnswIndex {
             .map(|idx| self.node_info[idx].max_layer)
             .collect();
 
+        let mut scratch = SearchScratch::new();
         for (i, &node_level) in node_levels.iter().enumerate().take(n) {
             let idx = first_new_idx + i;
 
@@ -578,7 +579,7 @@ impl HnswIndex {
             if idx > 0 {
                 let vec_start = idx * self.dim;
                 let vec: Vec<f32> = self.vectors[vec_start..vec_start + self.dim].to_vec();
-                self.insert_node(idx, &vec, node_level);
+                self.insert_node_with_scratch(idx, &vec, node_level, &mut scratch);
             }
         }
 
@@ -645,12 +646,13 @@ impl HnswIndex {
             .map(|idx| self.node_info[idx].max_layer)
             .collect();
 
+        let mut scratch = SearchScratch::new();
         for (i, &node_level) in node_levels.iter().enumerate().take(n) {
             let idx = first_new_idx + i;
             if idx > 0 {
                 let vec_start = idx * self.dim;
                 let vec: Vec<f32> = self.vectors[vec_start..vec_start + self.dim].to_vec();
-                self.insert_node_profiled(idx, &vec, node_level, stats);
+                self.insert_node_profiled_with_scratch(idx, &vec, node_level, stats, &mut scratch);
             }
         }
 
@@ -837,7 +839,7 @@ impl HnswIndex {
         self.ids.reserve(n);
         self.node_info.reserve(n);
 
-        let _first_new_idx = self.ids.len();
+        let first_new_idx = self.ids.len();
 
         // Pre-generate random levels
         let node_levels: Vec<usize> = (0..n).map(|_| self.random_level()).collect();
@@ -899,15 +901,31 @@ impl HnswIndex {
                 })
                 .collect();
 
+            let mut layer0_nodes_to_shrink: Vec<usize> = Vec::new();
+
             // Serial graph update (avoids race conditions)
             for (idx, node_level, neighbors_per_layer) in batch_results {
-                let new_id = self.ids[idx];
-                for (level, neighbors) in neighbors_per_layer.iter().enumerate() {
-                    if level > node_level {
-                        continue;
-                    }
-                    self.add_connections_for_node(idx, new_id, level, neighbors);
+                if base_count == 0 && idx == first_new_idx {
+                    continue;
                 }
+                let new_id = self.ids[idx];
+                for (level, neighbors) in
+                    neighbors_per_layer.iter().enumerate().take(node_level + 1)
+                {
+                    self.add_connections_for_node(
+                        idx,
+                        new_id,
+                        level,
+                        neighbors,
+                        &mut layer0_nodes_to_shrink,
+                    );
+                }
+            }
+
+            layer0_nodes_to_shrink.sort_unstable();
+            layer0_nodes_to_shrink.dedup();
+            for node_idx in layer0_nodes_to_shrink {
+                self.shrink_layer_neighbors_heuristic_idx(node_idx, 0, self.m_max0);
             }
 
             processed += current_batch_size;
@@ -996,21 +1014,36 @@ impl HnswIndex {
         vec: &[f32],
         node_level: usize,
     ) -> Vec<Vec<(usize, f32)>> {
-        let mut neighbors_per_layer = Vec::with_capacity(node_level + 1);
+        let mut scratch = SearchScratch::new();
+        self.find_neighbors_for_insertion_with_scratch(vec, node_level, &mut scratch)
+    }
+
+    fn find_neighbors_for_insertion_with_scratch(
+        &self,
+        vec: &[f32],
+        node_level: usize,
+        scratch: &mut SearchScratch,
+    ) -> Vec<Vec<(usize, f32)>> {
+        let mut neighbors_per_layer = vec![Vec::new(); node_level + 1];
         let entry_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
         let mut curr_ep_idx = entry_idx;
 
         for level in (0..=node_level).rev() {
-            let nearest = self.search_layer_idx(vec, curr_ep_idx, level, 1);
+            let nearest = self.search_layer_idx_with_scratch(vec, curr_ep_idx, level, 1, scratch);
             if !nearest.is_empty() {
                 curr_ep_idx = nearest[0].0;
             }
 
-            let candidates = self.search_layer_idx(vec, curr_ep_idx, level, self.ef_construction);
+            let candidates = self.search_layer_idx_with_scratch(
+                vec,
+                curr_ep_idx,
+                level,
+                self.ef_construction,
+                scratch,
+            );
             let m = if level == 0 { self.m_max0 } else { self.m };
-            let selected =
+            neighbors_per_layer[level] =
                 self.select_neighbors_heuristic_idx_layer_aware(vec, &candidates, m, level == 0);
-            neighbors_per_layer.push(selected);
         }
         neighbors_per_layer
     }
@@ -1022,11 +1055,20 @@ impl HnswIndex {
         new_id: i64,
         level: usize,
         neighbors: &[(usize, f32)],
+        layer0_nodes_to_shrink: &mut Vec<usize>,
     ) {
         let m_max = self.max_connections_for_layer(level);
+        let filtered_neighbors: Vec<(usize, f32)> = neighbors
+            .iter()
+            .copied()
+            .filter(|(nbr_idx, _)| *nbr_idx != new_idx)
+            .collect();
 
-        // First, collect neighbor IDs to avoid borrow conflicts
-        let nbr_ids: Vec<i64> = neighbors
+        if filtered_neighbors.is_empty() {
+            return;
+        }
+
+        let nbr_ids: Vec<i64> = filtered_neighbors
             .iter()
             .map(|&(nbr_idx, _)| self.get_id_from_idx(nbr_idx))
             .collect();
@@ -1034,18 +1076,32 @@ impl HnswIndex {
         {
             let node_info = &mut self.node_info[new_idx];
             let layer_nbrs = &mut node_info.layer_neighbors[level];
-            for (i, &(_nbr_idx, dist)) in neighbors.iter().enumerate() {
+            for (i, &(_, dist)) in filtered_neighbors.iter().enumerate() {
                 layer_nbrs.push(nbr_ids[i], dist);
             }
-            layer_nbrs.truncate_to_best(m_max);
+            if layer_nbrs.ids.len() > m_max {
+                if level == 0 {
+                    layer0_nodes_to_shrink.push(new_idx);
+                } else {
+                    layer_nbrs.truncate_to_best(m_max);
+                }
+            }
         }
 
-        for &(nbr_idx, dist) in neighbors {
+        for &(nbr_idx, dist) in &filtered_neighbors {
             let nbr_node_info = &mut self.node_info[nbr_idx];
-            if level <= nbr_node_info.max_layer {
-                let nbr_layer_nbrs = &mut nbr_node_info.layer_neighbors[level];
-                nbr_layer_nbrs.push(new_id, dist);
-                nbr_layer_nbrs.truncate_to_best(m_max);
+            if level > nbr_node_info.max_layer {
+                continue;
+            }
+
+            let nbr_layer_nbrs = &mut nbr_node_info.layer_neighbors[level];
+            nbr_layer_nbrs.push(new_id, dist);
+            if nbr_layer_nbrs.ids.len() > m_max {
+                if level == 0 {
+                    layer0_nodes_to_shrink.push(nbr_idx);
+                } else {
+                    nbr_layer_nbrs.truncate_to_best(m_max);
+                }
             }
         }
     }
@@ -1197,10 +1253,13 @@ impl HnswIndex {
         }
     }
 
-    /// Insert a node into the multi-layer graph
-    ///
-    /// OPT-015 REV2: Use index-based methods throughout - no ID conversion in hot path.
-    fn insert_node(&mut self, new_idx: usize, new_vec: &[f32], node_level: usize) {
+    fn insert_node_with_scratch(
+        &mut self,
+        new_idx: usize,
+        new_vec: &[f32],
+        node_level: usize,
+        scratch: &mut SearchScratch,
+    ) {
         let new_id = self.get_id_from_idx(new_idx);
 
         // Start from the top layer and work down
@@ -1213,7 +1272,8 @@ impl HnswIndex {
             if level > node_level {
                 // Just search for entry point at this layer, don't connect
                 // Use ef=1 for speed during descent through unused layers
-                let nearest_results = self.search_layer_idx(new_vec, curr_ep_idx, level, 1);
+                let nearest_results =
+                    self.search_layer_idx_with_scratch(new_vec, curr_ep_idx, level, 1, scratch);
                 if !nearest_results.is_empty() {
                     curr_ep_idx = nearest_results[0].0;
                 }
@@ -1222,15 +1282,21 @@ impl HnswIndex {
 
             // For layers <= node_level: search for nearest neighbors and connect
             // Use ef=1 to find the closest entry point for this layer
-            let nearest_results = self.search_layer_idx(new_vec, curr_ep_idx, level, 1);
+            let nearest_results =
+                self.search_layer_idx_with_scratch(new_vec, curr_ep_idx, level, 1, scratch);
 
             if !nearest_results.is_empty() {
                 curr_ep_idx = nearest_results[0].0;
             }
 
             // Find efConstruction candidates at this layer (using index-based version)
-            let candidates =
-                self.search_layer_idx(new_vec, curr_ep_idx, level, self.ef_construction);
+            let candidates = self.search_layer_idx_with_scratch(
+                new_vec,
+                curr_ep_idx,
+                level,
+                self.ef_construction,
+                scratch,
+            );
 
             // Select best M neighbors using heuristic (index-based)
             // Layer 0 must use the denser base-layer degree (m_max0), otherwise bulk-build
@@ -1248,12 +1314,13 @@ impl HnswIndex {
         }
     }
 
-    fn insert_node_profiled(
+    fn insert_node_profiled_with_scratch(
         &mut self,
         new_idx: usize,
         new_vec: &[f32],
         node_level: usize,
         stats: &mut HnswBuildProfileStats,
+        scratch: &mut SearchScratch,
     ) {
         let new_id = self.get_id_from_idx(new_idx);
         let mut curr_ep_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
@@ -1261,7 +1328,8 @@ impl HnswIndex {
         for level in (0..=self.max_level).rev() {
             if level > node_level {
                 let stage_start = Instant::now();
-                let nearest_results = self.search_layer_idx(new_vec, curr_ep_idx, level, 1);
+                let nearest_results =
+                    self.search_layer_idx_with_scratch(new_vec, curr_ep_idx, level, 1, scratch);
                 stats.record(HnswBuildProfileStage::LayerDescent, stage_start.elapsed());
                 if !nearest_results.is_empty() {
                     curr_ep_idx = nearest_results[0].0;
@@ -1270,15 +1338,21 @@ impl HnswIndex {
             }
 
             let stage_start = Instant::now();
-            let nearest_results = self.search_layer_idx(new_vec, curr_ep_idx, level, 1);
+            let nearest_results =
+                self.search_layer_idx_with_scratch(new_vec, curr_ep_idx, level, 1, scratch);
             stats.record(HnswBuildProfileStage::LayerDescent, stage_start.elapsed());
             if !nearest_results.is_empty() {
                 curr_ep_idx = nearest_results[0].0;
             }
 
             let stage_start = Instant::now();
-            let candidates =
-                self.search_layer_idx(new_vec, curr_ep_idx, level, self.ef_construction);
+            let candidates = self.search_layer_idx_with_scratch(
+                new_vec,
+                curr_ep_idx,
+                level,
+                self.ef_construction,
+                scratch,
+            );
             stats.record(
                 HnswBuildProfileStage::CandidateSearch,
                 stage_start.elapsed(),
@@ -3356,6 +3430,7 @@ pub fn random_level(_m: usize, rng: &mut impl Rng) -> usize {
 mod tests {
     use super::*;
     use crate::api::IndexType;
+    use std::collections::BTreeSet;
 
     fn faiss_layer0_backfill_model(
         index: &HnswIndex,
@@ -3393,6 +3468,43 @@ mod tests {
         selected
     }
 
+    fn deterministic_layer0_config(m: usize) -> IndexConfig {
+        IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(m),
+                ef_construction: Some(32),
+                ef_search: Some(32),
+                ml: Some(0.0),
+                num_threads: Some(1),
+                ..Default::default()
+            },
+        }
+    }
+
+    fn clustered_layer0_vectors() -> Vec<f32> {
+        vec![
+            0.0, 0.0, // center
+            1.0, 0.0, // east
+            1.01, 0.0, // east duplicate 1
+            1.02, 0.0, // east duplicate 2
+            0.0, 1.05, // north
+            -1.05, 0.0, // west
+            0.0, -1.05, // south
+        ]
+    }
+
+    fn layer0_neighbor_ids(index: &HnswIndex, node_idx: usize) -> BTreeSet<i64> {
+        index.node_info[node_idx].layer_neighbors[0]
+            .ids
+            .iter()
+            .copied()
+            .collect()
+    }
+
     #[test]
     fn test_hnsw() {
         let config = IndexConfig {
@@ -3422,6 +3534,37 @@ mod tests {
 
         let result = index.search(&query, &req).unwrap();
         assert_eq!(result.ids.len(), 2);
+    }
+
+    #[test]
+    fn test_parallel_bulk_build_matches_single_insert_layer0_neighbor_diversification() {
+        let config = deterministic_layer0_config(2);
+        let vectors = clustered_layer0_vectors();
+
+        let mut serial = HnswIndex::new(&config).unwrap();
+        serial.train(&vectors).unwrap();
+        for (idx, vector) in vectors.chunks_exact(2).enumerate() {
+            serial
+                .add_vector(vector, Some(idx as i64), Some(&[0]))
+                .unwrap();
+        }
+
+        let serial_neighbors = layer0_neighbor_ids(&serial, 0);
+        assert_eq!(
+            serial_neighbors,
+            BTreeSet::from([1, 4, 5, 6]),
+            "single-node insertion should keep diverse reverse neighbors around the center node"
+        );
+
+        let mut parallel = HnswIndex::new(&config).unwrap();
+        parallel.train(&vectors).unwrap();
+        parallel.add_parallel(&vectors, None, Some(true)).unwrap();
+
+        let parallel_neighbors = layer0_neighbor_ids(&parallel, 0);
+        assert_eq!(
+            parallel_neighbors, serial_neighbors,
+            "bulk add path should maintain the same diversified layer-0 reverse neighbors as repeated single-node insertion"
+        );
     }
 
     #[test]

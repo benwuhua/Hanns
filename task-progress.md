@@ -12,13 +12,37 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `hnsw-build-quality-rework` (round-1 reopen profiling is now closed; the next active step is a direct algorithm rework in `src/faiss/hnsw.rs` aimed first at the measured candidate-search hotspot)
-- Next feature: `hnsw-authority-rerun-and-verdict-refresh` (after the first build-path rework lands, re-run the authority lane and decide whether the historical HNSW verdict meaningfully improves)
+- Current focus: `hnsw-authority-rerun-and-verdict-refresh` (the first HNSW build-path rework is now landed; the remaining tracked step is to rerun authority evidence and decide whether the historical verdict actually moves)
+- Next feature: `hnsw-authority-rerun-and-verdict-refresh` (this is the last tracked HNSW reopen feature; any follow-up beyond it depends on what the refreshed authority evidence says)
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 33/35 features passing (94%)
+- Progress: 34/35 features passing (97%)
 
 ## Session Log
+
+### Session 42 - 2026-03-12
+- Focus: `hnsw-build-quality-rework`
+- Completed:
+  - added a deterministic HNSW regression in `src/faiss/hnsw.rs` that compares `add_parallel()` against repeated single-node insertion on a forced layer-0 graph; the TDD red failure showed the bulk path was keeping `{0,1,2}` around the center node instead of the diversified `{1,4,5,6}` reverse-neighbor set produced by the stronger insertion path
+  - reworked the build path so `add()` reuses `SearchScratch` across insertions, `find_neighbors_for_insertion()` now uses scratch-friendly layer search, and `add_parallel()` no longer connects the first node to itself or mis-maps descending layers into ascending layer slots
+  - strengthened `add_parallel()` layer-0 connection maintenance to defer heuristic shrink to the end of each batch, preserving the serial insertion diversification semantics on the new regression without collapsing the 10K parallel-build smoke into the previous ~50s slowdown
+- Verification:
+  - `cargo test hnsw --lib -- --nocapture` -> initial `FAIL` on `test_parallel_bulk_build_matches_single_insert_layer0_neighbor_diversification`, then `ok`
+  - focused regression smoke: `cargo test test_parallel_bulk_build_matches_single_insert_layer0_neighbor_diversification --lib -- --nocapture` -> `ok`
+  - focused parallel-build smoke: `cargo test test_hnsw_parallel_build --lib -- --nocapture` -> `ok` (10K parallel build remained around `3.6s` in the focused run after deferred layer-0 shrink)
+  - `cargo test --test bench_hnsw_reopen_progress -q` -> `ok`
+  - `cargo test --test bench_hnsw_cpp_compare -q` -> `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-rework KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-rework bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_cpp_compare -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-rework/test_20260312T071858Z_98869.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 35 features (34 passing, 1 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-build-quality-rework` is now `passing`
+  - the only remaining tracked reopen feature is `hnsw-authority-rerun-and-verdict-refresh`
+- Notes:
+  - the authority compare replay for this slice is still only a contract/safety gate; the actual question of whether HNSW materially improved remains deferred to the next feature's fresh authority rerun
+  - `benchmark_results/hnsw_reopen_profile_round1.json` remains the pre-rework hotspot baseline and should be refreshed, not overwritten narratively, in the next session
+- Git Commits: pending
 
 ### Session 41 - 2026-03-12
 - Focus: `hnsw-build-path-profiler`

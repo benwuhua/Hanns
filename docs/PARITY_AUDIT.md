@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-12 07:05
+Last updated: 2026-03-12 07:22
 Sync baseline: f841df2955e06eb8c6d6f5e7cb8316941fb9c550 from origin/main
 
 ## 轮次记录
+- 2026-03-12 07:22: **builder-loop：收口 `hnsw-build-quality-rework`，交付第一刀真实 HNSW 算法改动（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_profile_round1.json`、`src/faiss/hnsw.rs`、`tests/bench_hnsw_reopen_progress.rs`、`tests/bench_hnsw_cpp_compare.rs`。
+  2. 阶段结论：round-1 profiler 已经给出明确的“先切 candidate_search”方向，但真正落地前还需要一个语义回归把 bulk path 的弱连接维护钉住。新的 deterministic layer-0 regression 随后证明，当前 `add_parallel()` 会把中心节点的 reverse neighbors 维持成 `{0,1,2}`，而 repeated single-node insertion 的强语义路径会保留 `{1,4,5,6}` 这一组多样化邻居。
+  3. 本轮执行：在 `src/faiss/hnsw.rs` 中新增该 regression，并把 build path 重构成两层：`add()`/profiling 路径复用 `SearchScratch` 降低 insertion-time candidate-search 分配开销；`add_parallel()` 则修复了首节点自连接和层级映射问题，并把 layer-0 heuristic shrink 延后到 batch 末尾，以更接近 repeated insertion 的 reverse-link semantics 而不把 10K parallel smoke 拖到不可用。
+  4. 验证结果：本地 `cargo test hnsw --lib -- --nocapture` 先红后绿；focused `test_parallel_bulk_build_matches_single_insert_layer0_neighbor_diversification` 和 `test_hnsw_parallel_build` 都通过；`cargo test --test bench_hnsw_reopen_progress -q` 与 `cargo test --test bench_hnsw_cpp_compare -q` 通过；authority safety replay `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-rework KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-rework bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_cpp_compare -q"` 返回 `test=ok`，日志 `/data/work/knowhere-rs-logs-hnsw-reopen-rework/test_20260312T071858Z_98869.log`。
+  5. 后续主缺口：当前 repo 已经不再缺“第一刀算法改动”，只剩 `hnsw-authority-rerun-and-verdict-refresh`。下一轮必须刷新 reopen profile / compare evidence，回答这次 build-path rework 是否真的改变 authority verdict，而不是继续停留在局部 regression 层。
+  状态：Phase 6 Active（first algorithm slice closed；only authority rerun/verdict refresh remains）。
 - 2026-03-12 07:05: **builder-loop：收口 `hnsw-build-path-profiler`，把 HNSW reopen line 从“只有基线”推进到“有可执行热点分解”的状态（plan+exec）**
   1. 复核输入：`feature-list.json`、`task-progress.md`、`docs/superpowers/plans/2026-03-12-hnsw-reopen-algorithm-line.md`、`tests/bench_hnsw_reopen_progress.rs`、`src/faiss/hnsw.rs`、`tests/bench_hnsw_cpp_compare.rs`。
   2. 阶段结论：HNSW reopen line 不能直接跳进“试着优化一点点”；必须先把 build-path 热点拆成可执行事实，否则下一轮核心算法修改仍然会退回凭感觉调参。默认 lane 因此需要新增一个 profile artifact contract，而 authority lane 需要有可回放的 long-test 生成器。

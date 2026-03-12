@@ -558,7 +558,7 @@
       "title": "Rework the HNSW bulk build path",
       "description": "Perform the first real HNSW algorithm rework on src/faiss/hnsw.rs by aligning the bulk-build connection-update path with the stronger single-node insertion logic and reducing avoidable hot-loop search overhead without breaking contracts.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "cargo test hnsw --lib -- --nocapture",
         "cargo test --test bench_hnsw_reopen_progress -q",
