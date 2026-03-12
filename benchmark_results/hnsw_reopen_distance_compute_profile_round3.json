@@ -1,0 +1,85 @@
+{
+  "authority_scope": "remote_x86_only",
+  "benchmark_lane": "hnsw_reopen_distance_compute_profile_round3",
+  "call_counts": {
+    "distance_calls": 33505,
+    "entry_descent_calls": 384,
+    "frontier_pops": 20324,
+    "frontier_pushes": 23994,
+    "layer0_candidate_search_calls": 128,
+    "pruned_candidates": 15179,
+    "visited_marks": 27048
+  },
+  "candidate_search_breakdown": {
+    "candidate_pruning_ms": 0.726034,
+    "distance_compute_ms": 40.165079,
+    "entry_descent_ms": 7.848127999999999,
+    "frontier_ops_ms": 7.032671,
+    "visited_ops_ms": 7.27917
+  },
+  "config": {
+    "ef_construction": 200,
+    "ef_search": 64,
+    "m": 16,
+    "top_k": 10
+  },
+  "dataset": {
+    "base_vectors": 12000,
+    "dim": 128,
+    "query_vectors": 128
+  },
+  "dataset_source": "synthetic_sift_like_128d",
+  "distance_compute_breakdown": {
+    "layer0_query_distance_ms": 32.499584999999996,
+    "node_node_distance_ms": 0.0,
+    "upper_layer_query_distance_ms": 7.665494
+  },
+  "distance_compute_call_counts": {
+    "layer0_query_distance_calls": 27048,
+    "node_node_distance_calls": 0,
+    "upper_layer_query_distance_calls": 6457
+  },
+  "family": "HNSW",
+  "hotspot_ranking": [
+    {
+      "calls": 33505,
+      "milliseconds": 40.165079,
+      "share_of_profiled_time": 0.6370244209290493,
+      "stage": "distance_compute"
+    },
+    {
+      "calls": 384,
+      "milliseconds": 7.848127999999999,
+      "share_of_profiled_time": 0.12447253482501695,
+      "stage": "entry_descent"
+    },
+    {
+      "calls": 27048,
+      "milliseconds": 7.27917,
+      "share_of_profiled_time": 0.11544877215588466,
+      "stage": "visited_ops"
+    },
+    {
+      "calls": 44318,
+      "milliseconds": 7.032671,
+      "share_of_profiled_time": 0.11153925954831355,
+      "stage": "frontier_ops"
+    },
+    {
+      "calls": 15179,
+      "milliseconds": 0.726034,
+      "share_of_profiled_time": 0.011515012541735604,
+      "stage": "candidate_pruning"
+    }
+  ],
+  "profiled_distance_hotspot_share": 0.8091502820148816,
+  "recommended_next_target": "layer0_query_distance",
+  "round3_baseline_source": "benchmark_results/hnsw_reopen_round3_baseline.json",
+  "sample_search": {
+    "qps": 2023.6940742458892,
+    "query_count": 128,
+    "search_wall_clock_ms": 63.250667
+  },
+  "task_id": "HNSW-REOPEN-DISTANCE-COMPUTE-PROFILE-ROUND3",
+  "total_profiled_ms": 63.051081999999994
+}

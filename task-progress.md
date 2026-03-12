@@ -12,13 +12,36 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `hnsw-distance-compute-profiler`
-- Next feature: `hnsw-distance-compute-profiler`
+- Current focus: `hnsw-distance-l2-fast-path-rework`
+- Next feature: `hnsw-distance-l2-fast-path-rework`
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 40/43 features passing (93%)
+- Progress: 41/43 features passing (95%)
 
 ## Session Log
+
+### Session 49 - 2026-03-12
+- Focus: `hnsw-distance-compute-profiler`
+- Completed:
+  - tightened `tests/bench_hnsw_reopen_round3.rs` so the default lane now requires `benchmark_results/hnsw_reopen_distance_compute_profile_round3.json`, then used the missing-artifact failure as the TDD red signal for the first round-3 profiling slice
+  - extended `src/faiss/hnsw.rs` profiling so candidate-search reporting now preserves the existing aggregate `distance_compute` bucket while also splitting it into `upper_layer_query_distance`, `layer0_query_distance`, and `node_node_distance`
+  - added `tests/bench_hnsw_reopen_round3_profile.rs`, generated `benchmark_results/hnsw_reopen_distance_compute_profile_round3.json`, and confirmed the round-3 hotspot is not upper-layer distance anymore: `layer0_query_distance` now accounts for about `32.500ms` of `40.165ms` aggregate distance time (~`80.9%`), while `node_node_distance` is `0`
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round3 -- --nocapture` -> initial `FAIL` (missing `benchmark_results/hnsw_reopen_distance_compute_profile_round3.json`), then `ok`
+  - `cargo test --features long-tests --test bench_hnsw_reopen_round3_profile -- --ignored --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (rustfmt wanted the new round-3 contract assertion wrapped), then `ok`
+  - `bash init.sh` -> `ok`
+  - first parallel authority contract replay hit the shared wrapper lock and returned `status=conflict` (`/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T091236Z_18116.log`); final evidence comes from the successful replays below
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_round3_profile -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T091236Z_18115.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round3 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T091319Z_18338.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 43 features (41 passing, 2 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-distance-compute-profiler` is now `passing`
+  - round 3 now has an authority-backed split of the remaining distance hotspot, and the next tracked feature is `hnsw-distance-l2-fast-path-rework`
+- Notes:
+  - round 3 profiling disproved the idea that `node_node_distance` was a meaningful search-time blocker on this lane; the dominant remaining target is `layer0_query_distance`
+  - the next rework should therefore target the L2 `query -> node` fast path inside the layer-0 candidate-expansion loop before touching broader layout or API questions
+- Git Commits: pending
 
 ### Session 48 - 2026-03-12
 - Focus: `hnsw-reopen-round3-activation`

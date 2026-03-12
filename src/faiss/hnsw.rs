@@ -213,6 +213,9 @@ pub struct HnswCandidateSearchProfileStats {
     frontier_ops: Duration,
     visited_ops: Duration,
     distance_compute: Duration,
+    upper_layer_query_distance: Duration,
+    layer0_query_distance: Duration,
+    node_node_distance: Duration,
     candidate_pruning: Duration,
     entry_descent_calls: u64,
     layer0_candidate_search_calls: u64,
@@ -220,6 +223,9 @@ pub struct HnswCandidateSearchProfileStats {
     frontier_pops: u64,
     visited_marks: u64,
     distance_calls: u64,
+    upper_layer_query_distance_calls: u64,
+    layer0_query_distance_calls: u64,
+    node_node_distance_calls: u64,
     pruned_candidates: u64,
 }
 
@@ -244,9 +250,25 @@ pub struct HnswCandidateSearchProfileCallCounts {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct HnswDistanceComputeProfileBreakdown {
+    pub upper_layer_query_distance_ms: f64,
+    pub layer0_query_distance_ms: f64,
+    pub node_node_distance_ms: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HnswDistanceComputeProfileCallCounts {
+    pub upper_layer_query_distance_calls: u64,
+    pub layer0_query_distance_calls: u64,
+    pub node_node_distance_calls: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct HnswCandidateSearchProfileReport {
     pub candidate_search_breakdown: HnswCandidateSearchProfileBreakdown,
     pub call_counts: HnswCandidateSearchProfileCallCounts,
+    pub distance_compute_breakdown: HnswDistanceComputeProfileBreakdown,
+    pub distance_compute_call_counts: HnswDistanceComputeProfileCallCounts,
     pub hotspot_ranking: Vec<HnswBuildProfileHotspot>,
     pub recommended_next_target: String,
     pub total_profiled_ms: f64,
@@ -408,6 +430,18 @@ impl HnswCandidateSearchProfileStats {
         self.distance_calls += calls;
     }
 
+    fn record_upper_layer_query_distance(&mut self, elapsed: Duration, calls: u64) {
+        self.upper_layer_query_distance += elapsed;
+        self.upper_layer_query_distance_calls += calls;
+        self.record_distance_compute(elapsed, calls);
+    }
+
+    fn record_layer0_query_distance(&mut self, elapsed: Duration, calls: u64) {
+        self.layer0_query_distance += elapsed;
+        self.layer0_query_distance_calls += calls;
+        self.record_distance_compute(elapsed, calls);
+    }
+
     fn record_candidate_pruning(&mut self, elapsed: Duration, pruned: u64) {
         self.candidate_pruning += elapsed;
         self.pruned_candidates += pruned;
@@ -432,6 +466,22 @@ impl HnswCandidateSearchProfileStats {
             visited_marks: self.visited_marks,
             distance_calls: self.distance_calls,
             pruned_candidates: self.pruned_candidates,
+        }
+    }
+
+    fn distance_compute_breakdown(&self) -> HnswDistanceComputeProfileBreakdown {
+        HnswDistanceComputeProfileBreakdown {
+            upper_layer_query_distance_ms: self.upper_layer_query_distance.as_secs_f64() * 1000.0,
+            layer0_query_distance_ms: self.layer0_query_distance.as_secs_f64() * 1000.0,
+            node_node_distance_ms: self.node_node_distance.as_secs_f64() * 1000.0,
+        }
+    }
+
+    fn distance_compute_call_counts(&self) -> HnswDistanceComputeProfileCallCounts {
+        HnswDistanceComputeProfileCallCounts {
+            upper_layer_query_distance_calls: self.upper_layer_query_distance_calls,
+            layer0_query_distance_calls: self.layer0_query_distance_calls,
+            node_node_distance_calls: self.node_node_distance_calls,
         }
     }
 
@@ -509,6 +559,8 @@ impl HnswCandidateSearchProfileStats {
         HnswCandidateSearchProfileReport {
             candidate_search_breakdown: self.breakdown(),
             call_counts: self.call_counts(),
+            distance_compute_breakdown: self.distance_compute_breakdown(),
+            distance_compute_call_counts: self.distance_compute_call_counts(),
             hotspot_ranking: self.hotspot_ranking(),
             recommended_next_target: self.recommended_next_target(),
             total_profiled_ms: self.total_profiled_ms(),
@@ -2310,7 +2362,9 @@ impl HnswIndex {
         level: usize,
     ) -> (usize, f32) {
         let entry_dist = self.distance(query, entry_idx);
-        self.greedy_upper_layer_descent_idx_with_entry_dist(query, entry_idx, level, entry_dist)
+        self.greedy_upper_layer_descent_idx_with_entry_dist_optional_profile(
+            query, entry_idx, level, entry_dist, None,
+        )
     }
 
     fn greedy_upper_layer_descent_idx_with_entry_dist(
@@ -2319,6 +2373,19 @@ impl HnswIndex {
         entry_idx: usize,
         level: usize,
         entry_dist: f32,
+    ) -> (usize, f32) {
+        self.greedy_upper_layer_descent_idx_with_entry_dist_optional_profile(
+            query, entry_idx, level, entry_dist, None,
+        )
+    }
+
+    fn greedy_upper_layer_descent_idx_with_entry_dist_optional_profile(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+        entry_dist: f32,
+        mut profile: Option<&mut HnswCandidateSearchProfileStats>,
     ) -> (usize, f32) {
         let num_nodes = self.node_info.len();
         let mut best_idx = entry_idx;
@@ -2337,7 +2404,11 @@ impl HnswIndex {
                     continue;
                 }
 
+                let distance_start = Instant::now();
                 let nbr_dist = self.distance(query, nbr_idx);
+                if let Some(stats) = profile.as_deref_mut() {
+                    stats.record_upper_layer_query_distance(distance_start.elapsed(), 1);
+                }
                 if nbr_dist < best_dist {
                     best_idx = nbr_idx;
                     best_dist = nbr_dist;
@@ -2449,7 +2520,7 @@ impl HnswIndex {
         let distance_start = Instant::now();
         let entry_dist = self.distance(query, entry_idx);
         if let Some(stats) = profile.as_deref_mut() {
-            stats.record_distance_compute(distance_start.elapsed(), 1);
+            stats.record_layer0_query_distance(distance_start.elapsed(), 1);
         }
 
         let frontier_start = Instant::now();
@@ -2516,7 +2587,7 @@ impl HnswIndex {
                 let distance_start = Instant::now();
                 let nbr_dist = self.distance(query, nbr_idx);
                 if let Some(stats) = profile.as_deref_mut() {
-                    stats.record_distance_compute(distance_start.elapsed(), 1);
+                    stats.record_layer0_query_distance(distance_start.elapsed(), 1);
                 }
 
                 let pruning_start = Instant::now();
@@ -2576,17 +2647,19 @@ impl HnswIndex {
         let distance_start = Instant::now();
         let mut curr_ep_dist = self.distance(query, curr_ep_idx);
         let mut best_ep_dist = curr_ep_dist;
-        stats.record_distance_compute(distance_start.elapsed(), 1);
+        stats.record_upper_layer_query_distance(distance_start.elapsed(), 1);
         let mut best_ep_idx = curr_ep_idx;
 
         for level in (1..=self.max_level).rev() {
             let entry_start = Instant::now();
-            let (next_idx, next_dist) = self.greedy_upper_layer_descent_idx_with_entry_dist(
-                query,
-                curr_ep_idx,
-                level,
-                curr_ep_dist,
-            );
+            let (next_idx, next_dist) = self
+                .greedy_upper_layer_descent_idx_with_entry_dist_optional_profile(
+                    query,
+                    curr_ep_idx,
+                    level,
+                    curr_ep_dist,
+                    Some(stats),
+                );
             curr_ep_idx = next_idx;
             curr_ep_dist = next_dist;
             if next_dist < best_ep_dist {

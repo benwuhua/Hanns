@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-12 09:03
+Last updated: 2026-03-12 09:13
 Sync baseline: c87ab4915cca1a0ed68252cbf2701352e8cb6af7 from main
 
 ## 轮次记录
+- 2026-03-12 09:13: **builder-loop：收口 `hnsw-distance-compute-profiler`，把第三轮 HNSW 的 `distance_compute` 再拆成 authority-backed 子热点（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round3_baseline.json`、`tests/bench_hnsw_reopen_round3.rs`、`src/faiss/hnsw.rs`、`docs/superpowers/plans/2026-03-12-hnsw-reopen-round3-distance-compute.md`。
+  2. 阶段结论：round 3 不再缺“distance_compute 是不是当前主热点”这个大结论，缺的是把它拆成下一刀算法改动能直接利用的子来源。只有在 authority surface 上把 `distance_compute` 分解成更小热点，后续 L2 fast path rework 才不会继续围绕一个过宽的 timing bucket 试错。
+  3. 本轮执行：先把 `tests/bench_hnsw_reopen_round3.rs` 升级成要求 `benchmark_results/hnsw_reopen_distance_compute_profile_round3.json` 的默认-lane contract，并用缺失 artifact 的失败做 TDD red；随后在 `src/faiss/hnsw.rs` 中扩展现有 candidate-search profiling，保留 aggregate `distance_compute` bucket 的同时，再显式记录 `upper_layer_query_distance`、`layer0_query_distance`、`node_node_distance` 三个子桶与对应 call counts；再新增 `tests/bench_hnsw_reopen_round3_profile.rs` 生成 authority artifact 并回传到本地 durable state。
+  4. 验证结果：本地 `cargo test --test bench_hnsw_reopen_round3 -- --nocapture` 先红后绿；本地 `cargo test --features long-tests --test bench_hnsw_reopen_round3_profile -- --ignored --nocapture` 通过；`cargo fmt --all -- --check` 先红后绿；`bash init.sh` 通过；第一次并行 authority contract replay 因 shared wrapper lock 返回 `status=conflict`（`/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T091236Z_18116.log`），最终有效证据来自串行成功 reruns：`bench_hnsw_reopen_round3_profile` 日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T091236Z_18115.log`，`bench_hnsw_reopen_round3` 日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T091319Z_18338.log`；`python3 scripts/validate_features.py feature-list.json` 返回 `VALID - 43 features (41 passing, 2 failing); workflow/doc checks passed`。
+  5. 后续主缺口：round 3 authority profile 现在明确显示 `layer0_query_distance≈32.500ms`、`upper_layer_query_distance≈7.665ms`、`node_node_distance=0`，因此下一条活动 feature 必须是 `hnsw-distance-l2-fast-path-rework`，而不是继续停留在 profiling 或过早重开 family verdict 叙事。
+  状态：Phase 6 Active（round-3 distance-compute profiler closed；L2 fast path rework is next）。
 - 2026-03-12 09:03: **builder-loop：收口 `hnsw-reopen-round3-activation`，把第三轮 HNSW 的 distance-compute 线正式挂回 durable workflow（plan+exec）**
   1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round2_authority_summary.json`、`benchmark_results/hnsw_reopen_candidate_search_profile_round2.json`、`benchmark_results/hnsw_p3_002_final_verdict.json`、`tests/bench_hnsw_reopen_round2.rs`、`docs/superpowers/specs/2026-03-12-hnsw-reopen-round3-distance-compute-design.md`、`docs/superpowers/plans/2026-03-12-hnsw-reopen-round3-distance-compute.md`。
   2. 阶段结论：round 2 已经被 authority evidence 判成 `hard_stop`，所以 round 3 不能再泛泛地说“继续优化 candidate-search”。最小诚实切口是把 HNSW 的 active hypothesis 收窄到 `distance_compute_inner_loop`，并把这个新假设写回 durable workflow，而不是继续停在 `39/39` 的终态叙事里。

@@ -1,6 +1,6 @@
 # Knowhere-RS Development Roadmap (Non-GPU)
 
-Last updated: 2026-03-12 09:03 UTC
+Last updated: 2026-03-12 09:13 UTC
 
 ## Goal
 
@@ -167,8 +167,8 @@ Active scoped tasks:
 - `hnsw-candidate-search-core-rework`: closed; the shared HNSW candidate-search core now uses greedy fast descent for `ef<=1`, the unfiltered query path no longer pays the old broad upper-layer descent, and `SearchScratch` no longer writes an unused `touched` list
 - `hnsw-round2-authority-same-schema-rerun`: closed; fresh authority evidence is archived in `benchmark_results/hnsw_reopen_round2_authority_summary.json`, which keeps the historical HNSW family verdict unchanged and closes round 2 as `hard_stop`
 - `hnsw-reopen-round3-activation`: closed; `benchmark_results/hnsw_reopen_round3_baseline.json` now freezes round 2 as a hard-stop baseline and officially activates the third HNSW line around `distance_compute_inner_loop`
-- `hnsw-distance-compute-profiler`: active; split the remaining `distance_compute` hotspot into actionable sub-paths before touching the L2 fast path
-- `hnsw-distance-l2-fast-path-rework`: pending; only start after the round-3 profiler says which distance path dominates
+- `hnsw-distance-compute-profiler`: closed; `benchmark_results/hnsw_reopen_distance_compute_profile_round3.json` now shows `layer0_query_distance` as the dominant remaining search-time distance cost while `node_node_distance` stays at zero on this lane
+- `hnsw-distance-l2-fast-path-rework`: active; target the layer-0 `L2 + no filter` `query -> node` hot path without broadening scope into layout or API changes
 - `hnsw-round3-authority-same-schema-rerun`: pending; only fresh same-schema authority evidence can tell whether round 3 justifies a later verdict-refresh feature
 
 Phase exit criteria:
