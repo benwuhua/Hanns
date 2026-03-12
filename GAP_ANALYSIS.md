@@ -1,6 +1,6 @@
 # Knowhere-RS Gap Analysis (Non-GPU)
 
-Last updated: 2026-03-12 08:18 UTC
+Last updated: 2026-03-12 08:45 UTC
 Scope: Non-GPU production parity against C++ knowhere
 
 ## 1. Baseline and Method
@@ -37,13 +37,12 @@ Evaluation dimensions:
 
 ## P3 (Core Implementation / Semantic Fidelity / Production Readiness / Performance Advantage)
 
-- 🔄 `HNSW-REOPEN-001`: HNSW remains the only active algorithm line, and it has now entered round 2.
-  - `benchmark_results/hnsw_p3_002_final_verdict.json` remains historical truth for 2026-03-12, but it is still treated only as the baseline to beat rather than as a permanent stop signal.
-  - The active blocker is unchanged at the family level: Rust HNSW recall is credible, but native remains about `14.8x` faster on the authoritative same-schema lane.
-  - `benchmark_results/hnsw_reopen_round2_baseline.json` now freezes the end of round 1 into a new round-2 target: build wall clock improved about `5.8%`, but sample-search qps regressed about `5.7%`, so the first reopen line did not move the historical verdict.
-  - `benchmark_results/hnsw_reopen_candidate_search_profile_round2.json` now replaces the monolithic round-1 hotspot with an authority-backed split: `entry_descent` is about `51.021ms` (~`46.1%`) and `distance_compute` is about `43.644ms` (~`39.4%`), while `frontier_ops`, `visited_ops`, and `candidate_pruning` are secondary costs.
-  - The shared core cut has now landed: unfiltered query search uses greedy upper-layer descent again, `ef<=1` shared layer search no longer pays the full heap-based path, and `SearchScratch` no longer performs the unused `touched` write on every visit.
-  - The next active question is narrower than before: not “can the shared candidate-search core cut `entry_descent_level_hopping`?” but “does this landed core rework materially improve the same-schema authority lane without recall regression?”
+- ✅ `HNSW-REOPEN-001`: round 2 is now closed as `hard_stop`.
+  - `benchmark_results/hnsw_p3_002_final_verdict.json` remains the current historical truth: HNSW is still `functional-but-not-leading`.
+  - `benchmark_results/hnsw_reopen_candidate_search_profile_round2.json` did improve materially after the core rework: `entry_descent` dropped from about `51.021ms` to `6.205ms`, total profiled time dropped about `39.9%`, and synthetic sample-search qps rose about `57.1%`.
+  - But `benchmark_results/hnsw_reopen_round2_authority_summary.json` shows the authority lane moved the wrong way: the fresh same-schema Rust row fell from `710.962` to `521.031` qps (about `-26.7%`) while recall only increased from `0.9915` to `0.9923`.
+  - Native BF16 remained essentially flat at `10519.683` qps with recall@10=`0.95`, so the native-over-Rust throughput gap widened from `14.8x` to `20.2x`.
+  - There is no active tracked HNSW reopen feature now; any future HNSW work must start from a new authority-backed hypothesis rather than implicitly continuing round 2.
 - ✅ `CORE-P0-001`: 远端 x86 SIMD 验证链已恢复可执行并取得新鲜证据。最新复核中，本地 `cargo test --lib -q`、远端 `cargo test --features simd simd::tests -- --nocapture`、远端 `cargo test --lib --features simd test_x86_simd_l2_reduction_matches_scalar_on_irregular_input -- --nocapture` 均已通过；`default+simd` 不再因 toolchain/脚本漂移阻断后续核心路径工作。
 - ✅ `HNSW-P1-001`: HNSW 已完成首轮远端 before/after artifact 落地；当前证据显示 recall 基本持平（`0.217 -> 0.215`）但 qps 大幅提升（`~1621 -> ~19235`），由于 recall 仍低于可信阈值，这条结果已被诚实归档为 `recheck required / no-go`，不再作为当前活动 blocker。
 - ✅ `IVFPQ-P1-002`: IVF/PQ 已完成 focused reality audit，并留下 `benchmark_results/ivfpq_p1_002_focused.json` 作为可审计 no-go / recheck-required artifact。结论已明确：`src/faiss/ivf.rs` 是 placeholder coarse-assignment scaffold，真实热点路径在 `src/faiss/ivfpq.rs`。
@@ -109,4 +108,4 @@ Historical final artifacts remain explicit, but the repo is no longer in a pure 
 
 1. `benchmark_results/final_production_acceptance.json` 仍然是当前项目级历史结论：`not accepted on current remote x86 evidence`。
 2. 当前唯一被重新打开的工作线仍然是 HNSW；future work must improve HNSW with new authority artifacts rather than by rewriting historical verdict docs.
-3. Round 2 现已明确聚焦 `candidate_search_same_schema_qps`，并已落下 `entry_descent_level_hopping` 主导的 shared candidate-search core rework；当前唯一诚实的下一步是 fresh same-schema authority rerun。只有当新的 authority evidence 真正改善，才允许重开 family-level leadership 或 project-level acceptance 叙事。
+3. Round 2 已经以 `hard_stop` 归档：synthetic hotspot 改善没有转化成 same-schema authority qps 改善，反而使 authority lane 更慢。只有当新的 authority-backed HNSW hypothesis 出现时，才允许重开 family-level leadership 或 project-level acceptance 叙事。

@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-12 08:18
+Last updated: 2026-03-12 08:45
 Sync baseline: d586788295e093c6599d8456c54d8d161b1c6f12 from origin/main
 
 ## 轮次记录
+- 2026-03-12 08:45: **builder-loop：收口 `hnsw-round2-authority-same-schema-rerun`，用 fresh authority same-schema evidence 给第二轮 HNSW reopen 终判（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round2_baseline.json`、`benchmark_results/hnsw_reopen_candidate_search_profile_round2.json`、`benchmark_results/hnsw_p3_002_final_verdict.json`、`tests/bench_hnsw_reopen_round2.rs`。
+  2. 阶段结论：第二轮 core rework 之后，真正要回答的问题已经不是“synthetic profile 有没有改善”，而是“same-schema authority lane 有没有跟着改善”。因此本轮只做三件事：重跑真实 HDF5 Rust row、重跑 native capture、再把 round-2 profile 和 contract 都刷成 fresh evidence。
+  3. 本轮执行：先把 `tests/bench_hnsw_reopen_round2.rs` 升级成要求 `benchmark_results/hnsw_reopen_round2_authority_summary.json` 的默认-lane contract，并用缺失 artifact 的失败做 TDD red；随后 authority 侧重跑 Rust same-schema HDF5 command、native HNSW capture、以及 `bench_hnsw_reopen_round2_profile`，把 fresh `benchmark_results/rs_hnsw_sift128.full_k100.json` 和 `benchmark_results/hnsw_reopen_candidate_search_profile_round2.json` 回传到本地；最后新增 `benchmark_results/hnsw_reopen_round2_authority_summary.json`，明确记录 synthetic hotspot 虽然改善，但 authoritative same-schema Rust qps 仍明显回退，因此 round 2 进入 `hard_stop`。
+  4. 验证结果：本地 `cargo test --test bench_hnsw_reopen_round2 -- --nocapture` 先红后绿；`cargo fmt --all -- --check` 先红后绿；authority Rust same-schema HDF5 日志为 `/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T082542Z_10202.log`；native fresh capture 日志为 `/data/work/knowhere-rs-logs-hnsw-reopen-round2/native_hnsw_qps_linkfix_20260312T083313Z.log`；authority round-2 profile refresh 日志为 `/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T084128Z_12238.log`；第一次 authority contract replay 按预期因为 summary 尚未同步而失败（`/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T084211Z_12364.log`），同步后最终 replay 转绿（`/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T084531Z_12900.log`）；`python3 scripts/validate_features.py feature-list.json` 返回 `VALID - 39 features (39 passing, 0 failing); workflow/doc checks passed`。
+  5. 后续主缺口：当前 tracked reopen line 已经结束，不存在下一条活动 feature。若未来仍要再动 HNSW，必须先提出新的 authority-backed hypothesis，而不是继续默认延长这一轮已经被证据判成 `hard_stop` 的 candidate-search line。
+  状态：Phase 6 Closed（round 2 hard-stop archived；all tracked features passing）。
 - 2026-03-12 08:18: **builder-loop：收口 `hnsw-candidate-search-core-rework`，把第二轮 HNSW 的 shared candidate-search core 真正改掉（plan+exec）**
   1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round2_baseline.json`、`benchmark_results/hnsw_reopen_candidate_search_profile_round2.json`、`src/faiss/hnsw.rs`、`tests/bench_hnsw_cpp_compare.rs`、`tests/bench_hnsw_reopen_round2.rs`。
   2. 阶段结论：round-2 profiler 已经把热点缩到 `entry_descent` 与 `distance_compute`，所以下一刀不该再去扩 artifact，而应直接把 shared candidate-search core 的上层 hop 逻辑做轻。最小诚实切口是：让 `ef<=1` 的 shared layer search 走 greedy fast path，并把无过滤 query path 的 upper-layer descent 从之前的宽泛 heap search 拉回标准 greedy 行为。

@@ -2,20 +2,20 @@
   "authority_scope": "remote_x86_only",
   "benchmark_lane": "hnsw_reopen_candidate_search_profile_round2",
   "call_counts": {
-    "distance_calls": 27154,
+    "distance_calls": 27231,
     "entry_descent_calls": 384,
-    "frontier_pops": 20261,
-    "frontier_pushes": 23874,
+    "frontier_pops": 20394,
+    "frontier_pushes": 24126,
     "layer0_candidate_search_calls": 128,
-    "pruned_candidates": 15217,
-    "visited_marks": 27026
+    "pruned_candidates": 15168,
+    "visited_marks": 27103
   },
   "candidate_search_breakdown": {
-    "candidate_pruning_ms": 1.393296,
-    "distance_compute_ms": 43.644337,
-    "entry_descent_ms": 51.021309,
-    "frontier_ops_ms": 9.401527999999999,
-    "visited_ops_ms": 5.189404
+    "candidate_pruning_ms": 1.36826,
+    "distance_compute_ms": 39.113468,
+    "entry_descent_ms": 6.205426,
+    "frontier_ops_ms": 9.045222,
+    "visited_ops_ms": 10.787234999999999
   },
   "config": {
     "ef_construction": 200,
@@ -32,43 +32,43 @@
   "family": "HNSW",
   "hotspot_ranking": [
     {
-      "calls": 384,
-      "milliseconds": 51.021309,
-      "share_of_profiled_time": 0.46110589335149177,
-      "stage": "entry_descent"
-    },
-    {
-      "calls": 27154,
-      "milliseconds": 43.644337,
-      "share_of_profiled_time": 0.3944363913148243,
+      "calls": 27231,
+      "milliseconds": 39.113468,
+      "share_of_profiled_time": 0.5879990488819905,
       "stage": "distance_compute"
     },
     {
-      "calls": 44135,
-      "milliseconds": 9.401527999999999,
-      "share_of_profiled_time": 0.08496645915746817,
-      "stage": "frontier_ops"
-    },
-    {
-      "calls": 27026,
-      "milliseconds": 5.189404,
-      "share_of_profiled_time": 0.046899321367505575,
+      "calls": 27103,
+      "milliseconds": 10.787234999999999,
+      "share_of_profiled_time": 0.1621662369613075,
       "stage": "visited_ops"
     },
     {
-      "calls": 15217,
-      "milliseconds": 1.393296,
-      "share_of_profiled_time": 0.012591934808710221,
+      "calls": 44520,
+      "milliseconds": 9.045222,
+      "share_of_profiled_time": 0.13597827563964557,
+      "stage": "frontier_ops"
+    },
+    {
+      "calls": 384,
+      "milliseconds": 6.205426,
+      "share_of_profiled_time": 0.09328716609602541,
+      "stage": "entry_descent"
+    },
+    {
+      "calls": 15168,
+      "milliseconds": 1.36826,
+      "share_of_profiled_time": 0.02056927242103084,
       "stage": "candidate_pruning"
     }
   ],
-  "recommended_next_target": "entry_descent_level_hopping",
+  "recommended_next_target": "distance_compute_inner_loop",
   "round2_baseline_source": "benchmark_results/hnsw_reopen_round2_baseline.json",
   "sample_search": {
-    "qps": 1033.9900729359633,
+    "qps": 1623.9604401206836,
     "query_count": 128,
-    "search_wall_clock_ms": 123.792291
+    "search_wall_clock_ms": 78.819654
   },
   "task_id": "HNSW-REOPEN-CANDIDATE-SEARCH-PROFILE-ROUND2",
-  "total_profiled_ms": 110.649874
+  "total_profiled_ms": 66.51961100000001
 }

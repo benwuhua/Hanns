@@ -12,13 +12,37 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `hnsw-round2-authority-same-schema-rerun` (the round-2 core rework is now landed and safety-gated; the active task is to decide whether the new candidate-search path actually moves the authoritative same-schema recall-gated lane)
-- Next feature: `hnsw-round2-authority-same-schema-rerun` (the shared core cut is now closed; the next honest step is to rerun the same-schema authority lane and judge whether the historical HNSW family verdict can move)
+- Current focus: `none`
+- Next feature: `none`
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 38/39 features passing (97%)
+- Progress: 39/39 features passing (100%)
 
 ## Session Log
+
+### Session 47 - 2026-03-12
+- Focus: `hnsw-round2-authority-same-schema-rerun`
+- Completed:
+  - tightened `tests/bench_hnsw_reopen_round2.rs` again so the default lane now requires `benchmark_results/hnsw_reopen_round2_authority_summary.json`, then used the missing-artifact failure as the TDD red signal for the final round-2 evidence slice
+  - reran the real authority surfaces for round 2: fresh Rust same-schema HDF5 row, fresh native HNSW capture, and fresh round-2 profile artifact, then synced the updated `benchmark_results/rs_hnsw_sift128.full_k100.json` and `benchmark_results/hnsw_reopen_candidate_search_profile_round2.json` back into the local worktree
+  - created `benchmark_results/hnsw_reopen_round2_authority_summary.json`, which records the actual round-2 outcome: synthetic profile time improved, but the authoritative same-schema Rust HNSW row regressed from `710.962` to `521.031` qps while recall only nudged from `0.9915` to `0.9923`, so the native-over-Rust gap widened from `14.8x` to `20.2x`; the historical HNSW family verdict therefore remains unchanged and round 2 is archived as `hard_stop`
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round2 -- --nocapture` -> initial `FAIL` (missing `benchmark_results/hnsw_reopen_round2_authority_summary.json`), then `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (rustfmt wanted the new contract assertion compacted), then `ok`
+  - `bash init.sh` -> `ok` (initial authority sync before reruns)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round2 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round2 bash scripts/remote/test.sh --command "cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T082542Z_10202.log`)
+  - `bash scripts/remote/native_hnsw_qps_capture.sh --log-dir /data/work/knowhere-rs-logs-hnsw-reopen-round2 --gtest-filter Benchmark_float_qps.TEST_HNSW` -> `exit_code=0` via linkfix fallback (`/data/work/knowhere-rs-logs-hnsw-reopen-round2/native_hnsw_qps_linkfix_20260312T083313Z.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round2 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round2 bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_round2_profile -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T084128Z_12238.log`)
+  - first authority contract replay failed exactly because the new summary artifact had not been synced yet (`/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T084211Z_12364.log`); after syncing the artifact, the final replay passed: `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round2 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round2 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round2 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T084531Z_12900.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 39 features (39 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-round2-authority-same-schema-rerun` is now `passing`
+  - all tracked features are now `passing`
+  - the round-2 HNSW reopen line is now closed as `hard_stop`; the historical HNSW family verdict remains `functional-but-not-leading`
+- Notes:
+  - round 2 did not fail because the synthetic profile was useless; it failed because the authoritative same-schema lane moved in the wrong direction after the core rework
+  - future HNSW work now requires a new authority-backed hypothesis and a new tracked feature line rather than another implicit continuation of round 2
+- Git Commits: pending
 
 ### Session 46 - 2026-03-12
 - Focus: `hnsw-candidate-search-core-rework`

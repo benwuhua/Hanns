@@ -1,0 +1,42 @@
+{
+  "task_id": "HNSW-REOPEN-ROUND2-AUTHORITY-SUMMARY",
+  "family": "HNSW",
+  "authority_scope": "remote_x86_only",
+  "round2_target": "candidate_search_same_schema_qps",
+  "historical_verdict_source": "benchmark_results/hnsw_p3_002_final_verdict.json",
+  "round2_baseline_source": "benchmark_results/hnsw_reopen_round2_baseline.json",
+  "round2_profile_source": "benchmark_results/hnsw_reopen_candidate_search_profile_round2.json",
+  "same_schema_sources": {
+    "rust": "benchmark_results/rs_hnsw_sift128.full_k100.json",
+    "native_log": "/data/work/knowhere-rs-logs-hnsw-reopen-round2/native_hnsw_qps_linkfix_20260312T083313Z.log"
+  },
+  "authority_logs": [
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T082542Z_10202.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round2/native_hnsw_qps_linkfix_20260312T083313Z.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T084128Z_12238.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T084531Z_12900.log"
+  ],
+  "same_schema_current": {
+    "rust_recall_at_10": 0.9922999999999992,
+    "rust_qps": 521.0310353032352,
+    "native_recall_at_10": 0.95,
+    "native_qps": 10519.683,
+    "native_over_rust_qps_ratio": 20.190127434304646
+  },
+  "delta_vs_reopen_baseline": {
+    "rust_recall_at_10_delta": 0.0007999999999999119,
+    "rust_qps_pct": -26.714676456598063,
+    "native_qps_pct": -0.04900786624709529,
+    "native_over_rust_qps_ratio_pct": 36.38609656210182
+  },
+  "profile_refresh_current": {
+    "entry_descent_ms": 6.205426,
+    "distance_compute_ms": 39.113468,
+    "sample_search_qps": 1623.9604401206836,
+    "recommended_next_target": "distance_compute_inner_loop"
+  },
+  "verdict_refresh_allowed": false,
+  "next_action": "hard_stop",
+  "summary": "Round 2 did improve the synthetic candidate-search profile, but the authoritative same-schema HNSW row regressed on qps: Rust moved from 710.9623183892526 to 521.0310353032352 qps (-26.7%) while recall only nudged from 0.9914999999999993 to 0.9922999999999992. Native BF16 remained at 10519.683 qps, so the native-over-Rust gap widened from 14.8x to 20.2x. The historical HNSW family verdict therefore does not gain a rewrite on this round-2 evidence.",
+  "action": "Keep benchmark_results/hnsw_p3_002_final_verdict.json unchanged, archive round 2 as a hard-stop on the current authority evidence, and do not reopen another HNSW algorithm line without a new authority-backed hypothesis that explains the same-schema regression."
+}

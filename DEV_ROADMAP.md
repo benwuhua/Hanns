@@ -1,6 +1,6 @@
 # Knowhere-RS Development Roadmap (Non-GPU)
 
-Last updated: 2026-03-12 08:18 UTC
+Last updated: 2026-03-12 08:45 UTC
 
 ## Goal
 
@@ -153,7 +153,7 @@ Exit criteria:
 - Production-relevant persistence / FFI metadata semantics are stable and auditable.
 - At least one core non-GPU path shows repeatable, recall-gated performance leadership over native knowhere. Not met on the current authority evidence; the final program verdict is therefore archived as `not accepted` in `benchmark_results/final_production_acceptance.json`.
 
-## Phase 6: HNSW Reopen Algorithm Push — 🔄 Active
+## Phase 6: HNSW Reopen Algorithm Push — ✅ Closed (round 2 hard-stop archived)
 
 Objective:
 
@@ -165,9 +165,8 @@ Active scoped tasks:
 - `hnsw-reopen-round2-activation`: closed; round 1 is now frozen into `benchmark_results/hnsw_reopen_round2_baseline.json`, and the second HNSW reopen line is officially active
 - `hnsw-candidate-search-profiler`: closed; `benchmark_results/hnsw_reopen_candidate_search_profile_round2.json` now pins round-2 authority evidence to `entry_descent` first and `distance_compute` second, replacing the old monolithic `candidate_search` bucket
 - `hnsw-candidate-search-core-rework`: closed; the shared HNSW candidate-search core now uses greedy fast descent for `ef<=1`, the unfiltered query path no longer pays the old broad upper-layer descent, and `SearchScratch` no longer writes an unused `touched` list
-- `hnsw-round2-authority-same-schema-rerun`: active; rerun the real recall-gated same-schema lane and decide whether round 2 may rewrite the historical HNSW family verdict
+- `hnsw-round2-authority-same-schema-rerun`: closed; fresh authority evidence is now archived in `benchmark_results/hnsw_reopen_round2_authority_summary.json`, which keeps the historical HNSW family verdict unchanged and closes round 2 as `hard_stop`
 
 Phase exit criteria:
 
-- HNSW round 2 produces a fresh same-schema authority result that materially improves on `benchmark_results/hnsw_reopen_baseline.json` without recall regression, or
-- the round-2 candidate-search hypothesis fails and the repo explicitly records a continue/soft-stop/hard-stop outcome instead of drifting back into untracked reopen work.
+- HNSW round 2 produced a fresh same-schema authority result, and the repo explicitly recorded the outcome as `hard_stop` instead of drifting back into untracked reopen work. ✅
