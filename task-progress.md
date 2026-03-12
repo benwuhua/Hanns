@@ -43,7 +43,7 @@
 - Notes:
   - round-5 evidence is now explicitly marked unstable across reruns, preventing accidental use of a single favorable ratio as optimization proof
   - next HNSW progression should either harden benchmark environment controls or move to larger structural algorithm cuts before expecting reliable same-schema leadership movement
-- Git Commits: pending
+- Git Commits: `ceaeaf6`
 
 ### Session 57 - 2026-03-12
 - Focus: `hnsw-round5-authority-same-schema-rerun`
