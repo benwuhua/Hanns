@@ -277,11 +277,11 @@
       "title": "IVF-PQ production contract closure",
       "description": "Define and verify the supported, constrained, and unsupported production-facing semantics for IVF-PQ across FFI, persistence, and metadata surfaces.",
       "priority": "medium",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"cargo test --lib ffi -- --nocapture\"",
-        "bash scripts/remote/test.sh --command \"cargo test --tests -q test_ivf_index_trait\"",
-        "bash scripts/remote/test.sh --command \"cargo test --test bench_json_export -q\""
+        "bash scripts/remote/test.sh --command \"cargo test --test test_ivf_index_trait -- --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_json_export -- --nocapture\""
       ],
       "dependencies": [
         "ivfpq-remote-recall-benchmark"
@@ -293,7 +293,7 @@
       "title": "IVF-PQ leadership or no-go verdict",
       "description": "End the IVF-PQ family with a remote-only verdict that is technically honest about parity, confidence, and production suitability.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"cargo test --test bench_ivf_pq_perf -q\"",
         "bash scripts/remote/test.sh --command \"cargo test --test bench_recall_gated_baseline -q\"",
@@ -342,7 +342,7 @@
       "title": "Remote benchmark gate for DiskANN family",
       "description": "Run the DiskANN family through the remote benchmark gate only after its comparability boundaries are explicit, so results can exit as credible evidence or explicit no-go.",
       "priority": "medium",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"cargo test --test bench_diskann_1m -q\"",
         "bash scripts/remote/test.sh --command \"cargo test --test bench_recall_gated_baseline -q\"",
@@ -358,7 +358,7 @@
       "title": "DiskANN parity or constrained verdict",
       "description": "End the DiskANN family with a remote-only verdict: production-candidate, constrained, or no-go. The result must reflect the actual simplified boundary rather than API surface alone.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"cargo test --lib diskann -- --nocapture\"",
         "bash scripts/remote/test.sh --command \"cargo test --test bench_diskann_1m -q\"",
@@ -406,7 +406,7 @@
       "title": "Remote fmt and clippy gate closure",
       "description": "Close style and lint drift on the remote authority machine so production acceptance does not rely on local-only formatting or lint checks.",
       "priority": "medium",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"cargo fmt --all -- --check\"",
         "bash scripts/remote/test.sh --command \"cargo clippy --all-targets --all-features -- -D warnings\"",
@@ -423,7 +423,7 @@
       "title": "Remote FFI, observability, and persistence gate",
       "description": "Keep the cross-cutting production contracts honest on the remote x86 lane: FFI metadata, observability schema, persistence semantics, and deserialize behavior.",
       "priority": "medium",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"cargo test --lib ffi -- --nocapture\"",
         "bash scripts/remote/test.sh --command \"cargo test --lib serialize -- --nocapture\"",
@@ -439,7 +439,7 @@
       "title": "Remote-first operator documentation",
       "description": "Align README and operator-facing docs with the actual remote-x86 workflow, current benchmark truth, and long-task durable state so future sessions and humans do not follow stale instructions.",
       "priority": "medium",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash init.sh",
         "python3 scripts/validate_features.py feature-list.json",
@@ -450,12 +450,25 @@
       ]
     },
     {
+      "id": "prod-workflow-doc-validator-gate",
+      "category": "cross-cutting-prod",
+      "title": "Workflow/doc consistency validator gate",
+      "description": "Upgrade scripts/validate_features.py into a workflow/doc consistency gate that catches durable-state drift, stale latest-session placeholders, bad verification patterns, and orphan temp artifacts before future sessions rely on them.",
+      "priority": "medium",
+      "status": "passing",
+      "verification_steps": [
+        "python3 -m unittest tests/test_validate_features.py",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": []
+    },
+    {
       "id": "final-core-path-classification",
       "category": "final-acceptance",
       "title": "Classify all core CPU paths honestly",
       "description": "Produce the final classification of HNSW, IVF-PQ, and DiskANN as production-candidate, functional-but-not-leading, constrained, or no-go, based only on remote x86 evidence.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "python3 scripts/validate_features.py feature-list.json",
         "bash scripts/remote/test.sh --command \"cargo test --test bench_recall_gated_baseline -q\"",
@@ -473,7 +486,7 @@
       "title": "Prove at least one remote performance leadership lane",
       "description": "Demonstrate at least one core CPU path that beats native on the same remote x86 benchmark surface at the same recall gate, or explicitly fail the project completion criteria.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/native_hnsw_qps_capture.sh --gtest-filter Benchmark_float_qps.TEST_HNSW",
         "bash scripts/remote/test.sh --command \"cargo build --features hdf5 --bin generate_hdf5_hnsw_baseline --verbose\"",
@@ -490,7 +503,7 @@
       "title": "Final non-GPU production acceptance gate",
       "description": "Accept the project only when remote x86 evidence shows non-GPU CPU-path replaceability, production engineering closure, and at least one credible leadership result over native.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"cargo fmt --all -- --check\"",
         "bash scripts/remote/test.sh --command \"cargo clippy --all-targets --all-features -- -D warnings\"",

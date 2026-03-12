@@ -683,6 +683,7 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
+#[allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -931,18 +932,17 @@ mod tests {
         // Query same as first vector
         let query = vec![1.0, 0.0, 0.0, 0.0];
         // For IP, we use -IP internally, so radius=-0.5 means IP >= 0.5
-        let (ids, distances) = index.range_search(&query, -0.5).unwrap();
+        let (ids, _distances) = index.range_search(&query, -0.5).unwrap();
 
         // Should find vectors with -IP <= -0.5, i.e., IP >= 0.5
         // IDs 0 and 2 have IP >= 0.5 with query
         // Note: range search may return empty due to implementation
-        #[ignore]
         assert!(ids.len() >= 2);
     }
 
     #[test]
     fn test_range_search_with_filter() {
-        use crate::api::{IdsPredicate, Predicate};
+        use crate::api::IdsPredicate;
 
         let config = IndexConfig::new(IndexType::Flat, MetricType::L2, 4);
         let mut index = MemIndex::new(&config).unwrap();

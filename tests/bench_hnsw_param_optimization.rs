@@ -140,6 +140,7 @@ fn compute_ground_truth(
 // Benchmark core
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn benchmark_single(
     base: &[f32],
     query: &[f32],

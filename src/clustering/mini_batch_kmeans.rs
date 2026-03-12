@@ -355,7 +355,7 @@ mod tests {
             .with_tolerance(1e-3)
             .with_seed(42);
 
-        let mut mbkm = MiniBatchKMeans::with_config(10, 64, config);
+        let mbkm = MiniBatchKMeans::with_config(10, 64, config);
 
         assert_eq!(mbkm.config().batch_size, 5000);
         assert_eq!(mbkm.config().max_iterations, 50);

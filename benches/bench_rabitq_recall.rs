@@ -17,7 +17,7 @@ fn generate_random_vectors(rng: &mut StdRng, n: usize, dim: usize) -> Vec<f32> {
     data
 }
 
-fn compute_recall(query: &[f32], approx_ids: &[i64], ground_truth_ids: &[i64], k: usize) -> f32 {
+fn compute_recall(_query: &[f32], approx_ids: &[i64], ground_truth_ids: &[i64], k: usize) -> f32 {
     let approx_set: std::collections::HashSet<i64> = approx_ids.iter().copied().collect();
     let mut matched = 0;
     for &id in ground_truth_ids.iter().take(k) {

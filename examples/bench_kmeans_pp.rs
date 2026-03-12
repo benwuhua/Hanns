@@ -12,7 +12,7 @@ fn generate_clustered_data(n_clusters: usize, dim: usize, points_per_cluster: us
     for c in 0..n_clusters {
         let center = (c as f32) * 10.0;
         for _ in 0..points_per_cluster {
-            for j in 0..dim {
+            for _ in 0..dim {
                 let value = center + (rand::random::<f32>() - 0.5) * 2.0;
                 data.push(value);
             }
@@ -41,7 +41,7 @@ fn benchmark_kmeans_random(vectors: &[f32], k: usize, dim: usize) -> (f32, usize
     let mut kmeans = KMeans::new(k, dim);
 
     let start = Instant::now();
-    let n = kmeans.train(vectors);
+    let _n = kmeans.train(vectors);
     let elapsed = start.elapsed().as_secs_f64();
 
     // 计算惯性
@@ -98,7 +98,7 @@ fn main() {
     for (n, dim, k) in test_cases {
         let vectors = generate_clustered_data(k, dim, n / k);
 
-        let (inertia_pp, iter_pp, time_pp) = benchmark_kmeans_pp(&vectors, k, dim);
+        let (inertia_pp, _iter_pp, time_pp) = benchmark_kmeans_pp(&vectors, k, dim);
         let (inertia_rand, _, time_rand) = benchmark_kmeans_random(&vectors, k, dim);
 
         let speedup = time_rand / time_pp;

@@ -243,7 +243,7 @@ fn benchmark_ivf_flat(dataset: &Hdf5Dataset, num_queries: usize) -> BenchmarkRes
 
     // Calculate number of clusters (sqrt of base vectors)
     let nlist = (dataset.num_train() as f64).sqrt() as usize;
-    let nlist = nlist.max(16).min(4096); // Clamp to reasonable range
+    let nlist = nlist.clamp(16, 4096); // Clamp to reasonable range
 
     let config = IndexConfig {
         index_type: IndexType::IvfFlat,
@@ -369,16 +369,11 @@ fn test_hdf5_loader() {
             let num_queries = (100).min(dataset.num_test());
             println!("\nRunning benchmarks with {} queries...", num_queries);
 
-            let mut results = Vec::new();
-
-            // Benchmark Flat
-            results.push(benchmark_flat(&dataset, num_queries));
-
-            // Benchmark HNSW
-            results.push(benchmark_hnsw(&dataset, num_queries));
-
-            // Benchmark IVF-Flat
-            results.push(benchmark_ivf_flat(&dataset, num_queries));
+            let results = vec![
+                benchmark_flat(&dataset, num_queries),
+                benchmark_hnsw(&dataset, num_queries),
+                benchmark_ivf_flat(&dataset, num_queries),
+            ];
 
             // Print summary
             print_summary(&results);

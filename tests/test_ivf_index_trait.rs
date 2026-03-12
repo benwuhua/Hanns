@@ -5,9 +5,10 @@
 
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 use knowhere_rs::dataset::Dataset;
-use knowhere_rs::index::Index;
+use knowhere_rs::faiss::ivf_rabitq::{IvfRaBitqConfig, IvfRaBitqIndex};
 use knowhere_rs::faiss::ivf_sq8::IvfSq8Index;
-use knowhere_rs::faiss::ivf_rabitq::{IvfRaBitqIndex, IvfRaBitqConfig};
+use knowhere_rs::faiss::IvfPqIndex;
+use knowhere_rs::index::Index;
 
 #[test]
 fn test_ivf_sq8_index_trait_metadata() {
@@ -44,10 +45,7 @@ fn test_ivf_sq8_index_trait_lifecycle() {
 
     // Train and add using Index trait
     let vectors = vec![
-        0.0, 0.0, 0.0, 0.0,
-        1.0, 1.0, 1.0, 1.0,
-        2.0, 2.0, 2.0, 2.0,
-        3.0, 3.0, 3.0, 3.0,
+        0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0,
     ];
 
     let dataset = Dataset::from_vectors_with_ids(vectors.clone(), 4, vec![0, 1, 2, 3]);
@@ -82,10 +80,7 @@ fn test_ivf_sq8_ann_iterator() {
     let mut index = IvfSq8Index::new(&config).unwrap();
 
     let vectors = vec![
-        0.0, 0.0, 0.0, 0.0,
-        1.0, 1.0, 1.0, 1.0,
-        2.0, 2.0, 2.0, 2.0,
-        3.0, 3.0, 3.0, 3.0,
+        0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0,
     ];
 
     let dataset = Dataset::from_vectors_with_ids(vectors.clone(), 4, vec![0, 1, 2, 3]);
@@ -195,10 +190,7 @@ fn test_ivf_sq8_search_with_bitset() {
     let mut index = IvfSq8Index::new(&config).unwrap();
 
     let vectors = vec![
-        0.0, 0.0, 0.0, 0.0,
-        1.0, 1.0, 1.0, 1.0,
-        2.0, 2.0, 2.0, 2.0,
-        3.0, 3.0, 3.0, 3.0,
+        0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0,
     ];
 
     let dataset = Dataset::from_vectors_with_ids(vectors.clone(), 4, vec![0, 1, 2, 3]);
@@ -216,6 +208,77 @@ fn test_ivf_sq8_search_with_bitset() {
 
     // Result should not contain filtered ids (0 and 1)
     for id in &result.ids {
-        assert!(*id != 0 && *id != 1, "Filtered ID {} should not be in results", id);
+        assert!(
+            *id != 0 && *id != 1,
+            "Filtered ID {} should not be in results",
+            id
+        );
     }
+}
+
+#[test]
+fn test_ivf_index_trait_ivf_pq_persistence_contract_roundtrip() {
+    let config = IndexConfig {
+        index_type: IndexType::IvfPq,
+        metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
+        dim: 8,
+        params: IndexParams {
+            nlist: Some(4),
+            nprobe: Some(2),
+            m: Some(4),
+            nbits_per_idx: Some(8),
+            ..Default::default()
+        },
+    };
+
+    let mut index = IvfPqIndex::new(&config).unwrap();
+    let vectors: Vec<f32> = (0..256).map(|i| i as f32 * 0.125).collect();
+
+    index.train(&vectors).unwrap();
+    index.add(&vectors, None).unwrap();
+    assert_eq!(index.ntotal(), 32);
+    assert!(index.is_trained());
+
+    let query = &vectors[..8];
+    let result = index
+        .search(
+            query,
+            &SearchRequest {
+                top_k: 4,
+                nprobe: 2,
+                filter: None,
+                params: None,
+                radius: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(result.ids.len(), 4);
+
+    let path = std::env::temp_dir().join(format!(
+        "knowhere_rs_ivfpq_trait_contract_{}.bin",
+        std::process::id()
+    ));
+    index.save(&path).unwrap();
+
+    let mut restored = IvfPqIndex::new(&config).unwrap();
+    restored.load(&path).unwrap();
+
+    let restored_result = restored
+        .search(
+            query,
+            &SearchRequest {
+                top_k: 4,
+                nprobe: 2,
+                filter: None,
+                params: None,
+                radius: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(restored.ntotal(), 32);
+    assert!(restored.is_trained());
+    assert_eq!(restored_result.ids.len(), 4);
+
+    let _ = std::fs::remove_file(path);
 }

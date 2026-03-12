@@ -129,17 +129,7 @@ fn test_minhash_lsh_jaccard_similarity() {
     // Create two similar vectors
     let vec_len = 8;
     let elem_size = 8;
-    let mut data = Vec::new();
-
-    // Vector 0: all zeros
-    for _ in 0..vec_len * elem_size {
-        data.push(0u8);
-    }
-
-    // Vector 1: same as vector 0 (identical)
-    for _ in 0..vec_len * elem_size {
-        data.push(0u8);
-    }
+    let mut data = vec![0u8; 2 * vec_len * elem_size];
 
     // Vector 2: different
     for i in 0..vec_len * elem_size {

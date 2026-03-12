@@ -46,8 +46,8 @@ pub use binary::BinaryIndex;
 pub use binary_hnsw::BinaryHnswIndex;
 pub use diskann::DiskAnnIndex;
 pub use diskann_aisaq::{
-    AsyncReadEngine, BeamSearchIO, BeamSearchStats, FileGroup, FlashLayout, PQFlashIndex, PageCache,
-    PageCacheStats,
+    AsyncReadEngine, BeamSearchIO, BeamSearchStats, FileGroup, FlashLayout, PQFlashIndex,
+    PageCache, PageCacheStats,
 };
 pub use hnsw::HnswIndex;
 pub use hnsw_pq::{HnswPqConfig, HnswPqIndex};

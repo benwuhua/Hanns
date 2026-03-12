@@ -4,7 +4,6 @@
 /// This test checks if search_layer returns enough candidates.
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 use knowhere_rs::faiss::HnswIndex;
-use knowhere_rs::index::Index;
 use rand::Rng;
 
 fn l2_distance_sq(a: &[f32], b: &[f32]) -> f32 {
@@ -53,7 +52,7 @@ fn test_hnsw_search_count() {
 
     // Check distance values
     println!("\nDistance statistics:");
-    let valid_dists: Vec<f32> = result.distances.iter().copied().collect();
+    let valid_dists = result.distances.to_vec();
     if !valid_dists.is_empty() {
         let min_dist = valid_dists.iter().cloned().fold(f32::INFINITY, f32::min);
         let max_dist = valid_dists

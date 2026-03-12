@@ -446,7 +446,7 @@ mod tests {
         let vector: Vec<f32> = (0..32).map(|i| i as f32 * 0.1).collect();
         let (code, centroid_dist, _ip) = encoder.encode(&vector);
 
-        assert_eq!(code.len(), (32 + 7) / 8);
+        assert_eq!(code.len(), 32_usize.div_ceil(8));
         assert!(centroid_dist > 0.0);
 
         // 测试解码
@@ -471,13 +471,13 @@ mod tests {
         let centroid: Vec<f32> = vec![0.5; 16];
         let (code, centroid_dist, ip, _sum_xb) = encoder.encode_with_centroid(&vector, &centroid);
 
-        assert_eq!(code.len(), (16 + 7) / 8);
+        assert_eq!(code.len(), 16_usize.div_ceil(8));
         assert!(centroid_dist > 0.0);
 
         // 验证校正因子在合理范围内
         // ip = <sign(residual), residual> / ||residual|| / sqrt(d)
         // 应该在 [0, 1] 范围内
-        assert!(ip >= 0.0 && ip <= 2.0);
+        assert!((0.0..=2.0).contains(&ip));
     }
 
     #[test]

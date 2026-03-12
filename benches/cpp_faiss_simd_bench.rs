@@ -180,8 +180,8 @@ fn bench_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("Throughput");
 
     for (nq, nb, dim) in [(100, 10000, 128), (100, 10000, 960)] {
-        let queries: Vec<f32> = (0..nq * dim).map(|i| ((i as f32 * 0.01).sin())).collect();
-        let database: Vec<f32> = (0..nb * dim).map(|i| ((i as f32 * 0.02).cos())).collect();
+        let queries: Vec<f32> = (0..nq * dim).map(|i| (i as f32 * 0.01).sin()).collect();
+        let database: Vec<f32> = (0..nb * dim).map(|i| (i as f32 * 0.02).cos()).collect();
 
         group.bench_with_input(
             BenchmarkId::new(

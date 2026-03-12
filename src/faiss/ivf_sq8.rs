@@ -6,11 +6,15 @@
 use std::collections::HashMap;
 
 use crate::api::{IndexConfig, Result, SearchRequest, SearchResult};
+use crate::bitset::BitsetView;
 use crate::dataset::Dataset;
 use crate::executor::l2_distance;
-use crate::index::{Index as IndexTrait, IndexError, AnnIterator, SearchResult as IndexSearchResult};
+use crate::index::{
+    AnnIterator, Index as IndexTrait, IndexError, SearchResult as IndexSearchResult,
+};
 use crate::quantization::ScalarQuantizer;
-use crate::bitset::BitsetView;
+
+type IvfSq8InvertedListSnapshot = Vec<(usize, Vec<(i64, Vec<u8>)>)>;
 
 /// IVF-SQ8 Index
 #[allow(dead_code)]
@@ -387,7 +391,7 @@ impl IvfSq8Index {
         let dim = self.dim;
         let nlist = self.nlist;
         let centroids = self.centroids.clone();
-        let inverted_lists: Vec<(usize, Vec<(i64, Vec<u8>)>)> = self
+        let inverted_lists: IvfSq8InvertedListSnapshot = self
             .inverted_lists
             .iter()
             .map(|(k, v)| (*k, v.clone()))
@@ -651,7 +655,7 @@ impl IndexTrait for IvfSq8Index {
         let results: Vec<(i64, f32)> = api_result
             .ids
             .into_iter()
-            .zip(api_result.distances.into_iter())
+            .zip(api_result.distances)
             .collect();
 
         Ok(Box::new(IvfSq8AnnIterator::new(results)))
@@ -696,7 +700,7 @@ mod tests {
             index_type: IndexType::IvfSq8,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: IndexParams::default(),
         };
 
@@ -711,7 +715,7 @@ mod tests {
             index_type: IndexType::IvfSq8,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_sq8(4, 2),
         };
 
@@ -752,7 +756,7 @@ mod tests {
             index_type: IndexType::IvfSq8,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_sq8(4, 2),
         };
 
@@ -773,7 +777,7 @@ mod tests {
             index_type: IndexType::IvfSq8,
             metric_type: MetricType::L2,
             dim: 8,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_sq8(10, 3),
         };
 
@@ -784,9 +788,9 @@ mod tests {
 
     #[test]
     fn test_ivf_sq8_from_str() {
-        assert_eq!(IndexType::from_str("ivf_sq8"), Some(IndexType::IvfSq8));
-        assert_eq!(IndexType::from_str("ivf-sq8"), Some(IndexType::IvfSq8));
-        assert_eq!(IndexType::from_str("ivfsq8"), Some(IndexType::IvfSq8));
-        assert_eq!(IndexType::from_str("IVF_SQ8"), Some(IndexType::IvfSq8));
+        assert_eq!("ivf_sq8".parse::<IndexType>().ok(), Some(IndexType::IvfSq8));
+        assert_eq!("ivf-sq8".parse::<IndexType>().ok(), Some(IndexType::IvfSq8));
+        assert_eq!("ivfsq8".parse::<IndexType>().ok(), Some(IndexType::IvfSq8));
+        assert_eq!("IVF_SQ8".parse::<IndexType>().ok(), Some(IndexType::IvfSq8));
     }
 }

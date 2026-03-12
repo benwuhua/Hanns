@@ -28,9 +28,18 @@ fn test_hnsw_high_params_preserve_persistence_and_raw_vector_contract() {
     let query: Vec<f32> = vectors[..dim].to_vec();
 
     let index = build_high_param_index(&vectors, dim, 48, 600);
-    let original = index.search(&query, &SearchRequest { top_k: 10, ..Default::default() })
+    let original = index
+        .search(
+            &query,
+            &SearchRequest {
+                top_k: 10,
+                ..Default::default()
+            },
+        )
         .expect("search should succeed");
-    let retrieved = index.get_vector_by_ids(&[0, 17]).expect("get_vector_by_ids should succeed");
+    let retrieved = index
+        .get_vector_by_ids(&[0, 17])
+        .expect("get_vector_by_ids should succeed");
 
     assert_eq!(retrieved.len(), dim * 2);
     assert_eq!(&retrieved[..dim], &vectors[..dim]);
@@ -47,10 +56,18 @@ fn test_hnsw_high_params_preserve_persistence_and_raw_vector_contract() {
         params: IndexParams::hnsw(48, 600, 0.5),
     };
     let mut restored = HnswIndex::new(&config).expect("restored hnsw should build");
-    restored.load(temp_file.path()).expect("load should succeed");
+    restored
+        .load(temp_file.path())
+        .expect("load should succeed");
 
     let restored_search = restored
-        .search(&query, &SearchRequest { top_k: 10, ..Default::default() })
+        .search(
+            &query,
+            &SearchRequest {
+                top_k: 10,
+                ..Default::default()
+            },
+        )
         .expect("restored search should succeed");
     let restored_vectors = restored
         .get_vector_by_ids(&[0, 17])
@@ -94,13 +111,22 @@ fn test_hnsw_high_params() {
         for q_idx in 0..num_queries {
             let q = &queries[q_idx * dim..(q_idx + 1) * dim];
             let result = index
-                .search(q, &SearchRequest { top_k: 1, ..Default::default() })
+                .search(
+                    q,
+                    &SearchRequest {
+                        top_k: 1,
+                        ..Default::default()
+                    },
+                )
                 .expect("search should succeed");
             if !result.ids.is_empty() {
                 recall_at_1 += 1;
             }
         }
 
-        println!("  completed {} queries with non-empty top-1 on {} / {}", num_queries, recall_at_1, num_queries);
+        println!(
+            "  completed {} queries with non-empty top-1 on {} / {}",
+            num_queries, recall_at_1, num_queries
+        );
     }
 }

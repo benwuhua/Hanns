@@ -31,116 +31,251 @@ impl LegalMatrix {
         let mut mmap_supported = HashSet::new();
 
         // === Binary IVF ===
-        add_legal(&mut legal_index_datatype, &mut legal_combinations,
-            IndexType::BinFlat, DataType::Binary, vec![MetricType::Hamming]);
-        add_legal(&mut legal_index_datatype, &mut legal_combinations,
-            IndexType::BinIvfFlat, DataType::Binary, vec![MetricType::Hamming]);
+        add_legal(
+            &mut legal_index_datatype,
+            &mut legal_combinations,
+            IndexType::BinFlat,
+            DataType::Binary,
+            vec![MetricType::Hamming],
+        );
+        add_legal(
+            &mut legal_index_datatype,
+            &mut legal_combinations,
+            IndexType::BinIvfFlat,
+            DataType::Binary,
+            vec![MetricType::Hamming],
+        );
 
         // === Flat (IDMAP) ===
         for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16] {
-            add_legal(&mut legal_index_datatype, &mut legal_combinations,
-                IndexType::Flat, *dt, vec![MetricType::L2, MetricType::Ip, MetricType::Cosine]);
+            add_legal(
+                &mut legal_index_datatype,
+                &mut legal_combinations,
+                IndexType::Flat,
+                *dt,
+                vec![MetricType::L2, MetricType::Ip, MetricType::Cosine],
+            );
         }
 
         // === IVF-Flat ===
         for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16] {
-            add_legal(&mut legal_index_datatype, &mut legal_combinations,
-                IndexType::IvfFlat, *dt, vec![MetricType::L2, MetricType::Ip, MetricType::Cosine]);
+            add_legal(
+                &mut legal_index_datatype,
+                &mut legal_combinations,
+                IndexType::IvfFlat,
+                *dt,
+                vec![MetricType::L2, MetricType::Ip, MetricType::Cosine],
+            );
         }
 
         // === IVF-Flat-CC ===
         for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16] {
-            add_legal(&mut legal_index_datatype, &mut legal_combinations,
-                IndexType::IvfFlatCc, *dt, vec![MetricType::L2, MetricType::Ip, MetricType::Cosine]);
+            add_legal(
+                &mut legal_index_datatype,
+                &mut legal_combinations,
+                IndexType::IvfFlatCc,
+                *dt,
+                vec![MetricType::L2, MetricType::Ip, MetricType::Cosine],
+            );
         }
 
         // === IVF-PQ ===
         for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16] {
-            add_legal(&mut legal_index_datatype, &mut legal_combinations,
-                IndexType::IvfPq, *dt, vec![MetricType::L2, MetricType::Ip, MetricType::Cosine]);
+            add_legal(
+                &mut legal_index_datatype,
+                &mut legal_combinations,
+                IndexType::IvfPq,
+                *dt,
+                vec![MetricType::L2, MetricType::Ip, MetricType::Cosine],
+            );
         }
 
         // === ScaNN ===
         #[cfg(feature = "scann")]
         for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16] {
-            add_legal(&mut legal_index_datatype, &mut legal_combinations,
-                IndexType::Scann, *dt, vec![MetricType::L2, MetricType::Ip, MetricType::Cosine]);
+            add_legal(
+                &mut legal_index_datatype,
+                &mut legal_combinations,
+                IndexType::Scann,
+                *dt,
+                vec![MetricType::L2, MetricType::Ip, MetricType::Cosine],
+            );
         }
 
         // === IVF-SQ8 ===
         for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16] {
-            add_legal(&mut legal_index_datatype, &mut legal_combinations,
-                IndexType::IvfSq8, *dt, vec![MetricType::L2, MetricType::Ip, MetricType::Cosine]);
+            add_legal(
+                &mut legal_index_datatype,
+                &mut legal_combinations,
+                IndexType::IvfSq8,
+                *dt,
+                vec![MetricType::L2, MetricType::Ip, MetricType::Cosine],
+            );
         }
 
         // === IVF-SQ-CC ===
         for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16] {
-            add_legal(&mut legal_index_datatype, &mut legal_combinations,
-                IndexType::IvfSqCc, *dt, vec![MetricType::L2, MetricType::Ip, MetricType::Cosine]);
+            add_legal(
+                &mut legal_index_datatype,
+                &mut legal_combinations,
+                IndexType::IvfSqCc,
+                *dt,
+                vec![MetricType::L2, MetricType::Ip, MetricType::Cosine],
+            );
         }
 
         // === IVF-RaBitQ ===
         for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16] {
-            add_legal(&mut legal_index_datatype, &mut legal_combinations,
-                IndexType::IvfRabitq, *dt, vec![MetricType::L2, MetricType::Ip, MetricType::Cosine]);
+            add_legal(
+                &mut legal_index_datatype,
+                &mut legal_combinations,
+                IndexType::IvfRabitq,
+                *dt,
+                vec![MetricType::L2, MetricType::Ip, MetricType::Cosine],
+            );
         }
 
         // === HNSW ===
-        for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16, DataType::Int8] {
-            add_legal(&mut legal_index_datatype, &mut legal_combinations,
-                IndexType::Hnsw, *dt, vec![MetricType::L2, MetricType::Ip, MetricType::Cosine]);
+        for dt in &[
+            DataType::Float,
+            DataType::Float16,
+            DataType::BFloat16,
+            DataType::Int8,
+        ] {
+            add_legal(
+                &mut legal_index_datatype,
+                &mut legal_combinations,
+                IndexType::Hnsw,
+                *dt,
+                vec![MetricType::L2, MetricType::Ip, MetricType::Cosine],
+            );
         }
         // HNSW with binary
-        add_legal(&mut legal_index_datatype, &mut legal_combinations,
-            IndexType::Hnsw, DataType::Binary, vec![MetricType::Hamming]);
+        add_legal(
+            &mut legal_index_datatype,
+            &mut legal_combinations,
+            IndexType::Hnsw,
+            DataType::Binary,
+            vec![MetricType::Hamming],
+        );
 
         // === HNSW-SQ ===
-        for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16, DataType::Int8] {
-            add_legal(&mut legal_index_datatype, &mut legal_combinations,
-                IndexType::HnswSq, *dt, vec![MetricType::L2, MetricType::Ip, MetricType::Cosine]);
+        for dt in &[
+            DataType::Float,
+            DataType::Float16,
+            DataType::BFloat16,
+            DataType::Int8,
+        ] {
+            add_legal(
+                &mut legal_index_datatype,
+                &mut legal_combinations,
+                IndexType::HnswSq,
+                *dt,
+                vec![MetricType::L2, MetricType::Ip, MetricType::Cosine],
+            );
         }
 
         // === HNSW-PQ ===
-        for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16, DataType::Int8] {
-            add_legal(&mut legal_index_datatype, &mut legal_combinations,
-                IndexType::HnswPq, *dt, vec![MetricType::L2, MetricType::Ip, MetricType::Cosine]);
+        for dt in &[
+            DataType::Float,
+            DataType::Float16,
+            DataType::BFloat16,
+            DataType::Int8,
+        ] {
+            add_legal(
+                &mut legal_index_datatype,
+                &mut legal_combinations,
+                IndexType::HnswPq,
+                *dt,
+                vec![MetricType::L2, MetricType::Ip, MetricType::Cosine],
+            );
         }
 
         // === HNSW-PRQ ===
-        for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16, DataType::Int8] {
-            add_legal(&mut legal_index_datatype, &mut legal_combinations,
-                IndexType::HnswPrq, *dt, vec![MetricType::L2, MetricType::Ip, MetricType::Cosine]);
+        for dt in &[
+            DataType::Float,
+            DataType::Float16,
+            DataType::BFloat16,
+            DataType::Int8,
+        ] {
+            add_legal(
+                &mut legal_index_datatype,
+                &mut legal_combinations,
+                IndexType::HnswPrq,
+                *dt,
+                vec![MetricType::L2, MetricType::Ip, MetricType::Cosine],
+            );
         }
 
         // === DiskANN ===
         for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16] {
-            add_legal(&mut legal_index_datatype, &mut legal_combinations,
-                IndexType::DiskAnn, *dt, vec![MetricType::L2, MetricType::Ip, MetricType::Cosine]);
+            add_legal(
+                &mut legal_index_datatype,
+                &mut legal_combinations,
+                IndexType::DiskAnn,
+                *dt,
+                vec![MetricType::L2, MetricType::Ip, MetricType::Cosine],
+            );
         }
 
         // === AISAQ ===
         for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16] {
-            add_legal(&mut legal_index_datatype, &mut legal_combinations,
-                IndexType::Aisaq, *dt, vec![MetricType::L2, MetricType::Ip, MetricType::Cosine]);
+            add_legal(
+                &mut legal_index_datatype,
+                &mut legal_combinations,
+                IndexType::Aisaq,
+                *dt,
+                vec![MetricType::L2, MetricType::Ip, MetricType::Cosine],
+            );
         }
 
         // === Sparse Indexes ===
-        add_legal(&mut legal_index_datatype, &mut legal_combinations,
-            IndexType::SparseInverted, DataType::SparseFloat, vec![MetricType::Ip]);
-        add_legal(&mut legal_index_datatype, &mut legal_combinations,
-            IndexType::SparseWand, DataType::SparseFloat, vec![MetricType::Ip]);
-        add_legal(&mut legal_index_datatype, &mut legal_combinations,
-            IndexType::SparseWandCc, DataType::SparseFloat, vec![MetricType::Ip]);
-        add_legal(&mut legal_index_datatype, &mut legal_combinations,
-            IndexType::SparseInvertedCc, DataType::SparseFloat, vec![MetricType::Ip]);
+        add_legal(
+            &mut legal_index_datatype,
+            &mut legal_combinations,
+            IndexType::SparseInverted,
+            DataType::SparseFloat,
+            vec![MetricType::Ip],
+        );
+        add_legal(
+            &mut legal_index_datatype,
+            &mut legal_combinations,
+            IndexType::SparseWand,
+            DataType::SparseFloat,
+            vec![MetricType::Ip],
+        );
+        add_legal(
+            &mut legal_index_datatype,
+            &mut legal_combinations,
+            IndexType::SparseWandCc,
+            DataType::SparseFloat,
+            vec![MetricType::Ip],
+        );
+        add_legal(
+            &mut legal_index_datatype,
+            &mut legal_combinations,
+            IndexType::SparseInvertedCc,
+            DataType::SparseFloat,
+            vec![MetricType::Ip],
+        );
 
         // === MinHash-LSH ===
-        add_legal(&mut legal_index_datatype, &mut legal_combinations,
-            IndexType::MinHashLsh, DataType::Binary, vec![MetricType::Hamming]);
+        add_legal(
+            &mut legal_index_datatype,
+            &mut legal_combinations,
+            IndexType::MinHashLsh,
+            DataType::Binary,
+            vec![MetricType::Hamming],
+        );
 
         // === Binary HNSW ===
-        add_legal(&mut legal_index_datatype, &mut legal_combinations,
-            IndexType::BinaryHnsw, DataType::Binary, vec![MetricType::Hamming]);
+        add_legal(
+            &mut legal_index_datatype,
+            &mut legal_combinations,
+            IndexType::BinaryHnsw,
+            DataType::Binary,
+            vec![MetricType::Hamming],
+        );
 
         // === Mmap-supported indexes ===
         mmap_supported.extend(vec![
@@ -186,7 +321,8 @@ impl LegalMatrix {
         data_type: DataType,
         metric_type: MetricType,
     ) -> bool {
-        self.legal_combinations.contains(&(index_type, data_type, metric_type))
+        self.legal_combinations
+            .contains(&(index_type, data_type, metric_type))
     }
 
     /// Check if index supports mmap
@@ -228,7 +364,7 @@ fn add_legal(
 }
 
 /// Validate index configuration
-/// 
+///
 /// Returns Ok(()) if legal, Err with description if illegal
 pub fn validate_index_config(
     index_type: IndexType,
@@ -265,21 +401,9 @@ mod tests {
     #[test]
     fn test_legal_matrix_hnsw_float() {
         let matrix = LegalMatrix::instance();
-        assert!(matrix.is_legal_combination(
-            IndexType::Hnsw,
-            DataType::Float,
-            MetricType::L2
-        ));
-        assert!(matrix.is_legal_combination(
-            IndexType::Hnsw,
-            DataType::Float,
-            MetricType::Ip
-        ));
-        assert!(matrix.is_legal_combination(
-            IndexType::Hnsw,
-            DataType::Float,
-            MetricType::Cosine
-        ));
+        assert!(matrix.is_legal_combination(IndexType::Hnsw, DataType::Float, MetricType::L2));
+        assert!(matrix.is_legal_combination(IndexType::Hnsw, DataType::Float, MetricType::Ip));
+        assert!(matrix.is_legal_combination(IndexType::Hnsw, DataType::Float, MetricType::Cosine));
     }
 
     #[test]
@@ -291,21 +415,13 @@ mod tests {
             MetricType::Hamming
         ));
         // Binary HNSW should not support L2
-        assert!(!matrix.is_legal_combination(
-            IndexType::Hnsw,
-            DataType::Binary,
-            MetricType::L2
-        ));
+        assert!(!matrix.is_legal_combination(IndexType::Hnsw, DataType::Binary, MetricType::L2));
     }
 
     #[test]
     fn test_legal_matrix_ivf_sq8() {
         let matrix = LegalMatrix::instance();
-        assert!(matrix.is_legal_combination(
-            IndexType::IvfSq8,
-            DataType::Float,
-            MetricType::L2
-        ));
+        assert!(matrix.is_legal_combination(IndexType::IvfSq8, DataType::Float, MetricType::L2));
         assert!(matrix.is_legal_index_datatype(IndexType::IvfSq8, DataType::Float16));
         // IVF-SQ8 should not support binary
         assert!(!matrix.is_legal_index_datatype(IndexType::IvfSq8, DataType::Binary));
@@ -330,11 +446,7 @@ mod tests {
     #[test]
     fn test_legal_matrix_diskann() {
         let matrix = LegalMatrix::instance();
-        assert!(matrix.is_legal_combination(
-            IndexType::DiskAnn,
-            DataType::Float,
-            MetricType::L2
-        ));
+        assert!(matrix.is_legal_combination(IndexType::DiskAnn, DataType::Float, MetricType::L2));
         assert!(matrix.is_legal_index_datatype(IndexType::DiskAnn, DataType::Float16));
         // DiskANN does not support Int8
         assert!(!matrix.is_legal_index_datatype(IndexType::DiskAnn, DataType::Int8));
@@ -344,12 +456,19 @@ mod tests {
     fn test_validate_index_config() {
         // Legal combination
         assert!(validate_index_config(IndexType::Hnsw, DataType::Float, MetricType::L2).is_ok());
-        
+
         // Illegal datatype
-        assert!(validate_index_config(IndexType::IvfSq8, DataType::Binary, MetricType::L2).is_err());
-        
+        assert!(
+            validate_index_config(IndexType::IvfSq8, DataType::Binary, MetricType::L2).is_err()
+        );
+
         // Illegal metric
-        assert!(validate_index_config(IndexType::SparseInverted, DataType::SparseFloat, MetricType::L2).is_err());
+        assert!(validate_index_config(
+            IndexType::SparseInverted,
+            DataType::SparseFloat,
+            MetricType::L2
+        )
+        .is_err());
     }
 
     #[test]

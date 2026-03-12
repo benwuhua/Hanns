@@ -98,8 +98,8 @@ impl PqDistance {
 
         let mut sum = _mm_setzero_ps();
 
-        for sub_idx in 0..self.m {
-            let code = codes[sub_idx] as usize;
+        for (sub_idx, &code_u8) in codes.iter().take(self.m).enumerate() {
+            let code = code_u8 as usize;
             let cent_offset = sub_idx * self.k * self.sub_dim + code * self.sub_dim;
 
             if cent_offset + self.sub_dim > codebook.len() {
@@ -133,7 +133,7 @@ impl PqDistance {
         }
 
         // Horizontal sum
-        let mut result = _mm_cvtss_f32(sum);
+        let result = _mm_cvtss_f32(sum);
         let high = _mm_movehdup_ps(sum);
         let sums = _mm_add_ps(sum, high);
         let sums2 = _mm_movehl_ps(sums, sums);
@@ -149,8 +149,8 @@ impl PqDistance {
 
         let mut sum = _mm256_setzero_ps();
 
-        for sub_idx in 0..self.m {
-            let code = codes[sub_idx] as usize;
+        for (sub_idx, &code_u8) in codes.iter().take(self.m).enumerate() {
+            let code = code_u8 as usize;
             let cent_offset = sub_idx * self.k * self.sub_dim + code * self.sub_dim;
 
             if cent_offset + self.sub_dim > codebook.len() {
@@ -200,8 +200,8 @@ impl PqDistance {
         unsafe {
             let mut sum = vdupq_n_f32(0.0);
 
-            for sub_idx in 0..self.m {
-                let code = codes[sub_idx] as usize;
+            for (sub_idx, &code) in codes.iter().enumerate().take(self.m) {
+                let code = code as usize;
                 let cent_offset = sub_idx * self.k * self.sub_dim + code * self.sub_dim;
 
                 if cent_offset + self.sub_dim > codebook.len() {
@@ -237,11 +237,10 @@ impl PqDistance {
             }
 
             // Horizontal sum
-            let mut result = vgetq_lane_f32(sum, 0)
+            vgetq_lane_f32(sum, 0)
                 + vgetq_lane_f32(sum, 1)
                 + vgetq_lane_f32(sum, 2)
-                + vgetq_lane_f32(sum, 3);
-            result
+                + vgetq_lane_f32(sum, 3)
         }
     }
 

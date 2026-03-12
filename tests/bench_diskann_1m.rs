@@ -10,19 +10,35 @@
 //! - `SIFT_NUM_QUERIES`: 查询数量（默认 `100`）
 //! - `SIFT_BASE_SIZE`: base 向量数量（默认 `1000000`）
 
+#[cfg(feature = "long-tests")]
 use knowhere_rs::api::{MetricType, SearchResult};
-use knowhere_rs::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
+#[cfg(feature = "long-tests")]
 use knowhere_rs::benchmark::average_recall_at_k;
+#[cfg(feature = "long-tests")]
+use knowhere_rs::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
+use serde_json::Value;
+#[cfg(feature = "long-tests")]
 use std::env;
+use std::fs;
+#[cfg(feature = "long-tests")]
 use std::fs::File;
+#[cfg(feature = "long-tests")]
 use std::io::{BufReader, Read};
+#[cfg(feature = "long-tests")]
 use std::time::Instant;
 
+#[cfg(feature = "long-tests")]
 const TOP_K: usize = 10;
+#[cfg(feature = "long-tests")]
 const DEFAULT_BASE_SIZE: usize = 1_000_000;
+#[cfg(feature = "long-tests")]
 const DEFAULT_NUM_QUERIES: usize = 100;
+#[cfg(feature = "long-tests")]
 const REPORT_PATH: &str = "BENCH-051_DISKANN_1M.md";
+const DISKANN_BENCHMARK_GATE_PATH: &str = "benchmark_results/diskann_p3_004_benchmark_gate.json";
+const DISKANN_FINAL_VERDICT_PATH: &str = "benchmark_results/diskann_p3_004_final_verdict.json";
 
+#[cfg(feature = "long-tests")]
 #[derive(Debug, Clone)]
 struct BenchResult {
     config_name: String,
@@ -33,6 +49,7 @@ struct BenchResult {
     recall_at_10: f64,
 }
 
+#[cfg(feature = "long-tests")]
 fn compute_ground_truth(base: &[f32], queries: &[f32], dim: usize, top_k: usize) -> Vec<Vec<i32>> {
     let num_base = base.len() / dim;
     let num_queries = queries.len() / dim;
@@ -43,7 +60,11 @@ fn compute_ground_truth(base: &[f32], queries: &[f32], dim: usize, top_k: usize)
         let mut distances: Vec<(f32, i32)> = (0..num_base)
             .map(|i| {
                 let v = &base[i * dim..(i + 1) * dim];
-                let dist: f32 = query.iter().zip(v.iter()).map(|(a, b)| (a - b).powi(2)).sum();
+                let dist: f32 = query
+                    .iter()
+                    .zip(v.iter())
+                    .map(|(a, b)| (a - b).powi(2))
+                    .sum();
                 (dist, i as i32)
             })
             .collect();
@@ -55,6 +76,7 @@ fn compute_ground_truth(base: &[f32], queries: &[f32], dim: usize, top_k: usize)
     ground_truth
 }
 
+#[cfg(feature = "long-tests")]
 fn load_sift1m_subset(base_size: usize) -> Option<(Vec<f32>, Vec<f32>, usize)> {
     let path = env::var("SIFT1M_PATH").unwrap_or_else(|_| "./data/sift1m".to_string());
     let base_file = format!("{}/sift_base.fvecs", path);
@@ -68,13 +90,13 @@ fn load_sift1m_subset(base_size: usize) -> Option<(Vec<f32>, Vec<f32>, usize)> {
     // Load base vectors (subset)
     let mut base_reader = BufReader::new(File::open(&base_file).ok()?);
     let base_full = knowhere_rs::dataset::read_fvecs(&mut base_reader).ok()?;
-    
+
     // Determine dimension by reading first 4 bytes
     let mut dim_reader = BufReader::new(File::open(&base_file).ok()?);
     let mut dim_buf = [0u8; 4];
     dim_reader.read_exact(&mut dim_buf).ok()?;
     let dim = u32::from_le_bytes(dim_buf) as usize;
-    
+
     let base_count = base_full.len() / dim;
     let actual_size = base_count.min(base_size);
     let base = base_full[..actual_size * dim].to_vec();
@@ -86,6 +108,7 @@ fn load_sift1m_subset(base_size: usize) -> Option<(Vec<f32>, Vec<f32>, usize)> {
     Some((base, queries, dim))
 }
 
+#[cfg(feature = "long-tests")]
 fn run_benchmark(
     base: &[f32],
     queries: &[f32],
@@ -127,16 +150,14 @@ fn run_benchmark(
     }
 }
 
+#[cfg(feature = "long-tests")]
 fn generate_report(results: &[BenchResult], base_size: usize, num_queries: usize) -> String {
-    let mut report = String::new();
-    report.push_str("# BENCH-051: DiskANN 1M Benchmark\n\n");
-    report.push_str(&format!("**Date**: {}\n", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")));
-    report.push_str(&format!("**Dataset**: SIFT1M ({} base, {} queries)\n\n", base_size, num_queries));
-    
+    let mut report = render_report_preamble(base_size, num_queries);
+
     report.push_str("## Results\n\n");
     report.push_str("| Config | MaxDegree | BeamWidth | Build (s) | Search (s) | QPS | R@10 |\n");
     report.push_str("|--------|-----------|-----------|-----------|------------|-----|------|\n");
-    
+
     for r in results {
         report.push_str(&format!(
             "| {} | {} | {} | {:.2} | {:.3} | {:.0} | {:.3} |\n",
@@ -163,17 +184,79 @@ fn generate_report(results: &[BenchResult], base_size: usize, num_queries: usize
     }
 
     report.push_str("## Notes\n\n");
-    report.push_str("- Ground truth computed via brute-force L2 distance\n");
-    report.push_str("- DiskANN uses PQ compression + beam search\n");
-    report.push_str("- Benchmark uses in-memory mode (Phase 1-2 implementation)\n");
-    report.push_str("- This harness exercises a constrained Rust AISAQ skeleton, not a native-comparable SSD DiskANN pipeline\n");
+    report.push_str(&render_report_notes());
 
     report
 }
 
+fn render_report_preamble(base_size: usize, num_queries: usize) -> String {
+    format!(
+        "# BENCH-051: DiskANN 1M Benchmark\n\n**Dataset**: SIFT1M ({} base, {} queries)\n\n",
+        base_size, num_queries
+    )
+}
+
+fn render_report_notes() -> String {
+    [
+        "- Ground truth computed via brute-force L2 distance",
+        "- DiskANN uses PQ compression + beam search",
+        "- Benchmark uses in-memory mode (Phase 1-2 implementation)",
+        "- This harness exercises a constrained Rust AISAQ skeleton, not a native-comparable SSD DiskANN pipeline",
+    ]
+    .join("\n")
+        + "\n"
+}
+
+fn load_diskann_benchmark_gate() -> Value {
+    let content = fs::read_to_string(DISKANN_BENCHMARK_GATE_PATH)
+        .expect("DiskANN benchmark-gate artifact must exist for the default lane");
+    serde_json::from_str(&content).expect("DiskANN benchmark-gate artifact must be valid JSON")
+}
+
+fn load_diskann_final_verdict() -> Value {
+    let content = fs::read_to_string(DISKANN_FINAL_VERDICT_PATH)
+        .expect("DiskANN family verdict artifact must exist for the default lane");
+    serde_json::from_str(&content).expect("DiskANN family verdict artifact must be valid JSON")
+}
+
+#[test]
+fn diskann_default_lane_requires_benchmark_gate_artifact() {
+    let gate = load_diskann_benchmark_gate();
+
+    assert_eq!(gate["family"], "DiskANN");
+    assert_eq!(
+        gate["benchmark_gate_verdict"],
+        "no_go_for_native_comparable_benchmark"
+    );
+    assert_eq!(gate["comparability_status"], "constrained");
+    assert_eq!(gate["native_comparison_allowed"], false);
+}
+
+#[test]
+fn diskann_default_lane_requires_family_final_verdict_artifact() {
+    let gate = load_diskann_benchmark_gate();
+    let verdict = load_diskann_final_verdict();
+
+    assert_eq!(verdict["family"], "DiskANN");
+    assert_eq!(verdict["classification"], "constrained");
+    assert_eq!(
+        verdict["leadership_verdict"],
+        "no_go_for_native_comparable_benchmark"
+    );
+    assert_eq!(verdict["leadership_claim_allowed"], false);
+    assert_eq!(
+        verdict["leadership_verdict"], gate["benchmark_gate_verdict"],
+        "family verdict must stay aligned with the benchmark-gate no-go posture"
+    );
+}
+
 #[test]
 fn diskann_benchmark_report_states_constrained_scope() {
-    let report = generate_report(&[], 1024, 16);
+    let report = format!(
+        "{}## Notes\n\n{}",
+        render_report_preamble(1024, 16),
+        render_report_notes()
+    );
 
     assert!(
         report.contains("Benchmark uses in-memory mode"),
@@ -193,7 +276,7 @@ fn test_diskann_1m_benchmark() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_BASE_SIZE);
-    
+
     let num_queries = env::var("SIFT_NUM_QUERIES")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -218,8 +301,12 @@ fn test_diskann_1m_benchmark() {
     };
 
     let actual_queries = queries.len() / dim;
-    println!("Dataset loaded: {} base, {} queries, dim={}", 
-             base.len() / dim, actual_queries, dim);
+    println!(
+        "Dataset loaded: {} base, {} queries, dim={}",
+        base.len() / dim,
+        actual_queries,
+        dim
+    );
 
     // Compute ground truth
     println!("Computing ground truth...");
@@ -227,32 +314,44 @@ fn test_diskann_1m_benchmark() {
 
     // Test configurations
     let configs = vec![
-        ("R=32-B=4", AisaqConfig {
-            max_degree: 32,
-            search_list_size: 64,
-            beamwidth: 4,
-            num_entry_points: 1,
-            ..AisaqConfig::default()
-        }),
-        ("R=48-B=8", AisaqConfig {
-            max_degree: 48,
-            search_list_size: 128,
-            beamwidth: 8,
-            num_entry_points: 1,
-            ..AisaqConfig::default()
-        }),
-        ("R=64-B=16", AisaqConfig {
-            max_degree: 64,
-            search_list_size: 256,
-            beamwidth: 16,
-            num_entry_points: 2,
-            ..AisaqConfig::default()
-        }),
+        (
+            "R=32-B=4",
+            AisaqConfig {
+                max_degree: 32,
+                search_list_size: 64,
+                beamwidth: 4,
+                num_entry_points: 1,
+                ..AisaqConfig::default()
+            },
+        ),
+        (
+            "R=48-B=8",
+            AisaqConfig {
+                max_degree: 48,
+                search_list_size: 128,
+                beamwidth: 8,
+                num_entry_points: 1,
+                ..AisaqConfig::default()
+            },
+        ),
+        (
+            "R=64-B=16",
+            AisaqConfig {
+                max_degree: 64,
+                search_list_size: 256,
+                beamwidth: 16,
+                num_entry_points: 2,
+                ..AisaqConfig::default()
+            },
+        ),
     ];
 
     let mut results = Vec::new();
     for (name, config) in configs {
-        println!("Testing {} (R={}, B={})...", name, config.max_degree, config.beamwidth);
+        println!(
+            "Testing {} (R={}, B={})...",
+            name, config.max_degree, config.beamwidth
+        );
         let result = run_benchmark(&base, &queries, &ground_truth, dim, config, name);
         println!("  QPS: {:.0}, R@10: {:.3}", result.qps, result.recall_at_10);
         results.push(result);

@@ -19,7 +19,7 @@ fn gen_vectors(seed: u64, n: usize, dim: usize) -> Vec<f32> {
 #[test]
 fn diagnose_ivf_recall() {
     println!("\n=== IVF-Flat 召回率诊断 ===");
-    
+
     let base = gen_vectors(42, NBASE, DIM);
     let query = gen_vectors(999, NQ, DIM);
 
@@ -44,17 +44,17 @@ fn diagnose_ivf_recall() {
             ivf.add(&base, None).unwrap();
 
             let mut total_recall = 0.0;
-            
+
             for i in 0..NQ {
                 let q = &query[i * DIM..(i + 1) * DIM];
-                
+
                 // Ground truth
                 let gt_req = SearchRequest {
                     top_k: TOP_K,
                     ..Default::default()
                 };
                 let gt = flat.search(q, &gt_req).unwrap();
-                
+
                 // IVF 搜索
                 let ivf_req = SearchRequest {
                     top_k: TOP_K,
@@ -66,7 +66,7 @@ fn diagnose_ivf_recall() {
                 // 计算召回率
                 let gt_set: std::collections::HashSet<i64> = gt.ids.into_iter().collect();
                 let ivf_set: std::collections::HashSet<i64> = ivf_result.ids.into_iter().collect();
-                
+
                 let hit = gt_set.intersection(&ivf_set).count() as f64;
                 total_recall += hit / TOP_K as f64;
             }
@@ -74,7 +74,10 @@ fn diagnose_ivf_recall() {
             let avg_recall = total_recall / NQ as f64;
             println!(
                 "nlist={}, nprobe={}: R@{} = {:.2}%",
-                nlist, nprobe, TOP_K, avg_recall * 100.0
+                nlist,
+                nprobe,
+                TOP_K,
+                avg_recall * 100.0
             );
         }
         println!();

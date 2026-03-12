@@ -657,11 +657,12 @@ impl DiskAnnIndex {
                     let n_idx = nbr_id as usize;
                     if n_idx < n && !visited[n_idx] {
                         // Use PQ distance if available and node is not cached
-                        let d = if self.pq_codes.is_some() && !self.cached_nodes.contains(&n_idx) {
-                            self.pq_codes
-                                .as_ref()
-                                .unwrap()
-                                .distance(query, n_idx, self.dim)
+                        let d = if let Some(pq_codes) = &self.pq_codes {
+                            if !self.cached_nodes.contains(&n_idx) {
+                                pq_codes.distance(query, n_idx, self.dim)
+                            } else {
+                                self.compute_dist(query, n_idx)
+                            }
                         } else {
                             self.compute_dist(query, n_idx)
                         };
@@ -1000,17 +1001,6 @@ impl<'a> DiskAnnIterator<'a> {
         }
     }
 
-    /// Get next result
-    pub fn next(&mut self) -> Option<(i64, f32)> {
-        if self.current < self.results.len() {
-            let result = self.results[self.current];
-            self.current += 1;
-            Some(result)
-        } else {
-            None
-        }
-    }
-
     /// Get remaining count
     pub fn remaining(&self) -> usize {
         self.results.len() - self.current
@@ -1021,14 +1011,32 @@ impl<'a> Iterator for DiskAnnIterator<'a> {
     type Item = (i64, f32);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.next()
+        if self.current < self.results.len() {
+            let result = self.results[self.current];
+            self.current += 1;
+            Some(result)
+        } else {
+            None
+        }
     }
 }
 
+#[allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::api::IndexType;
+    use crate::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
+    use serde_json::Value;
+    use std::fs;
+
+    const DISKANN_FINAL_VERDICT_PATH: &str = "benchmark_results/diskann_p3_004_final_verdict.json";
+
+    fn load_diskann_final_verdict() -> Value {
+        let content = fs::read_to_string(DISKANN_FINAL_VERDICT_PATH)
+            .expect("DiskANN family verdict artifact must exist for the library verdict lane");
+        serde_json::from_str(&content).expect("DiskANN family verdict artifact must be valid JSON")
+    }
 
     #[test]
     fn test_diskann() {
@@ -1036,7 +1044,7 @@ mod tests {
             index_type: IndexType::DiskAnn,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -1066,7 +1074,7 @@ mod tests {
             index_type: IndexType::DiskAnn,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -1111,7 +1119,7 @@ mod tests {
             index_type: IndexType::DiskAnn,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -1133,7 +1141,7 @@ mod tests {
             index_type: IndexType::DiskAnn,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -1157,7 +1165,7 @@ mod tests {
             index_type: IndexType::DiskAnn,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -1168,10 +1176,10 @@ mod tests {
         index.train(&vectors).unwrap();
 
         let query = vec![0.1, 0.1, 0.1, 0.1];
-        let mut iter = index.search_iterator(&query, 10);
+        let iter = index.search_iterator(&query, 10);
 
         let mut count = 0;
-        while let Some((id, dist)) = iter.next() {
+        for (id, _dist) in iter {
             count += 1;
             assert!(id >= 0);
         }
@@ -1363,11 +1371,62 @@ mod tests {
         assert!(!audit.has_flash_layout);
         assert!(!audit.native_comparable);
         assert!(
-            audit
-                .comparability_reason
-                .contains("placeholder PQ"),
+            audit.comparability_reason.contains("placeholder PQ"),
             "audit should explain why DiskAnnIndex is not native-comparable"
         );
+    }
+
+    #[test]
+    fn test_diskann_family_verdict_archives_constrained_classification() {
+        let verdict = load_diskann_final_verdict();
+        let diskann = DiskAnnIndex::new(&IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                max_degree: Some(16),
+                search_list_size: Some(32),
+                beamwidth: Some(4),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        let diskann_audit = diskann.scope_audit();
+
+        let mut pqflash = PQFlashIndex::new(
+            AisaqConfig {
+                max_degree: 2,
+                search_list_size: 4,
+                beamwidth: 2,
+                disk_pq_dims: 2,
+                num_entry_points: 1,
+                ..AisaqConfig::default()
+            },
+            MetricType::L2,
+            4,
+        )
+        .unwrap();
+        pqflash
+            .add(&[
+                0.0, 0.0, 0.0, 0.0, //
+                1.0, 1.0, 1.0, 1.0, //
+                10.0, 10.0, 10.0, 10.0,
+            ])
+            .unwrap();
+        let pqflash_audit = pqflash.scope_audit();
+
+        assert_eq!(verdict["family"], "DiskANN");
+        assert_eq!(verdict["classification"], "constrained");
+        assert_eq!(
+            verdict["leadership_verdict"],
+            "no_go_for_native_comparable_benchmark"
+        );
+        assert_eq!(verdict["leadership_claim_allowed"], false);
+        assert!(!diskann_audit.native_comparable);
+        assert!(diskann_audit.uses_placeholder_pq);
+        assert!(!pqflash_audit.native_comparable);
+        assert!(pqflash_audit.uses_flash_layout);
     }
 }
 
@@ -1434,8 +1493,7 @@ impl Index for DiskAnnIndex {
 
     fn add(&mut self, dataset: &Dataset) -> std::result::Result<usize, IndexError> {
         let vectors = dataset.vectors().to_vec();
-        DiskAnnIndex::add(self, &vectors, None)
-            .map_err(|e| IndexError::Unsupported(e.to_string()))
+        DiskAnnIndex::add(self, &vectors, None).map_err(|e| IndexError::Unsupported(e.to_string()))
     }
 
     fn search(
@@ -1487,7 +1545,8 @@ impl Index for DiskAnnIndex {
     fn get_vector_by_ids(&self, ids: &[i64]) -> std::result::Result<Vec<f32>, IndexError> {
         if !self.has_raw_data() {
             return Err(IndexError::Unsupported(
-                "get_vector_by_ids not supported for DiskANN without raw-data metric semantics".into(),
+                "get_vector_by_ids not supported for DiskANN without raw-data metric semantics"
+                    .into(),
             ));
         }
         if ids.is_empty() {
@@ -1497,9 +1556,10 @@ impl Index for DiskAnnIndex {
         let mut result = Vec::with_capacity(ids.len() * self.dim);
 
         for &id in ids {
-            let idx = self.ids.iter().position(|&x| x == id).ok_or_else(|| {
-                IndexError::Unsupported(format!("ID {} not found in index", id))
-            })?;
+            let idx =
+                self.ids.iter().position(|&x| x == id).ok_or_else(|| {
+                    IndexError::Unsupported(format!("ID {} not found in index", id))
+                })?;
             let start = idx * self.dim;
             let end = start + self.dim;
             if end > self.vectors.len() {

@@ -78,7 +78,9 @@ impl RefineIndex {
         refine_type: RefineType,
     ) -> Result<Self> {
         if dim == 0 {
-            return Err(KnowhereError::InvalidArg("refine dim must be > 0".to_string()));
+            return Err(KnowhereError::InvalidArg(
+                "refine dim must be > 0".to_string(),
+            ));
         }
         if data.len() != ids.len() * dim {
             return Err(KnowhereError::InvalidArg(format!(
@@ -99,9 +101,9 @@ impl RefineIndex {
                     quantizer,
                 }
             }
-            RefineType::Float16Quant => {
-                RefineStorage::Float16Quant(data.iter().map(|&v| Fp16::from_f32(v).to_bits()).collect())
-            }
+            RefineType::Float16Quant => RefineStorage::Float16Quant(
+                data.iter().map(|&v| Fp16::from_f32(v).to_bits()).collect(),
+            ),
             RefineType::Bfloat16Quant => RefineStorage::Bfloat16Quant(
                 data.iter().map(|&v| Bf16::from_f32(v).to_bits()).collect(),
             ),
@@ -202,7 +204,12 @@ impl RefineIndex {
             .collect()
     }
 
-    pub fn rerank(&self, query: &[f32], candidates: &[(i64, f32)], top_k: usize) -> Vec<(i64, f32)> {
+    pub fn rerank(
+        &self,
+        query: &[f32],
+        candidates: &[(i64, f32)],
+        top_k: usize,
+    ) -> Vec<(i64, f32)> {
         let ids: Vec<i64> = candidates.iter().map(|(id, _)| *id).collect();
         let mut refined = self.refine_distances(query, &ids);
         sort_candidates(&mut refined, self.metric_type);
@@ -266,7 +273,11 @@ impl RefineIndex {
         Ok(())
     }
 
-    pub fn read_from<R: Read>(reader: &mut R, dim: usize, metric_type: MetricType) -> Result<Option<Self>> {
+    pub fn read_from<R: Read>(
+        reader: &mut R,
+        dim: usize,
+        metric_type: MetricType,
+    ) -> Result<Option<Self>> {
         let mut flag = [0u8; 1];
         reader.read_exact(&mut flag)?;
         if flag[0] == 0 {
@@ -476,7 +487,8 @@ mod tests {
     #[test]
     fn test_refine_rerank_dataview() {
         let (data, ids) = sample_data();
-        let refine = RefineIndex::build(&data, 4, &ids, MetricType::L2, RefineType::DataView).unwrap();
+        let refine =
+            RefineIndex::build(&data, 4, &ids, MetricType::L2, RefineType::DataView).unwrap();
         let query = vec![0.02; 4];
         let candidates = vec![(12, 10.0), (11, 11.0), (10, 12.0)];
         let reranked = refine.rerank(&query, &candidates, 2);
@@ -499,7 +511,8 @@ mod tests {
     #[test]
     fn test_refine_rerank_batch() {
         let (data, ids) = sample_data();
-        let refine = RefineIndex::build(&data, 4, &ids, MetricType::L2, RefineType::DataView).unwrap();
+        let refine =
+            RefineIndex::build(&data, 4, &ids, MetricType::L2, RefineType::DataView).unwrap();
         let queries = vec![0.02; 4 * 2];
         let batches = vec![
             vec![(12, 10.0), (11, 11.0), (10, 12.0)],

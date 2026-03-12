@@ -130,7 +130,10 @@ mod tests {
     fn test_confidence_from_recall_uses_three_levels() {
         assert_eq!(confidence_from_recall(0.80, 0.80), CONFIDENCE_TRUSTED);
         assert_eq!(confidence_from_recall(0.79, 0.80), CONFIDENCE_UNRELIABLE);
-        assert_eq!(confidence_from_recall(0.49, 0.80), CONFIDENCE_RECHECK_REQUIRED);
+        assert_eq!(
+            confidence_from_recall(0.49, 0.80),
+            CONFIDENCE_RECHECK_REQUIRED
+        );
     }
 
     #[test]

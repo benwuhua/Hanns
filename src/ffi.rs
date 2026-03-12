@@ -219,6 +219,8 @@ struct IndexCapabilitySummary<'a> {
     persistence: &'a str,
 }
 
+type RangeSearchOutcome = (Vec<i64>, Vec<f32>, Vec<usize>, f64);
+
 #[derive(Serialize)]
 struct PersistenceSemantics<'a> {
     file_save_load: &'a str,
@@ -341,8 +343,8 @@ impl IndexWrapper {
         };
 
         // Parse data_type from i32 (Milvus VecType enum)
-        let data_type = super::api::DataType::from_i32(config.data_type)
-            .unwrap_or(super::api::DataType::Float);
+        let data_type =
+            super::api::DataType::from_i32(config.data_type).unwrap_or(super::api::DataType::Float);
 
         // Validate (index_type, data_type, metric_type) combination
         if let Err(e) = super::api::validate_index_config(index_type, data_type, metric) {
@@ -582,10 +584,12 @@ impl IndexWrapper {
                 let hnsw_sq = crate::faiss::HnswSqIndex::new(dim);
 
                 // Set config parameters
-                let mut _hnsw_config = crate::faiss::HnswQuantizeConfig::default();
-                _hnsw_config.ef_construction = ef_construction;
-                _hnsw_config.ef_search = ef_search;
-                _hnsw_config.sq_bit = sq_bit;
+                let _hnsw_config = crate::faiss::HnswQuantizeConfig {
+                    ef_construction,
+                    ef_search,
+                    sq_bit,
+                    ..Default::default()
+                };
 
                 // Store config in index (simplified - HnswSqIndex needs config support)
                 Some(Self {
@@ -672,6 +676,7 @@ impl IndexWrapper {
                     ivf_rabitq: None,
                     hnsw_sq: None,
                     hnsw_pq: None,
+                    ivf_pq: None,
                     bin_flat: None,
                     binary_hnsw: None,
                     ivf_sq8: Some(ivf_sq8),
@@ -965,10 +970,10 @@ impl IndexWrapper {
             // Use u64 elements by default (8 bytes each), and derive mh_vec_length from dim.
             let mh_vec_element_size = std::mem::size_of::<u64>();
             let vector_bytes = self.dim.div_ceil(8);
-            if vector_bytes == 0 || vectors.is_empty() || !vectors.len().is_multiple_of(vector_bytes) {
+            if vector_bytes == 0 || vectors.is_empty() || vectors.len() % vector_bytes != 0 {
                 return Err(CError::InvalidArg);
             }
-            if !vector_bytes.is_multiple_of(mh_vec_element_size) {
+            if vector_bytes % mh_vec_element_size != 0 {
                 return Err(CError::InvalidArg);
             }
 
@@ -1192,11 +1197,7 @@ impl IndexWrapper {
     /// * `distances` - Corresponding distances
     /// * `lims` - Offset array where lims[i+1] - lims[i] = results for query i
     /// * `elapsed_ms` - Search time in milliseconds
-    fn range_search(
-        &self,
-        query: &[f32],
-        radius: f32,
-    ) -> Result<(Vec<i64>, Vec<f32>, Vec<usize>, f64), CError> {
+    fn range_search(&self, query: &[f32], radius: f32) -> Result<RangeSearchOutcome, CError> {
         let num_queries = query.len() / self.dim;
 
         if let Some(ref idx) = self.flat {
@@ -1426,7 +1427,10 @@ impl IndexWrapper {
     }
 
     fn is_additional_scalar_supported(&self, is_mv_only: bool) -> bool {
-        matches!(self.additional_scalar_support_mode(), "partial" | "supported") && is_mv_only
+        matches!(
+            self.additional_scalar_support_mode(),
+            "partial" | "supported"
+        ) && is_mv_only
     }
 
     fn capability_summary(&self) -> IndexCapabilitySummary<'static> {
@@ -1436,21 +1440,23 @@ impl IndexWrapper {
                 ann_iterator: "unsupported",
                 persistence: "supported",
             }
-        } else if self.hnsw.is_some() {
+        } else if self.hnsw.is_some() || self.scann.is_some() {
             IndexCapabilitySummary {
-                get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
-                ann_iterator: "supported",
-                persistence: "supported",
-            }
-        } else if self.scann.is_some() {
-            IndexCapabilitySummary {
-                get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
+                get_vector_by_ids: if self.has_raw_data() {
+                    "supported"
+                } else {
+                    "unsupported"
+                },
                 ann_iterator: "supported",
                 persistence: "supported",
             }
         } else if self.hnsw_prq.is_some() {
             IndexCapabilitySummary {
-                get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
+                get_vector_by_ids: if self.has_raw_data() {
+                    "supported"
+                } else {
+                    "unsupported"
+                },
                 ann_iterator: "unsupported",
                 persistence: "supported",
             }
@@ -1478,7 +1484,10 @@ impl IndexWrapper {
                 ann_iterator: "supported",
                 persistence: "unsupported",
             }
-        } else if self.bin_flat.is_some() || self.binary_hnsw.is_some() || self.bin_ivf_flat.is_some() {
+        } else if self.bin_flat.is_some()
+            || self.binary_hnsw.is_some()
+            || self.bin_ivf_flat.is_some()
+        {
             IndexCapabilitySummary {
                 get_vector_by_ids: "unsupported",
                 ann_iterator: "unsupported",
@@ -1486,13 +1495,21 @@ impl IndexWrapper {
             }
         } else if self.ivf_sq8.is_some() {
             IndexCapabilitySummary {
-                get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
+                get_vector_by_ids: if self.has_raw_data() {
+                    "supported"
+                } else {
+                    "unsupported"
+                },
                 ann_iterator: "unsupported",
                 persistence: "unsupported",
             }
         } else if self.sparse_wand.is_some() {
             IndexCapabilitySummary {
-                get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
+                get_vector_by_ids: if self.has_raw_data() {
+                    "supported"
+                } else {
+                    "unsupported"
+                },
                 ann_iterator: "supported",
                 persistence: "unsupported",
             }
@@ -1504,7 +1521,11 @@ impl IndexWrapper {
             }
         } else if self.minhash_lsh.is_some() {
             IndexCapabilitySummary {
-                get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
+                get_vector_by_ids: if self.has_raw_data() {
+                    "supported"
+                } else {
+                    "unsupported"
+                },
                 ann_iterator: "supported",
                 persistence: "supported",
             }
@@ -1524,7 +1545,11 @@ impl IndexWrapper {
                 memory_serialize: "supported",
                 deserialize_from_file: "supported",
             }
-        } else if self.hnsw.is_some() || self.scann.is_some() || self.hnsw_prq.is_some() || self.minhash_lsh.is_some() {
+        } else if self.hnsw.is_some()
+            || self.scann.is_some()
+            || self.hnsw_prq.is_some()
+            || self.minhash_lsh.is_some()
+        {
             PersistenceSemantics {
                 file_save_load: "supported",
                 memory_serialize: "unsupported",
@@ -1553,7 +1578,9 @@ impl IndexWrapper {
 
     fn meta_semantics(&self) -> IndexMetaSemantics<'static> {
         let persistence = self.persistence_semantics();
-        let persistence_mode = if persistence.file_save_load == "supported" && persistence.memory_serialize == "supported" {
+        let persistence_mode = if persistence.file_save_load == "supported"
+            && persistence.memory_serialize == "supported"
+        {
             "file_save_load+memory_serialize"
         } else if persistence.file_save_load == "supported" {
             "file_save_load"
@@ -1565,10 +1592,18 @@ impl IndexWrapper {
             "unsupported"
         };
 
-        if self.hnsw.is_some() || self.hnsw_prq.is_some() || self.hnsw_sq.is_some() || self.hnsw_pq.is_some() {
+        if self.hnsw.is_some()
+            || self.hnsw_prq.is_some()
+            || self.hnsw_sq.is_some()
+            || self.hnsw_pq.is_some()
+        {
             IndexMetaSemantics {
                 family: "hnsw",
-                raw_data_gate: if self.has_raw_data() { "raw_vectors_retained" } else { "compressed_or_graph_only" },
+                raw_data_gate: if self.has_raw_data() {
+                    "raw_vectors_retained"
+                } else {
+                    "compressed_or_graph_only"
+                },
                 persistence_mode,
                 persistence,
                 metadata_granularity: "per-index-capability",
@@ -1576,7 +1611,11 @@ impl IndexWrapper {
         } else if self.ivf_sq8.is_some() || self.ivf_rabitq.is_some() || self.ivf_pq.is_some() {
             IndexMetaSemantics {
                 family: "ivf",
-                raw_data_gate: if self.has_raw_data() { "raw_vectors_retained" } else { "quantized_or_codebook_only" },
+                raw_data_gate: if self.has_raw_data() {
+                    "raw_vectors_retained"
+                } else {
+                    "quantized_or_codebook_only"
+                },
                 persistence_mode,
                 persistence,
                 metadata_granularity: "per-index-capability",
@@ -1584,7 +1623,11 @@ impl IndexWrapper {
         } else if self.scann.is_some() {
             IndexMetaSemantics {
                 family: "scann",
-                raw_data_gate: if self.has_raw_data() { "raw_vectors_retained" } else { "partition_or_reorder_only" },
+                raw_data_gate: if self.has_raw_data() {
+                    "raw_vectors_retained"
+                } else {
+                    "partition_or_reorder_only"
+                },
                 persistence_mode,
                 persistence,
                 metadata_granularity: "per-index-capability",
@@ -1592,7 +1635,11 @@ impl IndexWrapper {
         } else if self.sparse_wand.is_some() || self.sparse_wand_cc.is_some() {
             IndexMetaSemantics {
                 family: "sparse",
-                raw_data_gate: if self.has_raw_data() { "sparse_postings_retained" } else { "wand_state_only" },
+                raw_data_gate: if self.has_raw_data() {
+                    "sparse_postings_retained"
+                } else {
+                    "wand_state_only"
+                },
                 persistence_mode,
                 persistence,
                 metadata_granularity: "per-index-capability",
@@ -1600,7 +1647,11 @@ impl IndexWrapper {
         } else {
             IndexMetaSemantics {
                 family: "generic",
-                raw_data_gate: if self.has_raw_data() { "raw_vectors_retained" } else { "not_retained" },
+                raw_data_gate: if self.has_raw_data() {
+                    "raw_vectors_retained"
+                } else {
+                    "not_retained"
+                },
                 persistence_mode,
                 persistence,
                 metadata_granularity: "uniform-summary",
@@ -1789,6 +1840,8 @@ impl IndexWrapper {
         } else if let Some(ref idx) = self.hnsw_prq {
             idx.save(path.to_str().unwrap())
                 .map_err(|_| CError::Internal)
+        } else if let Some(ref idx) = self.ivf_pq {
+            idx.save(path).map_err(|_| CError::Internal)
         } else if let Some(ref idx) = self.minhash_lsh {
             idx.save(path.to_str().unwrap())
                 .map_err(|_| CError::Internal)
@@ -1813,6 +1866,8 @@ impl IndexWrapper {
         } else if let Some(ref mut idx) = self.hnsw_prq {
             idx.load(path.to_str().unwrap())
                 .map_err(|_| CError::Internal)
+        } else if let Some(ref mut idx) = self.ivf_pq {
+            idx.load(path).map_err(|_| CError::Internal)
         } else if let Some(ref mut idx) = self.minhash_lsh {
             idx.load(path.to_str().unwrap())
                 .map_err(|_| CError::Internal)
@@ -2530,7 +2585,11 @@ pub extern "C" fn knowhere_has_raw_data(index: *const std::ffi::c_void) -> i32 {
 
     unsafe {
         let wrapper = &*(index as *const IndexWrapper);
-        if wrapper.has_raw_data() { 1 } else { 0 }
+        if wrapper.has_raw_data() {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -3562,8 +3621,7 @@ pub extern "C" fn knowhere_bitset_id_offset(bitset: *const CBitset) -> usize {
 /// * `offset` - ID 偏移量
 #[no_mangle]
 pub extern "C" fn knowhere_bitset_set_id_offset(bitset: *mut CBitset, _offset: usize) {
-    if bitset.is_null() {
-    }
+    if bitset.is_null() {}
 
     // 注意：CBitset 结构目前不存储 id_offset 信息
     // TODO: 需要在 CBitset 中添加 id_offset 字段
@@ -4019,6 +4077,7 @@ pub extern "C" fn knowhere_bitset_xor(
 }
 
 #[cfg(test)]
+#[allow(unused_unsafe, unused_variables)]
 mod tests {
     use super::*;
 
@@ -4038,7 +4097,7 @@ mod tests {
             ..Default::default()
         };
 
-        let index = knowhere_create_index(config);
+        let index = knowhere_create_index(config.clone());
         assert!(!index.is_null());
 
         let count = knowhere_get_index_count(index);
@@ -4059,7 +4118,7 @@ mod tests {
             ..Default::default()
         };
 
-        let index = knowhere_create_index(config);
+        let index = knowhere_create_index(config.clone());
         assert!(!index.is_null());
 
         // Test initial size (should be 0 or very small)
@@ -4249,7 +4308,7 @@ mod tests {
 
         // 1 vector, 9 bytes
         let vectors: Vec<u8> = (0..9).map(|v| v as u8).collect();
-        let ids = vec![0i64];
+        let ids = [0i64];
 
         let rc = knowhere_add_binary_index(index, vectors.as_ptr(), ids.as_ptr(), 1, 72);
         assert_eq!(rc, CError::InvalidArg as i32);
@@ -4297,30 +4356,87 @@ mod tests {
         assert_eq!(flat_meta_json["is_trained"], false);
         assert_eq!(flat_meta_json["has_raw_data"], true);
         assert_eq!(flat_meta_json["additional_scalar_supported"], false);
-        assert_eq!(flat_meta_json["additional_scalar"]["support_mode"], "unsupported");
+        assert_eq!(
+            flat_meta_json["additional_scalar"]["support_mode"],
+            "unsupported"
+        );
         assert_eq!(flat_meta_json["additional_scalar"]["mv_only_query"], true);
         assert_eq!(flat_meta_json["additional_scalar"]["unsupported_reason"], "additional-scalar filtering is unsupported for this index type in the current Rust FFI");
-        assert_eq!(flat_meta_json["capabilities"]["get_vector_by_ids"], "supported");
-        assert_eq!(flat_meta_json["capabilities"]["ann_iterator"], "unsupported");
+        assert_eq!(
+            flat_meta_json["capabilities"]["get_vector_by_ids"],
+            "supported"
+        );
+        assert_eq!(
+            flat_meta_json["capabilities"]["ann_iterator"],
+            "unsupported"
+        );
         assert_eq!(flat_meta_json["capabilities"]["persistence"], "supported");
         assert_eq!(flat_meta_json["semantics"]["family"], "generic");
-        assert_eq!(flat_meta_json["semantics"]["raw_data_gate"], "raw_vectors_retained");
-        assert_eq!(flat_meta_json["semantics"]["persistence_mode"], "file_save_load+memory_serialize");
-        assert_eq!(flat_meta_json["semantics"]["persistence"]["file_save_load"], "supported");
-        assert_eq!(flat_meta_json["semantics"]["persistence"]["memory_serialize"], "supported");
-        assert_eq!(flat_meta_json["semantics"]["persistence"]["deserialize_from_file"], "supported");
-        assert_eq!(flat_meta_json["observability"]["schema_version"], "runtime_observability.v1");
-        assert_eq!(flat_meta_json["observability"]["build_event"], "knowhere.index.build");
-        assert_eq!(flat_meta_json["observability"]["search_event"], "knowhere.index.search");
-        assert_eq!(flat_meta_json["observability"]["load_event"], "knowhere.index.load");
-        assert_eq!(flat_meta_json["trace_propagation"]["ffi_entrypoint"], "index_meta.trace_context_json");
-        assert_eq!(flat_meta_json["trace_propagation"]["gate_runner_entrypoint"], "OPENCLAW_TRACE_CONTEXT_JSON");
-        assert_eq!(flat_meta_json["trace_propagation"]["context_encoding"], "w3c-traceparent-json");
-        assert_eq!(flat_meta_json["resource_contract"]["schema_version"], "resource_contract.v1");
-        assert_eq!(flat_meta_json["resource_contract"]["memory_bytes"], "estimated_runtime_memory_bytes");
-        assert_eq!(flat_meta_json["resource_contract"]["disk_bytes"], "estimated_file_bytes");
+        assert_eq!(
+            flat_meta_json["semantics"]["raw_data_gate"],
+            "raw_vectors_retained"
+        );
+        assert_eq!(
+            flat_meta_json["semantics"]["persistence_mode"],
+            "file_save_load+memory_serialize"
+        );
+        assert_eq!(
+            flat_meta_json["semantics"]["persistence"]["file_save_load"],
+            "supported"
+        );
+        assert_eq!(
+            flat_meta_json["semantics"]["persistence"]["memory_serialize"],
+            "supported"
+        );
+        assert_eq!(
+            flat_meta_json["semantics"]["persistence"]["deserialize_from_file"],
+            "supported"
+        );
+        assert_eq!(
+            flat_meta_json["observability"]["schema_version"],
+            "runtime_observability.v1"
+        );
+        assert_eq!(
+            flat_meta_json["observability"]["build_event"],
+            "knowhere.index.build"
+        );
+        assert_eq!(
+            flat_meta_json["observability"]["search_event"],
+            "knowhere.index.search"
+        );
+        assert_eq!(
+            flat_meta_json["observability"]["load_event"],
+            "knowhere.index.load"
+        );
+        assert_eq!(
+            flat_meta_json["trace_propagation"]["ffi_entrypoint"],
+            "index_meta.trace_context_json"
+        );
+        assert_eq!(
+            flat_meta_json["trace_propagation"]["gate_runner_entrypoint"],
+            "OPENCLAW_TRACE_CONTEXT_JSON"
+        );
+        assert_eq!(
+            flat_meta_json["trace_propagation"]["context_encoding"],
+            "w3c-traceparent-json"
+        );
+        assert_eq!(
+            flat_meta_json["resource_contract"]["schema_version"],
+            "resource_contract.v1"
+        );
+        assert_eq!(
+            flat_meta_json["resource_contract"]["memory_bytes"],
+            "estimated_runtime_memory_bytes"
+        );
+        assert_eq!(
+            flat_meta_json["resource_contract"]["disk_bytes"],
+            "estimated_file_bytes"
+        );
         assert_eq!(flat_meta_json["resource_contract"]["mmap_supported"], true);
-        assert_eq!(flat_meta_json["resource_contract"]["unsupported_reason"], "");
+        assert_eq!(
+            flat_meta_json["resource_contract"]["unsupported_reason"],
+            ""
+        );
 
         knowhere_free_cstring(flat_meta_ptr);
         knowhere_free_index(flat);
@@ -4342,17 +4458,41 @@ mod tests {
         let hnsw_meta_json: serde_json::Value = serde_json::from_str(hnsw_meta_str).unwrap();
         assert_eq!(hnsw_meta_json["index_type"], "HNSW");
         assert_eq!(hnsw_meta_json["semantics"]["family"], "hnsw");
-        assert_eq!(hnsw_meta_json["semantics"]["raw_data_gate"], "raw_vectors_retained");
-        assert_eq!(hnsw_meta_json["semantics"]["persistence_mode"], "file_save_load");
-        assert_eq!(hnsw_meta_json["semantics"]["persistence"]["file_save_load"], "supported");
-        assert_eq!(hnsw_meta_json["semantics"]["persistence"]["memory_serialize"], "unsupported");
-        assert_eq!(hnsw_meta_json["semantics"]["persistence"]["deserialize_from_file"], "supported");
+        assert_eq!(
+            hnsw_meta_json["semantics"]["raw_data_gate"],
+            "raw_vectors_retained"
+        );
+        assert_eq!(
+            hnsw_meta_json["semantics"]["persistence_mode"],
+            "file_save_load"
+        );
+        assert_eq!(
+            hnsw_meta_json["semantics"]["persistence"]["file_save_load"],
+            "supported"
+        );
+        assert_eq!(
+            hnsw_meta_json["semantics"]["persistence"]["memory_serialize"],
+            "unsupported"
+        );
+        assert_eq!(
+            hnsw_meta_json["semantics"]["persistence"]["deserialize_from_file"],
+            "supported"
+        );
         assert_eq!(hnsw_meta_json["capabilities"]["ann_iterator"], "supported");
         assert_eq!(hnsw_meta_json["capabilities"]["persistence"], "supported");
-        assert_eq!(hnsw_meta_json["capabilities"]["get_vector_by_ids"], "supported");
-        assert_eq!(hnsw_meta_json["additional_scalar"]["unsupported_reason"], "HNSW does not expose additional-scalar filtering through the current Rust FFI");
+        assert_eq!(
+            hnsw_meta_json["capabilities"]["get_vector_by_ids"],
+            "supported"
+        );
+        assert_eq!(
+            hnsw_meta_json["additional_scalar"]["unsupported_reason"],
+            "HNSW does not expose additional-scalar filtering through the current Rust FFI"
+        );
         assert_eq!(hnsw_meta_json["resource_contract"]["mmap_supported"], true);
-        assert_eq!(hnsw_meta_json["resource_contract"]["disk_bytes"], "estimated_file_bytes");
+        assert_eq!(
+            hnsw_meta_json["resource_contract"]["disk_bytes"],
+            "estimated_file_bytes"
+        );
         knowhere_free_cstring(hnsw_meta_ptr);
         knowhere_free_index(hnsw);
 
@@ -4372,15 +4512,42 @@ mod tests {
         let ivf_meta_json: serde_json::Value = serde_json::from_str(ivf_meta_str).unwrap();
         assert_eq!(ivf_meta_json["index_type"], "IVF_SQ8");
         assert_eq!(ivf_meta_json["semantics"]["family"], "ivf");
-        assert_eq!(ivf_meta_json["semantics"]["raw_data_gate"], "quantized_or_codebook_only");
-        assert_eq!(ivf_meta_json["semantics"]["persistence_mode"], "constrained_file_save_load");
-        assert_eq!(ivf_meta_json["semantics"]["persistence"]["file_save_load"], "constrained");
-        assert_eq!(ivf_meta_json["semantics"]["persistence"]["memory_serialize"], "unsupported");
-        assert_eq!(ivf_meta_json["semantics"]["persistence"]["deserialize_from_file"], "unsupported");
-        assert_eq!(ivf_meta_json["capabilities"]["get_vector_by_ids"], "unsupported");
-        assert_eq!(ivf_meta_json["additional_scalar"]["unsupported_reason"], "IVF variants do not expose additional-scalar filtering through the current Rust FFI");
-        assert_eq!(ivf_meta_json["resource_contract"]["memory_bytes"], "estimated_runtime_memory_bytes_or_codebook_only");
-        assert_eq!(ivf_meta_json["resource_contract"]["disk_bytes"], "estimated_file_bytes");
+        assert_eq!(
+            ivf_meta_json["semantics"]["raw_data_gate"],
+            "quantized_or_codebook_only"
+        );
+        assert_eq!(
+            ivf_meta_json["semantics"]["persistence_mode"],
+            "constrained_file_save_load"
+        );
+        assert_eq!(
+            ivf_meta_json["semantics"]["persistence"]["file_save_load"],
+            "constrained"
+        );
+        assert_eq!(
+            ivf_meta_json["semantics"]["persistence"]["memory_serialize"],
+            "unsupported"
+        );
+        assert_eq!(
+            ivf_meta_json["semantics"]["persistence"]["deserialize_from_file"],
+            "unsupported"
+        );
+        assert_eq!(
+            ivf_meta_json["capabilities"]["get_vector_by_ids"],
+            "unsupported"
+        );
+        assert_eq!(
+            ivf_meta_json["additional_scalar"]["unsupported_reason"],
+            "IVF variants do not expose additional-scalar filtering through the current Rust FFI"
+        );
+        assert_eq!(
+            ivf_meta_json["resource_contract"]["memory_bytes"],
+            "estimated_runtime_memory_bytes_or_codebook_only"
+        );
+        assert_eq!(
+            ivf_meta_json["resource_contract"]["disk_bytes"],
+            "estimated_file_bytes"
+        );
         assert_eq!(ivf_meta_json["resource_contract"]["mmap_supported"], true);
         knowhere_free_cstring(ivf_meta_ptr);
         knowhere_free_index(ivf);
@@ -4403,15 +4570,39 @@ mod tests {
         let ivfpq_meta_json: serde_json::Value = serde_json::from_str(ivfpq_meta_str).unwrap();
         assert_eq!(ivfpq_meta_json["index_type"], "IVF_PQ");
         assert_eq!(ivfpq_meta_json["semantics"]["family"], "ivf");
-        assert_eq!(ivfpq_meta_json["semantics"]["raw_data_gate"], "quantized_or_codebook_only");
-        assert_eq!(ivfpq_meta_json["semantics"]["persistence_mode"], "file_save_load");
-        assert_eq!(ivfpq_meta_json["semantics"]["persistence"]["file_save_load"], "supported");
-        assert_eq!(ivfpq_meta_json["semantics"]["persistence"]["memory_serialize"], "unsupported");
-        assert_eq!(ivfpq_meta_json["semantics"]["persistence"]["deserialize_from_file"], "supported");
-        assert_eq!(ivfpq_meta_json["capabilities"]["get_vector_by_ids"], "unsupported");
-        assert_eq!(ivfpq_meta_json["capabilities"]["ann_iterator"], "unsupported");
+        assert_eq!(
+            ivfpq_meta_json["semantics"]["raw_data_gate"],
+            "quantized_or_codebook_only"
+        );
+        assert_eq!(
+            ivfpq_meta_json["semantics"]["persistence_mode"],
+            "file_save_load"
+        );
+        assert_eq!(
+            ivfpq_meta_json["semantics"]["persistence"]["file_save_load"],
+            "supported"
+        );
+        assert_eq!(
+            ivfpq_meta_json["semantics"]["persistence"]["memory_serialize"],
+            "unsupported"
+        );
+        assert_eq!(
+            ivfpq_meta_json["semantics"]["persistence"]["deserialize_from_file"],
+            "supported"
+        );
+        assert_eq!(
+            ivfpq_meta_json["capabilities"]["get_vector_by_ids"],
+            "unsupported"
+        );
+        assert_eq!(
+            ivfpq_meta_json["capabilities"]["ann_iterator"],
+            "unsupported"
+        );
         assert_eq!(ivfpq_meta_json["capabilities"]["persistence"], "supported");
-        assert_eq!(ivfpq_meta_json["additional_scalar"]["unsupported_reason"], "IVF variants do not expose additional-scalar filtering through the current Rust FFI");
+        assert_eq!(
+            ivfpq_meta_json["additional_scalar"]["unsupported_reason"],
+            "IVF variants do not expose additional-scalar filtering through the current Rust FFI"
+        );
         assert_eq!(ivfpq_meta_json["resource_contract"]["mmap_supported"], true);
         knowhere_free_cstring(ivfpq_meta_ptr);
         knowhere_free_index(ivfpq);
@@ -4434,14 +4625,32 @@ mod tests {
             let scann_meta_json: serde_json::Value = serde_json::from_str(scann_meta_str).unwrap();
             assert_eq!(scann_meta_json["index_type"], "ScaNN");
             assert_eq!(scann_meta_json["semantics"]["family"], "scann");
-            assert_eq!(scann_meta_json["semantics"]["persistence_mode"], "file_save_load");
-            assert_eq!(scann_meta_json["semantics"]["persistence"]["file_save_load"], "supported");
-            assert_eq!(scann_meta_json["semantics"]["persistence"]["memory_serialize"], "unsupported");
-            assert_eq!(scann_meta_json["semantics"]["persistence"]["deserialize_from_file"], "supported");
+            assert_eq!(
+                scann_meta_json["semantics"]["persistence_mode"],
+                "file_save_load"
+            );
+            assert_eq!(
+                scann_meta_json["semantics"]["persistence"]["file_save_load"],
+                "supported"
+            );
+            assert_eq!(
+                scann_meta_json["semantics"]["persistence"]["memory_serialize"],
+                "unsupported"
+            );
+            assert_eq!(
+                scann_meta_json["semantics"]["persistence"]["deserialize_from_file"],
+                "supported"
+            );
             assert_eq!(scann_meta_json["capabilities"]["ann_iterator"], "supported");
             assert_eq!(scann_meta_json["capabilities"]["persistence"], "supported");
-            assert_eq!(scann_meta_json["additional_scalar"]["unsupported_reason"], "ScaNN does not expose additional-scalar filtering through the current Rust FFI");
-            assert_eq!(scann_meta_json["trace_propagation"]["propagation_mode"], "optional_passthrough");
+            assert_eq!(
+                scann_meta_json["additional_scalar"]["unsupported_reason"],
+                "ScaNN does not expose additional-scalar filtering through the current Rust FFI"
+            );
+            assert_eq!(
+                scann_meta_json["trace_propagation"]["propagation_mode"],
+                "optional_passthrough"
+            );
             assert_eq!(scann_meta_json["resource_contract"]["mmap_supported"], true);
             knowhere_free_cstring(scann_meta_ptr);
             knowhere_free_index(scann);
@@ -4467,26 +4676,65 @@ mod tests {
         let sparse_meta_json: serde_json::Value = serde_json::from_str(sparse_meta_str).unwrap();
         assert_eq!(sparse_meta_json["index_type"], "SparseWand");
         assert_eq!(sparse_meta_json["additional_scalar_supported"], true);
-        assert_eq!(sparse_meta_json["additional_scalar"]["support_mode"], "partial");
+        assert_eq!(
+            sparse_meta_json["additional_scalar"]["support_mode"],
+            "partial"
+        );
         assert_eq!(sparse_meta_json["additional_scalar"]["unsupported_reason"], "only sparse indexes expose MV-only additional-scalar filtering via the current Rust FFI");
-        assert_eq!(sparse_meta_json["capabilities"]["ann_iterator"], "supported");
-        assert_eq!(sparse_meta_json["capabilities"]["persistence"], "unsupported");
+        assert_eq!(
+            sparse_meta_json["capabilities"]["ann_iterator"],
+            "supported"
+        );
+        assert_eq!(
+            sparse_meta_json["capabilities"]["persistence"],
+            "unsupported"
+        );
         assert_eq!(sparse_meta_json["semantics"]["family"], "sparse");
-        assert_eq!(sparse_meta_json["semantics"]["persistence_mode"], "unsupported");
-        assert_eq!(sparse_meta_json["semantics"]["persistence"]["file_save_load"], "unsupported");
-        assert_eq!(sparse_meta_json["semantics"]["persistence"]["memory_serialize"], "unsupported");
-        assert_eq!(sparse_meta_json["semantics"]["persistence"]["deserialize_from_file"], "unsupported");
-        assert_eq!(sparse_meta_json["observability"]["required_fields"][0], "index_type");
-        assert_eq!(sparse_meta_json["trace_propagation"]["context_encoding"], "w3c-traceparent-json");
-        assert_eq!(sparse_meta_json["resource_contract"]["memory_bytes"], "estimated_runtime_memory_bytes");
-        assert_eq!(sparse_meta_json["resource_contract"]["disk_bytes"], "unsupported");
-        assert_eq!(sparse_meta_json["resource_contract"]["mmap_supported"], false);
+        assert_eq!(
+            sparse_meta_json["semantics"]["persistence_mode"],
+            "unsupported"
+        );
+        assert_eq!(
+            sparse_meta_json["semantics"]["persistence"]["file_save_load"],
+            "unsupported"
+        );
+        assert_eq!(
+            sparse_meta_json["semantics"]["persistence"]["memory_serialize"],
+            "unsupported"
+        );
+        assert_eq!(
+            sparse_meta_json["semantics"]["persistence"]["deserialize_from_file"],
+            "unsupported"
+        );
+        assert_eq!(
+            sparse_meta_json["observability"]["required_fields"][0],
+            "index_type"
+        );
+        assert_eq!(
+            sparse_meta_json["trace_propagation"]["context_encoding"],
+            "w3c-traceparent-json"
+        );
+        assert_eq!(
+            sparse_meta_json["resource_contract"]["memory_bytes"],
+            "estimated_runtime_memory_bytes"
+        );
+        assert_eq!(
+            sparse_meta_json["resource_contract"]["disk_bytes"],
+            "unsupported"
+        );
+        assert_eq!(
+            sparse_meta_json["resource_contract"]["mmap_supported"],
+            false
+        );
         assert_eq!(sparse_meta_json["resource_contract"]["unsupported_reason"], "this index family does not expose a stable file-backed persistence contract, so mmap load is not auditable");
 
         knowhere_free_cstring(sparse_meta_ptr);
         knowhere_free_index(sparse);
 
-        assert_eq!(knowhere_is_additional_scalar_supported(std::ptr::null(), true), 0);
+        assert_eq!(
+            knowhere_is_additional_scalar_supported(std::ptr::null(), true),
+            0
+        );
         assert!(knowhere_get_index_meta(std::ptr::null()).is_null());
     }
 
@@ -4505,23 +4753,35 @@ mod tests {
             ..Default::default()
         };
 
-        let index = knowhere_create_index(config);
+        let index = knowhere_create_index(config.clone());
         assert!(!index.is_null());
 
         let vectors: Vec<f32> = (0..64).map(|i| i as f32 * 0.125).collect();
-        assert_eq!(knowhere_train_index(index, vectors.as_ptr(), 8, 8), CError::Success as i32);
-        assert_eq!(knowhere_add_index(index, vectors.as_ptr(), std::ptr::null(), 8, 8), CError::Success as i32);
+        assert_eq!(
+            knowhere_train_index(index, vectors.as_ptr(), 8, 8),
+            CError::Success as i32
+        );
+        assert_eq!(
+            knowhere_add_index(index, vectors.as_ptr(), std::ptr::null(), 8, 8),
+            CError::Success as i32
+        );
 
         let path = std::env::temp_dir().join(format!(
             "knowhere_rs_scann_persistence_{}.bin",
             std::process::id()
         ));
         let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
-        assert_eq!(knowhere_save_index(index, path_c.as_ptr()), CError::Success as i32);
+        assert_eq!(
+            knowhere_save_index(index, path_c.as_ptr()),
+            CError::Success as i32
+        );
 
-        let loaded = knowhere_create_index(config);
+        let loaded = knowhere_create_index(config.clone());
         assert!(!loaded.is_null());
-        assert_eq!(knowhere_load_index(loaded, path_c.as_ptr()), CError::Success as i32);
+        assert_eq!(
+            knowhere_load_index(loaded, path_c.as_ptr()),
+            CError::Success as i32
+        );
         assert_eq!(knowhere_get_index_count(loaded), 8);
 
         let _ = std::fs::remove_file(&path);
@@ -4545,11 +4805,66 @@ mod tests {
             .to_str()
             .unwrap();
         let meta_json: serde_json::Value = serde_json::from_str(meta_str).unwrap();
-        assert_eq!(meta_json["semantics"]["persistence"]["file_save_load"], "constrained");
-        assert_eq!(meta_json["semantics"]["persistence"]["deserialize_from_file"], "unsupported");
+        assert_eq!(
+            meta_json["semantics"]["persistence"]["file_save_load"],
+            "constrained"
+        );
+        assert_eq!(
+            meta_json["semantics"]["persistence"]["deserialize_from_file"],
+            "unsupported"
+        );
 
         knowhere_free_cstring(meta_ptr);
         knowhere_free_index(ivf);
+    }
+
+    #[test]
+    fn test_ffi_persistence_ivfpq_file_roundtrip() {
+        use std::ffi::CString;
+
+        let config = CIndexConfig {
+            index_type: CIndexType::IvfPq,
+            metric_type: CMetricType::L2,
+            dim: 8,
+            num_clusters: 4,
+            nprobe: 2,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config.clone());
+        assert!(!index.is_null());
+
+        let vectors: Vec<f32> = (0..96).map(|i| i as f32 * 0.25).collect();
+        assert_eq!(
+            knowhere_train_index(index, vectors.as_ptr(), 12, 8),
+            CError::Success as i32
+        );
+        assert_eq!(
+            knowhere_add_index(index, vectors.as_ptr(), std::ptr::null(), 12, 8),
+            CError::Success as i32
+        );
+
+        let path = std::env::temp_dir().join(format!(
+            "knowhere_rs_ivfpq_persistence_{}.bin",
+            std::process::id()
+        ));
+        let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+        assert_eq!(
+            knowhere_save_index(index, path_c.as_ptr()),
+            CError::Success as i32
+        );
+
+        let loaded = knowhere_create_index(config);
+        assert!(!loaded.is_null());
+        assert_eq!(
+            knowhere_load_index(loaded, path_c.as_ptr()),
+            CError::Success as i32
+        );
+        assert_eq!(knowhere_get_index_count(loaded), 12);
+
+        let _ = std::fs::remove_file(&path);
+        knowhere_free_index(loaded);
+        knowhere_free_index(index);
     }
 
     #[test]
@@ -4570,7 +4885,10 @@ mod tests {
         ));
         std::fs::write(&path, []).unwrap();
         let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
-        assert_eq!(knowhere_load_index(flat, path_c.as_ptr()), CError::Internal as i32);
+        assert_eq!(
+            knowhere_load_index(flat, path_c.as_ptr()),
+            CError::Internal as i32
+        );
 
         let _ = std::fs::remove_file(&path);
         knowhere_free_index(flat);
@@ -5013,7 +5331,7 @@ mod tests {
             0.0, 0.0, 1.0, 0.0, // dist=1.0 from origin
             2.0, 0.0, 0.0, 0.0, // dist=2.0 from origin
         ];
-        let ids = vec![0i64, 1, 2, 3];
+        let ids = [0i64, 1, 2, 3];
 
         let train_result = knowhere_train_index(index, vectors.as_ptr(), 4, 4);
         assert_eq!(train_result, CError::Success as i32);
@@ -5022,7 +5340,7 @@ mod tests {
         assert_eq!(add_result, CError::Success as i32);
 
         // Range search with radius=1.5 (should find first 3 vectors)
-        let query = vec![0.0, 0.0, 0.0, 0.0];
+        let query = [0.0, 0.0, 0.0, 0.0];
         let result = knowhere_range_search(index, query.as_ptr(), 1, 1.5, 4);
         assert!(!result.is_null());
 
@@ -5060,7 +5378,7 @@ mod tests {
             1.0, 0.0, 0.0, 0.0, // id=1
             0.0, 1.0, 0.0, 0.0, // id=2
         ];
-        let ids = vec![0i64, 1, 2];
+        let ids = [0i64, 1, 2];
 
         let train_result = knowhere_train_index(index, vectors.as_ptr(), 3, 4);
         assert_eq!(train_result, CError::Success as i32);
@@ -5069,7 +5387,7 @@ mod tests {
         assert_eq!(add_result, CError::Success as i32);
 
         // Two query vectors
-        let queries = vec![
+        let queries = [
             0.0, 0.0, 0.0, 0.0, // Query 1: at origin
             1.0, 0.0, 0.0, 0.0, // Query 2: at (1,0,0,0)
         ];
@@ -5092,7 +5410,7 @@ mod tests {
 
     #[test]
     fn test_range_search_null_index() {
-        let query = vec![0.0, 0.0, 0.0, 0.0];
+        let query = [0.0, 0.0, 0.0, 0.0];
         let result = knowhere_range_search(std::ptr::null(), query.as_ptr(), 1, 1.0, 4);
         assert!(result.is_null());
     }
@@ -5130,8 +5448,8 @@ mod tests {
         assert!(!index.is_null());
 
         // Add test vectors
-        let vectors = vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
-        let ids = vec![0i64, 1];
+        let vectors = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+        let ids = [0i64, 1];
 
         let train_result = knowhere_train_index(index, vectors.as_ptr(), 2, 4);
         assert_eq!(train_result, CError::Success as i32);
@@ -5140,7 +5458,7 @@ mod tests {
         assert_eq!(add_result, CError::Success as i32);
 
         // HNSW range search should return NULL (NotImplemented)
-        let query = vec![0.0, 0.0, 0.0, 0.0];
+        let query = [0.0, 0.0, 0.0, 0.0];
         let result = knowhere_range_search(index, query.as_ptr(), 1, 1.5, 4);
         assert!(result.is_null());
 
@@ -5350,7 +5668,8 @@ mod tests {
         let result = unsafe { &*result };
         assert_eq!(result.num_ids, 1);
         assert_eq!(result.dim, 16);
-        let returned = unsafe { std::slice::from_raw_parts(result.vectors, result.num_ids * result.dim) };
+        let returned =
+            unsafe { std::slice::from_raw_parts(result.vectors, result.num_ids * result.dim) };
         assert_eq!(returned, &vectors[..16]);
 
         knowhere_free_get_vector_result(result as *const _ as *mut _);

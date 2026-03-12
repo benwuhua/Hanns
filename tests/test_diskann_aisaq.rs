@@ -1,7 +1,7 @@
 use std::fs;
 
-use knowhere_rs::{MetricType, PQFlashIndex, SearchResult};
 use knowhere_rs::faiss::diskann_aisaq::AisaqConfig;
+use knowhere_rs::{MetricType, PQFlashIndex, SearchResult};
 use tempfile::tempdir;
 
 fn build_index() -> PQFlashIndex {
@@ -17,9 +17,7 @@ fn build_index() -> PQFlashIndex {
 
     let mut index = PQFlashIndex::new(config, MetricType::L2, 4).expect("index should build");
     let data = vec![
-        0.0, 0.0, 0.0, 0.0,
-        1.0, 1.0, 1.0, 1.0,
-        10.0, 10.0, 10.0, 10.0,
+        0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 10.0, 10.0, 10.0, 10.0,
     ];
     index.add(&data).expect("add should succeed");
     index
@@ -48,7 +46,9 @@ fn search_returns_expected_neighbor() {
 fn rejects_dimension_mismatch() {
     let config = AisaqConfig::default();
     let mut index = PQFlashIndex::new(config, MetricType::L2, 4).expect("index should build");
-    let error = index.train(&[1.0, 2.0, 3.0]).expect_err("invalid input must fail");
+    let error = index
+        .train(&[1.0, 2.0, 3.0])
+        .expect_err("invalid input must fail");
     assert!(error.to_string().contains("dimension"));
 }
 
@@ -127,9 +127,7 @@ fn scope_audit_reports_real_flash_skeleton_but_not_native_diskann_parity() {
     assert!(!audit.uses_mmap_backed_pages);
     assert!(!audit.native_comparable);
     assert!(
-        audit
-            .comparability_reason
-            .contains("simplified"),
+        audit.comparability_reason.contains("simplified"),
         "audit should explain why PQFlashIndex is still a constrained AISAQ skeleton"
     );
 

@@ -41,8 +41,8 @@ fn generate_sift_like_data(n: usize, dim: usize, seed: u64) -> Vec<f32> {
         let end = start + dim;
         let norm: f32 = data[start..end].iter().map(|x| x * x).sum::<f32>().sqrt();
         if norm > 0.0 {
-            for j in start..end {
-                data[j] /= norm;
+            for value in data.iter_mut().take(end).skip(start) {
+                *value /= norm;
             }
         }
     }

@@ -115,9 +115,8 @@ impl PqEncoder {
 
         // 保存码书
         let offset = m_idx * self.k * self.sub_dim;
-        for i in 0..(self.k * self.sub_dim) {
-            self.codebooks[offset + i] = centroids[i];
-        }
+        self.codebooks[offset..self.k * self.sub_dim + offset]
+            .copy_from_slice(&centroids[..self.k * self.sub_dim]);
     }
 
     /// K-means++ 初始化

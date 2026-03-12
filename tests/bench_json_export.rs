@@ -1,4 +1,3 @@
-#![cfg(feature = "long-tests")]
 //! Benchmark JSON Export Test
 //!
 //! Test and validate JSON export functionality for benchmark results.
@@ -21,15 +20,24 @@
 //! - `QUICK`: Set to enable quick mode (1000 vectors, 10 queries)
 //! - `DETAILED`: Set to enable detailed mode (50000 vectors, 500 queries)
 
+#[cfg(feature = "long-tests")]
 use knowhere_rs::api::{IndexConfig, IndexParams, SearchRequest};
-use knowhere_rs::benchmark::{average_recall_at_k, BenchmarkResult};
+#[cfg(feature = "long-tests")]
+use knowhere_rs::benchmark::average_recall_at_k;
+use knowhere_rs::benchmark::BenchmarkResult;
+#[cfg(feature = "long-tests")]
 use knowhere_rs::faiss::{HnswIndex, IvfFlatIndex, MemIndex as FlatIndex};
+#[cfg(feature = "long-tests")]
 use knowhere_rs::IndexType;
+#[cfg(feature = "long-tests")]
 use knowhere_rs::MetricType;
+#[cfg(feature = "long-tests")]
 use rand::Rng;
+#[cfg(feature = "long-tests")]
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+#[cfg(feature = "long-tests")]
 use std::time::Instant;
 
 /// Test mode configuration
@@ -38,6 +46,7 @@ struct TestConfig {
     num_vectors: usize,
     num_queries: usize,
     dim: usize,
+    #[cfg(feature = "long-tests")]
     k: usize,
 }
 
@@ -47,12 +56,14 @@ impl Default for TestConfig {
             num_vectors: 10000,
             num_queries: 100,
             dim: 128,
+            #[cfg(feature = "long-tests")]
             k: 100,
         }
     }
 }
 
 /// Generate random dataset
+#[cfg(feature = "long-tests")]
 fn generate_random_dataset(num_vectors: usize, dim: usize) -> Vec<f32> {
     let mut rng = rand::thread_rng();
     let mut data = Vec::with_capacity(num_vectors * dim);
@@ -65,6 +76,7 @@ fn generate_random_dataset(num_vectors: usize, dim: usize) -> Vec<f32> {
 }
 
 /// Generate ground truth for random dataset (brute-force)
+#[cfg(feature = "long-tests")]
 fn compute_ground_truth(
     base: &[f32],
     query: &[f32],
@@ -97,11 +109,13 @@ fn compute_ground_truth(
     ground_truth
 }
 
+#[cfg(feature = "long-tests")]
 fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
 }
 
 /// Benchmark Flat index
+#[cfg(feature = "long-tests")]
 fn benchmark_flat(
     base: &[f32],
     query: &[f32],
@@ -168,6 +182,7 @@ fn benchmark_flat(
 }
 
 /// Benchmark HNSW index
+#[cfg(feature = "long-tests")]
 fn benchmark_hnsw(
     base: &[f32],
     query: &[f32],
@@ -235,6 +250,7 @@ fn benchmark_hnsw(
 }
 
 /// Benchmark IVF-Flat index
+#[cfg(feature = "long-tests")]
 fn benchmark_ivf_flat(
     base: &[f32],
     query: &[f32],
@@ -246,7 +262,7 @@ fn benchmark_ivf_flat(
 
     // Use reasonable nlist for dataset size (sqrt of num_vectors is a good rule of thumb)
     let num_vectors = base.len() / dim;
-    let nlist = ((num_vectors as f32).sqrt() as u32).max(16).min(256);
+    let nlist = ((num_vectors as f32).sqrt() as u32).clamp(16, 256);
     let nprobe = (nlist as f32 * 0.1).max(1.0) as u32;
 
     let config = IndexConfig {
@@ -307,6 +323,7 @@ fn benchmark_ivf_flat(
 }
 
 /// Get output directory from environment or use default
+#[cfg(feature = "long-tests")]
 fn get_output_dir() -> String {
     env::var("JSON_OUTPUT_DIR").unwrap_or_else(|_| {
         "/Users/ryan/.openclaw/workspace-builder/benchmark_results/".to_string()
@@ -314,12 +331,18 @@ fn get_output_dir() -> String {
 }
 
 /// Generate JSON filename with timestamp
+#[cfg(feature = "long-tests")]
 fn generate_filename() -> String {
     let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
     format!("benchmark_results_{}.json", timestamp)
 }
 
+fn dataset_name(config: TestConfig) -> String {
+    format!("Random{}", config.num_vectors / 100)
+}
+
 /// Ensure output directory exists
+#[cfg(feature = "long-tests")]
 fn ensure_output_dir(dir: &str) -> std::io::Result<()> {
     if !Path::new(dir).exists() {
         fs::create_dir_all(dir)?;
@@ -329,6 +352,7 @@ fn ensure_output_dir(dir: &str) -> std::io::Result<()> {
 }
 
 /// Parse test mode from environment variables
+#[cfg(feature = "long-tests")]
 fn parse_test_mode() -> TestConfig {
     // Check environment variables for test mode
     if env::var("QUICK").is_ok() {
@@ -337,6 +361,7 @@ fn parse_test_mode() -> TestConfig {
             num_vectors: 1000,
             num_queries: 10,
             dim: 128,
+            #[cfg(feature = "long-tests")]
             k: 100,
         };
     }
@@ -347,6 +372,7 @@ fn parse_test_mode() -> TestConfig {
             num_vectors: 50000,
             num_queries: 500,
             dim: 128,
+            #[cfg(feature = "long-tests")]
             k: 100,
         };
     }
@@ -355,6 +381,126 @@ fn parse_test_mode() -> TestConfig {
     TestConfig::default()
 }
 
+fn sample_contract_results() -> Vec<BenchmarkResult> {
+    vec![
+        BenchmarkResult {
+            index_name: "Flat".to_string(),
+            build_time_ms: 1.2,
+            search_time_ms: 2.5,
+            num_queries: 10,
+            qps: 4000.0,
+            recall_at_1: 1.0,
+            recall_at_10: 1.0,
+            recall_at_100: 1.0,
+        },
+        BenchmarkResult {
+            index_name: "HNSW".to_string(),
+            build_time_ms: 3.4,
+            search_time_ms: 1.1,
+            num_queries: 10,
+            qps: 9000.0,
+            recall_at_1: 0.98,
+            recall_at_10: 0.97,
+            recall_at_100: 0.97,
+        },
+        BenchmarkResult {
+            index_name: "IVF-Flat".to_string(),
+            build_time_ms: 2.0,
+            search_time_ms: 1.8,
+            num_queries: 10,
+            qps: 5500.0,
+            recall_at_1: 0.96,
+            recall_at_10: 0.95,
+            recall_at_100: 0.95,
+        },
+    ]
+}
+
+fn build_json_report(config: &TestConfig, results: &[BenchmarkResult]) -> serde_json::Value {
+    let fastest = results
+        .iter()
+        .min_by(|a, b| a.search_time_ms.partial_cmp(&b.search_time_ms).unwrap())
+        .unwrap();
+    let best_recall = results
+        .iter()
+        .max_by(|a, b| a.recall_at_10.partial_cmp(&b.recall_at_10).unwrap())
+        .unwrap();
+    let total_time: f64 = results
+        .iter()
+        .map(|r| r.build_time_ms + r.search_time_ms)
+        .sum();
+
+    serde_json::json!({
+        "dataset": dataset_name(*config),
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "config": {
+            "dim": config.dim,
+            "num_vectors": config.num_vectors,
+            "num_queries": config.num_queries,
+            "metric_type": "L2"
+        },
+        "results": results,
+        "summary": {
+            "fastest_index": fastest.index_name,
+            "best_recall_index": best_recall.index_name,
+            "total_test_time_ms": total_time
+        }
+    })
+}
+
+fn write_json_report(
+    output_dir: &Path,
+    filename: &str,
+    config: &TestConfig,
+    results: &[BenchmarkResult],
+) -> std::io::Result<PathBuf> {
+    fs::create_dir_all(output_dir)?;
+    let json_obj = build_json_report(config, results);
+    let json_string =
+        serde_json::to_string_pretty(&json_obj).expect("Failed to serialize benchmark JSON report");
+    let output_path = output_dir.join(filename);
+    fs::write(&output_path, json_string)?;
+    Ok(output_path)
+}
+
+#[test]
+fn test_json_export_contract_fast_lane() {
+    let config = TestConfig {
+        num_vectors: 1000,
+        num_queries: 10,
+        dim: 8,
+        #[cfg(feature = "long-tests")]
+        k: 10,
+    };
+    let output_dir = std::env::temp_dir().join(format!(
+        "knowhere_rs_json_export_contract_{}",
+        std::process::id()
+    ));
+    let output_path = write_json_report(
+        &output_dir,
+        "benchmark_results_contract.json",
+        &config,
+        &sample_contract_results(),
+    )
+    .expect("contract JSON report should be written");
+
+    let content = fs::read_to_string(&output_path).expect("Failed to read JSON file");
+    let parsed: serde_json::Value = serde_json::from_str(&content).expect("Failed to parse JSON");
+    let results_array = parsed["results"].as_array().unwrap();
+
+    assert_eq!(parsed["dataset"], "Random10");
+    assert_eq!(parsed["config"]["dim"], 8);
+    assert_eq!(parsed["summary"]["fastest_index"], "HNSW");
+    assert_eq!(parsed["summary"]["best_recall_index"], "Flat");
+    assert_eq!(results_array.len(), 3, "Should have results for 3 indexes");
+    assert_eq!(results_array[0]["index_name"], "Flat");
+    assert_eq!(results_array[1]["index_name"], "HNSW");
+    assert_eq!(results_array[2]["index_name"], "IVF-Flat");
+
+    let _ = fs::remove_dir_all(output_dir);
+}
+
+#[cfg(feature = "long-tests")]
 #[test]
 #[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_json_export() {
@@ -404,47 +550,15 @@ fn test_json_export() {
     // Print summary table
     BenchmarkResult::print_table(&results);
 
-    // Find best performers
-    let fastest = results
-        .iter()
-        .min_by(|a, b| a.search_time_ms.partial_cmp(&b.search_time_ms).unwrap())
-        .unwrap();
-    let best_recall = results
-        .iter()
-        .max_by(|a, b| a.recall_at_10.partial_cmp(&b.recall_at_10).unwrap())
-        .unwrap();
+    // Write to file
+    let filename = generate_filename();
+    let output_path = write_json_report(Path::new(&output_dir), &filename, &config, &results)
+        .expect("Failed to write JSON file");
 
     let total_time: f64 = results
         .iter()
         .map(|r| r.build_time_ms + r.search_time_ms)
         .sum();
-
-    // Create JSON output with enhanced format
-    let timestamp = chrono::Utc::now().to_rfc3339();
-    let json_obj = serde_json::json!({
-        "dataset": format!("Random{}", config.num_vectors / 100),
-        "timestamp": timestamp,
-        "config": {
-            "dim": config.dim,
-            "num_vectors": config.num_vectors,
-            "num_queries": config.num_queries,
-            "metric_type": "L2"
-        },
-        "results": results,
-        "summary": {
-            "fastest_index": fastest.index_name,
-            "best_recall_index": best_recall.index_name,
-            "total_test_time_ms": total_time
-        }
-    });
-
-    let json_string = serde_json::to_string_pretty(&json_obj).expect("Failed to serialize JSON");
-
-    // Write to file
-    let filename = generate_filename();
-    let output_path = Path::new(&output_dir).join(&filename);
-
-    fs::write(&output_path, &json_string).expect("Failed to write JSON file");
 
     println!("\n{}", "=".repeat(60));
     println!("✅ JSON Export Complete!");

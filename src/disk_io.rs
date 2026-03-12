@@ -54,7 +54,7 @@ mod tests {
 
     #[test]
     fn test_sync_read() -> Result<()> {
-        let reader = SyncReader;
+        let _reader = SyncReader;
         Ok(())
     }
 }

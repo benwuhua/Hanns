@@ -3,6 +3,9 @@
 //! This module provides unsafe FFI bindings to Faiss C API.
 //! In production, use `cxx` or `rust-cpp` for safer bindings.
 
+#[cfg(feature = "ffi")]
+use std::os::raw::c_char;
+
 /// Faiss return codes
 pub const FAISS_SUCCESS: i32 = 0;
 pub const FAISS_ERR_INVALID_ARG: i32 = -1;
@@ -26,37 +29,37 @@ pub struct FaissIndex {
     _priv: [u8; 0],
 }
 
-/// Create a new flat index
+// Create a new flat index
 #[cfg(feature = "ffi")]
 extern "C" {
     pub fn faiss_index_new(d: i32, metric: i32) -> *mut FaissIndex;
 }
 
-/// Free an index
+// Free an index
 #[cfg(feature = "ffi")]
 extern "C" {
     pub fn faiss_index_free(index: *mut FaissIndex);
 }
 
-/// Get the number of vectors
+// Get the number of vectors
 #[cfg(feature = "ffi")]
 extern "C" {
     pub fn faiss_index_ntotal(index: *const FaissIndex) -> i64;
 }
 
-/// Get the dimension
+// Get the dimension
 #[cfg(feature = "ffi")]
 extern "C" {
     pub fn faiss_index_d(index: *const FaissIndex) -> i32;
 }
 
-/// Add vectors to the index
+// Add vectors to the index
 #[cfg(feature = "ffi")]
 extern "C" {
     pub fn faiss_index_add(index: *mut FaissIndex, x: *const f32, n: i64) -> i32;
 }
 
-/// Search the index
+// Search the index
 #[cfg(feature = "ffi")]
 extern "C" {
     pub fn faiss_index_search(
@@ -68,31 +71,31 @@ extern "C" {
     ) -> i32;
 }
 
-/// Train the index
+// Train the index
 #[cfg(feature = "ffi")]
 extern "C" {
     pub fn faiss_index_train(index: *mut FaissIndex, x: *const f32, n: i64) -> i32;
 }
 
-/// Reset the index (remove all vectors)
+// Reset the index (remove all vectors)
 #[cfg(feature = "ffi")]
 extern "C" {
     pub fn faiss_index_reset(index: *mut FaissIndex) -> i32;
 }
 
-/// Write index to file
+// Write index to file
 #[cfg(feature = "ffi")]
 extern "C" {
     pub fn faiss_index_write(index: *mut FaissIndex, path: *const c_char) -> i32;
 }
 
-/// Read index from file
+// Read index from file
 #[cfg(feature = "ffi")]
 extern "C" {
     pub fn faiss_index_read(path: *const c_char) -> *mut FaissIndex;
 }
 
-/// Check if index is trained
+// Check if index is trained
 #[cfg(feature = "ffi")]
 extern "C" {
     pub fn faiss_index_is_trained(index: *const FaissIndex) -> bool;

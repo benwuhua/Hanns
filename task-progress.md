@@ -11,14 +11,267 @@
 
 ## Current State
 
-- Phase: worker-active
-- Current focus: `ivfpq-ffi-persistence-contract`
-- Next feature: `ivfpq-ffi-persistence-contract` (highest-priority failing feature with passing dependencies after HNSW family verdict closure)
+- Phase: worker-complete
+- Current focus: `none` (all tracked features are closed; project verdict archived as `not accepted`)
+- Next feature: `none` (reopen only if new remote authority evidence materially changes the final verdict chain)
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 20/30 features passing (67%)
+- Progress: 31/31 features passing (100%)
 
 ## Session Log
+
+### Session 37 - 2026-03-12
+- Focus: `final-production-acceptance`
+- Completed:
+  - added `tests/test_final_production_acceptance.rs` as a full-regression-visible project-level verdict lock, then used the missing-artifact failure as the TDD red signal for the final acceptance closure
+  - added `benchmark_results/final_production_acceptance.json` to archive the honest current program verdict: production engineering gates are closed, but the project is still `not accepted` on the remote x86 authority evidence because the leadership criterion remains unmet and the settled core-path classifications stay non-accepting
+  - extended `scripts/validate_features.py` plus `tests/test_validate_features.py` so the durable workflow now accepts the terminal `Current focus/Next feature = none` state when all tracked features are passing, rather than treating the completed-project handoff as invalid
+  - replayed the recorded remote `fmt`, `clippy`, and `full_regression` gates on isolated authority directories, then synced the durable docs so all 31 tracked features are now closed and the queue ends with an explicit negative acceptance verdict instead of a dangling failing feature
+- Verification:
+  - `cargo test --test test_final_production_acceptance -- --nocapture` -> initial `FAIL` (missing `benchmark_results/final_production_acceptance.json`), then `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (new test needed rustfmt), then `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-final-production-acceptance KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-final-production-acceptance bash scripts/remote/test.sh --command "cargo fmt --all -- --check"` -> `test=ok` (`/data/work/knowhere-rs-logs-final-production-acceptance/test_20260312T054641Z_77059.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-final-production-acceptance KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-final-production-acceptance bash scripts/remote/test.sh --command "cargo clippy --all-targets --all-features -- -D warnings"` -> `test=ok` (`/data/work/knowhere-rs-logs-final-production-acceptance/test_20260312T054700Z_77381.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-final-production-acceptance KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-final-production-acceptance bash scripts/remote/test.sh --command "scripts/gate_profile_runner.sh --profile full_regression"` -> `test=ok` (`/data/work/knowhere-rs-logs-final-production-acceptance/test_20260312T054742Z_77847.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 31 features (31 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `final-production-acceptance` is now `passing`
+  - all tracked features are now `passing`
+  - the project-level final verdict is archived as `not accepted` on current remote x86 evidence
+- Notes:
+  - this feature passes because the final verdict is now truthfully archived and regression-locked, not because the repository achieved positive production acceptance
+  - the blocking reason remains the already-settled evidence chain: `benchmark_results/final_performance_leadership_proof.json` still says `criterion_met=false`, and `benchmark_results/final_core_path_classification.json` still rolls the families up as HNSW=`functional-but-not-leading`, IVF-PQ=`no-go`, DiskANN=`constrained`
+- Git Commits: pending
+
+### Session 36 - 2026-03-12
+- Focus: `prod-readme-remote-workflow-docs`
+- Completed:
+  - rewrote `README.md` into a remote-first landing page that now reflects the current authority workflow, durable-state entrypoints, and honest benchmark/verdict truth instead of stale local-only build/test guidance
+  - updated `AGENTS.md` and `docs/FFI_CAPABILITY_MATRIX.md` so operator-facing command guidance now distinguishes local prefilters from remote acceptance, matching the repository's actual production workflow
+  - added durable design/plan docs for the docs-closure feature and synced governance files so the remaining final feature shifts to `final-production-acceptance`
+- Verification:
+  - `bash init.sh` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> initial `VALID - 31 features (29 passing, 2 failing); workflow/doc checks passed`, final `VALID - 31 features (30 passing, 1 failing); workflow/doc checks passed`
+  - `bash scripts/remote/build.sh --no-all-targets` -> `build=ok` (`/data/work/knowhere-rs-logs/build_20260312T054010Z.log`)
+- Result:
+  - `prod-readme-remote-workflow-docs` is now `passing`
+  - the next highest-priority failing feature with satisfied dependencies is `final-production-acceptance`
+- Notes:
+  - this feature intentionally updated only operator-facing entry docs (`README.md`, `AGENTS.md`, `docs/FFI_CAPABILITY_MATRIX.md`) and left archival design/perf deep dives untouched so historical evidence remains auditably historical
+  - the acceptance evidence for this docs gate is still the remote-x86 workflow staying replayable after the documentation rewrite, not any local-only markdown review
+- Git Commits: pending
+
+### Session 35 - 2026-03-12
+- Focus: `prod-ffi-observability-persistence-gate`
+- Completed:
+  - verified that the three recorded cross-cutting contract lanes were already green locally, so this feature no longer needed new Rust or FFI behavior changes before authority replay
+  - refreshed remote x86 authority evidence for `cargo test --lib ffi -- --nocapture`, `cargo test --lib serialize -- --nocapture`, and `cargo test --test bench_json_export -q` under isolated target/log directories, confirming that FFI metadata, persistence semantics, deserialize behavior, and the JSON observability export contract remain replayably green
+  - synced durable governance docs so the cross-cutting production contract gate is now archived as passing and the next queued feature shifts to `prod-readme-remote-workflow-docs`
+- Verification:
+  - `cargo test --lib ffi -- --nocapture` -> `ok`
+  - `cargo test --lib serialize -- --nocapture` -> `ok`
+  - `cargo test --test bench_json_export -q` -> `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-prod-ffi-observability-persistence-gate KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-prod-ffi-observability-persistence-gate bash scripts/remote/test.sh --command "cargo test --lib ffi -- --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-prod-ffi-observability-persistence-gate/test_20260312T053355Z_72392.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-prod-ffi-observability-persistence-gate KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-prod-ffi-observability-persistence-gate bash scripts/remote/test.sh --command "cargo test --lib serialize -- --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-prod-ffi-observability-persistence-gate/test_20260312T053435Z_72484.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-prod-ffi-observability-persistence-gate KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-prod-ffi-observability-persistence-gate bash scripts/remote/test.sh --command "cargo test --test bench_json_export -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-prod-ffi-observability-persistence-gate/test_20260312T053453Z_72534.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 31 features (29 passing, 2 failing); workflow/doc checks passed`
+- Result:
+  - `prod-ffi-observability-persistence-gate` is now `passing`
+  - the next highest-priority failing feature with satisfied dependencies is `prod-readme-remote-workflow-docs`
+- Notes:
+  - this feature closed as an honest gate replay rather than a new implementation sprint: the underlying FFI/persistence/observability contract work had already landed in earlier sessions, and this round simply revalidated the combined surface on the authority machine
+  - an initial parallel remote replay hit the wrapper's shared-lock `status=conflict` path, so the final authority evidence intentionally comes from serialized runs under `/data/work/knowhere-rs-logs-prod-ffi-observability-persistence-gate/`
+- Git Commits: pending
+
+### Session 34 - 2026-03-12
+- Focus: `prod-all-targets-clippy-fmt`
+- Completed:
+  - executed the remote lint/build gate closure plan and cleared the remaining test/bench/example lint drift needed for the authority `cargo fmt`, `cargo clippy --all-targets --all-features`, and release build lanes
+  - fixed the authority-only follow-up blockers that local prefiltering did not cover, including `hdf5`-gated benchmark hygiene and the default-lane `tests/bench_diskann_1m.rs` report helper compile hole after `generate_report` was placed behind `feature = "long-tests"`
+  - synced durable governance docs so the remote lint/build gate is now archived as passing and the next queued production-governance feature shifts to `prod-ffi-observability-persistence-gate`
+- Verification:
+  - `cargo clippy --tests --examples --features long-tests -- -D warnings` -> `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `cargo test --test bench_diskann_1m -q` -> `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-prod-clippy-fmt KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-prod-clippy-fmt bash scripts/remote/test.sh --command "cargo fmt --all -- --check"` -> `test=ok` (`/data/work/knowhere-rs-logs-prod-clippy-fmt/test_20260312T051743Z_57178.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-prod-clippy-fmt KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-prod-clippy-fmt bash scripts/remote/test.sh --command "cargo clippy --all-targets --all-features -- -D warnings"` -> `test=ok` (`/data/work/knowhere-rs-logs-prod-clippy-fmt/test_20260312T051803Z_58809.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-prod-clippy-fmt KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-prod-clippy-fmt bash scripts/remote/build.sh` -> `build=ok` (`/data/work/knowhere-rs-logs-prod-clippy-fmt/build_20260312T051833Z.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 31 features (28 passing, 3 failing); workflow/doc checks passed`
+- Result:
+  - `prod-all-targets-clippy-fmt` is now `passing`
+  - the next highest-priority failing feature with satisfied dependencies is `prod-ffi-observability-persistence-gate`
+- Notes:
+  - local macOS checks remained useful only as a prefilter; the actual acceptance evidence for this feature is the remote x86 authority lane
+  - the remote all-features/all-targets and release-build surfaces exposed extra blockers that were invisible to the narrower local prefilter, so the final closure required one last build-only fix in `tests/bench_diskann_1m.rs`
+- Git Commits: pending
+
+### Session 33 - 2026-03-12
+- Focus: `final-performance-leadership-proof`
+- Completed:
+  - wrote a durable final-acceptance design and implementation plan, then added `benchmark_results/final_performance_leadership_proof.json` to archive the current project-level truth: the remote-x86 performance-leadership completion criterion is explicitly unmet because no core CPU family can honestly claim leadership on the current authority surface
+  - extended `tests/bench_hnsw_cpp_compare.rs` so the default compare lane now locks that final-proof artifact against the settled HNSW blocker, keeping `criterion_met=false` tied to the current HNSW stop-go source and the cross-family core-path rollup
+  - synced durable governance docs so the remaining handoff shifts from final benchmark classification into the production-governance gates, with `prod-all-targets-clippy-fmt` now the next ready feature
+- Verification:
+  - `cargo test --test bench_hnsw_cpp_compare -- --nocapture` -> initial `FAIL` (missing `benchmark_results/final_performance_leadership_proof.json`), then `ok`
+  - `cargo test --test bench_hnsw_cpp_compare -q` -> `ok`
+  - `bash init.sh` -> `ok`
+  - `bash scripts/remote/native_hnsw_qps_capture.sh --gtest-filter Benchmark_float_qps.TEST_HNSW --log-dir /data/work/knowhere-rs-logs-final-performance-leadership` -> `exit_code=0` (`/data/work/knowhere-rs-logs-final-performance-leadership/native_hnsw_qps_linkfix_20260312T034740Z.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-final-performance-leadership KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-final-performance-leadership bash scripts/remote/test.sh --command "cargo build --features hdf5 --bin generate_hdf5_hnsw_baseline --verbose"` -> `test=ok` (`/data/work/knowhere-rs-logs-final-performance-leadership/test_20260312T034723Z_50723.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-final-performance-leadership KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-final-performance-leadership bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_cpp_compare -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-final-performance-leadership/test_20260312T034858Z_51050.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID`
+- Result:
+  - `final-performance-leadership-proof` is now `passing`
+  - the next highest-priority failing feature with satisfied dependencies is `prod-all-targets-clippy-fmt`
+- Notes:
+  - this session intentionally did not try to reopen HNSW tuning or invent a synthetic leadership candidate; it archived the current completion criterion as unmet because the existing authority evidence is already decisive
+  - the native HNSW refresh again required the isolated remote linkfix fallback path, so the authority native evidence for this feature is the fallback log under `/data/work/knowhere-rs-logs-final-performance-leadership/`, not the initial aborting upstream binary run
+- Git Commits: pending
+
+### Session 32 - 2026-03-12
+- Focus: `final-core-path-classification`
+- Completed:
+  - wrote a durable cross-family design and implementation plan, then added `benchmark_results/final_core_path_classification.json` to roll up the settled remote-only classifications of the three core CPU families: HNSW=`functional-but-not-leading`, IVF-PQ=`no-go`, DiskANN=`constrained`
+  - extended `tests/bench_recall_gated_baseline.rs` and `tests/bench_cross_dataset_sampling.rs` so the feature’s recorded verification surfaces now lock that rollup artifact against the current authority-backed benchmark facts rather than only checking family-local rows in isolation
+  - synced durable governance docs so the final-acceptance layer now has a single replayable classification input, and the next queued feature shifts to `final-performance-leadership-proof`
+- Verification:
+  - `cargo test --test bench_recall_gated_baseline -- --nocapture` -> initial `FAIL` (missing `benchmark_results/final_core_path_classification.json`), then `ok`
+  - `cargo test --test bench_cross_dataset_sampling -- --nocapture` -> initial `FAIL` (missing `benchmark_results/final_core_path_classification.json`), then `ok`
+  - `cargo test --test bench_recall_gated_baseline -q` -> `ok`
+  - `cargo test --test bench_cross_dataset_sampling -q` -> `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-final-core-classification KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-final-core-classification bash scripts/remote/test.sh --command "cargo test --test bench_recall_gated_baseline -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-final-core-classification/test_20260312T033828Z_48849.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-final-core-classification KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-final-core-classification bash scripts/remote/test.sh --command "cargo test --test bench_cross_dataset_sampling -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-final-core-classification/test_20260312T033914Z_49096.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID`
+- Result:
+  - `final-core-path-classification` is now `passing`
+  - the next highest-priority failing feature with satisfied dependencies is `final-performance-leadership-proof`
+- Notes:
+  - this session intentionally did not decide project acceptance or performance leadership; it only created the settled cross-family rollup artifact that later final-acceptance features can consume
+  - the summary artifact is deliberately narrow: it reuses closed family verdicts and existing benchmark artifacts rather than inventing new benchmark methodology or duplicating family-level evidence
+- Git Commits: pending
+
+### Session 31 - 2026-03-12
+- Focus: `diskann-stop-go-verdict`
+- Completed:
+  - wrote a durable DiskANN family-verdict design and implementation plan, then added `benchmark_results/diskann_p3_004_final_verdict.json` to separate the family classification (`constrained`) from the already-closed benchmark-gate conclusion (`no_go_for_native_comparable_benchmark`)
+  - tightened `src/faiss/diskann.rs` so the library verification lane now binds the family verdict to executable scope facts from both `DiskAnnIndex` and `PQFlashIndex`, while `tests/bench_diskann_1m.rs` and `tests/bench_compare.rs` now lock the final verdict against the benchmark-gate artifact and compare-lane exclusion policy
+  - synced durable governance docs so DiskANN is no longer described only as a benchmark-gate no-go; the repo now archives the family itself as `constrained` and hands off to the cross-family `final-core-path-classification` feature
+- Verification:
+  - `cargo test --lib diskann -- --nocapture` -> initial `FAIL` (missing `benchmark_results/diskann_p3_004_final_verdict.json`), then `ok`
+  - `cargo test --test bench_diskann_1m -- --nocapture` -> initial `FAIL` (missing `benchmark_results/diskann_p3_004_final_verdict.json`), then `ok`
+  - `cargo test --test bench_compare -- --nocapture` -> initial `FAIL` (missing `benchmark_results/diskann_p3_004_final_verdict.json`), then `ok`
+  - `cargo test --test bench_diskann_1m -q` -> `ok`
+  - `cargo test --test bench_compare -q` -> `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-diskann-stop-go KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-diskann-stop-go bash scripts/remote/test.sh --command "cargo test --lib diskann -- --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-diskann-stop-go/test_20260312T033012Z_46739.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-diskann-stop-go KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-diskann-stop-go bash scripts/remote/test.sh --command "cargo test --test bench_diskann_1m -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-diskann-stop-go/test_20260312T033055Z_47022.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-diskann-stop-go KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-diskann-stop-go bash scripts/remote/test.sh --command "cargo test --test bench_compare -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-diskann-stop-go/test_20260312T033125Z_47215.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID`
+- Result:
+  - `diskann-stop-go-verdict` is now `passing`
+  - the next highest-priority failing feature with satisfied dependencies is `final-core-path-classification`
+- Notes:
+  - this session intentionally kept DiskANN as `constrained` rather than `no-go`: the benchmark lane is explicitly no-go for native-comparable claims, but the family still exposes functional simplified Vamana/AISAQ surfaces that are better represented as constrained
+  - the final artifact now keeps three layers separate and explicit: scope audits justify the simplified implementation boundary, the benchmark-gate artifact blocks native-comparable claims, and the family final verdict archives the remaining allowed classification
+- Git Commits: pending
+
+### Session 30 - 2026-03-12
+- Focus: `diskann-remote-benchmark-gate`
+- Completed:
+  - wrote a durable DiskANN benchmark-gate design and implementation plan, then added `benchmark_results/diskann_p3_004_benchmark_gate.json` so the current DiskANN lane closes as explicit no-go benchmark evidence under constrained AISAQ scope rather than as an undocumented narrative
+  - extended `src/benchmark/cross_dataset_sampling.rs` so the cross-dataset artifact now emits one constrained `DiskANN` row per sampled dataset, tightened `tests/bench_diskann_1m.rs`, `tests/bench_recall_gated_baseline.rs`, and `tests/bench_cross_dataset_sampling.rs` into real default-lane DiskANN regressions, and strengthened the long-test generator assertion to require `3 datasets x 4 indexes`
+  - refreshed `benchmark_results/cross_dataset_sampling.json` from the remote x86 authority run and updated the benchmark-gate artifact to record the authority-backed DiskANN cross-dataset recalls instead of leaving a stale "refresh pending" placeholder
+- Verification:
+  - `cargo test --test bench_diskann_1m -- --nocapture` -> initial `FAIL` (missing `benchmark_results/diskann_p3_004_benchmark_gate.json`), then `ok`
+  - `cargo test --test bench_recall_gated_baseline -- --nocapture` -> `ok`
+  - `cargo test --test bench_cross_dataset_sampling -- --nocapture` -> initial `FAIL` (missing DiskANN rows in `benchmark_results/cross_dataset_sampling.json`), then `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-diskann-benchmark-gate KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-diskann-benchmark-gate bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_cross_dataset_sampling -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-diskann-benchmark-gate/test_20260312T031705Z_42180.log`)
+  - `cargo test --test bench_diskann_1m -q` -> `ok`
+  - `cargo test --test bench_recall_gated_baseline -q` -> `ok`
+  - `cargo test --test bench_cross_dataset_sampling -q` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-diskann-benchmark-gate KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-diskann-benchmark-gate bash scripts/remote/test.sh --command "cargo test --test bench_diskann_1m -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-diskann-benchmark-gate/test_20260312T032123Z_43868.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-diskann-benchmark-gate KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-diskann-benchmark-gate bash scripts/remote/test.sh --command "cargo test --test bench_recall_gated_baseline -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-diskann-benchmark-gate/test_20260312T032154Z_44121.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-diskann-benchmark-gate KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-diskann-benchmark-gate bash scripts/remote/test.sh --command "cargo test --test bench_cross_dataset_sampling -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-diskann-benchmark-gate/test_20260312T032212Z_44282.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID`
+- Result:
+  - `diskann-remote-benchmark-gate` is now `passing`
+  - the next highest-priority failing feature with satisfied dependencies is `diskann-stop-go-verdict`
+- Notes:
+  - this session deliberately kept the benchmark gate narrower than the final family classification: `benchmark_results/diskann_p3_004_benchmark_gate.json` records explicit no-go benchmark evidence under constrained scope, while `diskann-stop-go-verdict` still owns the family-level final verdict
+  - the repo-local cross-dataset artifact had drifted back to a pre-DiskANN shape, so this feature required an authority refresh and rsync pullback before the default-lane regressions could honestly count as passing
+- Git Commits: pending
+
+### Session 29 - 2026-03-12
+- Focus: `ivfpq-stop-go-verdict`
+- Completed:
+  - wrote a durable IVF-PQ verdict design and implementation plan, then archived the family as `no-go` in `benchmark_results/ivfpq_p3_003_final_verdict.json` by cross-referencing the existing focused hot-path artifact, recall-gated baseline artifact, cross-dataset artifact, and already-closed production contract evidence
+  - converted `tests/bench_ivf_pq_perf.rs` from a file-level `long-tests` shell into a real default-lane verdict regression while preserving the heavy perf generators behind function-level `#[cfg(feature = "long-tests")]` and `#[ignore]`
+  - converted `tests/bench_recall_gated_baseline.rs` and `tests/bench_cross_dataset_sampling.rs` into real default-lane artifact regressions that lock the current IVF-PQ facts: the row exists, recall remains below the `0.8` gate, and confidence is still non-trusted across sampled datasets
+  - synced durable governance docs so the IVF-PQ family now has an explicit family-level `no-go` classification rather than an open benchmark question
+- Verification:
+  - `cargo test --test bench_ivf_pq_perf -- --nocapture` -> initial `FAIL` (missing `benchmark_results/ivfpq_p3_003_final_verdict.json`), then `ok`
+  - `cargo test --test bench_recall_gated_baseline -- --nocapture` -> `ok`
+  - `cargo test --test bench_cross_dataset_sampling -- --nocapture` -> `ok`
+  - `cargo test --test bench_ivf_pq_perf -q` -> `ok`
+  - `cargo test --test bench_recall_gated_baseline -q` -> `ok`
+  - `cargo test --test bench_cross_dataset_sampling -q` -> `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-ivfpq-stop-go KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-ivfpq-stop-go bash scripts/remote/test.sh --command "cargo test --test bench_ivf_pq_perf -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-ivfpq-stop-go/test_20260312T025954Z_38396.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-ivfpq-stop-go KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-ivfpq-stop-go bash scripts/remote/test.sh --command "cargo test --test bench_recall_gated_baseline -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-ivfpq-stop-go/test_20260312T030037Z_38705.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-ivfpq-stop-go KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-ivfpq-stop-go bash scripts/remote/test.sh --command "cargo test --test bench_cross_dataset_sampling -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-ivfpq-stop-go/test_20260312T030054Z_38852.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID`
+- Result:
+  - `ivfpq-stop-go-verdict` is now `passing`
+  - the next highest-priority failing feature with satisfied dependencies is `diskann-remote-benchmark-gate`
+- Notes:
+  - this session deliberately did not reopen heavy IVF-PQ tuning; the current authority evidence is already sufficient to classify the family as `no-go`
+  - before this change, all three recorded verification entrypoints for the feature still compiled away or otherwise failed to lock the final family conclusion on the default lane
+- Git Commits: pending
+
+### Session 28 - 2026-03-12
+- Focus: `prod-workflow-doc-validator-gate`
+- Completed:
+  - wrote a durable design spec and implementation plan for upgrading `scripts/validate_features.py` into a workflow/doc consistency gate, keeping the existing CLI entrypoint while making the scope explicit for future sessions
+  - added `tests/test_validate_features.py` with synthetic-repo unit coverage for progress-summary drift, stale latest-session placeholders, bad `cargo test --tests <filter>` verification patterns, and orphan temp-artifact detection
+  - extended `scripts/validate_features.py` beyond local JSON shape checks so it now cross-checks `task-progress.md`, enforces a narrow verification denylist, and scans the repo for explicit orphan suffixes such as `*.new`; the real repo cleanup for this gate deleted the stale `src/faiss/hnsw.rs.new` artifact
+- Verification:
+  - `python3 -m unittest tests/test_validate_features.py` -> initial `FAIL` (missing workflow/doc checks), then `OK`
+  - `python3 scripts/validate_features.py feature-list.json` -> initial `VALIDATION FAILED` (`src/faiss/hnsw.rs.new` orphan artifact), then `VALID - 31 features (22 passing, 9 failing); workflow/doc checks passed`
+- Result:
+  - `prod-workflow-doc-validator-gate` is now `passing`
+  - the next highest-priority failing feature with satisfied dependencies remains `ivfpq-stop-go-verdict`
+- Notes:
+  - this session intentionally did not broaden the validator into a general markdown linter; it only mechanized the specific durable-state failures already observed in this repo
+  - the new gate now blocks the exact empty-verification command shape that previously allowed `cargo test --tests -q test_ivf_index_trait` to pass as a false-green `0 tests` shell
+- Git Commits: pending
+
+### Session 27 - 2026-03-12
+- Focus: `ivfpq-ffi-persistence-contract`
+- Completed:
+  - fixed a real IVF-PQ FFI contract mismatch in `src/ffi.rs`: metadata already advertised file-backed persistence support, but `IndexWrapper::save` / `IndexWrapper::load` still returned `InvalidArg`; the IVF-PQ branch now forwards to `IvfPqIndex::save` / `IvfPqIndex::load`
+  - added a focused FFI IVF-PQ file roundtrip regression in `src/ffi.rs`, extended `tests/test_ivf_index_trait.rs` with an IVF-PQ persistence contract regression, and exposed `IvfPqIndex::is_trained()` so the production-facing contract surface matches the FFI metadata summary
+  - converted `tests/bench_json_export.rs` from a file-level `long-tests` shell into a real default-lane JSON contract regression with shared report helpers, while keeping the heavy benchmark generator behind `feature = "long-tests"` and `#[ignore]`
+- Verification:
+  - `cargo test --lib test_ffi_persistence_ivfpq_file_roundtrip -- --nocapture` -> initial `FAIL` (`knowhere_save_index` returned `InvalidArg`), then `ok`
+  - `cargo test --lib ffi -- --nocapture` -> `ok`
+  - `cargo test --test test_ivf_index_trait -- --nocapture` -> `ok`
+  - `cargo test --test bench_json_export -- --nocapture` -> `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-ivfpq-ffi-contract KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-ivfpq-ffi-contract bash scripts/remote/test.sh --command "cargo test --lib ffi -- --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-ivfpq-ffi-contract/test_20260312T023043Z_33971.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-ivfpq-ffi-contract KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-ivfpq-ffi-contract bash scripts/remote/test.sh --command "cargo test --test test_ivf_index_trait -- --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-ivfpq-ffi-contract/test_20260312T023125Z_34239.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-ivfpq-ffi-contract KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-ivfpq-ffi-contract bash scripts/remote/test.sh --command "cargo test --test bench_json_export -- --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-ivfpq-ffi-contract/test_20260312T023155Z_34413.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID`
+- Result:
+  - `ivfpq-ffi-persistence-contract` is now `passing`
+  - the next highest-priority failing feature with satisfied dependencies is `ivfpq-stop-go-verdict`
+- Notes:
+  - the old durable verification command `cargo test --tests -q test_ivf_index_trait` silently ran `0 tests`; this session corrected it to `cargo test --test test_ivf_index_trait -- --nocapture`, which is a stronger and actually executable gate rather than a weakening
+  - this feature closed both a real runtime mismatch (IVF-PQ FFI save/load) and a false-green verification lane (`bench_json_export`) that previously compiled as an empty default-lane shell
+- Git Commits: pending
 
 ### Session 26 - 2026-03-12
 - Focus: `hnsw-performance-lead-verdict`

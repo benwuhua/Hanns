@@ -156,7 +156,7 @@ fn print_comparison_table(fixed: &BenchmarkResult, dynamic: &BenchmarkResult) {
     println!("| Mode    | Base EF | Actual EF | Search(ms) | QPS   | R@1   | R@10  | R@100 | R@K   | Latency(ms) |");
     println!("{:-<110}", "");
     println!("| Fixed   | {:>7} | {:>9} | {:>10.2} | {:>5.0} | {:>5.3} | {:>5.3} | {:>5.3} | {:>5.3} | {:>11.4} |",
-        fixed.ef_search, fixed.actual_ef, fixed.search_time_ms, fixed.qps, 
+        fixed.ef_search, fixed.actual_ef, fixed.search_time_ms, fixed.qps,
         fixed.recall_at_1, fixed.recall_at_10, fixed.recall_at_100, fixed.recall_at_topk, fixed.avg_latency_ms);
     println!("| Dynamic | {:>7} | {:>9} | {:>10.2} | {:>5.0} | {:>5.3} | {:>5.3} | {:>5.3} | {:>5.3} | {:>11.4} |",
         dynamic.ef_search, dynamic.actual_ef, dynamic.search_time_ms, dynamic.qps,

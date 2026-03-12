@@ -1,6 +1,7 @@
 //! Index types and configuration
 
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 use super::DataType;
 
@@ -59,42 +60,43 @@ pub enum IndexType {
     MinHashLsh,
 }
 
+impl FromStr for IndexType {
+    type Err = String;
 
-impl IndexType {
-    pub fn from_str(s: &str) -> Option<Self> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "flat" => Some(IndexType::Flat),
-            "ivf_flat" | "ivf-flat" => Some(IndexType::IvfFlat),
-            "ivf_pq" | "ivf-pq" => Some(IndexType::IvfPq),
-            "hnsw" => Some(IndexType::Hnsw),
-            "diskann" | "disk_ann" => Some(IndexType::DiskAnn),
-            "annoy" => Some(IndexType::Annoy),
+            "flat" => Ok(IndexType::Flat),
+            "ivf_flat" | "ivf-flat" => Ok(IndexType::IvfFlat),
+            "ivf_pq" | "ivf-pq" => Ok(IndexType::IvfPq),
+            "hnsw" => Ok(IndexType::Hnsw),
+            "diskann" | "disk_ann" => Ok(IndexType::DiskAnn),
+            "annoy" => Ok(IndexType::Annoy),
             #[cfg(feature = "scann")]
-            "scann" => Some(IndexType::Scann),
-            "hnsw_prq" | "hnsw-prq" => Some(IndexType::HnswPrq),
-            "hnsw_pq" | "hnsw-pq" => Some(IndexType::HnswPq),
-            "ivf_rabitq" | "ivf-rabitq" | "rabitq" => Some(IndexType::IvfRabitq),
-            "ivf_flat_cc" | "ivf-flat-cc" | "ivfcc" => Some(IndexType::IvfFlatCc),
-            "ivf_sq8" | "ivf-sq8" | "ivfsq8" => Some(IndexType::IvfSq8),
-            "ivf_sq_cc" | "ivf-sq-cc" | "ivfsqcc" => Some(IndexType::IvfSqCc),
-            "sparse_inverted" | "sparse-inverted" | "sparse" => Some(IndexType::SparseInverted),
-            "binary_hnsw" | "binary-hnsw" | "binaryhnsw" => Some(IndexType::BinaryHnsw),
+            "scann" => Ok(IndexType::Scann),
+            "hnsw_prq" | "hnsw-prq" => Ok(IndexType::HnswPrq),
+            "hnsw_pq" | "hnsw-pq" => Ok(IndexType::HnswPq),
+            "ivf_rabitq" | "ivf-rabitq" | "rabitq" => Ok(IndexType::IvfRabitq),
+            "ivf_flat_cc" | "ivf-flat-cc" | "ivfcc" => Ok(IndexType::IvfFlatCc),
+            "ivf_sq8" | "ivf-sq8" | "ivfsq8" => Ok(IndexType::IvfSq8),
+            "ivf_sq_cc" | "ivf-sq-cc" | "ivfsqcc" => Ok(IndexType::IvfSqCc),
+            "sparse_inverted" | "sparse-inverted" | "sparse" => Ok(IndexType::SparseInverted),
+            "binary_hnsw" | "binary-hnsw" | "binaryhnsw" => Ok(IndexType::BinaryHnsw),
             "bin_flat" | "bin-flat" | "binflat" | "binary_flat" | "binary-flat" => {
-                Some(IndexType::BinFlat)
+                Ok(IndexType::BinFlat)
             }
             "bin_ivf_flat" | "bin-ivf-flat" | "binivfflat" | "binary_ivf_flat"
-            | "binary-ivf-flat" => Some(IndexType::BinIvfFlat),
-            "hnsw_sq" | "hnsw-sq" | "hnswsq" => Some(IndexType::HnswSq),
-            "aisaq" | "a_isaq" | "a-saq" => Some(IndexType::Aisaq),
+            | "binary-ivf-flat" => Ok(IndexType::BinIvfFlat),
+            "hnsw_sq" | "hnsw-sq" | "hnswsq" => Ok(IndexType::HnswSq),
+            "aisaq" | "a_isaq" | "a-saq" => Ok(IndexType::Aisaq),
             "sparse_inverted_cc" | "sparse-inverted-cc" | "sparsecc" => {
-                Some(IndexType::SparseInvertedCc)
+                Ok(IndexType::SparseInvertedCc)
             }
-            "sparse_wand" | "sparse-wand" | "sparsewand" | "wand" => Some(IndexType::SparseWand),
+            "sparse_wand" | "sparse-wand" | "sparsewand" | "wand" => Ok(IndexType::SparseWand),
             "sparse_wand_cc" | "sparse-wand-cc" | "sparsewandcc" | "wandcc" => {
-                Some(IndexType::SparseWandCc)
+                Ok(IndexType::SparseWandCc)
             }
-            "minhash_lsh" | "minhash-lsh" | "minhashlsh" => Some(IndexType::MinHashLsh),
-            _ => None,
+            "minhash_lsh" | "minhash-lsh" | "minhashlsh" => Ok(IndexType::MinHashLsh),
+            _ => Err(format!("unknown index type: {s}")),
         }
     }
 }
@@ -115,18 +117,7 @@ pub enum MetricType {
     Hamming,
 }
 
-
 impl MetricType {
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "l2" | "l2_distance" => Some(MetricType::L2),
-            "ip" | "inner_product" => Some(MetricType::Ip),
-            "cosine" | "cos" => Some(MetricType::Cosine),
-            "hamming" => Some(MetricType::Hamming),
-            _ => None,
-        }
-    }
-
     pub fn from_bytes(b: u8) -> Self {
         match b {
             0 => MetricType::L2,
@@ -134,6 +125,20 @@ impl MetricType {
             2 => MetricType::Cosine,
             3 => MetricType::Hamming,
             _ => MetricType::L2,
+        }
+    }
+}
+
+impl FromStr for MetricType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "l2" | "l2_distance" => Ok(MetricType::L2),
+            "ip" | "inner_product" => Ok(MetricType::Ip),
+            "cosine" | "cos" => Ok(MetricType::Cosine),
+            "hamming" => Ok(MetricType::Hamming),
+            _ => Err(format!("unknown metric type: {s}")),
         }
     }
 }
@@ -464,11 +469,11 @@ mod tests {
 
     #[test]
     fn test_index_type_from_str_ivf_sq8() {
-        assert_eq!(IndexType::from_str("ivf_sq8"), Some(IndexType::IvfSq8));
-        assert_eq!(IndexType::from_str("ivf-sq8"), Some(IndexType::IvfSq8));
-        assert_eq!(IndexType::from_str("ivfsq8"), Some(IndexType::IvfSq8));
-        assert_eq!(IndexType::from_str("IVF_SQ8"), Some(IndexType::IvfSq8));
-        assert_eq!(IndexType::from_str("IvfSq8"), Some(IndexType::IvfSq8));
+        assert_eq!("ivf_sq8".parse::<IndexType>().ok(), Some(IndexType::IvfSq8));
+        assert_eq!("ivf-sq8".parse::<IndexType>().ok(), Some(IndexType::IvfSq8));
+        assert_eq!("ivfsq8".parse::<IndexType>().ok(), Some(IndexType::IvfSq8));
+        assert_eq!("IVF_SQ8".parse::<IndexType>().ok(), Some(IndexType::IvfSq8));
+        assert_eq!("IvfSq8".parse::<IndexType>().ok(), Some(IndexType::IvfSq8));
     }
 
     #[test]
@@ -494,12 +499,8 @@ mod tests {
         assert!(config.validate().is_ok());
 
         // Illegal combination (binary index with L2 metric)
-        let config = IndexConfig::with_data_type(
-            IndexType::BinFlat,
-            MetricType::L2,
-            128,
-            DataType::Binary,
-        );
+        let config =
+            IndexConfig::with_data_type(IndexType::BinFlat, MetricType::L2, 128, DataType::Binary);
         assert!(config.validate().is_err());
     }
 

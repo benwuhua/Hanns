@@ -35,3 +35,26 @@ load_remote_cargo_env() {
         export RUSTUP_TOOLCHAIN="${rustup_toolchain}"
     fi
 }
+
+ensure_remote_rust_components() {
+    local installed=""
+    local component
+    local missing=()
+
+    if ! command -v rustup >/dev/null 2>&1; then
+        echo "missing rustup on remote PATH=${PATH}" >&2
+        exit 127
+    fi
+
+    installed="$(rustup component list --installed 2>/dev/null || true)"
+
+    for component in "$@"; do
+        if ! grep -Eq "^${component}(-|$)" <<<"${installed}"; then
+            missing+=("${component}")
+        fi
+    done
+
+    if [[ "${#missing[@]}" -gt 0 ]]; then
+        rustup component add "${missing[@]}"
+    fi
+}

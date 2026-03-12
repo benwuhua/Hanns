@@ -172,7 +172,7 @@ fn test_ivf_rabitq_with_custom_ids() {
 
     // 验证返回的 IDs 在自定义范围内
     for &id in &results.ids {
-        assert!(id >= 1000 && id < 1100, "ID {} 不在预期范围内", id);
+        assert!((1000..1100).contains(&id), "ID {} 不在预期范围内", id);
     }
 }
 
@@ -346,7 +346,11 @@ fn test_ivf_rabitq_search_accuracy() {
     let results = index.search(&query_cluster1, &req).expect("搜索失败");
 
     // 验证返回的 IDs 主要来自 Cluster 1 (IDs 0-49)
-    let cluster1_count = results.ids.iter().filter(|&&id| id >= 0 && id < 50).count();
+    let cluster1_count = results
+        .ids
+        .iter()
+        .filter(|&&id| (0..50).contains(&id))
+        .count();
     assert!(
         cluster1_count >= 3,
         "应该主要找到 Cluster 1 的向量，但只找到 {}/{}",

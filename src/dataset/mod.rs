@@ -1,16 +1,16 @@
 //! Dataset module
 
+pub mod binary_dataset;
 pub mod dataset_loader;
 pub mod sift_loader;
-pub mod binary_dataset;
 
 // HDF5 loader is optional and requires the `hdf5` feature
 #[cfg(feature = "hdf5")]
 pub mod hdf5_loader;
 
+pub use binary_dataset::BinaryDataset;
 pub use dataset_loader::*;
 pub use sift_loader::*;
-pub use binary_dataset::BinaryDataset;
 
 #[cfg(feature = "hdf5")]
 pub use hdf5_loader::{load_hdf5_dataset, load_hdf5_dataset_custom, Hdf5Dataset, Hdf5LoaderError};

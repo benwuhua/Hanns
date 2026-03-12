@@ -1,12 +1,13 @@
 # FFI Capability Matrix
 
-Last updated: 2026-03-09 12:39
+Last updated: 2026-03-12 05:36
 
 ## Purpose
 
 Document the capability matrix for all FFI-exposed index types, showing which operations are supported.
 
 > Note: `docs/PARITY_AUDIT.md` is the authoritative audit log. This matrix is a condensed operator-facing view and must stay consistent with the audit’s `supported / constrained / unsupported` wording.
+> Note: production acceptance still uses the remote x86 authority machine. Local `cargo test` output is useful for prefiltering but does not by itself close a contract change.
 
 ## Capability Legend
 
@@ -93,17 +94,28 @@ Document the capability matrix for all FFI-exposed index types, showing which op
 
 ## Validation
 
-Run `cargo test` to verify all implemented capabilities work correctly.
+Use local commands as quick smoke only, then replay the relevant gate on the remote x86 authority machine.
 
-For specific index type testing:
+Local smoke:
 ```bash
-# Test specific index family
-cargo test hnsw --lib
-cargo test ivf --lib
-
-# Test serialization
+cargo test --lib ffi -- --nocapture
 cargo test serialize --lib
 ```
+
+Authority replay:
+```bash
+bash init.sh
+bash scripts/remote/test.sh --command "cargo test --lib ffi -- --nocapture"
+bash scripts/remote/test.sh --command "cargo test --lib serialize -- --nocapture"
+```
+
+When a feature-specific contract also depends on artifact export or metadata shape, replay the matching regression from `feature-list.json` as well, for example:
+
+```bash
+bash scripts/remote/test.sh --command "cargo test --test bench_json_export -q"
+```
+
+This matrix is a contract view, not a performance-leadership claim. Family-level verdicts still come from the remote benchmark artifacts under `benchmark_results/`.
 
 ## Changes
 

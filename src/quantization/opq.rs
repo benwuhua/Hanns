@@ -334,9 +334,8 @@ impl OptimizedProductQuantizer {
 
                 // Add centroid to reconstruction
                 let centroid_offset = sub_q * ksub * sub_dim + best_idx * sub_dim;
-                for j in 0..sub_dim {
-                    reconstructed[sub_offset + j] = self.centroids[centroid_offset + j];
-                }
+                reconstructed[sub_offset..sub_offset + sub_dim]
+                    .copy_from_slice(&self.centroids[centroid_offset..centroid_offset + sub_dim]);
             }
 
             // Accumulate correlation: X^T * reconstructed
@@ -600,11 +599,7 @@ impl OptimizedProductQuantizer {
 
         // Apply rotation to query
         let mut rotated_query = vec![0.0f32; self.config.dim];
-        for (j, rotated_query_value) in rotated_query
-            .iter_mut()
-            .enumerate()
-            .take(self.config.dim)
-        {
+        for (j, rotated_query_value) in rotated_query.iter_mut().enumerate().take(self.config.dim) {
             let mut sum = 0.0f32;
             for (k, &qk) in query.iter().enumerate().take(self.config.dim) {
                 sum += self.rotation[j * self.config.dim + k] * qk;

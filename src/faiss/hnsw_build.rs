@@ -2,7 +2,7 @@
 //!
 //! **已废弃**: 请使用 `hnsw.rs`
 
-#![deprecated(since = "0.1.0", note = "Use hnsw.rs instead")]
+#![cfg_attr(not(test), deprecated(since = "0.1.0", note = "Use hnsw.rs instead"))]
 
 use std::collections::{BinaryHeap, HashSet};
 
@@ -307,6 +307,7 @@ impl HnswIndex {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 

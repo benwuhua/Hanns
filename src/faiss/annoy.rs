@@ -195,7 +195,7 @@ impl AnnoyIndex {
     }
 
     /// Shuffle
-    fn shuffle(&self, v: &mut Vec<usize>) {
+    fn shuffle(&self, v: &mut [usize]) {
         use rand::prelude::*;
         let mut rng = StdRng::from_entropy();
         for i in (1..v.len()).rev() {

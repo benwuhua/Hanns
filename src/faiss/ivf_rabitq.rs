@@ -9,9 +9,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::api::{KnowhereError, MetricType, Result, SearchRequest, SearchResult};
-use crate::dataset::Dataset;
-use crate::index::{Index as IndexTrait, IndexError, AnnIterator, SearchResult as IndexSearchResult};
 use crate::bitset::BitsetView;
+use crate::dataset::Dataset;
+use crate::index::{
+    AnnIterator, Index as IndexTrait, IndexError, SearchResult as IndexSearchResult,
+};
 use crate::quantization::{pick_refine_index, KMeans, RaBitQEncoder, RefineIndex, RefineType};
 
 /// IVF-RaBitQ 索引配置
@@ -148,13 +150,10 @@ impl IvfRaBitqIndex {
 
             let id = batch_ids[i];
 
-            lists.entry(cluster).or_default().push((
-                id,
-                code,
-                centroid_dist,
-                ip,
-                sum_xb,
-            ));
+            lists
+                .entry(cluster)
+                .or_default()
+                .push((id, code, centroid_dist, ip, sum_xb));
         }
 
         if self.config.refine_type.is_some() {
@@ -410,7 +409,9 @@ impl IvfRaBitqIndex {
         let refine_size = match &self.refine_index {
             Some(refine) => match refine.refine_type() {
                 RefineType::DataView => refine.len() * self.config.dim * std::mem::size_of::<f32>(),
-                RefineType::Uint8Quant => refine.len() * self.config.dim * std::mem::size_of::<u8>(),
+                RefineType::Uint8Quant => {
+                    refine.len() * self.config.dim * std::mem::size_of::<u8>()
+                }
                 RefineType::Float16Quant | RefineType::Bfloat16Quant => {
                     refine.len() * self.config.dim * std::mem::size_of::<u16>()
                 }
@@ -716,8 +717,7 @@ impl IndexTrait for IvfRaBitqIndex {
 
     fn load(&mut self, path: &str) -> std::result::Result<(), IndexError> {
         let path = std::path::Path::new(path);
-        let loaded = Self::load(path)
-            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        let loaded = Self::load(path).map_err(|e| IndexError::Unsupported(e.to_string()))?;
         *self = loaded;
         Ok(())
     }
@@ -758,7 +758,7 @@ impl IndexTrait for IvfRaBitqIndex {
         let results: Vec<(i64, f32)> = api_result
             .ids
             .into_iter()
-            .zip(api_result.distances.into_iter())
+            .zip(api_result.distances)
             .collect();
 
         Ok(Box::new(IvfRaBitqAnnIterator::new(results)))

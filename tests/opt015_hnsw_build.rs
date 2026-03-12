@@ -11,7 +11,7 @@
 //! 3. 减少 search_layer 中的分配
 //! 4. 简化邻居选择
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType};
 use knowhere_rs::faiss::HnswIndex;
 use rand::Rng;
 use std::time::Instant;

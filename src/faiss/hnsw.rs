@@ -20,6 +20,8 @@ use crate::dataset::Dataset;
 use crate::index::{Index as IndexTrait, IndexError, SearchResult as IndexSearchResult};
 use crate::simd;
 
+type BatchNeighborResults = (usize, usize, Vec<Vec<(usize, f32)>>);
+
 /// Maximum number of layers in the HNSW graph
 const MAX_LAYERS: usize = 16;
 
@@ -87,11 +89,17 @@ impl LayerNeighbors {
     }
 
     /// Get neighbors as (id, dist) pairs for heuristic processing
+    #[allow(dead_code)]
     fn as_pairs(&self) -> Vec<(i64, f32)> {
-        self.ids.iter().zip(self.dists.iter()).map(|(&id, &dist)| (id, dist)).collect()
+        self.ids
+            .iter()
+            .zip(self.dists.iter())
+            .map(|(&id, &dist)| (id, dist))
+            .collect()
     }
 
     /// Set neighbors from (id, dist) pairs after heuristic processing
+    #[allow(dead_code)]
     fn set_from_pairs(&mut self, pairs: &[(i64, f32)]) {
         self.ids.clear();
         self.dists.clear();
@@ -617,8 +625,7 @@ impl HnswIndex {
             let current_batch_size = batch_end - batch_start;
 
             // Parallel neighbor search (read-only)
-            let batch_results: Vec<(usize, usize, Vec<Vec<(usize, f32)>>)> = (batch_start
-                ..batch_end)
+            let batch_results: Vec<BatchNeighborResults> = (batch_start..batch_end)
                 .into_par_iter()
                 .map(|idx| {
                     let vec_start = idx * self.dim;
@@ -738,12 +745,8 @@ impl HnswIndex {
 
             let candidates = self.search_layer_idx(vec, curr_ep_idx, level, self.ef_construction);
             let m = if level == 0 { self.m_max0 } else { self.m };
-            let selected = self.select_neighbors_heuristic_idx_layer_aware(
-                vec,
-                &candidates,
-                m,
-                level == 0,
-            );
+            let selected =
+                self.select_neighbors_heuristic_idx_layer_aware(vec, &candidates, m, level == 0);
             neighbors_per_layer.push(selected);
         }
         neighbors_per_layer
@@ -992,7 +995,7 @@ impl HnswIndex {
     /// 2. Use get_idx_from_id_fast to avoid Option overhead
     /// 3. Removed BUG-001 duplicate search extension (BUG-006 fix makes it unnecessary)
     /// 4. Early termination when candidate exceeds worst result
-    /// OPT-036: Fixed heap ordering bug - use separate types for candidates vs results
+    /// 5. OPT-036: Fixed heap ordering bug by using separate types for candidates and results
     fn search_layer_idx(
         &self,
         query: &[f32],
@@ -1016,7 +1019,10 @@ impl HnswIndex {
         impl Ord for MinDist {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
                 // Reverse: smaller distance = "greater" in heap = popped first
-                other.0.partial_cmp(&self.0).unwrap_or(std::cmp::Ordering::Equal)
+                other
+                    .0
+                    .partial_cmp(&self.0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             }
         }
 
@@ -1034,7 +1040,9 @@ impl HnswIndex {
         impl Ord for MaxDist {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
                 // Normal: larger distance = "greater" in heap = peek returns worst
-                self.0.partial_cmp(&other.0).unwrap_or(std::cmp::Ordering::Equal)
+                self.0
+                    .partial_cmp(&other.0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             }
         }
 
@@ -1140,6 +1148,7 @@ impl HnswIndex {
     /// - Improves graph connectivity and search recall
     ///
     /// OPT-015 REV2: Return indices instead of IDs for direct access
+    #[allow(dead_code)]
     fn select_neighbors_heuristic_idx(
         &self,
         _query: &[f32],
@@ -1210,6 +1219,7 @@ impl HnswIndex {
 
     /// Select neighbors using the hnswlib-style diversification heuristic.
     /// BUG-006: Implemented proper heuristic to improve recall.
+    #[allow(dead_code)]
     fn select_neighbors_heuristic(
         &self,
         _query: &[f32],
@@ -1451,10 +1461,8 @@ impl HnswIndex {
                 nbr_layer_nbrs.push(new_id, dist_from_nbr);
 
                 // Track for shrinking
-                if nbr_layer_nbrs.ids.len() > m_max {
-                    if !nodes_to_shrink.contains(&nbr_idx) {
-                        nodes_to_shrink.push(nbr_idx);
-                    }
+                if nbr_layer_nbrs.ids.len() > m_max && !nodes_to_shrink.contains(&nbr_idx) {
+                    nodes_to_shrink.push(nbr_idx);
                 }
             }
         }
@@ -1881,8 +1889,13 @@ impl HnswIndex {
 
         for level in (1..=self.max_level).rev() {
             let descent_ef = ef.max(64).min(ef * 2);
-            let results =
-                self.search_layer_idx_with_scratch(query, curr_ep_idx, level, descent_ef, &mut scratch);
+            let results = self.search_layer_idx_with_scratch(
+                query,
+                curr_ep_idx,
+                level,
+                descent_ef,
+                &mut scratch,
+            );
 
             let mut best_valid_idx: Option<usize> = None;
             let mut best_valid_dist = f32::MAX;
@@ -1946,9 +1959,8 @@ impl HnswIndex {
         }
 
         if self.metric_type == MetricType::Cosine && self.ids.len() <= ef.max(k).max(64) {
-            return self.brute_force_search(query, k, |_id, idx| {
-                idx >= bitset.len() || !bitset.get(idx)
-            });
+            return self
+                .brute_force_search(query, k, |_id, idx| idx >= bitset.len() || !bitset.get(idx));
         }
 
         // Multi-layer search with layer-wise jumping: start from top layer
@@ -2579,11 +2591,10 @@ impl HnswIndex {
                 // Add edge from candidate to unreachable (unidirectional for repair)
                 let nbr_max_layer = self.node_info[nbr_idx].max_layer;
                 if level <= nbr_max_layer {
-                    let nbr_layer_nbrs =
-                        &mut self.node_info[nbr_idx].layer_neighbors[level];
+                    let nbr_layer_nbrs = &mut self.node_info[nbr_idx].layer_neighbors[level];
 
                     // Check if edge already exists
-                    if !nbr_layer_nbrs.ids.iter().any(|&id| id == unreachable_id) {
+                    if !nbr_layer_nbrs.ids.contains(&unreachable_id) {
                         nbr_layer_nbrs.push(unreachable_id, 0.0);
                         add_count += 1;
                     }
@@ -2920,7 +2931,7 @@ impl IndexTrait for HnswIndex {
         let results: Vec<(i64, f32)> = api_result
             .ids
             .into_iter()
-            .zip(api_result.distances.into_iter())
+            .zip(api_result.distances)
             .collect();
 
         Ok(Box::new(HnswAnnIterator::new(results)))
@@ -3028,7 +3039,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -3059,7 +3070,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::Ip,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(16),
                 ef_construction: Some(200),
@@ -3069,7 +3080,7 @@ mod tests {
         };
 
         let mut index = HnswIndex::new(&config).unwrap();
-        let vectors = vec![
+        let vectors = [
             [1.0, 0.0, 0.0, 0.0],
             [0.0, 1.0, 0.0, 0.0],
             [0.0, 0.0, 1.0, 0.0],
@@ -3104,7 +3115,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::Cosine,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(16),
                 ef_construction: Some(200),
@@ -3114,7 +3125,7 @@ mod tests {
         };
 
         let mut index = HnswIndex::new(&config).unwrap();
-        let vectors = vec![
+        let vectors = [
             [2.0, 0.0, 0.0, 0.0],
             [0.0, 2.0, 0.0, 0.0],
             [0.0, 0.0, 2.0, 0.0],
@@ -3152,7 +3163,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -3200,7 +3211,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -3253,7 +3264,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -3288,7 +3299,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(16),
                 ..Default::default()
@@ -3298,7 +3309,7 @@ mod tests {
         let index = HnswIndex::new(&config).unwrap();
 
         // Test that random levels follow expected distribution
-        let mut level_counts = vec![0usize; 10];
+        let mut level_counts = [0usize; 10];
         for _ in 0..1000 {
             let level = index.random_level();
             if level < 10 {
@@ -3326,7 +3337,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(8),
                 ..Default::default()
@@ -3379,7 +3390,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -3421,7 +3432,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -3436,7 +3447,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -3451,7 +3462,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
         };
 
@@ -3471,7 +3482,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(8),
                 ef_construction: Some(100),
@@ -3519,7 +3530,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(8),
                 ef_construction: Some(100),
@@ -3563,7 +3574,7 @@ mod tests {
         };
 
         let result = index.search(&query, &req).unwrap();
-        assert!(result.ids.len() > 0);
+        assert!(!result.ids.is_empty());
     }
 
     #[test]
@@ -3572,7 +3583,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(16),
                 ef_construction: Some(200),
@@ -3621,7 +3632,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(8),
                 ef_construction: Some(150),
@@ -3685,7 +3696,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 128,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(16),
                 ef_construction: Some(200),
@@ -3785,7 +3796,7 @@ mod tests {
         println!("\n=== Benchmark Complete ===\n");
 
         assert_eq!(count, n, "Should add all {} vectors", n);
-        assert!(result.ids.len() > 0, "Search should return results");
+        assert!(!result.ids.is_empty(), "Search should return results");
     }
 
     /// OPT-031: Test parallel HNSW build
@@ -3797,7 +3808,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 128,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(16),
                 ef_construction: Some(200),
@@ -3848,7 +3859,7 @@ mod tests {
         };
 
         let result = index.search(query, &req).unwrap();
-        assert!(result.ids.len() > 0, "Search should return results");
+        assert!(!result.ids.is_empty(), "Search should return results");
         println!(
             "Search results: {} vectors, top distance: {:.4}",
             result.ids.len(),
@@ -3865,7 +3876,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 128,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(16),
                 num_threads: Some(4),
@@ -3913,7 +3924,7 @@ mod tests {
             index_type: IndexType::Hnsw,
             metric_type: MetricType::L2,
             dim: 128,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 num_threads: Some(8),
                 ..Default::default()
@@ -4076,10 +4087,13 @@ mod tests {
             "heuristic should not exceed M, but may return fewer if candidates are too similar"
         );
         assert!(
-            selected.len() >= 1,
+            !selected.is_empty(),
             "heuristic should always select at least the nearest candidate"
         );
-        assert_eq!(selected[0].0, 0, "nearest good candidate should stay selected");
+        assert_eq!(
+            selected[0].0, 0,
+            "nearest good candidate should stay selected"
+        );
     }
 
     #[test]
@@ -4151,18 +4165,10 @@ mod tests {
 
         let candidates = vec![(0usize, 0.1f32), (1usize, 0.2f32), (2usize, 5.0f32)];
 
-        let layer0_selected = index.select_neighbors_heuristic_idx_layer_aware(
-            &[0.0, 0.0],
-            &candidates,
-            2,
-            true,
-        );
-        let upper_layer_selected = index.select_neighbors_heuristic_idx_layer_aware(
-            &[0.0, 0.0],
-            &candidates,
-            2,
-            false,
-        );
+        let layer0_selected =
+            index.select_neighbors_heuristic_idx_layer_aware(&[0.0, 0.0], &candidates, 2, true);
+        let upper_layer_selected =
+            index.select_neighbors_heuristic_idx_layer_aware(&[0.0, 0.0], &candidates, 2, false);
 
         assert_eq!(
             layer0_selected,

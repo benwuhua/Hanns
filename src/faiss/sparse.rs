@@ -118,8 +118,7 @@ impl SparseVector {
 }
 
 /// 搜索算法
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum InvertedIndexAlgo {
     #[default]
     Taat,
@@ -127,16 +126,13 @@ pub enum InvertedIndexAlgo {
     MaxScore,
 }
 
-
 /// 稀疏检索度量
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SparseMetricType {
     #[default]
     Cosine,
     Bm25,
 }
-
 
 /// BM25 参数
 #[derive(Clone, Debug)]
@@ -312,7 +308,10 @@ impl<'a> QueryTermState<'a> {
     }
 
     fn current_doc_id(&self) -> Option<i64> {
-        self.postings.entries.get(self.cursor).map(|entry| entry.doc_id)
+        self.postings
+            .entries
+            .get(self.cursor)
+            .map(|entry| entry.doc_id)
     }
 
     fn current_block_upper_bound(&self) -> f32 {
@@ -570,9 +569,11 @@ impl SparseIndex {
                     match query_pairs[i].0.cmp(&doc_pairs[j].0) {
                         Ordering::Equal => {
                             let idf = self.bm25_idf(query_pairs[i].0);
-                            let tf_score =
-                                self.bm25_params
-                                    .score_tf(doc_pairs[j].1, doc_len, self.avg_doc_len());
+                            let tf_score = self.bm25_params.score_tf(
+                                doc_pairs[j].1,
+                                doc_len,
+                                self.avg_doc_len(),
+                            );
                             score += query_pairs[i].1 * idf * tf_score;
                             i += 1;
                             j += 1;
@@ -586,7 +587,12 @@ impl SparseIndex {
         }
     }
 
-    fn search_taat(&self, _query: &SparseVector, query_terms: &[QueryTermState<'_>], k: usize) -> Vec<(i64, f32)> {
+    fn search_taat(
+        &self,
+        _query: &SparseVector,
+        query_terms: &[QueryTermState<'_>],
+        k: usize,
+    ) -> Vec<(i64, f32)> {
         let mut candidates: HashMap<i64, f32> = HashMap::new();
 
         for term in query_terms {
@@ -595,9 +601,9 @@ impl SparseIndex {
                     SparseMetricType::Cosine => term.query_weight * entry.normalized_value,
                     SparseMetricType::Bm25 => {
                         let doc_len = self.doc_lengths.get(&entry.doc_id).copied().unwrap_or(0.0);
-                        let tf_score = self
-                            .bm25_params
-                            .score_tf(entry.value, doc_len, self.avg_doc_len());
+                        let tf_score =
+                            self.bm25_params
+                                .score_tf(entry.value, doc_len, self.avg_doc_len());
                         term.query_weight * term.bm25_idf * tf_score
                     }
                 };
@@ -786,7 +792,11 @@ impl SparseIndex {
             return Vec::new();
         }
 
-        let query_norm = filtered.iter().map(|(_, val)| val * val).sum::<f32>().sqrt();
+        let query_norm = filtered
+            .iter()
+            .map(|(_, val)| val * val)
+            .sum::<f32>()
+            .sqrt();
 
         filtered
             .into_iter()
@@ -807,7 +817,8 @@ impl SparseIndex {
                 } else {
                     1.0
                 };
-                let block_upper_bounds = self.compute_block_upper_bounds(postings, query_weight, bm25_idf);
+                let block_upper_bounds =
+                    self.compute_block_upper_bounds(postings, query_weight, bm25_idf);
                 let term_upper_bound = block_upper_bounds.iter().copied().fold(0.0, f32::max);
 
                 if term_upper_bound <= 0.0 {
@@ -846,10 +857,11 @@ impl SparseIndex {
                     postings.entries[block.start..block.end]
                         .iter()
                         .map(|entry| {
-                            let doc_len = self.doc_lengths.get(&entry.doc_id).copied().unwrap_or(0.0);
-                            let tf_score = self
-                                .bm25_params
-                                .score_tf(entry.value, doc_len, self.avg_doc_len());
+                            let doc_len =
+                                self.doc_lengths.get(&entry.doc_id).copied().unwrap_or(0.0);
+                            let tf_score =
+                                self.bm25_params
+                                    .score_tf(entry.value, doc_len, self.avg_doc_len());
                             query_weight.abs() * bm25_idf * tf_score
                         })
                         .fold(0.0f32, f32::max)

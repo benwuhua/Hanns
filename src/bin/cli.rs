@@ -80,8 +80,8 @@ fn main() {
             index_type,
             metric,
         } => {
-            let idx_type = IndexType::from_str(&index_type).unwrap_or(IndexType::Flat);
-            let met = MetricType::from_str(&metric).unwrap_or(MetricType::L2);
+            let idx_type = index_type.parse().unwrap_or(IndexType::Flat);
+            let met = metric.parse().unwrap_or(MetricType::L2);
 
             let config = IndexConfig::new(idx_type, met, dim);
             let index = MemIndex::new(&config).expect("Failed to create index");

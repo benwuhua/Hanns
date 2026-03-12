@@ -10,28 +10,10 @@ use knowhere_rs::faiss::HnswIndex;
 use std::path::Path;
 use std::time::Instant;
 
-/// 测试结果结构
-#[derive(Debug, Clone)]
-struct CompareResult {
-    dataset: String,
-    rust_build_time_ms: f64,
-    rust_search_time_ms: f64,
-    rust_qps: f64,
-    rust_recall_at_1: f64,
-    rust_recall_at_10: f64,
-    rust_recall_at_100: f64,
-    rust_memory_mb: f64,
-    cpp_build_time_ms: f64,
-    cpp_search_time_ms: f64,
-    cpp_qps: f64,
-    cpp_recall_at_1: f64,
-    cpp_recall_at_10: f64,
-    cpp_recall_at_100: f64,
-    cpp_memory_mb: f64,
-}
+type BenchmarkDataset = (Vec<f32>, Vec<f32>, Vec<Vec<i32>>);
 
 /// 加载 SIFT1M 数据集
-fn load_sift1m() -> Option<(Vec<f32>, Vec<f32>, Vec<Vec<i32>>)> {
+fn load_sift1m() -> Option<BenchmarkDataset> {
     let base_path = "/Users/ryan/.openclaw/workspace-builder/datasets/sift1m";
 
     match load_sift1m_complete(base_path) {
@@ -49,7 +31,7 @@ fn load_sift1m() -> Option<(Vec<f32>, Vec<f32>, Vec<Vec<i32>>)> {
 }
 
 /// 加载 Deep1M 数据集
-fn load_deep1m() -> Option<(Vec<f32>, Vec<f32>, Vec<Vec<i32>>)> {
+fn load_deep1m() -> Option<BenchmarkDataset> {
     let base_path = "/Users/ryan/.openclaw/workspace-builder/datasets/deep1m";
 
     match load_deep1m_complete(base_path) {

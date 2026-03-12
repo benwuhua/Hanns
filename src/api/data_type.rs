@@ -1,19 +1,20 @@
 //! Data type enumeration for vectors
-//! 
+//!
 //! Corresponds to C++ VecType in knowhere/comp/index_param.h
 
 use serde::{Deserialize, Serialize};
 
 /// Vector data type
-/// 
+///
 /// Values aligned with Milvus proto definitions
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 #[repr(i32)]
 pub enum DataType {
     /// Binary vectors (100)
     Binary = 100,
     /// Float32 vectors (101)
+    #[default]
     Float = 101,
     /// Float16 vectors (102)
     Float16 = 102,
@@ -58,7 +59,10 @@ impl DataType {
 
     /// Check if this is a dense floating-point type
     pub fn is_dense_float(&self) -> bool {
-        matches!(self, DataType::Float | DataType::Float16 | DataType::BFloat16)
+        matches!(
+            self,
+            DataType::Float | DataType::Float16 | DataType::BFloat16
+        )
     }
 
     /// Check if this is a binary type
@@ -69,12 +73,6 @@ impl DataType {
     /// Check if this is a sparse type
     pub fn is_sparse(&self) -> bool {
         matches!(self, DataType::SparseFloat)
-    }
-}
-
-impl Default for DataType {
-    fn default() -> Self {
-        DataType::Float
     }
 }
 

@@ -381,7 +381,7 @@ mod tests {
         }
         let n = km.train(&data);
         assert_eq!(n, 4);
-        assert!(km.centroids().len() > 0);
+        assert!(!km.centroids().is_empty());
     }
 
     #[test]

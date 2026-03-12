@@ -161,8 +161,6 @@ fn debug_hnsw_recall_detailed() {
 
         // Check matches
         let gt_ids: HashSet<usize> = gt.iter().map(|&(id, _)| id).collect();
-        let hnsw_ids: HashSet<i64> = hnsw.iter().map(|&(id, _)| id).collect();
-
         let matched: Vec<_> = hnsw
             .iter()
             .filter(|&(id, _)| gt_ids.contains(&(*id as usize)))
@@ -172,7 +170,7 @@ fn debug_hnsw_recall_detailed() {
 
         // Check distance consistency
         println!("  Distance Check:");
-        for (rank, &(id, dist)) in hnsw.iter().enumerate().take(3) {
+        for (_rank, &(id, dist)) in hnsw.iter().enumerate().take(3) {
             let idx = id as usize;
             let q = &query_data[q_idx * dim..(q_idx + 1) * dim];
             let b = &base_data[idx * dim..(idx + 1) * dim];

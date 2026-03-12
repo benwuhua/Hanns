@@ -12,9 +12,7 @@
 //! Target: 100K vectors build time < 3s
 
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::dataset::Dataset;
 use knowhere_rs::faiss::hnsw::HnswIndex;
-use knowhere_rs::index::Index;
 use rand::Rng;
 use std::time::Instant;
 
@@ -104,7 +102,7 @@ fn verify_search_quality(index: &HnswIndex, vectors: &[f32], dim: usize) -> bool
     let result = index.search(query, &req).unwrap();
 
     // Check that we get results and the top result is reasonably close
-    result.ids.len() > 0 && result.distances[0] < 100.0
+    !result.ids.is_empty() && result.distances[0] < 100.0
 }
 
 #[test]
@@ -469,7 +467,7 @@ fn test_hnsw_parallel_api_compatibility() {
 fn test_hnsw_batch_size_optimization() {
     println!("\n=== OPT-031: HNSW Batch Size Optimization ===");
 
-    let config = IndexConfig {
+    let _config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
         data_type: knowhere_rs::api::DataType::Float,
@@ -481,8 +479,6 @@ fn test_hnsw_batch_size_optimization() {
             ..Default::default()
         },
     };
-
-    let index = HnswIndex::new(&config).unwrap();
 
     // Test batch size calculation for different scenarios
     let test_cases = vec![
@@ -498,11 +494,9 @@ fn test_hnsw_batch_size_optimization() {
         // Use reflection or direct calculation
         // For this test, we'll just verify the logic works
         let base_batch = ((n as f64) / 8.0).max(50.0);
-        let dim_factor = (128.0 / dim as f64).max(0.25).min(2.0);
-        let count_factor = (n as f64 / 10000.0).max(0.5).min(1.0);
-        let batch_size = (base_batch * dim_factor * count_factor)
-            .max(50.0)
-            .min(5000.0) as usize;
+        let dim_factor = (128.0 / dim as f64).clamp(0.25, 2.0);
+        let count_factor = (n as f64 / 10000.0).clamp(0.5, 1.0);
+        let batch_size = (base_batch * dim_factor * count_factor).clamp(50.0, 5000.0) as usize;
 
         println!(
             "  {}: n={}, dim={} -> batch_size={}",
@@ -582,7 +576,7 @@ fn test_hnsw_parallel_performance_target() {
     };
 
     let result = index.search(query, &req).unwrap();
-    assert!(result.ids.len() > 0, "Search should return results");
+    assert!(!result.ids.is_empty(), "Search should return results");
     println!(
         "Search quality: ✅ PASS (top_k={} results, distance={:.4})",
         result.ids.len(),

@@ -4,9 +4,7 @@
 //! This test measures the search performance improvement from SIMD optimization.
 
 use knowhere_rs::api::{IndexConfig, IndexType, MetricType, SearchRequest};
-use knowhere_rs::dataset::Dataset;
 use knowhere_rs::faiss::HnswIndex;
-use knowhere_rs::index::Index;
 use rand::Rng;
 use std::time::Instant;
 

@@ -26,6 +26,7 @@
 //! index.save("index.bin")
 //! index2 = knowhere_rs.Index.load("index.bin")
 //! ```
+#![allow(clippy::useless_conversion)]
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use parking_lot::RwLock;
@@ -86,7 +87,9 @@ impl InnerIndex {
         match self {
             InnerIndex::Flat(idx) => idx.save(path),
             InnerIndex::Hnsw(idx) => idx.save(path),
-            InnerIndex::IvfFlat(idx) => idx.save(path),
+            InnerIndex::IvfFlat(_) => Err(crate::api::KnowhereError::InvalidArg(
+                "IVF-Flat save is not implemented".to_string(),
+            )),
             InnerIndex::IvfPq(idx) => idx.save(path),
         }
     }
@@ -95,7 +98,9 @@ impl InnerIndex {
         match self {
             InnerIndex::Flat(idx) => idx.load(path),
             InnerIndex::Hnsw(idx) => idx.load(path),
-            InnerIndex::IvfFlat(idx) => idx.load(path),
+            InnerIndex::IvfFlat(_) => Err(crate::api::KnowhereError::InvalidArg(
+                "IVF-Flat load is not implemented".to_string(),
+            )),
             InnerIndex::IvfPq(idx) => idx.load(path),
         }
     }
@@ -126,11 +131,13 @@ pub struct PyIndex {
     config: IndexConfig,
 }
 
+#[allow(clippy::useless_conversion)]
 #[pymethods]
 impl PyIndex {
     /// 创建新索引
     #[new]
     #[pyo3(signature = (index_type, dimension, metric_type, ef_construction=None, ef_search=None, m=None, nlist=None, nprobe=None, nbits=None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         index_type: &str,
         dimension: usize,
@@ -168,7 +175,7 @@ impl PyIndex {
         };
 
         let config = IndexConfig {
-            index_type: index_type_enum.clone(),
+            index_type: index_type_enum,
             dim: dimension,
             metric_type: metric_type_enum,
             data_type: crate::api::DataType::Float,
@@ -521,23 +528,33 @@ mod tests {
     #[test]
     fn test_create_index() {
         // 测试创建 Flat 索引
-        let index = PyIndex::new("flat", 128, "l2", None, None, None);
+        let index = PyIndex::new("flat", 128, "l2", None, None, None, None, None, None);
         assert!(index.is_ok());
 
         // 测试创建 HNSW 索引
-        let index = PyIndex::new("hnsw", 128, "l2", Some(400), Some(128), Some(16));
+        let index = PyIndex::new(
+            "hnsw",
+            128,
+            "l2",
+            Some(400),
+            Some(128),
+            Some(16),
+            None,
+            None,
+            None,
+        );
         assert!(index.is_ok());
     }
 
     #[test]
     fn test_invalid_index_type() {
-        let result = PyIndex::new("invalid", 128, "l2", None, None, None);
+        let result = PyIndex::new("invalid", 128, "l2", None, None, None, None, None, None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_invalid_metric_type() {
-        let result = PyIndex::new("flat", 128, "invalid", None, None, None);
+        let result = PyIndex::new("flat", 128, "invalid", None, None, None, None, None, None);
         assert!(result.is_err());
     }
 }

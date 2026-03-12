@@ -1,9 +1,72 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-09 21:03
+Last updated: 2026-03-12 05:56
 Sync baseline: 4f60908fc9ad7438b4b8ff64210481ab281009b0 from origin/main
 
 ## 轮次记录
+- 2026-03-12 05:56: **builder-loop：收口 `final-production-acceptance`，归档项目级 `not accepted` verdict（plan+exec）**
+  1. 复核输入：`feature-list.json`、`benchmark_results/final_core_path_classification.json`、`benchmark_results/final_performance_leadership_proof.json`、`scripts/gate_profile_runner.sh`、`tests/bench_hnsw_cpp_compare.rs`、`README.md`。
+  2. 阶段结论：所有 prerequisite gates 都已经关闭，当前剩下的不是“继续补工程项”，而是把项目级最终 verdict 明确归档。由于 leadership criterion 已被 authority evidence 明确判成未满足，最终收口必须是 `production_accepted=false`，而不是悬空保留一个 failing feature。
+  3. 本轮执行：新增 `tests/test_final_production_acceptance.rs` 作为 full-regression-visible 的 verdict lock，并用缺失 `benchmark_results/final_production_acceptance.json` 的失败做 TDD red；随后新增该 artifact，明确记录 production gates 已关闭但项目仍 `not accepted`。本地 `cargo fmt --all -- --check` 因新测试格式化先红后绿，随后 authority `fmt`、`clippy`、`scripts/gate_profile_runner.sh --profile full_regression` 均在 isolated remote dirs 下通过。为支持最终 handoff，本轮还把 `scripts/validate_features.py` 与 `tests/test_validate_features.py` 扩到支持“all features passing -> Current focus/Next feature = none”的终态表达。
+  4. 治理同步：`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`task-progress.md`、`feature-list.json`、`RELEASE_NOTES.md`、`DEV_ROADMAP.md`、`README.md` 已统一写回最终 verdict；当前已无剩余 failing feature。
+  5. 后续主缺口：当前没有未归档的 queue feature。若未来重开项目，只能基于新的 authority artifact 改写 leadership 或 core-path verdict chain，不能靠文档或本地结果翻案。
+  状态：Phase 5 Closed（all tracked features archived；project verdict = `not accepted` on current authority evidence）。
+- 2026-03-12 05:41: **builder-loop：收口 `prod-readme-remote-workflow-docs`，把入口文档统一改成 remote-first workflow（plan+exec）**
+  1. 复核输入：`feature-list.json`、`README.md`、`AGENTS.md`、`docs/FFI_CAPABILITY_MATRIX.md`、`long-task-guide.md`、`task-progress.md`。
+  2. 阶段结论：这一轮已经不需要新的 runtime 修复；阻断点是入口文档仍在暗示“本地 cargo 命令就是最终验收”，并且 `README.md` 还保留着过时的 passed-tests 叙事。要关闭这条 feature，关键是把 operator-facing docs 统一到 remote-first authority workflow 与当前 verdict truth。
+  3. 本轮执行：重写 `README.md` 作为 remote-first landing page，补入 authority workflow、durable-state 入口与当前 HNSW / IVF-PQ / DiskANN / final-proof truth；同步更新 `AGENTS.md` 与 `docs/FFI_CAPABILITY_MATRIX.md`，把 local prefilter 与 remote acceptance 的边界写清楚；随后用 `bash init.sh`、`python3 scripts/validate_features.py feature-list.json`、`bash scripts/remote/build.sh --no-all-targets` 验证文档收口后 workflow 仍保持可执行。
+  4. 治理同步：`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`task-progress.md`、`feature-list.json`、`RELEASE_NOTES.md`、`DEV_ROADMAP.md` 已统一写回 docs gate closure，下一条按 `feature-list.json` 选择的可执行 feature 是 `final-production-acceptance`。
+  5. 后续主缺口：`PROD-P3-005` 的准备条件现已全部关闭，只剩最后一条 `final-production-acceptance`。但当前 authority evidence 仍明确表明 leadership criterion 未满足，因此最终收口必须诚实地表达“project not accepted”而不是生成正向 completion claim。
+  状态：Phase 5 Active（remote-first operator docs closed；next feature per durable source is `final-production-acceptance`）。
+- 2026-03-12 05:36: **builder-loop：收口 `prod-ffi-observability-persistence-gate`，关闭 authority FFI/serialize/JSON export gate（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`src/ffi.rs`、`src/serialize.rs`、`tests/bench_json_export.rs`、`scripts/remote/test.sh`。
+  2. 阶段结论：这条 feature 已不再缺新的行为级修复；前几轮 family-specific contract closure 已把底层 FFI / observability / persistence gaps 收口完毕，本轮需要做的是在 authority x86 上把三条 recorded regression surface 重新跑通并归档成 durable evidence。
+  3. 本轮执行：先在本地重新确认 `cargo test --lib ffi -- --nocapture`、`cargo test --lib serialize -- --nocapture`、`cargo test --test bench_json_export -q` 全部为绿；随后在 isolated `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-prod-ffi-observability-persistence-gate` 与 `KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-prod-ffi-observability-persistence-gate` 下串行重放三条 authority tests。初始并行尝试触发了 wrapper shared-lock `status=conflict`，因此最终 authority evidence 以串行 isolated runs 为准。
+  4. 治理同步：`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`task-progress.md`、`feature-list.json`、`RELEASE_NOTES.md`、`DEV_ROADMAP.md` 已统一写回 gate closure，下一条按 `feature-list.json` 选择的可执行 feature 是 `prod-readme-remote-workflow-docs`。
+  5. 后续主缺口：`PROD-P3-005` 现在只剩 remote-first operator documentation closure；在新的 authority leadership evidence 出现前，仍不得宣称正向 final acceptance。
+  状态：Phase 5 Active（cross-cutting FFI/observability/persistence gate closed；next feature per durable source is `prod-readme-remote-workflow-docs`）。
+- 2026-03-12 05:18: **builder-loop：收口 `prod-all-targets-clippy-fmt`，关闭 authority remote fmt/clippy/build gate（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`tests/bench_diskann_1m.rs`、`tests/bench_hdf5.rs`、`benches/bench_rabitq_recall.rs`、`benches/cpp_faiss_simd_bench.rs`、`scripts/remote/build.sh`。
+  2. 阶段结论：production governance 的下一道真实门槛不是再做 benchmark 叙事，而是让 remote x86 authority lane 的 `fmt` / `all-targets all-features clippy` / release build 三条基础 gate 真正变绿；本地预筛只能加速排查，不能替代 authority 结论。
+  3. 本轮执行：系统清掉 tests / benches / examples 上残留的 lint drift，并修复 `tests/bench_diskann_1m.rs` 默认 lane 仍调用 `long-tests` gated `generate_report()` 的 build-only compile hole，使 remote release build 不再因 gated benchmark helper 失真。
+  4. 治理同步：`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`task-progress.md`、`feature-list.json`、`RELEASE_NOTES.md`、`DEV_ROADMAP.md` 已统一写回 lint/build gate closure，下一条按 `feature-list.json` 选择的可执行 feature 是 `prod-ffi-observability-persistence-gate`。
+  5. 后续主缺口：`PROD-P3-005` 仍未关闭，但剩余工作已收缩为 cross-cutting FFI / persistence / observability gate 与 remote-first operator docs，而不再是基础 lint/build governance。
+  状态：Phase 5 Active（remote lint/build gate closed；next feature per durable source is `prod-ffi-observability-persistence-gate`）。
+- 2026-03-12 03:49: **builder-loop：收口 `final-performance-leadership-proof`，把最终 leadership criterion 明确归档为未满足（plan+exec）**
+  1. 复核输入：`feature-list.json`、`benchmark_results/baseline_p3_001_stop_go_verdict.json`、`benchmark_results/hnsw_p3_002_final_verdict.json`、`benchmark_results/final_core_path_classification.json`、`tests/bench_hnsw_cpp_compare.rs`、`scripts/remote/native_hnsw_qps_capture.sh`。
+  2. 阶段结论：当前 authority evidence 已足够给出项目级 final-proof 结论，不需要再重开调参或 benchmark 设计。HNSW 是唯一具备 trusted same-schema compare evidence 的 core path，但 native 仍约快 `14.8x`；IVF-PQ 已 `no-go`，DiskANN 已 `constrained`，因此“至少一条可信 leadership lane”这个 completion criterion 必须诚实记为未满足。
+  3. 本轮执行：新增 `benchmark_results/final_performance_leadership_proof.json`，把 `criterion_met=false`、family-level blockers、以及 HNSW same-schema gap 一次性归档；同时将 `tests/bench_hnsw_cpp_compare.rs` 升级成默认 lane 的 final-proof regression，保证 compare lane 持续绑定当前 project-level conclusion。
+  4. 治理同步：`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`task-progress.md`、`feature-list.json`、`RELEASE_NOTES.md`、`DEV_ROADMAP.md` 已统一写回 final-proof closure，下一条按 `feature-list.json` 选择的可执行 feature 是 `prod-all-targets-clippy-fmt`。
+  5. 后续主缺口：当前不再缺“final proof 结论”；剩余工作转向 production governance gates，而最终 acceptance 不得在新的 authority leadership evidence 出现前声称正向通过。
+  状态：Phase 5 Active（leadership criterion archived as unmet；next feature per durable source is `prod-all-targets-clippy-fmt`）。
+- 2026-03-12 03:39: **builder-loop：收口 `final-core-path-classification`，归档三条 core CPU paths 的统一最终分类（plan+exec）**
+  1. 复核输入：`feature-list.json`、`benchmark_results/hnsw_p3_002_final_verdict.json`、`benchmark_results/ivfpq_p3_003_final_verdict.json`、`benchmark_results/diskann_p3_004_final_verdict.json`、`benchmark_results/recall_gated_baseline.json`、`benchmark_results/cross_dataset_sampling.json`、`tests/bench_recall_gated_baseline.rs`、`tests/bench_cross_dataset_sampling.rs`。
+  2. 阶段结论：HNSW、IVF-PQ、DiskANN 三条 family verdict 都已经各自收口，但 final acceptance 层还缺一个统一、可回放的 cross-family classification input；当前 authority baseline 与 cross-dataset artifacts 已足以支撑这个 rollup，不需要重开任一家族的 benchmark 工作。
+  3. 本轮执行：新增 `benchmark_results/final_core_path_classification.json`，把 HNSW=`functional-but-not-leading`、IVF-PQ=`no-go`、DiskANN=`constrained` 统一归档；并将 `tests/bench_recall_gated_baseline.rs` 与 `tests/bench_cross_dataset_sampling.rs` 升级成默认 lane 的 rollup regressions，保证该 artifact 始终与现有 authority-backed benchmark facts 对齐。
+  4. 治理同步：`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`task-progress.md`、`feature-list.json`、`RELEASE_NOTES.md`、`DEV_ROADMAP.md` 已统一写回 cross-family rollup，下一条按 `feature-list.json` 选择的可执行 feature 是 `final-performance-leadership-proof`。
+  5. 后续主缺口：项目仍未满足 final acceptance，因为“至少一条可信 leadership lane”仍未证明；下一条应转向 `final-performance-leadership-proof`，而不是再次重开已关闭的 family classifications。
+  状态：Phase 5 Active（core path classifications rolled up；next feature per durable source is `final-performance-leadership-proof`）。
+- 2026-03-12 03:32: **builder-loop：收口 `DISKANN-P3-004` family verdict，将 DiskANN 归档为 constrained（plan+exec）**
+  1. 复核输入：`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`feature-list.json`、`benchmark_results/diskann_p3_004_benchmark_gate.json`、`benchmark_results/recall_gated_baseline.json`、`benchmark_results/cross_dataset_sampling.json`、`src/faiss/diskann.rs`、`src/faiss/diskann_aisaq.rs`、`tests/bench_diskann_1m.rs`、`tests/bench_compare.rs`。
+  2. 阶段结论：benchmark gate 的 no-go 结论已经成立，但 family 本身仍有真实可执行的简化 Vamana/AISAQ surfaces，因此 DiskANN family 更准确的最终分类不是 `no-go`，而是 `constrained`。
+  3. 本轮执行：新增 `benchmark_results/diskann_p3_004_final_verdict.json`，把 family-level final classification 固化为 `constrained`；同时将 `src/faiss/diskann.rs`、`tests/bench_diskann_1m.rs`、`tests/bench_compare.rs` 升级为真实 final-verdict regressions，确保 library lane、benchmark lane、compare lane 三者都绑定同一口径。
+  4. 治理同步：`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`task-progress.md`、`feature-list.json`、`RELEASE_NOTES.md`、`DEV_ROADMAP.md` 已统一写回 DiskANN final verdict，下一条按 `feature-list.json` 选择的可执行 feature 是 `final-core-path-classification`。
+  5. 后续主缺口：DiskANN family 已不再是开放 verdict；下一条工作应转入跨 family 汇总，把 HNSW / IVF-PQ / DiskANN 三个 core CPU paths 的最终分类统一归档到 final acceptance 层。
+  状态：Phase 5 Active（DiskANN archived as constrained；next feature per durable source is `final-core-path-classification`）。
+- 2026-03-12 03:23: **builder-loop：收口 `DISKANN-P3-004` benchmark gate，归档 DiskANN 远端 no-go benchmark evidence（plan+exec）**
+  1. 复核输入：`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`feature-list.json`、`benchmark_results/recall_gated_baseline.json`、`benchmark_results/cross_dataset_sampling.json`、`tests/bench_diskann_1m.rs`、`tests/bench_recall_gated_baseline.rs`、`tests/bench_cross_dataset_sampling.rs`、`tests/bench_compare.rs`。
+  2. 阶段结论：DiskANN 的实现边界此前已经被诚实收口，但 benchmark gate 本身还缺一个 replayable artifact 和 authority-backed cross-dataset DiskANN rows；在本轮 authority refresh 后，baseline 与 sampled datasets 仍一致停留在 sub-gate / non-trusted 区间，因此 benchmark gate 可以正式归档为受限范围下的 explicit no-go benchmark evidence，而不是继续停留在口头描述。
+  3. 本轮执行：新增 `benchmark_results/diskann_p3_004_benchmark_gate.json`，把当前 benchmark lane 固化为 `no_go_for_native_comparable_benchmark`；扩展 `src/benchmark/cross_dataset_sampling.rs` 生成 `DiskANN` rows，并将 `tests/bench_diskann_1m.rs`、`tests/bench_recall_gated_baseline.rs`、`tests/bench_cross_dataset_sampling.rs` 改成默认 lane 的真实 DiskANN benchmark regressions；随后从 authority run 回传并落库新的 `benchmark_results/cross_dataset_sampling.json`。
+  4. 治理同步：`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`task-progress.md`、`feature-list.json`、`RELEASE_NOTES.md`、`DEV_ROADMAP.md` 已统一写回 DiskANN benchmark-gate closure，下一条按 `feature-list.json` 选择的可执行 feature 是 `diskann-stop-go-verdict`。
+  5. 后续主缺口：不要把 benchmark-gate artifact 误当成 family-level final classification；下一条需要单独归档 DiskANN family 的 constrained/no-go final verdict，并继续阻止任何 native-comparable or leadership claim。
+  状态：Phase 5 Active（DiskANN benchmark gate archived as constrained no-go evidence；next feature per durable source is `diskann-stop-go-verdict`）。
+- 2026-03-12 03:02: **builder-loop：收口 `IVFPQ-P3-003`，将 IVF-PQ family 归档为 no-go（plan+exec）**
+  1. 复核输入：`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`feature-list.json`、`benchmark_results/ivfpq_p1_002_focused.json`、`benchmark_results/recall_gated_baseline.json`、`benchmark_results/cross_dataset_sampling.json`、`tests/bench_ivf_pq_perf.rs`、`tests/bench_recall_gated_baseline.rs`、`tests/bench_cross_dataset_sampling.rs`。
+  2. 阶段结论：IVF-PQ hot-path、baseline、cross-dataset 三条 authority-backed artifact 链都未把 recall 拉过 `0.8` gate；与此同时 FFI / persistence / metadata contract 已在前一轮关闭，因此 family 级最终状态不再是“缺 benchmark 事实”，而是明确 `no-go`。
+  3. 本轮执行：新增 `benchmark_results/ivfpq_p3_003_final_verdict.json`，把 IVF-PQ family 级最终分类固化为 `no-go`；并将 `tests/bench_ivf_pq_perf.rs`、`tests/bench_recall_gated_baseline.rs`、`tests/bench_cross_dataset_sampling.rs` 改成默认 lane 的 artifact/verdict regressions，而不是 `long-tests` 文件级空壳。
+  4. 治理同步：`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`task-progress.md`、`feature-list.json`、`RELEASE_NOTES.md` 已统一写回 IVF-PQ 收口状态，下一条按 `feature-list.json` 选择的可执行 feature 是 `diskann-remote-benchmark-gate`。
+  5. 后续主缺口：不再围绕 IVF-PQ 继续做无边界性能调参；除非未来出现新的 authority artifact 清楚越过 recall gate，否则不要重开 IVF-PQ production-candidate 或 leadership claim。
+  状态：Phase 5 Active（IVF-PQ archived as no-go；next feature per durable source is `diskann-remote-benchmark-gate`）。
 - 2026-03-12 02:00: **builder-loop：收口 `HNSW-P3-002`，将 HNSW family 归档为 functional-but-not-leading（plan+exec）**
   1. 复核输入：`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`feature-list.json`、`benchmark_results/baseline_p3_001_same_schema_hnsw_hdf5.json`、`benchmark_results/baseline_p3_001_stop_go_verdict.json`、`tests/test_baseline_methodology_lock.py`、`tests/bench_hnsw_cpp_compare.rs`。
   2. 阶段结论：layer-0 repair、same-schema HDF5 refresh、以及 HNSW FFI / persistence contract 已全部形成 authority-backed 证据链；HNSW 不再缺 recall 或 production contract 事实。

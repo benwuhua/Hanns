@@ -65,9 +65,7 @@ struct RsBaselineReport {
 
 #[cfg(feature = "hdf5")]
 fn arg_value(args: &[String], name: &str) -> Option<String> {
-    args.windows(2)
-        .find(|w| w[0] == name)
-        .map(|w| w[1].clone())
+    args.windows(2).find(|w| w[0] == name).map(|w| w[1].clone())
 }
 
 #[cfg(feature = "hdf5")]
@@ -91,7 +89,9 @@ fn print_usage(program: &str) {
     );
     eprintln!("  --top-k      number of results to retrieve per query (default: {DEFAULT_TOP_K})");
     eprintln!("  --recall-at  k for recall@k measurement, independent of top-k (default: {DEFAULT_RECALL_AT})");
-    eprintln!("               Set --recall-at 10 to match native benchmark methodology (recall@10)");
+    eprintln!(
+        "               Set --recall-at 10 to match native benchmark methodology (recall@10)"
+    );
 }
 
 #[cfg(feature = "hdf5")]
@@ -114,7 +114,13 @@ fn compute_ground_truth(base: &[f32], queries: &[f32], dim: usize, k: usize) -> 
             })
             .collect();
         pairs.sort_by(|a, b| a.1.partial_cmp(&b.1).expect("distance compare"));
-        gt.push(pairs.into_iter().take(k).map(|(idx, _)| idx as i32).collect());
+        gt.push(
+            pairs
+                .into_iter()
+                .take(k)
+                .map(|(idx, _)| idx as i32)
+                .collect(),
+        );
     }
 
     gt
@@ -135,7 +141,8 @@ fn run() {
             std::process::exit(2);
         }
     };
-    let output_path = arg_value(&args, "--output").unwrap_or_else(|| DEFAULT_OUTPUT_PATH.to_string());
+    let output_path =
+        arg_value(&args, "--output").unwrap_or_else(|| DEFAULT_OUTPUT_PATH.to_string());
     let base_limit = parse_usize_arg(&args, "--base-limit", DEFAULT_BASE_LIMIT);
     let query_limit = parse_usize_arg(&args, "--query-limit", DEFAULT_QUERY_LIMIT);
     let top_k = parse_usize_arg(&args, "--top-k", DEFAULT_TOP_K);

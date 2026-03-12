@@ -14,9 +14,10 @@ pub struct Fp16(pub u16);
 #[repr(transparent)]
 pub struct Bf16(pub u16);
 
-// Use the standard library's f16 if available (Rust 1.69+)
+// Keep the feature flag stable on current toolchains even though std::f16 is
+// not available on the stable compiler used by the authority lane.
 #[cfg(feature = "std-f16")]
-pub use std::f32::F16;
+pub type F16 = Fp16;
 
 impl Fp16 {
     /// 从 f32 转换
@@ -265,6 +266,7 @@ unsafe fn load_bf16x8_as_m256(ptr: *const u16) -> std::arch::x86_64::__m256 {
 
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
+#[allow(clippy::incompatible_msrv)]
 unsafe fn load_fp16x16_as_m512(ptr: *const u16) -> std::arch::x86_64::__m512 {
     use std::arch::x86_64::*;
     let lo = load_fp16x8_as_m256(ptr);
@@ -277,6 +279,7 @@ unsafe fn load_fp16x16_as_m512(ptr: *const u16) -> std::arch::x86_64::__m512 {
 
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
+#[allow(clippy::incompatible_msrv)]
 unsafe fn load_bf16x16_as_m512(ptr: *const u16) -> std::arch::x86_64::__m512 {
     use std::arch::x86_64::*;
     let raw = _mm256_loadu_si256(ptr as *const __m256i);
@@ -467,6 +470,9 @@ pub fn fp16_l2_batch_4_scalar(
 /// FP16 batch_4: 计算一个查询向量与 4 个数据库向量的 L2 距离 (AVX2 SIMD)
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
+/// # Safety
+/// `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim` contiguous `u16`
+/// elements.
 pub unsafe fn fp16_l2_batch_4_avx2(
     query: *const u16,
     db0: *const u16,
@@ -535,6 +541,10 @@ pub unsafe fn fp16_l2_batch_4_avx2(
 /// FP16 batch_4: 计算一个查询向量与 4 个数据库向量的 L2 距离 (AVX512 SIMD)
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
+#[allow(clippy::incompatible_msrv)]
+/// # Safety
+/// `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim` contiguous `u16`
+/// elements.
 pub unsafe fn fp16_l2_batch_4_avx512(
     query: *const u16,
     db0: *const u16,
@@ -598,6 +608,10 @@ pub unsafe fn fp16_l2_batch_4_avx512(
 }
 
 /// FP16 batch_4: 计算一个查询向量与 4 个数据库向量的 L2 距离 (NEON SIMD)
+///
+/// # Safety
+/// - `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim`
+///   readable `u16` values.
 #[cfg(all(feature = "simd", target_arch = "aarch64"))]
 #[inline]
 pub unsafe fn fp16_l2_batch_4_neon(
@@ -774,6 +788,9 @@ pub fn bf16_l2_batch_4_scalar(
 /// BF16 batch_4: 计算一个查询向量与 4 个数据库向量的 L2 距离 (AVX2 SIMD)
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
+/// # Safety
+/// `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim` contiguous `u16`
+/// elements.
 pub unsafe fn bf16_l2_batch_4_avx2(
     query: *const u16,
     db0: *const u16,
@@ -843,6 +860,10 @@ pub unsafe fn bf16_l2_batch_4_avx2(
 /// BF16 batch_4: 计算一个查询向量与 4 个数据库向量的 L2 距离 (AVX512 SIMD)
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
+#[allow(clippy::incompatible_msrv)]
+/// # Safety
+/// `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim` contiguous `u16`
+/// elements.
 pub unsafe fn bf16_l2_batch_4_avx512(
     query: *const u16,
     db0: *const u16,
@@ -906,6 +927,10 @@ pub unsafe fn bf16_l2_batch_4_avx512(
 }
 
 /// BF16 batch_4: 计算一个查询向量与 4 个数据库向量的 L2 距离 (NEON SIMD)
+///
+/// # Safety
+/// - `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim`
+///   readable `u16` values.
 #[cfg(all(feature = "simd", target_arch = "aarch64"))]
 #[inline]
 pub unsafe fn bf16_l2_batch_4_neon(
@@ -1082,6 +1107,9 @@ pub fn fp16_ip_batch_4_scalar(
 /// FP16 batch_4 内积 (AVX2 SIMD)
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
+/// # Safety
+/// `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim` contiguous `u16`
+/// elements.
 pub unsafe fn fp16_ip_batch_4_avx2(
     query: *const u16,
     db0: *const u16,
@@ -1139,6 +1167,10 @@ pub unsafe fn fp16_ip_batch_4_avx2(
 /// FP16 batch_4 内积 (AVX512 SIMD)
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
+#[allow(clippy::incompatible_msrv)]
+/// # Safety
+/// `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim` contiguous `u16`
+/// elements.
 pub unsafe fn fp16_ip_batch_4_avx512(
     query: *const u16,
     db0: *const u16,
@@ -1192,6 +1224,10 @@ pub unsafe fn fp16_ip_batch_4_avx512(
 }
 
 /// FP16 batch_4 内积 (NEON SIMD)
+///
+/// # Safety
+/// - `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim`
+///   readable `u16` values.
 #[cfg(all(feature = "simd", target_arch = "aarch64"))]
 #[inline]
 pub unsafe fn fp16_ip_batch_4_neon(
@@ -1358,6 +1394,9 @@ pub fn bf16_ip_batch_4_scalar(
 /// BF16 batch_4 内积 (AVX2 SIMD)
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
+/// # Safety
+/// `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim` contiguous `u16`
+/// elements.
 pub unsafe fn bf16_ip_batch_4_avx2(
     query: *const u16,
     db0: *const u16,
@@ -1416,6 +1455,10 @@ pub unsafe fn bf16_ip_batch_4_avx2(
 /// BF16 batch_4 内积 (AVX512 SIMD)
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
+#[allow(clippy::incompatible_msrv)]
+/// # Safety
+/// `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim` contiguous `u16`
+/// elements.
 pub unsafe fn bf16_ip_batch_4_avx512(
     query: *const u16,
     db0: *const u16,
@@ -1469,6 +1512,10 @@ pub unsafe fn bf16_ip_batch_4_avx512(
 }
 
 /// BF16 batch_4 内积 (NEON SIMD)
+///
+/// # Safety
+/// - `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim`
+///   readable `u16` values.
 #[cfg(all(feature = "simd", target_arch = "aarch64"))]
 #[inline]
 pub unsafe fn bf16_ip_batch_4_neon(
@@ -1642,11 +1689,11 @@ mod tests {
 
     #[test]
     fn test_fp16_negative() {
-        let f: f32 = -3.14;
+        let f: f32 = -std::f32::consts::PI;
         let h = Fp16::from_f32(f);
         let back: f32 = h.to_f32();
         // fp16 has limited precision
-        assert!((back + 3.14).abs() < 0.1);
+        assert!((back - f).abs() < 0.1);
     }
 
     #[test]
@@ -1669,7 +1716,7 @@ mod tests {
     #[test]
     fn test_bf16_precision_loss() {
         // bf16 有更少的尾数位，会有精度损失
-        let f: f32 = 1.23456789;
+        let f: f32 = 1.234_567_9;
         let b = Bf16::from_f32(f);
         let back: f32 = b.to_f32();
 

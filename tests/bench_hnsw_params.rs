@@ -24,14 +24,6 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
-/// Parameter combination for HNSW
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct HnswParams {
-    m: usize,
-    ef_construction: usize,
-    ef_search: usize,
-}
-
 /// Benchmark result for a specific parameter combination
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct HnswParamResult {
@@ -136,6 +128,7 @@ fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Benchmark HNSW with specific parameter combination
+#[allow(clippy::too_many_arguments)]
 fn benchmark_hnsw_params(
     base: &[f32],
     query: &[f32],
@@ -452,7 +445,7 @@ fn find_best_configurations(results: &[HnswParamResult]) {
 }
 
 /// Provide parameter selection recommendations
-fn provide_recommendations(results: &[HnswParamResult], analyses: &[ParamAnalysis]) {
+fn provide_recommendations(_results: &[HnswParamResult], analyses: &[ParamAnalysis]) {
     println!("\n{}", "=".repeat(100));
     println!("参数选择建议");
     println!("{}", "=".repeat(100));

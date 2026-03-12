@@ -97,8 +97,6 @@ pub fn bench_ip_batch_4() {
 /// Benchmark AVX2 vs AVX512 (仅在支持 AVX512 的 CPU 上)
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 pub fn bench_avx2_vs_avx512() {
-    use std::arch::x86_64::*;
-
     println!("\n=== AVX2 vs AVX512 Direct Comparison ===");
 
     if !std::is_x86_feature_detected!("avx512f") {

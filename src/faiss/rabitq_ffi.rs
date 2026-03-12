@@ -3,7 +3,7 @@
 //! 提供 C 语言接口用于构建、搜索、保存/加载 IVF-RaBitQ 索引
 
 use std::ffi::CStr;
-use std::os::raw::{c_char, c_void};
+use std::os::raw::c_char;
 use std::path::Path;
 
 use super::ivf_rabitq::{IvfRaBitqConfig, IvfRaBitqIndex};
@@ -24,8 +24,12 @@ pub struct IvfRaBitqIndexHandle {
 ///
 /// # Returns
 /// 返回索引句柄，失败返回 NULL
+///
+/// # Safety
+/// `data` must point to at least `n * dim` valid `f32` values. When `ids` is non-null, it must
+/// point to at least `n` valid `i64` values.
 #[no_mangle]
-pub extern "C" fn knowhere_ivf_rabitq_build(
+pub unsafe extern "C" fn knowhere_ivf_rabitq_build(
     dim: u32,
     nlist: u32,
     data: *const f32,
@@ -36,10 +40,10 @@ pub extern "C" fn knowhere_ivf_rabitq_build(
         return std::ptr::null_mut();
     }
 
-    let data_slice = unsafe { std::slice::from_raw_parts(data, (n * dim as u64) as usize) };
+    let data_slice = std::slice::from_raw_parts(data, (n * dim as u64) as usize);
 
     let ids_slice = if !ids.is_null() {
-        Some(unsafe { std::slice::from_raw_parts(ids, n as usize) })
+        Some(std::slice::from_raw_parts(ids, n as usize))
     } else {
         None
     };
@@ -48,12 +52,12 @@ pub extern "C" fn knowhere_ivf_rabitq_build(
     let mut index = IvfRaBitqIndex::new(config);
 
     // 训练
-    if let Err(_) = index.train(data_slice) {
+    if index.train(data_slice).is_err() {
         return std::ptr::null_mut();
     }
 
     // 添加向量
-    if let Err(_) = index.add(data_slice, ids_slice) {
+    if index.add(data_slice, ids_slice).is_err() {
         return std::ptr::null_mut();
     }
 
@@ -68,17 +72,20 @@ pub extern "C" fn knowhere_ivf_rabitq_build(
 ///
 /// # Returns
 /// 返回索引句柄，失败返回 NULL
+///
+/// # Safety
+/// `path` must be a valid, NUL-terminated C string.
 #[no_mangle]
-pub extern "C" fn knowhere_ivf_rabitq_load(path: *const c_char) -> *mut IvfRaBitqIndexHandle {
+pub unsafe extern "C" fn knowhere_ivf_rabitq_load(
+    path: *const c_char,
+) -> *mut IvfRaBitqIndexHandle {
     if path.is_null() {
         return std::ptr::null_mut();
     }
 
-    let path_str = unsafe {
-        match CStr::from_ptr(path).to_str() {
-            Ok(s) => s,
-            Err(_) => return std::ptr::null_mut(),
-        }
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
     };
 
     match IvfRaBitqIndex::load(Path::new(path_str)) {
@@ -98,8 +105,12 @@ pub extern "C" fn knowhere_ivf_rabitq_load(path: *const c_char) -> *mut IvfRaBit
 ///
 /// # Returns
 /// 0 表示成功，非 0 表示失败
+///
+/// # Safety
+/// `index` must be a valid handle returned by this module and `path` must be a valid,
+/// NUL-terminated C string.
 #[no_mangle]
-pub extern "C" fn knowhere_ivf_rabitq_save(
+pub unsafe extern "C" fn knowhere_ivf_rabitq_save(
     index: *mut IvfRaBitqIndexHandle,
     path: *const c_char,
 ) -> i32 {
@@ -107,14 +118,12 @@ pub extern "C" fn knowhere_ivf_rabitq_save(
         return -1;
     }
 
-    let path_str = unsafe {
-        match CStr::from_ptr(path).to_str() {
-            Ok(s) => s,
-            Err(_) => return -1,
-        }
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
     };
 
-    let handle = unsafe { &mut *index };
+    let handle = &mut *index;
 
     match handle.index.save(Path::new(path_str)) {
         Ok(_) => 0,
@@ -134,8 +143,12 @@ pub extern "C" fn knowhere_ivf_rabitq_save(
 ///
 /// # Returns
 /// 0 表示成功，非 0 表示失败
+///
+/// # Safety
+/// `index`, `query`, `distances`, and `labels` must be valid for reads/writes according to the
+/// sizes implied by `k` and the index dimension.
 #[no_mangle]
-pub extern "C" fn knowhere_ivf_rabitq_search(
+pub unsafe extern "C" fn knowhere_ivf_rabitq_search(
     index: *const IvfRaBitqIndexHandle,
     query: *const f32,
     k: u32,
@@ -147,10 +160,10 @@ pub extern "C" fn knowhere_ivf_rabitq_search(
         return -1;
     }
 
-    let handle = unsafe { &*index };
-    let query_slice = unsafe { std::slice::from_raw_parts(query, handle.index.config().dim) };
-    let distances_slice = unsafe { std::slice::from_raw_parts_mut(distances, k as usize) };
-    let labels_slice = unsafe { std::slice::from_raw_parts_mut(labels, k as usize) };
+    let handle = &*index;
+    let query_slice = std::slice::from_raw_parts(query, handle.index.config().dim);
+    let distances_slice = std::slice::from_raw_parts_mut(distances, k as usize);
+    let labels_slice = std::slice::from_raw_parts_mut(labels, k as usize);
 
     // 创建搜索请求
     use crate::api::SearchRequest;
@@ -165,10 +178,8 @@ pub extern "C" fn knowhere_ivf_rabitq_search(
     match handle.index.search(query_slice, &req) {
         Ok(result) => {
             let len = result.ids.len().min(k as usize);
-            for i in 0..len {
-                labels_slice[i] = result.ids[i];
-                distances_slice[i] = result.distances[i];
-            }
+            labels_slice[..len].copy_from_slice(&result.ids[..len]);
+            distances_slice[..len].copy_from_slice(&result.distances[..len]);
             0
         }
         Err(_) => -1,
@@ -188,8 +199,12 @@ pub extern "C" fn knowhere_ivf_rabitq_search(
 ///
 /// # Returns
 /// 0 表示成功，非 0 表示失败
+///
+/// # Safety
+/// `index`, `queries`, `distances`, and `labels` must be valid for reads/writes according to the
+/// sizes implied by `nq`, `k`, and the index dimension.
 #[no_mangle]
-pub extern "C" fn knowhere_ivf_rabitq_batch_search(
+pub unsafe extern "C" fn knowhere_ivf_rabitq_batch_search(
     index: *const IvfRaBitqIndexHandle,
     queries: *const f32,
     nq: u64,
@@ -208,13 +223,12 @@ pub extern "C" fn knowhere_ivf_rabitq_batch_search(
         return -1;
     }
 
-    let handle = unsafe { &*index };
+    let handle = &*index;
     let dim = handle.index.config().dim;
 
-    let queries_slice = unsafe { std::slice::from_raw_parts(queries, (nq * dim as u64) as usize) };
-    let distances_slice =
-        unsafe { std::slice::from_raw_parts_mut(distances, (nq * k as u64) as usize) };
-    let labels_slice = unsafe { std::slice::from_raw_parts_mut(labels, (nq * k as u64) as usize) };
+    let queries_slice = std::slice::from_raw_parts(queries, (nq * dim as u64) as usize);
+    let distances_slice = std::slice::from_raw_parts_mut(distances, (nq * k as u64) as usize);
+    let labels_slice = std::slice::from_raw_parts_mut(labels, (nq * k as u64) as usize);
 
     use crate::api::SearchRequest;
 
@@ -232,10 +246,8 @@ pub extern "C" fn knowhere_ivf_rabitq_batch_search(
         match handle.index.search(query, &req) {
             Ok(result) => {
                 let len = result.ids.len().min(k as usize);
-                for j in 0..len {
-                    labels_slice[offset + j] = result.ids[j];
-                    distances_slice[offset + j] = result.distances[j];
-                }
+                labels_slice[offset..offset + len].copy_from_slice(&result.ids[..len]);
+                distances_slice[offset..offset + len].copy_from_slice(&result.distances[..len]);
                 // 填充剩余部分
                 for j in len..k as usize {
                     labels_slice[offset + j] = -1;
@@ -260,13 +272,18 @@ pub extern "C" fn knowhere_ivf_rabitq_batch_search(
 ///
 /// # Returns
 /// 1 表示有原始数据，0 表示没有
+///
+/// # Safety
+/// `index` must be a valid handle returned by this module or null.
 #[no_mangle]
-pub extern "C" fn knowhere_ivf_rabitq_has_raw_data(index: *const IvfRaBitqIndexHandle) -> i32 {
+pub unsafe extern "C" fn knowhere_ivf_rabitq_has_raw_data(
+    index: *const IvfRaBitqIndexHandle,
+) -> i32 {
     if index.is_null() {
         return 0;
     }
 
-    let handle = unsafe { &*index };
+    let handle = &*index;
     if handle.index.has_raw_data() {
         1
     } else {
@@ -278,13 +295,16 @@ pub extern "C" fn knowhere_ivf_rabitq_has_raw_data(index: *const IvfRaBitqIndexH
 ///
 /// # Returns
 /// 返回向量数量，失败返回 0
+///
+/// # Safety
+/// `index` must be a valid handle returned by this module or null.
 #[no_mangle]
-pub extern "C" fn knowhere_ivf_rabitq_count(index: *const IvfRaBitqIndexHandle) -> u64 {
+pub unsafe extern "C" fn knowhere_ivf_rabitq_count(index: *const IvfRaBitqIndexHandle) -> u64 {
     if index.is_null() {
         return 0;
     }
 
-    let handle = unsafe { &*index };
+    let handle = &*index;
     handle.index.count() as u64
 }
 
@@ -292,23 +312,27 @@ pub extern "C" fn knowhere_ivf_rabitq_count(index: *const IvfRaBitqIndexHandle) 
 ///
 /// # Returns
 /// 返回索引大小，失败返回 0
+///
+/// # Safety
+/// `index` must be a valid handle returned by this module or null.
 #[no_mangle]
-pub extern "C" fn knowhere_ivf_rabitq_size(index: *const IvfRaBitqIndexHandle) -> u64 {
+pub unsafe extern "C" fn knowhere_ivf_rabitq_size(index: *const IvfRaBitqIndexHandle) -> u64 {
     if index.is_null() {
         return 0;
     }
 
-    let handle = unsafe { &*index };
+    let handle = &*index;
     handle.index.size() as u64
 }
 
 /// 释放索引资源
+///
+/// # Safety
+/// `index` must be a valid handle returned by this module or null. It must not be freed twice.
 #[no_mangle]
-pub extern "C" fn knowhere_ivf_rabitq_free(index: *mut IvfRaBitqIndexHandle) {
+pub unsafe extern "C" fn knowhere_ivf_rabitq_free(index: *mut IvfRaBitqIndexHandle) {
     if !index.is_null() {
-        unsafe {
-            let _ = Box::from_raw(index);
-        }
+        let _ = Box::from_raw(index);
     }
 }
 
@@ -316,8 +340,11 @@ pub extern "C" fn knowhere_ivf_rabitq_free(index: *mut IvfRaBitqIndexHandle) {
 ///
 /// # Returns
 /// 0 表示成功，非 0 表示失败
+///
+/// # Safety
+/// `index` must be a valid handle returned by this module.
 #[no_mangle]
-pub extern "C" fn knowhere_ivf_rabitq_set_nprobe(
+pub unsafe extern "C" fn knowhere_ivf_rabitq_set_nprobe(
     index: *mut IvfRaBitqIndexHandle,
     nprobe: u32,
 ) -> i32 {
@@ -325,30 +352,36 @@ pub extern "C" fn knowhere_ivf_rabitq_set_nprobe(
         return -1;
     }
 
-    let handle = unsafe { &mut *index };
+    let handle = &mut *index;
     handle.index.set_nprobe(nprobe as usize);
     0
 }
 
 /// 获取索引维度
+///
+/// # Safety
+/// `index` must be a valid handle returned by this module or null.
 #[no_mangle]
-pub extern "C" fn knowhere_ivf_rabitq_dim(index: *const IvfRaBitqIndexHandle) -> u32 {
+pub unsafe extern "C" fn knowhere_ivf_rabitq_dim(index: *const IvfRaBitqIndexHandle) -> u32 {
     if index.is_null() {
         return 0;
     }
 
-    let handle = unsafe { &*index };
+    let handle = &*index;
     handle.index.config().dim as u32
 }
 
 /// 获取索引的 nlist 参数
+///
+/// # Safety
+/// `index` must be a valid handle returned by this module or null.
 #[no_mangle]
-pub extern "C" fn knowhere_ivf_rabitq_nlist(index: *const IvfRaBitqIndexHandle) -> u32 {
+pub unsafe extern "C" fn knowhere_ivf_rabitq_nlist(index: *const IvfRaBitqIndexHandle) -> u32 {
     if index.is_null() {
         return 0;
     }
 
-    let handle = unsafe { &*index };
+    let handle = &*index;
     handle.index.config().nlist as u32
 }
 
@@ -359,122 +392,128 @@ mod tests {
 
     #[test]
     fn test_ffi_build_search() {
-        // 生成测试数据
-        let dim = 16;
-        let n = 100;
-        let mut data = vec![0.0f32; n * dim];
-        for i in 0..n {
-            for j in 0..dim {
-                data[i * dim + j] = (i as f32) * 0.1 + (j as f32) * 0.01;
+        unsafe {
+            // 生成测试数据
+            let dim = 16;
+            let n = 100;
+            let mut data = vec![0.0f32; n * dim];
+            for i in 0..n {
+                for j in 0..dim {
+                    data[i * dim + j] = (i as f32) * 0.1 + (j as f32) * 0.01;
+                }
             }
+
+            // 构建索引
+            let index_ptr =
+                knowhere_ivf_rabitq_build(dim as u32, 4, data.as_ptr(), n as u64, std::ptr::null());
+
+            assert!(!index_ptr.is_null());
+
+            // 搜索
+            let query = vec![0.5f32; dim];
+            let mut distances = vec![0.0f32; 10];
+            let mut labels = vec![0i64; 10];
+
+            let ret = knowhere_ivf_rabitq_search(
+                index_ptr,
+                query.as_ptr(),
+                10,
+                2,
+                distances.as_mut_ptr(),
+                labels.as_mut_ptr(),
+            );
+
+            assert_eq!(ret, 0);
+
+            // 清理
+            knowhere_ivf_rabitq_free(index_ptr);
         }
-
-        // 构建索引
-        let index_ptr =
-            knowhere_ivf_rabitq_build(dim, 4, data.as_ptr(), n as u64, std::ptr::null());
-
-        assert!(!index_ptr.is_null());
-
-        // 搜索
-        let query = vec![0.5f32; dim];
-        let mut distances = vec![0.0f32; 10];
-        let mut labels = vec![0i64; 10];
-
-        let ret = knowhere_ivf_rabitq_search(
-            index_ptr,
-            query.as_ptr(),
-            10,
-            2,
-            distances.as_mut_ptr(),
-            labels.as_mut_ptr(),
-        );
-
-        assert_eq!(ret, 0);
-
-        // 清理
-        knowhere_ivf_rabitq_free(index_ptr);
     }
 
     #[test]
     fn test_ffi_save_load() {
-        // 生成测试数据
-        let dim = 16;
-        let n = 100;
-        let mut data = vec![0.0f32; n * dim];
-        for i in 0..n {
-            for j in 0..dim {
-                data[i * dim + j] = (i as f32) * 0.1 + (j as f32) * 0.01;
+        unsafe {
+            // 生成测试数据
+            let dim = 16;
+            let n = 100;
+            let mut data = vec![0.0f32; n * dim];
+            for i in 0..n {
+                for j in 0..dim {
+                    data[i * dim + j] = (i as f32) * 0.1 + (j as f32) * 0.01;
+                }
             }
+
+            // 构建索引
+            let index_ptr =
+                knowhere_ivf_rabitq_build(dim as u32, 4, data.as_ptr(), n as u64, std::ptr::null());
+
+            assert!(!index_ptr.is_null());
+
+            // 保存
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("test_ivf_rabitq.bin");
+            let path_str = path.to_str().unwrap();
+            let c_path = std::ffi::CString::new(path_str).unwrap();
+
+            let ret = knowhere_ivf_rabitq_save(index_ptr, c_path.as_ptr());
+            assert_eq!(ret, 0);
+
+            // 释放原索引
+            knowhere_ivf_rabitq_free(index_ptr);
+
+            // 加载
+            let loaded_ptr = knowhere_ivf_rabitq_load(c_path.as_ptr());
+            assert!(!loaded_ptr.is_null());
+
+            // 验证
+            assert_eq!(knowhere_ivf_rabitq_count(loaded_ptr), n as u64);
+            assert_eq!(knowhere_ivf_rabitq_dim(loaded_ptr), dim as u32);
+
+            // 清理
+            knowhere_ivf_rabitq_free(loaded_ptr);
         }
-
-        // 构建索引
-        let index_ptr =
-            knowhere_ivf_rabitq_build(dim, 4, data.as_ptr(), n as u64, std::ptr::null());
-
-        assert!(!index_ptr.is_null());
-
-        // 保存
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("test_ivf_rabitq.bin");
-        let path_str = path.to_str().unwrap();
-        let c_path = std::ffi::CString::new(path_str).unwrap();
-
-        let ret = knowhere_ivf_rabitq_save(index_ptr, c_path.as_ptr());
-        assert_eq!(ret, 0);
-
-        // 释放原索引
-        knowhere_ivf_rabitq_free(index_ptr);
-
-        // 加载
-        let loaded_ptr = knowhere_ivf_rabitq_load(c_path.as_ptr());
-        assert!(!loaded_ptr.is_null());
-
-        // 验证
-        assert_eq!(knowhere_ivf_rabitq_count(loaded_ptr), n as u64);
-        assert_eq!(knowhere_ivf_rabitq_dim(loaded_ptr), dim);
-
-        // 清理
-        knowhere_ivf_rabitq_free(loaded_ptr);
     }
 
     #[test]
     fn test_ffi_batch_search() {
-        // 生成测试数据
-        let dim = 16;
-        let n = 100;
-        let mut data = vec![0.0f32; n * dim];
-        for i in 0..n {
-            for j in 0..dim {
-                data[i * dim + j] = (i as f32) * 0.1 + (j as f32) * 0.01;
+        unsafe {
+            // 生成测试数据
+            let dim = 16;
+            let n = 100;
+            let mut data = vec![0.0f32; n * dim];
+            for i in 0..n {
+                for j in 0..dim {
+                    data[i * dim + j] = (i as f32) * 0.1 + (j as f32) * 0.01;
+                }
             }
+
+            // 构建索引
+            let index_ptr =
+                knowhere_ivf_rabitq_build(dim as u32, 4, data.as_ptr(), n as u64, std::ptr::null());
+
+            assert!(!index_ptr.is_null());
+
+            // 批量搜索
+            let nq = 5;
+            let k = 10;
+            let queries = vec![0.5f32; nq * dim];
+            let mut distances = vec![0.0f32; nq * k];
+            let mut labels = vec![0i64; nq * k];
+
+            let ret = knowhere_ivf_rabitq_batch_search(
+                index_ptr,
+                queries.as_ptr(),
+                nq as u64,
+                k as u32,
+                2,
+                distances.as_mut_ptr(),
+                labels.as_mut_ptr(),
+            );
+
+            assert_eq!(ret, 0);
+
+            // 清理
+            knowhere_ivf_rabitq_free(index_ptr);
         }
-
-        // 构建索引
-        let index_ptr =
-            knowhere_ivf_rabitq_build(dim, 4, data.as_ptr(), n as u64, std::ptr::null());
-
-        assert!(!index_ptr.is_null());
-
-        // 批量搜索
-        let nq = 5;
-        let k = 10;
-        let mut queries = vec![0.5f32; nq * dim];
-        let mut distances = vec![0.0f32; nq * k];
-        let mut labels = vec![0i64; nq * k];
-
-        let ret = knowhere_ivf_rabitq_batch_search(
-            index_ptr,
-            queries.as_ptr(),
-            nq as u64,
-            k,
-            2,
-            distances.as_mut_ptr(),
-            labels.as_mut_ptr(),
-        );
-
-        assert_eq!(ret, 0);
-
-        // 清理
-        knowhere_ivf_rabitq_free(index_ptr);
     }
 }

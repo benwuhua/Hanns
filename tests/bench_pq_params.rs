@@ -62,6 +62,7 @@ struct PQResult {
     error: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_pq_benchmark(
     train_data: &[f32],
     base_data: &[f32],
@@ -256,7 +257,7 @@ fn bench_pq_params() {
         }
         for &pq_k in &pq_k_values {
             let nbits = (pq_k as f32).log2() as usize;
-            if nbits < 1 || nbits > 16 {
+            if !(1..=16).contains(&nbits) {
                 println!("  跳过 k={} (nbits 超出范围)", pq_k);
                 continue;
             }

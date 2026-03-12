@@ -95,6 +95,7 @@ struct ParamResult {
 // Benchmark core
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn benchmark_hnsw_params(
     base: &[f32],
     query: &[f32],
@@ -134,7 +135,7 @@ fn benchmark_hnsw_params(
 
     let graph_overhead = estimate_hnsw_overhead(num_vectors, dim, m);
     tracker.record_index_overhead(graph_overhead);
-    let memory_mb = tracker.total_memory_mb() as f64 / 1024.0 / 1024.0;
+    let memory_mb = tracker.total_memory_mb() / 1024.0 / 1024.0;
 
     // Search
     let search_start = Instant::now();

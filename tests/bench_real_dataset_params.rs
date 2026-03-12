@@ -1,4 +1,5 @@
 #![cfg(feature = "long-tests")]
+#![allow(dead_code)]
 //! BENCH-027: 真实数据集参数验证
 //!
 //! 在 SIFT1M/Deep1M 真实数据集上验证 HNSW 参数敏感性分析结论
@@ -21,10 +22,11 @@ use knowhere_rs::faiss::HnswIndex;
 use knowhere_rs::IndexType;
 use knowhere_rs::MetricType;
 use serde::{Deserialize, Serialize};
-use std::env;
 use std::fs;
 use std::path::Path;
 use std::time::Instant;
+
+type GroundTruth = Vec<Vec<i32>>;
 
 /// Parameter combination for HNSW
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,7 +91,7 @@ fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
 
 /// Load SIFT1M dataset from file
 /// Expected format: base vectors (1M x 128 f32), query vectors (10K x 128 f32), ground truth (10K x 100 i32)
-fn load_sift1m(base_path: &str) -> Result<(Vec<f32>, Vec<f32>, Vec<Vec<i32>>), String> {
+fn load_sift1m(base_path: &str) -> Result<(Vec<f32>, Vec<f32>, GroundTruth), String> {
     let base_file = format!("{}/base.fvecs", base_path);
     let query_file = format!("{}/query.fvecs", base_path);
     let gt_file = format!("{}/groundtruth.ivecs", base_path);
@@ -183,17 +185,18 @@ fn parse_ivecs(data: &[u8], k: usize) -> Result<Vec<Vec<i32>>, String> {
 }
 
 /// Load Deep1M dataset (HDF5 format)
-fn load_deep1m(base_path: &str) -> Result<(Vec<f32>, Vec<f32>, Vec<Vec<i32>>), String> {
+fn load_deep1m(base_path: &str) -> Result<(Vec<f32>, Vec<f32>, GroundTruth), String> {
     // For now, use a simplified loader - in production, use hdf5 crate
-    let base_file = format!("{}/base.fvecs", base_path);
-    let query_file = format!("{}/query.fvecs", base_path);
-    let gt_file = format!("{}/groundtruth.ivecs", base_path);
+    let _base_file = format!("{}/base.fvecs", base_path);
+    let _query_file = format!("{}/query.fvecs", base_path);
+    let _gt_file = format!("{}/groundtruth.ivecs", base_path);
 
     // Same format as SIFT1M but with 96 dimensions
     load_sift1m(base_path) // Reuse SIFT1M loader for now
 }
 
 /// Benchmark HNSW with specific parameter combination on real dataset
+#[allow(clippy::too_many_arguments)]
 fn benchmark_hnsw_real(
     base: &[f32],
     query: &[f32],
@@ -226,7 +229,7 @@ fn benchmark_hnsw_real(
     let build_time = build_start.elapsed().as_secs_f64() * 1000.0;
 
     // Estimate index size
-    let index_size_mb = (base.len() * std::mem::size_of::<f32>() * 2) as f64 / (1024.0 * 1024.0);
+    let index_size_mb = (std::mem::size_of_val(base) * 2) as f64 / (1024.0 * 1024.0);
 
     // Search
     let search_start = Instant::now();
@@ -430,7 +433,7 @@ fn test_deep1m_param_validation() {
         return;
     }
 
-    let (base, query, ground_truth) =
+    let (base, query, _ground_truth) =
         load_deep1m(dataset_path.unwrap()).expect("Failed to load Deep1M dataset");
 
     println!(

@@ -375,11 +375,7 @@ impl AnisotropicQuantizer {
 
         let mut distance = 0.0f32;
 
-        for (p, &codeword) in codes
-            .iter()
-            .enumerate()
-            .take(self.config.num_partitions)
-        {
+        for (p, &codeword) in codes.iter().enumerate().take(self.config.num_partitions) {
             let start = p * self.sub_dim;
             let sub_query = &query[start..start + self.sub_dim];
 
@@ -407,7 +403,7 @@ pub struct ScaNNIndex {
     quantizer: AnisotropicQuantizer,
 
     /// Inverted lists: partition -> [(id, codes)]
-    inverted_lists: RwLock<HashMap<usize, Vec<(i64, Vec<u8>)>>>,
+    inverted_lists: RwLock<ScannInvertedLists>,
 
     /// Original vectors for reranking
     vectors: RwLock<Vec<f32>>,
@@ -415,6 +411,8 @@ pub struct ScaNNIndex {
 
     trained: bool,
 }
+
+type ScannInvertedLists = HashMap<usize, Vec<(i64, Vec<u8>)>>;
 
 impl ScaNNIndex {
     /// Create a new SCANN index
@@ -498,7 +496,6 @@ impl ScaNNIndex {
         let candidates = self.coarse_search(query, self.config.reorder_k);
 
         // Phase 2: Rerank using original vectors
-        
 
         self.rerank(query, candidates, k)
     }
@@ -557,7 +554,6 @@ impl ScaNNIndex {
         let candidates = self.coarse_search_with_bitset(query, self.config.reorder_k, bitset);
 
         // Phase 2: Rerank using original vectors with bitset filtering
-        
 
         self.rerank_with_bitset(query, candidates, k, bitset)
     }
@@ -1062,8 +1058,10 @@ mod tests {
         assert!(config.validate(128).is_ok());
         assert!(config.validate(127).is_err());
 
-        let mut config = ScaNNConfig::default();
-        config.num_partitions = 0;
+        let config = ScaNNConfig {
+            num_partitions: 0,
+            ..ScaNNConfig::default()
+        };
         assert!(config.validate(128).is_err());
     }
 
@@ -1077,8 +1075,8 @@ mod tests {
         // Generate test data (keep small for stable regression runtime)
         let n = 256;
         let mut data = vec![0.0f32; n * dim];
-        for i in 0..data.len() {
-            data[i] = (i as f32 * 0.01).sin();
+        for (i, value) in data.iter_mut().enumerate() {
+            *value = (i as f32 * 0.01).sin();
         }
 
         // Train
@@ -1108,14 +1106,14 @@ mod tests {
 
         let n = 500;
         let mut data = vec![0.0f32; n * dim];
-        for i in 0..data.len() {
-            data[i] = (i as f32 * 0.02).cos();
+        for (i, value) in data.iter_mut().enumerate() {
+            *value = (i as f32 * 0.02).cos();
         }
 
         // Generate query sample
         let mut query_sample = vec![0.0f32; 100 * dim];
-        for i in 0..query_sample.len() {
-            query_sample[i] = (i as f32 * 0.03).sin();
+        for (i, value) in query_sample.iter_mut().enumerate() {
+            *value = (i as f32 * 0.03).sin();
         }
 
         // Train with query sample
@@ -1138,8 +1136,8 @@ mod tests {
 
         let n = 100;
         let mut data = vec![0.0f32; n * dim];
-        for i in 0..data.len() {
-            data[i] = (i as f32 * 0.05).sin();
+        for (i, value) in data.iter_mut().enumerate() {
+            *value = (i as f32 * 0.05).sin();
         }
 
         index.train(&data, None);
@@ -1175,8 +1173,8 @@ mod tests {
 
         let n = 50;
         let mut data = vec![0.0f32; n * dim];
-        for i in 0..data.len() {
-            data[i] = (i as f32 * 0.05).sin();
+        for (i, value) in data.iter_mut().enumerate() {
+            *value = (i as f32 * 0.05).sin();
         }
 
         let ids: Vec<i64> = (1000..1000 + n as i64).collect();
@@ -1215,8 +1213,8 @@ mod tests {
 
         let n = 200;
         let mut data = vec![0.0f32; n * dim];
-        for i in 0..data.len() {
-            data[i] = (i as f32 * 0.02).sin();
+        for (i, value) in data.iter_mut().enumerate() {
+            *value = (i as f32 * 0.02).sin();
         }
 
         quantizer.train(&data, None);
@@ -1242,8 +1240,8 @@ mod tests {
         // Generate test data
         let n = 200;
         let mut data = vec![0.0f32; n * dim];
-        for i in 0..data.len() {
-            data[i] = (i as f32 * 0.01).sin();
+        for (i, value) in data.iter_mut().enumerate() {
+            *value = (i as f32 * 0.01).sin();
         }
 
         // Train and add
@@ -1251,7 +1249,7 @@ mod tests {
         index.add(&data, None);
 
         // Create bitset: filter out first 10 vectors (indices 0-9)
-        let mut bitset_data = vec![0u8; (n + 7) / 8];
+        let mut bitset_data = vec![0u8; n.div_ceil(8)];
         for i in 0..10 {
             bitset_data[i / 8] |= 1 << (i % 8);
         }
@@ -1285,8 +1283,8 @@ mod tests {
 
         let n = 50;
         let mut data = vec![0.0f32; n * dim];
-        for i in 0..data.len() {
-            data[i] = (i as f32 * 0.05).sin();
+        for (i, value) in data.iter_mut().enumerate() {
+            *value = (i as f32 * 0.05).sin();
         }
 
         index.train(&data, None);
@@ -1313,8 +1311,8 @@ mod tests {
 
         let n = 100;
         let mut data = vec![0.0f32; n * dim];
-        for i in 0..data.len() {
-            data[i] = (i as f32 * 0.02).cos();
+        for (i, value) in data.iter_mut().enumerate() {
+            *value = (i as f32 * 0.02).cos();
         }
 
         index.train(&data, None);
@@ -1331,7 +1329,7 @@ mod tests {
         let results = index.search_with_bitset(query, 5, &bitset);
 
         // Verify all results are odd indices (not filtered)
-        assert!(results.len() > 0);
+        assert!(!results.is_empty());
         for (id, _) in &results {
             assert_eq!(*id % 2, 1, "ID {} should be odd (not filtered)", id);
         }

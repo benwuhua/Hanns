@@ -1,5 +1,5 @@
 //! IVF-Flat 召回率与性能平衡分析
-//! 
+//!
 //! 对比不同 nprobe 下的召回率和 QPS
 
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType};
@@ -83,7 +83,10 @@ fn ivfpq_nprobe_expands_coarse_probe_order() {
 #[cfg(feature = "long-tests")]
 #[test]
 fn ivf_flat_nprobe_recall_tradeoff() {
-    println!("\n=== IVF-Flat nprobe-Recall Tradeoff (nlist={}) ===", NLIST);
+    println!(
+        "\n=== IVF-Flat nprobe-Recall Tradeoff (nlist={}) ===",
+        NLIST
+    );
     println!("Base: {} vectors, {} queries, dim={}", NBASE, NQ, DIM);
     println!();
 
@@ -113,7 +116,7 @@ fn ivf_flat_nprobe_recall_tradeoff() {
 
     for nprobe in [1, 2, 5, 10, 16, 25, 50, 100] {
         let mut total_recall = 0.0;
-        
+
         let ivf_req = SearchRequest {
             top_k: TOP_K,
             nprobe,
@@ -123,13 +126,21 @@ fn ivf_flat_nprobe_recall_tradeoff() {
         let start = Instant::now();
         for i in 0..NQ {
             let q = &query[i * DIM..(i + 1) * DIM];
-            
-            let gt = flat.search(q, &SearchRequest { top_k: TOP_K, ..Default::default() }).unwrap();
+
+            let gt = flat
+                .search(
+                    q,
+                    &SearchRequest {
+                        top_k: TOP_K,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
             let ivf_result = ivf.search(q, &ivf_req).unwrap();
 
             let gt_set: std::collections::HashSet<i64> = gt.ids.into_iter().collect();
             let ivf_set: std::collections::HashSet<i64> = ivf_result.ids.into_iter().collect();
-            
+
             let hit = gt_set.intersection(&ivf_set).count() as f64;
             total_recall += hit / TOP_K as f64;
         }
@@ -145,7 +156,7 @@ fn ivf_flat_nprobe_recall_tradeoff() {
             qps / 5000.0
         );
     }
-    
+
     println!();
     println!("结论：");
     println!("- nprobe=16: R@10≈43%, QPS≈{}K → 适合低延迟场景", 29);

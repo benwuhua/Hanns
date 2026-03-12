@@ -1,5 +1,6 @@
 use crate::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 use crate::benchmark::{confidence_from_recall, CONFIDENCE_TRUSTED};
+use crate::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
 use crate::faiss::{HnswIndex, IvfFlatIndex, IvfPqIndex};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -61,7 +62,13 @@ fn compute_ground_truth(base: &[f32], queries: &[f32], dim: usize, k: usize) -> 
             })
             .collect();
         pairs.sort_by(|a, b| a.1.partial_cmp(&b.1).expect("distance compare"));
-        gt.push(pairs.into_iter().take(k).map(|(idx, _)| idx as i32).collect());
+        gt.push(
+            pairs
+                .into_iter()
+                .take(k)
+                .map(|(idx, _)| idx as i32)
+                .collect(),
+        );
     }
 
     gt
@@ -252,12 +259,7 @@ fn bench_ivf(dataset: &str, base: &[f32], queries: &[f32], gt: &[Vec<i32>]) -> C
     }
 }
 
-fn bench_ivfpq(
-    dataset: &str,
-    base: &[f32],
-    queries: &[f32],
-    gt: &[Vec<i32>],
-) -> CrossDatasetRow {
+fn bench_ivfpq(dataset: &str, base: &[f32], queries: &[f32], gt: &[Vec<i32>]) -> CrossDatasetRow {
     let config = IndexConfig {
         index_type: IndexType::IvfPq,
         dim: DIM,
@@ -311,12 +313,51 @@ fn bench_ivfpq(
     }
 }
 
+fn bench_diskann(dataset: &str, base: &[f32], queries: &[f32], gt: &[Vec<i32>]) -> CrossDatasetRow {
+    let config = AisaqConfig {
+        max_degree: 48,
+        search_list_size: 128,
+        beamwidth: 8,
+        num_entry_points: 1,
+        ..AisaqConfig::default()
+    };
+
+    let mut index = PQFlashIndex::new(config, MetricType::L2, DIM).expect("create diskann");
+    index.add(base).expect("add diskann");
+
+    let mut all_results = Vec::with_capacity(QUERY_SIZE);
+    let start = Instant::now();
+    for i in 0..QUERY_SIZE {
+        let q = &queries[i * DIM..(i + 1) * DIM];
+        let result = index.search(q, TOP_K).expect("search diskann");
+        all_results.push(result.ids.into_iter().map(|id| id as i32).collect());
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    let qps = QUERY_SIZE as f64 / elapsed;
+    let recall = average_recall_at_k(&all_results, gt, TOP_K);
+
+    CrossDatasetRow {
+        dataset: dataset.to_string(),
+        index: "DiskANN".to_string(),
+        base_size: BASE_SIZE,
+        query_size: QUERY_SIZE,
+        dim: DIM,
+        params: "max_degree=48,search_list_size=128,beamwidth=8".to_string(),
+        ground_truth_source: "flat_exact_l2_bruteforce".to_string(),
+        recall_at_10: recall,
+        qps,
+        confidence: confidence_from_recall(recall, CROSS_DATASET_RECALL_GATE).to_string(),
+        runtime_seconds: elapsed,
+    }
+}
+
 fn build_rows(dataset: &str, base: Vec<f32>, queries: Vec<f32>) -> Vec<CrossDatasetRow> {
     let gt = compute_ground_truth(&base, &queries, DIM, TOP_K);
     vec![
         bench_hnsw(dataset, &base, &queries, &gt),
         bench_ivf(dataset, &base, &queries, &gt),
         bench_ivfpq(dataset, &base, &queries, &gt),
+        bench_diskann(dataset, &base, &queries, &gt),
     ]
 }
 
@@ -330,7 +371,11 @@ pub fn build_cross_dataset_artifact() -> CrossDatasetArtifact {
     rows.extend(build_rows("clustered_l2", base_clustered, query_clustered));
 
     let (base_anisotropic, query_anisotropic) = dataset_anisotropic(2026);
-    rows.extend(build_rows("anisotropic_l2", base_anisotropic, query_anisotropic));
+    rows.extend(build_rows(
+        "anisotropic_l2",
+        base_anisotropic,
+        query_anisotropic,
+    ));
 
     CrossDatasetArtifact {
         benchmark: "BENCH-P2-003-cross-dataset-sampling".to_string(),
@@ -341,18 +386,24 @@ pub fn build_cross_dataset_artifact() -> CrossDatasetArtifact {
 }
 
 pub fn validate_artifact(artifact: &CrossDatasetArtifact) -> Result<(), String> {
-    if artifact.rows.len() < 9 {
-        return Err("rows must include at least 3 datasets x 3 indexes".to_string());
+    if artifact.rows.len() < 12 {
+        return Err("rows must include at least 3 datasets x 4 indexes".to_string());
     }
     for row in &artifact.rows {
         if row.dataset.trim().is_empty() {
             return Err("dataset must not be empty".to_string());
         }
         if row.ground_truth_source.trim().is_empty() {
-            return Err(format!("{}:{} missing ground_truth_source", row.dataset, row.index));
+            return Err(format!(
+                "{}:{} missing ground_truth_source",
+                row.dataset, row.index
+            ));
         }
         if !row.recall_at_10.is_finite() || !(0.0..=1.0).contains(&row.recall_at_10) {
-            return Err(format!("{}:{} invalid recall_at_10", row.dataset, row.index));
+            return Err(format!(
+                "{}:{} invalid recall_at_10",
+                row.dataset, row.index
+            ));
         }
         if !row.qps.is_finite() || row.qps <= 0.0 {
             return Err(format!("{}:{} invalid qps", row.dataset, row.index));

@@ -3,7 +3,7 @@
 //! Verify that ScaNN implements the full Index trait lifecycle and advanced interfaces.
 
 use knowhere_rs::dataset::Dataset;
-use knowhere_rs::faiss::scann::{ScaNNIndex, ScaNNConfig};
+use knowhere_rs::faiss::scann::{ScaNNConfig, ScaNNIndex};
 use knowhere_rs::index::Index;
 
 fn create_test_scann_config() -> ScaNNConfig {
@@ -56,7 +56,10 @@ fn test_scann_index_trait_lifecycle() {
     // Search with bitset (all zeros = no filtering)
     let bitset = knowhere_rs::bitset::BitsetView::new(100);
     let result_filtered = Index::search_with_bitset(&index, &query, 5, &bitset).unwrap();
-    assert!(result_filtered.ids.len() >= 5, "Should return at least 5 results with bitset");
+    assert!(
+        result_filtered.ids.len() >= 5,
+        "Should return at least 5 results with bitset"
+    );
 }
 
 #[test]
@@ -77,7 +80,10 @@ fn test_scann_index_trait_get_vector_by_ids() {
     assert_eq!(vectors.len(), ids.len() * 8);
 
     let missing = Index::get_vector_by_ids(&index, &[0, 9999]);
-    assert!(missing.is_err(), "missing ids should fail instead of returning partial data");
+    assert!(
+        missing.is_err(),
+        "missing ids should fail instead of returning partial data"
+    );
 }
 
 #[test]
@@ -97,7 +103,7 @@ fn test_scann_index_trait_ann_iterator() {
     // Get some results
     let mut count = 0;
     let mut prev_distance = f32::NEG_INFINITY;
-    while let Some((id, distance)) = iter.next() {
+    while let Some((_id, distance)) = iter.next() {
         count += 1;
         // Results should be in ascending distance order
         assert!(distance >= prev_distance, "Results not sorted by distance");
@@ -171,11 +177,21 @@ fn test_scann_index_trait_error_consistency() {
     match result {
         Ok(results) => {
             // If it succeeds, results should be empty
-            println!("Search without train succeeded with {} results (expected 0)", results.ids.len());
-            assert_eq!(results.ids.len(), 0, "Untrained index should return empty results");
+            println!(
+                "Search without train succeeded with {} results (expected 0)",
+                results.ids.len()
+            );
+            assert_eq!(
+                results.ids.len(),
+                0,
+                "Untrained index should return empty results"
+            );
         }
         Err(e) => {
-            println!("Search without train failed (some indexes require training): {:?}", e);
+            println!(
+                "Search without train failed (some indexes require training): {:?}",
+                e
+            );
         }
     }
 

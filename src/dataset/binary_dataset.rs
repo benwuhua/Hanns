@@ -5,7 +5,7 @@
 use crate::bitset::BitsetView;
 
 /// Binary dataset for bit vectors
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct BinaryDataset {
     /// Binary vector data (each u8 contains 8 dimensions)
     vectors: Vec<u8>,
@@ -24,9 +24,9 @@ pub struct BinaryDataset {
 impl BinaryDataset {
     /// Create binary dataset from u8 vector data
     pub fn from_vectors(vectors: Vec<u8>, dim_bits: usize) -> Self {
-        let dim_bytes = (dim_bits + 7) / 8; // Round up to nearest byte
+        let dim_bytes = dim_bits.div_ceil(8); // Round up to nearest byte
         let num_vectors = vectors.len() / dim_bytes;
-        
+
         Self {
             vectors,
             dim_bits,
@@ -38,12 +38,8 @@ impl BinaryDataset {
     }
 
     /// Create binary dataset with IDs
-    pub fn from_vectors_with_ids(
-        vectors: Vec<u8>,
-        dim_bits: usize,
-        ids: Vec<i64>,
-    ) -> Self {
-        let dim_bytes = (dim_bits + 7) / 8;
+    pub fn from_vectors_with_ids(vectors: Vec<u8>, dim_bits: usize, ids: Vec<i64>) -> Self {
+        let dim_bytes = dim_bits.div_ceil(8);
         let num_vectors = vectors.len() / dim_bytes;
         assert_eq!(ids.len(), num_vectors, "IDs count must match vector count");
 
@@ -129,19 +125,6 @@ impl BinaryDataset {
     }
 }
 
-impl Default for BinaryDataset {
-    fn default() -> Self {
-        Self {
-            vectors: Vec::new(),
-            dim_bits: 0,
-            dim_bytes: 0,
-            num_vectors: 0,
-            ids: None,
-            deleted: None,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,7 +162,7 @@ mod tests {
     #[test]
     fn test_binary_dataset_deleted() {
         let vectors = vec![0xFF, 0x00, 0x0F, 0xF0, 0xAA, 0x55];
-        let mut dataset = BinaryDataset::from_vectors(vectors, 16);
+        let dataset = BinaryDataset::from_vectors(vectors, 16);
         assert_eq!(dataset.num_vectors(), 3);
         assert_eq!(dataset.num_valid_vectors(), 3);
 

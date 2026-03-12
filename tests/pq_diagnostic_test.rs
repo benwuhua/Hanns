@@ -1,5 +1,11 @@
 // PQ 诊断测试 - 快速验证修复方案
 
+#[cfg(feature = "long-tests")]
+use knowhere_rs::api::{IndexConfig, IndexType, MetricType, SearchRequest};
+#[cfg(feature = "long-tests")]
+use knowhere_rs::faiss::IvfPqIndex;
+#[cfg(feature = "long-tests")]
+use knowhere_rs::quantization::{PQConfig, ProductQuantizer};
 use knowhere_rs::quantization::{ResidualPQConfig, ResidualProductQuantizer};
 use knowhere_rs::simd::{l2_distance, l2_distance_sq};
 
@@ -145,8 +151,8 @@ fn test_pure_pq_recall() {
         let mut min_dist = f32::MAX;
         let mut best_idx = 0;
 
-        for j in 0..codes.len() {
-            let dist = pq.compute_distance(query, &codes[j]);
+        for (j, code) in codes.iter().enumerate() {
+            let dist = pq.compute_distance(query, code);
             if dist < min_dist {
                 min_dist = dist;
                 best_idx = j;

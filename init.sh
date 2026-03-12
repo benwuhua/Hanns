@@ -39,6 +39,7 @@ rustup_toolchain="${3:-}"
 
 source "${repo_dir}/scripts/remote/remote_env.sh"
 load_remote_cargo_env "${cargo_env_file}" "${rustup_toolchain}"
+ensure_remote_rust_components rustfmt clippy
 
 cd "${repo_dir}"
 echo "remote_pwd=$(pwd)"

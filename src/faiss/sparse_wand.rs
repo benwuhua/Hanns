@@ -6,8 +6,7 @@
 use crate::dataset::Dataset;
 use crate::faiss::sparse_inverted::{
     ann_results_from_sparse_query, bitset_to_bool_vec, dataset_row_to_sparse, InvertedIndexAlgo,
-    SparseAnnIterator, SparseInvertedIndex, SparseInvertedSearcher, SparseMetricType,
-    SparseVector,
+    SparseAnnIterator, SparseInvertedIndex, SparseInvertedSearcher, SparseMetricType, SparseVector,
 };
 use crate::index::{AnnIterator, Index, IndexError, SearchResult};
 
@@ -279,11 +278,7 @@ mod tests {
     fn test_sparse_wand_save_load_roundtrip_preserves_wand_behavior() {
         let mut index = SparseWandIndex::new(SparseMetricType::Ip);
         let base = Dataset::from_vectors(
-            vec![
-                1.0, 0.0, 1.0, 0.0,
-                0.8, 0.2, 0.0, 0.0,
-                0.0, 1.0, 1.0, 0.0,
-            ],
+            vec![1.0, 0.0, 1.0, 0.0, 0.8, 0.2, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0],
             4,
         );
         Index::add(&mut index, &base).unwrap();

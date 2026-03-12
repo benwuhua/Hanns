@@ -482,21 +482,33 @@ impl crate::index::BinaryIndex for BinaryHnswIndex {
         self.trained
     }
 
-    fn train(&mut self, dataset: &crate::dataset::BinaryDataset) -> std::result::Result<(), crate::index::IndexError> {
+    fn train(
+        &mut self,
+        dataset: &crate::dataset::BinaryDataset,
+    ) -> std::result::Result<(), crate::index::IndexError> {
         let vectors = dataset.vectors();
-        self.train(vectors).map_err(|e| crate::index::IndexError::Unsupported(e.to_string()))
+        self.train(vectors)
+            .map_err(|e| crate::index::IndexError::Unsupported(e.to_string()))
     }
 
-    fn add(&mut self, dataset: &crate::dataset::BinaryDataset) -> std::result::Result<usize, crate::index::IndexError> {
+    fn add(
+        &mut self,
+        dataset: &crate::dataset::BinaryDataset,
+    ) -> std::result::Result<usize, crate::index::IndexError> {
         let vectors = dataset.vectors();
         let ids = dataset.ids();
-        self.add(vectors, ids).map_err(|e| crate::index::IndexError::Unsupported(e.to_string()))
+        self.add(vectors, ids)
+            .map_err(|e| crate::index::IndexError::Unsupported(e.to_string()))
     }
 
-    fn search(&self, query: &crate::dataset::BinaryDataset, top_k: usize) -> std::result::Result<crate::index::SearchResult, crate::index::IndexError> {
+    fn search(
+        &self,
+        query: &crate::dataset::BinaryDataset,
+        top_k: usize,
+    ) -> std::result::Result<crate::index::SearchResult, crate::index::IndexError> {
         let vectors = query.vectors();
         let num_queries = vectors.len() / self.dim_bytes;
-        
+
         // For simplicity, we only support single query search in BinaryIndex trait
         if num_queries == 0 {
             return Ok(crate::index::SearchResult {
@@ -505,10 +517,10 @@ impl crate::index::BinaryIndex for BinaryHnswIndex {
                 elapsed_ms: 0.0,
             });
         }
-        
+
         let query_vec = &vectors[0..self.dim_bytes];
         let result = self.search(query_vec, top_k);
-        
+
         Ok(crate::index::SearchResult {
             ids: result.ids,
             distances: result.distances,
@@ -525,7 +537,7 @@ impl crate::index::BinaryIndex for BinaryHnswIndex {
         // Search with bitset filtering
         let vectors = query.vectors();
         let num_queries = vectors.len() / self.dim_bytes;
-        
+
         if num_queries == 0 {
             return Ok(crate::index::SearchResult {
                 ids: Vec::new(),
@@ -533,14 +545,14 @@ impl crate::index::BinaryIndex for BinaryHnswIndex {
                 elapsed_ms: 0.0,
             });
         }
-        
+
         let query_vec = &vectors[0..self.dim_bytes];
         let result = self.search(query_vec, top_k);
-        
+
         // Filter out results where bitset is set
         let mut filtered_ids = Vec::new();
         let mut filtered_distances = Vec::new();
-        
+
         for (id, dist) in result.ids.iter().zip(result.distances.iter()) {
             let idx = *id as usize;
             // Only include if bit is NOT set (i.e., vector is not filtered out)
@@ -549,7 +561,7 @@ impl crate::index::BinaryIndex for BinaryHnswIndex {
                 filtered_distances.push(*dist);
             }
         }
-        
+
         Ok(crate::index::SearchResult {
             ids: filtered_ids,
             distances: filtered_distances,
@@ -558,11 +570,15 @@ impl crate::index::BinaryIndex for BinaryHnswIndex {
     }
 
     fn save(&self, _path: &str) -> std::result::Result<(), crate::index::IndexError> {
-        Err(crate::index::IndexError::Unsupported("save not implemented for BinaryHNSW".into()))
+        Err(crate::index::IndexError::Unsupported(
+            "save not implemented for BinaryHNSW".into(),
+        ))
     }
 
     fn load(&mut self, _path: &str) -> std::result::Result<(), crate::index::IndexError> {
-        Err(crate::index::IndexError::Unsupported("load not implemented for BinaryHNSW".into()))
+        Err(crate::index::IndexError::Unsupported(
+            "load not implemented for BinaryHNSW".into(),
+        ))
     }
 
     fn has_raw_data(&self) -> bool {
@@ -653,8 +669,8 @@ mod tests {
         let mut index = BinaryHnswIndex::new(&config).unwrap();
 
         // Add some data
-        index.train(&vec![0u8; 80]).unwrap();
-        index.add(&vec![0u8; 80], None).unwrap();
+        index.train(&[0u8; 80]).unwrap();
+        index.add(&[0u8; 80], None).unwrap();
         assert_eq!(index.len(), 10);
 
         // Reset

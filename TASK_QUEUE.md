@@ -1,5 +1,5 @@
 # Builder 任务队列
-> 最后更新: 2026-03-10 20:00 UTC | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
+> 最后更新: 2026-03-12 05:56 UTC | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
 
 ## 当前五个大任务
 
@@ -19,19 +19,23 @@
   - 完成标准: 基于当前 authority benchmark truth set 形成诚实的 leadership-or-no-go verdict
   - 当前结论: Rust HNSW 已关闭 recall 与生产契约缺口，但当前 trusted same-schema HDF5 lane 上 native 仍约快 `14.8x`；因此 HNSW 保持可用但不得宣称 performance leadership
 
-- [ ] **IVFPQ-P3-003**: 审计并锁定真实 IVF-PQ hot path
-  - 当前子阶段: `no_go_evidence_archived`
-  - 当前结论: `src/faiss/ivfpq.rs` 是 residual-PQ hot path；`src/faiss/ivf.rs` 只是 coarse-assignment scaffold，remote benchmark chain 已完成，但结果仍不足以支撑 parity / leadership claim
-  - 当前工作单: `memory/CURRENT_WORK_ORDER.json`
-  - 下一步: 仅在后续需要补 production contract 或 stop-go 归档细节时再回到 IVF-PQ family
+- [x] **IVFPQ-P3-003**: IVF-PQ family 最终 verdict 已归档
+  - 当前子阶段: `final_classification_archived` ✅
+  - 当前结论: `src/faiss/ivfpq.rs` 仍是 residual-PQ hot path，`src/faiss/ivf.rs` 仍是 coarse-assignment scaffold；现有 authority artifacts 一致表明 recall 未达 `0.8` gate，因此 family 级最终分类为 `no-go`
+  - 证据: `benchmark_results/ivfpq_p3_003_final_verdict.json`，以及 `tests/bench_ivf_pq_perf.rs` / `tests/bench_recall_gated_baseline.rs` / `tests/bench_cross_dataset_sampling.rs` 的默认 lane regressions
+  - 下一步: 无；除非 future authority evidence clears the recall gate, otherwise do not reopen IVF-PQ leadership or production-candidate claims
 
-- [x] **DISKANN-P3-004**: Rust DiskANN 边界已明确
-  - 结论: `src/faiss/diskann.rs` 仍是简化 Vamana + placeholder PQCode（均值量化）；`src/faiss/diskann_aisaq.rs` 暴露了真实 flash-layout / beam-search / page-cache skeleton，但仍是简化 AISAQ 路径，不具备原生 SSD 管道能力，**no-go** for C++ DiskANN 性能对比
-  - 证据: `docs/GAP_ANALYSIS.md`，`src/faiss/diskann.rs` / `src/faiss/diskann_aisaq.rs` 的 scope audit，`tests/bench_diskann_1m.rs` 的 scope-disclosure regression，`tests/bench_compare.rs` 的 compare-lane exclusion regression
+- [x] **DISKANN-P3-004**: Rust DiskANN family 最终 verdict 已归档
+  - 当前子阶段: `family_final_classification_archived` ✅
+  - 当前结论: `benchmark_results/diskann_p3_004_benchmark_gate.json` 继续把 benchmark lane 固化为 `no_go_for_native_comparable_benchmark`，而新的 `benchmark_results/diskann_p3_004_final_verdict.json` 把 family-level final classification 固化为 `constrained`。也就是说，`src/faiss/diskann.rs` 与 `src/faiss/diskann_aisaq.rs` 仍是功能可用但简化的 Vamana/AISAQ 实现，不允许进入 native-comparable benchmark 或 leadership claim。
+  - 证据: `benchmark_results/diskann_p3_004_final_verdict.json`，`benchmark_results/diskann_p3_004_benchmark_gate.json`，`benchmark_results/cross_dataset_sampling.json`，`src/faiss/diskann.rs` / `src/faiss/diskann_aisaq.rs` 的 scope audit，`tests/bench_diskann_1m.rs` / `tests/bench_compare.rs` 的 final-verdict regressions
+  - 下一步: 无；family-level DiskANN classification 已关闭，转入跨 family 的 `final-core-path-classification`
 
-- [ ] **PROD-P3-005**: 最终生产验收门
-  - 范围: semantic fidelity、persistence / deserialize-from-file、FFI metadata / additional scalar、minimum observability / runtime governance
-  - 说明: 只在前 4 个大任务收口后统一复核
+- [x] **PROD-P3-005**: 最终生产验收门 verdict 已归档
+  - 当前子阶段: `final_acceptance_verdict_archived` ✅
+  - 当前结论: production engineering gates 已全部收口，但项目最终 verdict 明确为 `not accepted`；当前 authority evidence 仍不支持 non-GPU production replacement claim
+  - 证据: `benchmark_results/final_production_acceptance.json`、`benchmark_results/final_core_path_classification.json`、`benchmark_results/final_performance_leadership_proof.json`
+  - 下一步: 无；除非新的 authority artifact 实质改变 leadership 或 core-path verdict chain，否则不要重开正向 final acceptance claim
 
 ## 粒度约定
 

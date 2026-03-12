@@ -76,7 +76,11 @@ pub trait BinaryIndex: Send + Sync {
     fn add(&mut self, dataset: &crate::dataset::BinaryDataset) -> Result<usize, IndexError>;
 
     /// 搜索
-    fn search(&self, query: &crate::dataset::BinaryDataset, top_k: usize) -> Result<SearchResult, IndexError>;
+    fn search(
+        &self,
+        query: &crate::dataset::BinaryDataset,
+        top_k: usize,
+    ) -> Result<SearchResult, IndexError>;
 
     /// 搜索时使用 Bitset 过滤
     fn search_with_bitset(
@@ -382,7 +386,6 @@ impl SearchResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dataset::Dataset;
 
     #[test]
     fn test_search_result() {

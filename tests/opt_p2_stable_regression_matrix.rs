@@ -31,41 +31,201 @@ macro_rules! illegal_case {
 }
 
 // Dense float index coverage
-legal_case!(legal_flat_float_l2, IndexType::Flat, DataType::Float, MetricType::L2);
-legal_case!(legal_flat_float_ip, IndexType::Flat, DataType::Float, MetricType::Ip);
-legal_case!(legal_flat_float16_cosine, IndexType::Flat, DataType::Float16, MetricType::Cosine);
-legal_case!(legal_ivf_flat_bf16_l2, IndexType::IvfFlat, DataType::BFloat16, MetricType::L2);
-legal_case!(legal_ivf_pq_float_ip, IndexType::IvfPq, DataType::Float, MetricType::Ip);
-legal_case!(legal_ivf_sq8_float16_cosine, IndexType::IvfSq8, DataType::Float16, MetricType::Cosine);
-legal_case!(legal_ivf_sq_cc_bf16_ip, IndexType::IvfSqCc, DataType::BFloat16, MetricType::Ip);
-legal_case!(legal_ivf_rabitq_float_l2, IndexType::IvfRabitq, DataType::Float, MetricType::L2);
-legal_case!(legal_diskann_float16_l2, IndexType::DiskAnn, DataType::Float16, MetricType::L2);
-legal_case!(legal_aisaq_bf16_cosine, IndexType::Aisaq, DataType::BFloat16, MetricType::Cosine);
+legal_case!(
+    legal_flat_float_l2,
+    IndexType::Flat,
+    DataType::Float,
+    MetricType::L2
+);
+legal_case!(
+    legal_flat_float_ip,
+    IndexType::Flat,
+    DataType::Float,
+    MetricType::Ip
+);
+legal_case!(
+    legal_flat_float16_cosine,
+    IndexType::Flat,
+    DataType::Float16,
+    MetricType::Cosine
+);
+legal_case!(
+    legal_ivf_flat_bf16_l2,
+    IndexType::IvfFlat,
+    DataType::BFloat16,
+    MetricType::L2
+);
+legal_case!(
+    legal_ivf_pq_float_ip,
+    IndexType::IvfPq,
+    DataType::Float,
+    MetricType::Ip
+);
+legal_case!(
+    legal_ivf_sq8_float16_cosine,
+    IndexType::IvfSq8,
+    DataType::Float16,
+    MetricType::Cosine
+);
+legal_case!(
+    legal_ivf_sq_cc_bf16_ip,
+    IndexType::IvfSqCc,
+    DataType::BFloat16,
+    MetricType::Ip
+);
+legal_case!(
+    legal_ivf_rabitq_float_l2,
+    IndexType::IvfRabitq,
+    DataType::Float,
+    MetricType::L2
+);
+legal_case!(
+    legal_diskann_float16_l2,
+    IndexType::DiskAnn,
+    DataType::Float16,
+    MetricType::L2
+);
+legal_case!(
+    legal_aisaq_bf16_cosine,
+    IndexType::Aisaq,
+    DataType::BFloat16,
+    MetricType::Cosine
+);
 
 // HNSW family
-legal_case!(legal_hnsw_float_cosine, IndexType::Hnsw, DataType::Float, MetricType::Cosine);
-legal_case!(legal_hnsw_int8_ip, IndexType::Hnsw, DataType::Int8, MetricType::Ip);
-legal_case!(legal_hnsw_binary_hamming, IndexType::Hnsw, DataType::Binary, MetricType::Hamming);
-legal_case!(legal_hnsw_sq_int8_l2, IndexType::HnswSq, DataType::Int8, MetricType::L2);
-legal_case!(legal_hnsw_pq_bf16_ip, IndexType::HnswPq, DataType::BFloat16, MetricType::Ip);
-legal_case!(legal_hnsw_prq_float16_cosine, IndexType::HnswPrq, DataType::Float16, MetricType::Cosine);
+legal_case!(
+    legal_hnsw_float_cosine,
+    IndexType::Hnsw,
+    DataType::Float,
+    MetricType::Cosine
+);
+legal_case!(
+    legal_hnsw_int8_ip,
+    IndexType::Hnsw,
+    DataType::Int8,
+    MetricType::Ip
+);
+legal_case!(
+    legal_hnsw_binary_hamming,
+    IndexType::Hnsw,
+    DataType::Binary,
+    MetricType::Hamming
+);
+legal_case!(
+    legal_hnsw_sq_int8_l2,
+    IndexType::HnswSq,
+    DataType::Int8,
+    MetricType::L2
+);
+legal_case!(
+    legal_hnsw_pq_bf16_ip,
+    IndexType::HnswPq,
+    DataType::BFloat16,
+    MetricType::Ip
+);
+legal_case!(
+    legal_hnsw_prq_float16_cosine,
+    IndexType::HnswPrq,
+    DataType::Float16,
+    MetricType::Cosine
+);
 
 // Binary and sparse
-legal_case!(legal_bin_flat_binary_hamming, IndexType::BinFlat, DataType::Binary, MetricType::Hamming);
-legal_case!(legal_bin_ivf_flat_binary_hamming, IndexType::BinIvfFlat, DataType::Binary, MetricType::Hamming);
-legal_case!(legal_binary_hnsw_binary_hamming, IndexType::BinaryHnsw, DataType::Binary, MetricType::Hamming);
-legal_case!(legal_sparse_inverted_sparse_ip, IndexType::SparseInverted, DataType::SparseFloat, MetricType::Ip);
-legal_case!(legal_sparse_wand_sparse_ip, IndexType::SparseWand, DataType::SparseFloat, MetricType::Ip);
-legal_case!(legal_sparse_wand_cc_sparse_ip, IndexType::SparseWandCc, DataType::SparseFloat, MetricType::Ip);
-legal_case!(legal_sparse_inverted_cc_sparse_ip, IndexType::SparseInvertedCc, DataType::SparseFloat, MetricType::Ip);
-legal_case!(legal_minhash_binary_hamming, IndexType::MinHashLsh, DataType::Binary, MetricType::Hamming);
+legal_case!(
+    legal_bin_flat_binary_hamming,
+    IndexType::BinFlat,
+    DataType::Binary,
+    MetricType::Hamming
+);
+legal_case!(
+    legal_bin_ivf_flat_binary_hamming,
+    IndexType::BinIvfFlat,
+    DataType::Binary,
+    MetricType::Hamming
+);
+legal_case!(
+    legal_binary_hnsw_binary_hamming,
+    IndexType::BinaryHnsw,
+    DataType::Binary,
+    MetricType::Hamming
+);
+legal_case!(
+    legal_sparse_inverted_sparse_ip,
+    IndexType::SparseInverted,
+    DataType::SparseFloat,
+    MetricType::Ip
+);
+legal_case!(
+    legal_sparse_wand_sparse_ip,
+    IndexType::SparseWand,
+    DataType::SparseFloat,
+    MetricType::Ip
+);
+legal_case!(
+    legal_sparse_wand_cc_sparse_ip,
+    IndexType::SparseWandCc,
+    DataType::SparseFloat,
+    MetricType::Ip
+);
+legal_case!(
+    legal_sparse_inverted_cc_sparse_ip,
+    IndexType::SparseInvertedCc,
+    DataType::SparseFloat,
+    MetricType::Ip
+);
+legal_case!(
+    legal_minhash_binary_hamming,
+    IndexType::MinHashLsh,
+    DataType::Binary,
+    MetricType::Hamming
+);
 
 // Negative regression cases
-illegal_case!(illegal_flat_binary_l2, IndexType::Flat, DataType::Binary, MetricType::L2);
-illegal_case!(illegal_ivf_sq8_binary_hamming, IndexType::IvfSq8, DataType::Binary, MetricType::Hamming);
-illegal_case!(illegal_diskann_int8_l2, IndexType::DiskAnn, DataType::Int8, MetricType::L2);
-illegal_case!(illegal_sparse_inverted_sparse_l2, IndexType::SparseInverted, DataType::SparseFloat, MetricType::L2);
-illegal_case!(illegal_minhash_binary_ip, IndexType::MinHashLsh, DataType::Binary, MetricType::Ip);
-illegal_case!(illegal_hnsw_binary_cosine, IndexType::Hnsw, DataType::Binary, MetricType::Cosine);
-illegal_case!(illegal_bin_flat_float_hamming, IndexType::BinFlat, DataType::Float, MetricType::Hamming);
-illegal_case!(illegal_binary_hnsw_float_hamming, IndexType::BinaryHnsw, DataType::Float, MetricType::Hamming);
+illegal_case!(
+    illegal_flat_binary_l2,
+    IndexType::Flat,
+    DataType::Binary,
+    MetricType::L2
+);
+illegal_case!(
+    illegal_ivf_sq8_binary_hamming,
+    IndexType::IvfSq8,
+    DataType::Binary,
+    MetricType::Hamming
+);
+illegal_case!(
+    illegal_diskann_int8_l2,
+    IndexType::DiskAnn,
+    DataType::Int8,
+    MetricType::L2
+);
+illegal_case!(
+    illegal_sparse_inverted_sparse_l2,
+    IndexType::SparseInverted,
+    DataType::SparseFloat,
+    MetricType::L2
+);
+illegal_case!(
+    illegal_minhash_binary_ip,
+    IndexType::MinHashLsh,
+    DataType::Binary,
+    MetricType::Ip
+);
+illegal_case!(
+    illegal_hnsw_binary_cosine,
+    IndexType::Hnsw,
+    DataType::Binary,
+    MetricType::Cosine
+);
+illegal_case!(
+    illegal_bin_flat_float_hamming,
+    IndexType::BinFlat,
+    DataType::Float,
+    MetricType::Hamming
+);
+illegal_case!(
+    illegal_binary_hnsw_float_hamming,
+    IndexType::BinaryHnsw,
+    DataType::Float,
+    MetricType::Hamming
+);

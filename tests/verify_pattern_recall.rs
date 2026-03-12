@@ -3,7 +3,7 @@
 //!
 //! 目的：确认 Pattern 数据是否因向量重复导致虚假的高性能
 
-use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, SearchRequest};
+use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
 use knowhere_rs::benchmark::average_recall_at_k;
 use knowhere_rs::faiss::{IvfFlatIndex, MemIndex as FlatIndex};
 use knowhere_rs::MetricType;
@@ -26,7 +26,7 @@ fn gen_random_data(seed: u64, n: usize, dim: usize) -> Vec<f32> {
     (0..n * dim).map(|_| rng.gen::<f32>()).collect()
 }
 
-fn test_recall(name: &str, nbase: usize, data: &[f32], queries: &[f32]) {
+fn test_recall(name: &str, _nbase: usize, data: &[f32], queries: &[f32]) {
     let dim = DIM;
 
     // Ground Truth (Flat index)

@@ -56,6 +56,7 @@ command_override="${9:-}"
 
 source "${repo_dir}/scripts/remote/remote_env.sh"
 load_remote_cargo_env "${cargo_env_file}" "${rustup_toolchain}"
+ensure_remote_rust_components rustfmt clippy
 export CARGO_TARGET_DIR="${target_dir}"
 
 mkdir -p "${log_dir}"

@@ -70,7 +70,7 @@ fn main() {
 
     let interrupt = Interrupt::new();
     match index.search_with_interrupt(&query, 10, None, &interrupt) {
-        Ok((ids, dists)) => println!("   Search found {} results", ids.len()),
+        Ok((ids, _dists)) => println!("   Search found {} results", ids.len()),
         Err(e) => println!("   Search failed: {:?}", e),
     }
 

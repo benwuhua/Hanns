@@ -25,7 +25,11 @@ fn exact_topk(data: &[f32], queries: &[f32], dim: usize, top_k: usize) -> Vec<Ve
                 })
                 .collect();
             distances.sort_by(|a, b| a.1.total_cmp(&b.1));
-            distances.into_iter().take(top_k).map(|(id, _)| id).collect()
+            distances
+                .into_iter()
+                .take(top_k)
+                .map(|(id, _)| id)
+                .collect()
         })
         .collect()
 }
@@ -43,7 +47,11 @@ fn recall_at_k(results: &[Vec<i64>], ground_truth: &[Vec<i64>], top_k: usize) ->
     hits as f32 / (results.len() * top_k) as f32
 }
 
-fn build_clustered_dataset(clusters: usize, points_per_cluster: usize, dim: usize) -> (Vec<f32>, Vec<f32>) {
+fn build_clustered_dataset(
+    clusters: usize,
+    points_per_cluster: usize,
+    dim: usize,
+) -> (Vec<f32>, Vec<f32>) {
     let mut rng = StdRng::seed_from_u64(7);
     let mut data = Vec::with_capacity(clusters * points_per_cluster * dim);
     let mut queries = Vec::with_capacity(clusters * dim);
@@ -71,7 +79,12 @@ fn build_clustered_dataset(clusters: usize, points_per_cluster: usize, dim: usiz
     (data, queries)
 }
 
-fn search_ids(index: &IvfRaBitqIndex, queries: &[f32], dim: usize, req: &SearchRequest) -> Vec<Vec<i64>> {
+fn search_ids(
+    index: &IvfRaBitqIndex,
+    queries: &[f32],
+    dim: usize,
+    req: &SearchRequest,
+) -> Vec<Vec<i64>> {
     queries
         .chunks(dim)
         .map(|query| index.search(query, req).unwrap().ids)
@@ -122,8 +135,16 @@ fn test_refine_distance() {
         let d11 = refine.refine_distance(&query, 11).unwrap();
         let d12 = refine.refine_distance(&query, 12).unwrap();
 
-        assert!(d10 <= d11, "expected id=10 closer than id=11 for {:?}", refine_type);
-        assert!(d11 < d12, "expected id=11 closer than id=12 for {:?}", refine_type);
+        assert!(
+            d10 <= d11,
+            "expected id=10 closer than id=11 for {:?}",
+            refine_type
+        );
+        assert!(
+            d11 < d12,
+            "expected id=11 closer than id=12 for {:?}",
+            refine_type
+        );
     }
 }
 
@@ -191,10 +212,21 @@ fn test_refine_recall_improves_dataview_and_fp16() {
         radius: None,
     };
 
-    let base_recall = recall_at_k(&search_ids(&base, &queries, dim, &req), &ground_truth, top_k);
-    let dataview_recall =
-        recall_at_k(&search_ids(&dataview, &queries, dim, &req), &ground_truth, top_k);
-    let fp16_recall = recall_at_k(&search_ids(&fp16, &queries, dim, &req), &ground_truth, top_k);
+    let base_recall = recall_at_k(
+        &search_ids(&base, &queries, dim, &req),
+        &ground_truth,
+        top_k,
+    );
+    let dataview_recall = recall_at_k(
+        &search_ids(&dataview, &queries, dim, &req),
+        &ground_truth,
+        top_k,
+    );
+    let fp16_recall = recall_at_k(
+        &search_ids(&fp16, &queries, dim, &req),
+        &ground_truth,
+        top_k,
+    );
 
     println!(
         "recall@{} baseline={:.3}, dataview={:.3}, fp16={:.3}",
@@ -213,6 +245,14 @@ fn test_refine_recall_improves_dataview_and_fp16() {
         base_recall,
         fp16_recall
     );
-    assert!(dataview_recall >= 0.92, "dataview recall too low: {:.3}", dataview_recall);
-    assert!(fp16_recall >= 0.92, "fp16 recall too low: {:.3}", fp16_recall);
+    assert!(
+        dataview_recall >= 0.92,
+        "dataview recall too low: {:.3}",
+        dataview_recall
+    );
+    assert!(
+        fp16_recall >= 0.92,
+        "fp16 recall too low: {:.3}",
+        fp16_recall
+    );
 }

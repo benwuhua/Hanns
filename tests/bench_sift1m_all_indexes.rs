@@ -291,7 +291,10 @@ fn benchmark_ivf_pq(
 
     BenchResult {
         index_name: "IVF-PQ",
-        config: format!("nlist={}, nprobe={}, M={}, nbits={}", nlist, nprobe, m, nbits),
+        config: format!(
+            "nlist={}, nprobe={}, M={}, nbits={}",
+            nlist, nprobe, m, nbits
+        ),
         build_time_s,
         search_time_s,
         qps: num_queries as f64 / search_time_s,
@@ -405,10 +408,22 @@ fn bench_sift1m_all_indexes() {
     let mut results = Vec::new();
 
     println!("\n[1/5] Benchmark Flat...");
-    results.push(benchmark_flat(base, queries, &ground_truth, dim, num_queries));
+    results.push(benchmark_flat(
+        base,
+        queries,
+        &ground_truth,
+        dim,
+        num_queries,
+    ));
 
     println!("[2/5] Benchmark HNSW...");
-    results.push(benchmark_hnsw(base, queries, &ground_truth, dim, num_queries));
+    results.push(benchmark_hnsw(
+        base,
+        queries,
+        &ground_truth,
+        dim,
+        num_queries,
+    ));
 
     // IVF-Flat with two nprobe settings
     println!("[3/5] Benchmark IVF-Flat (nprobe=16)...");

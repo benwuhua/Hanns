@@ -573,7 +573,7 @@ mod tests {
             index_type: IndexType::IvfFlat,
             metric_type: MetricType::L2,
             dim: 128,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: IndexParams::ivf(100, 10),
         };
 
@@ -587,7 +587,7 @@ mod tests {
             index_type: IndexType::IvfFlat,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: IndexParams::ivf(2, 2), // nprobe=2 to search both clusters
         };
 
@@ -610,6 +610,6 @@ mod tests {
         };
 
         let result = index.search(&query, &req).unwrap();
-        assert!(result.ids.len() > 0 && result.ids.len() <= 2); // IVF may return fewer than top_k
+        assert!(!result.ids.is_empty() && result.ids.len() <= 2); // IVF may return fewer than top_k
     }
 }

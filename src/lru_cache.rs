@@ -244,8 +244,10 @@ mod tests {
     #[test]
     fn test_cache_prewarm_warmup() {
         // Use custom threshold to test warmup
-        let mut warm = CachePrewarm::default();
-        warm.warm_threshold_bytes = 1000; // Low threshold for test
+        let warm = CachePrewarm {
+            warm_threshold_bytes: 1000,
+            ..CachePrewarm::default()
+        }; // Low threshold for test
 
         let data: Vec<f32> = (0..4000).map(|i| i as f32).collect(); // 100 vectors * 128 dim
 

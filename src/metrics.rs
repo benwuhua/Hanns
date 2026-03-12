@@ -4,6 +4,8 @@
 //!
 //! SIMD 优化：当启用 "simd" feature 时，使用 SIMD 加速计算
 
+use std::str::FromStr;
+
 /// 距离度量类型
 ///
 /// 与 Milvus/KnowHere 对齐
@@ -23,16 +25,17 @@ pub enum MetricType {
     Hamming = 4,
 }
 
-impl MetricType {
-    /// 从字符串转换
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "l2" | "l2_distance" | "euclidean" => Some(MetricType::L2),
-            "ip" | "inner_product" | "dot" => Some(MetricType::IP),
-            "cosine" | "cos" | "cosine_similarity" => Some(MetricType::COSINE),
-            "jaccard" => Some(MetricType::Jaccard),
-            "hamming" => Some(MetricType::Hamming),
-            _ => None,
+impl FromStr for MetricType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "l2" | "l2_distance" | "euclidean" => Ok(MetricType::L2),
+            "ip" | "inner_product" | "dot" => Ok(MetricType::IP),
+            "cosine" | "cos" | "cosine_similarity" => Ok(MetricType::COSINE),
+            "jaccard" => Ok(MetricType::Jaccard),
+            "hamming" => Ok(MetricType::Hamming),
+            _ => Err(format!("unknown metric type: {s}")),
         }
     }
 }
@@ -398,11 +401,11 @@ mod tests {
 
     #[test]
     fn test_metric_type_from_str() {
-        assert_eq!(MetricType::from_str("l2"), Some(MetricType::L2));
-        assert_eq!(MetricType::from_str("L2"), Some(MetricType::L2));
-        assert_eq!(MetricType::from_str("ip"), Some(MetricType::IP));
-        assert_eq!(MetricType::from_str("cosine"), Some(MetricType::COSINE));
-        assert_eq!(MetricType::from_str("unknown"), None);
+        assert_eq!("l2".parse::<MetricType>(), Ok(MetricType::L2));
+        assert_eq!("L2".parse::<MetricType>(), Ok(MetricType::L2));
+        assert_eq!("ip".parse::<MetricType>(), Ok(MetricType::IP));
+        assert_eq!("cosine".parse::<MetricType>(), Ok(MetricType::COSINE));
+        assert!("unknown".parse::<MetricType>().is_err());
     }
 
     #[test]

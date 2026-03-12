@@ -45,8 +45,12 @@ impl VectorSoA {
         self.ids.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
     pub fn dim(&self, total_dim: usize) -> usize {
-        if self.ids.is_empty() {
+        if self.is_empty() {
             0
         } else {
             total_dim

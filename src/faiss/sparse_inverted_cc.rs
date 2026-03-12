@@ -137,7 +137,6 @@ impl Bm25Params {
 
     /// 计算文档值 (document value)
     pub fn compute_doc_value(&self, tf: f32, doc_len: f32) -> f32 {
-        
         tf * (self.k1 + 1.0) / (tf + self.k1 * (1.0 - self.b + self.b * doc_len / self.avgdl))
     }
 }
@@ -504,7 +503,6 @@ impl SparseInvertedIndexCC {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{IndexParams, IndexType, MetricType};
     use std::sync::Arc;
 
     #[test]

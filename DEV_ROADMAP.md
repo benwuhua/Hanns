@@ -1,6 +1,6 @@
 # Knowhere-RS Development Roadmap (Non-GPU)
 
-Last updated: 2026-03-09 13:03 UTC
+Last updated: 2026-03-12 05:56 UTC
 
 ## Goal
 
@@ -92,7 +92,7 @@ Success criteria:
 
 Any claimed completion must update all three files coherently.
 
-## Phase 5: Core Implementation Excellence, Semantic Fidelity, Production Hardening, Performance Leadership (P3) — 🚧 Active
+## Phase 5: Core Implementation Excellence, Semantic Fidelity, Production Hardening, Performance Leadership (P3) — ✅ Closed (final verdict archived as not accepted)
 
 Objective:
 
@@ -100,7 +100,7 @@ Objective:
 - Put first-priority engineering effort into the core implementation paths that actually determine competitiveness: `DISKANN / HNSW / IVF / PQ`.
 - Prove not only contract stability, but also at least one clear non-GPU performance advantage over native knowhere on a credible core path.
 
-Active major tasks:
+Closed major tasks:
 
 1. `BASELINE-P3-001`
    - Build a credible remote x86 native-vs-rs baseline with the same dataset, schema, and recall gate.
@@ -113,16 +113,28 @@ Active major tasks:
    - Decide whether the real IVF-PQ hot path is performance-lead worthy after an honest, recall-gated audit.
 
 4. `DISKANN-P3-004`
-   - Close the realism gap around Rust DiskANN / PQ so its scope is technically honest and benchmark-comparable.
+   - Archive the Rust DiskANN family as constrained: benchmark no-go for native-comparable claims, but functional simplified Vamana/AISAQ surfaces remain explicitly bounded and auditable.
 
 5. `PROD-P3-005`
    - Final production acceptance gate after the first four major tasks converge.
+   - Current substage: final acceptance verdict archived.
 
 Recently closed milestones:
+
+- `PROD-P3-005`: the remote authority lint/build gate is now closed. `prod-all-targets-clippy-fmt` passed fresh remote `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `scripts/remote/build.sh` runs, and the build lane now stays honest after a default-lane `tests/bench_diskann_1m.rs` report-helper fix that no longer depends on `feature = "long-tests"`.
+- `PROD-P3-005`: the cross-cutting remote FFI/observability/persistence gate is now also closed. Fresh authority `cargo test --lib ffi -- --nocapture`, `cargo test --lib serialize -- --nocapture`, and `cargo test --test bench_json_export -q` replays passed under isolated remote target/log directories, so the current metadata, deserialize/persistence, and JSON export contract surfaces are replayably green on x86 without any new behavior widening.
+- `PROD-P3-005`: the remote-first operator docs gate is now also closed. `README.md`, `AGENTS.md`, and `docs/FFI_CAPABILITY_MATRIX.md` now point operators at `bash init.sh`, remote authority replays, durable-state files, and the current honest verdict chain instead of stale local-only guidance.
+- `FINAL-PRODUCTION-ACCEPTANCE`: the project-level final verdict is now archived in `benchmark_results/final_production_acceptance.json` and locked by `tests/test_final_production_acceptance.rs`. All tracked features are closed, but the archived verdict is explicitly `production_accepted=false` because the remote-x86 leadership criterion remains unmet and the core-path rollup remains non-accepting.
+
+- `IVFPQ-P3-003`: IVF-PQ family verdict is now archived as `no-go`. The new artifact `benchmark_results/ivfpq_p3_003_final_verdict.json` cross-references the focused hot-path, recall-gated baseline, cross-dataset, and contract-closure evidence; `tests/bench_ivf_pq_perf.rs`, `tests/bench_recall_gated_baseline.rs`, and `tests/bench_cross_dataset_sampling.rs` now provide real default-lane verdict regressions instead of `0 tests` shells.
 
 - `IVFPQ-P1-002`: IVF/PQ reality audit is now closed with an honest no-go artifact. `src/faiss/ivf.rs` has been explicitly classified as a placeholder coarse-assignment scaffold, while the real Rust IVF-PQ hot path remains `src/faiss/ivfpq.rs` (centroid search + residual ADC). The focused artifact `benchmark_results/ivfpq_p1_002_focused.json` reports recall@10 ≈ 0.442 with `confidence=recheck required`, so IVF/PQ does not yet qualify as the next performance-lead lane.
 
 - `DISKANN-P1-003`: DiskANN boundary closure is now also closed with an explicit constrained verdict. `src/faiss/diskann.rs` keeps the `l2_sqr -> simd::l2_distance_sq` fix, and `PQCode` is now regression-locked as a mean-quantization placeholder rather than native-comparable PQ. Therefore Rust DiskANN stays classified as a simplified Vamana-style implementation and does not enter the performance-lead lane.
+- `DISKANN-P3-004`: the DiskANN remote benchmark gate is now archived as explicit no-go benchmark evidence under constrained scope. `benchmark_results/diskann_p3_004_benchmark_gate.json` and the authority-refreshed `benchmark_results/cross_dataset_sampling.json` keep DiskANN out of native-comparable benchmark interpretation while preserving a replayable artifact chain for the follow-up family verdict.
+- `DISKANN-P3-004`: the DiskANN family final verdict is now archived as `constrained` in `benchmark_results/diskann_p3_004_final_verdict.json`. The benchmark lane remains no-go for native-comparable claims, but the family itself is now explicitly classified as a functional simplified implementation rather than left in an open or ambiguous state.
+- `FINAL-CORE-CLASSIFICATION`: the final-acceptance layer now has a single rollup artifact in `benchmark_results/final_core_path_classification.json`, which archives HNSW=`functional-but-not-leading`, IVF-PQ=`no-go`, and DiskANN=`constrained` against the current baseline and cross-dataset authority evidence.
+- `FINAL-PERFORMANCE-LEADERSHIP-PROOF`: the final-acceptance layer now also has `benchmark_results/final_performance_leadership_proof.json`, which explicitly archives `criterion_met=false` because HNSW still trails native on the trusted same-schema lane and the other core families are already in non-leadership states.
 
 - `HNSW-P1-001`: first remote x86 HNSW before/after artifact chain is now landed and honest about its outcome: recall stayed roughly flat (`0.217 -> 0.215`) while qps jumped (`~1621 -> ~19235`), so the result is archived as `recheck required / no-go` evidence rather than a leadership claim.
 - `CORE-P0-001`: remote x86 SIMD verification lane 已恢复；远端 x86 focused SIMD required gates 已重新通过，`default+simd` 不再因旧 toolchain/脚本漂移缺少可信证据。
@@ -139,4 +151,4 @@ Exit criteria:
 - `DISKANN / HNSW / IVF / PQ` each have an honest implementation status: production-candidate, functional-but-not-leading, or simplified/not-comparable.
 - Semantic-conformance gaps are documented and either aligned or explicitly constrained with regression evidence.
 - Production-relevant persistence / FFI metadata semantics are stable and auditable.
-- At least one core non-GPU path shows repeatable, recall-gated performance leadership over native knowhere.
+- At least one core non-GPU path shows repeatable, recall-gated performance leadership over native knowhere. Not met on the current authority evidence; the final program verdict is therefore archived as `not accepted` in `benchmark_results/final_production_acceptance.json`.

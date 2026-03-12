@@ -72,7 +72,6 @@ impl AtomicBool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
 
     #[test]
     fn test_counter() {

@@ -68,12 +68,12 @@ impl Index for MinHashLSHIndex {
     fn search(&self, query: &Dataset, top_k: usize) -> Result<SearchResult, IndexError> {
         // Convert f32 query to bytes
         let query_f32 = query.vectors();
-        
+
         // Reinterpret f32 bytes as u8 (zero-copy)
         let query_bytes = unsafe {
             std::slice::from_raw_parts(
                 query_f32.as_ptr() as *const u8,
-                query_f32.len() * std::mem::size_of::<f32>(),
+                std::mem::size_of_val(query_f32),
             )
         };
 
@@ -100,7 +100,7 @@ impl Index for MinHashLSHIndex {
         let query_bytes = unsafe {
             std::slice::from_raw_parts(
                 query_f32.as_ptr() as *const u8,
-                query_f32.len() * std::mem::size_of::<f32>(),
+                std::mem::size_of_val(query_f32),
             )
         };
 
@@ -132,7 +132,7 @@ impl Index for MinHashLSHIndex {
         // Convert bytes to f32 (reinterpret)
         let f32_count = byte_data.len() / std::mem::size_of::<f32>();
         let mut result = Vec::with_capacity(f32_count);
-        
+
         for i in 0..f32_count {
             let offset = i * std::mem::size_of::<f32>();
             let f32_bytes: [u8; 4] = byte_data[offset..offset + 4]
@@ -166,7 +166,7 @@ impl Index for MinHashLSHIndex {
         let query_bytes = unsafe {
             std::slice::from_raw_parts(
                 query_f32.as_ptr() as *const u8,
-                query_f32.len() * std::mem::size_of::<f32>(),
+                std::mem::size_of_val(query_f32),
             )
         };
 
@@ -182,7 +182,7 @@ impl Index for MinHashLSHIndex {
         };
 
         // Create iterator from results
-        let results: Vec<(i64, f32)> = ids.into_iter().zip(distances.into_iter()).collect();
+        let results: Vec<(i64, f32)> = ids.into_iter().zip(distances).collect();
         Ok(Box::new(MinHashAnnIterator::new(results)))
     }
 
@@ -233,9 +233,7 @@ mod tests {
         }
 
         // Build index
-        index
-            .build(&data, vec_len, elem_size, 4, true)
-            .unwrap();
+        index.build(&data, vec_len, elem_size, 4, true).unwrap();
 
         // Test Index trait methods
         assert_eq!(index.index_type(), "MinHashLSH");
@@ -276,15 +274,13 @@ mod tests {
             }
         }
 
-        index
-            .build(&data, vec_len, elem_size, 4, true)
-            .unwrap();
+        index.build(&data, vec_len, elem_size, 4, true).unwrap();
 
         // Create query dataset (reinterpret bytes as f32)
         let query_start = 5 * vec_len * elem_size;
         let query_end = query_start + vec_len * elem_size;
         let query_bytes = &data[query_start..query_end];
-        
+
         let query_f32: Vec<f32> = query_bytes
             .chunks_exact(4)
             .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
@@ -322,14 +318,12 @@ mod tests {
             }
         }
 
-        index
-            .build(&data, vec_len, elem_size, 4, true)
-            .unwrap();
+        index.build(&data, vec_len, elem_size, 4, true).unwrap();
 
         // Test get_vector_by_ids
         let ids = vec![0, 1, 2];
         let vectors = Index::get_vector_by_ids(&index, &ids).unwrap();
-        
+
         // Should return dim * num_ids f32 values
         let expected_len = vec_len * elem_size / 4 * ids.len(); // bytes / 4 = f32 count per vector
         assert_eq!(vectors.len(), expected_len);
@@ -358,9 +352,7 @@ mod tests {
             }
         }
 
-        index
-            .build(&data, vec_len, elem_size, 4, true)
-            .unwrap();
+        index.build(&data, vec_len, elem_size, 4, true).unwrap();
 
         // Save
         let temp_path = "/tmp/test_minhash_index_trait.bin";
@@ -402,9 +394,7 @@ mod tests {
             }
         }
 
-        index
-            .build(&data, vec_len, elem_size, 4, true)
-            .unwrap();
+        index.build(&data, vec_len, elem_size, 4, true).unwrap();
 
         // Create query
         let query_bytes = &data[0..vec_len * elem_size];

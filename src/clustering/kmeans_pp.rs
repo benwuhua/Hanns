@@ -592,7 +592,7 @@ mod tests {
         let mut cluster1_correct = 0;
 
         for i in 0..n {
-            let assignment = result.assignments[i];
+            let _assignment = result.assignments[i];
             let x = vectors[i * dim];
             let y = vectors[i * dim + 1];
 
@@ -637,8 +637,8 @@ mod tests {
 
         for i in 0..n {
             let cluster_idx = i % k;
-            for j in 0..dim {
-                vectors.push(cluster_centers[cluster_idx][j] + (rand::random::<f32>() - 0.5) * 0.5);
+            for center in cluster_centers[cluster_idx].iter().take(dim) {
+                vectors.push(*center + (rand::random::<f32>() - 0.5) * 0.5);
             }
         }
 

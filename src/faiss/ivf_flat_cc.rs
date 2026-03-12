@@ -11,6 +11,8 @@ use std::sync::{Arc, RwLock};
 use crate::api::{IndexConfig, KnowhereError, Result, SearchRequest, SearchResult};
 use crate::executor::l2_distance;
 
+type ConcurrentIvfFlatLists = Arc<RwLock<HashMap<usize, Vec<(i64, Vec<f32>)>>>>;
+
 /// IVF-Flat-CC Index - 并发版本，存储原始向量在倒排列表中
 ///
 /// 特点：
@@ -28,7 +30,7 @@ pub struct IvfFlatCcIndex {
     /// Cluster centroids (protected by RwLock)
     centroids: Arc<RwLock<Vec<f32>>>,
     /// Inverted lists: cluster_id -> list of (vector_id, raw_vector)
-    inverted_lists: Arc<RwLock<HashMap<usize, Vec<(i64, Vec<f32>)>>>>,
+    inverted_lists: ConcurrentIvfFlatLists,
     /// All vectors (for reference)
     vectors: Arc<RwLock<Vec<f32>>>,
     ids: Arc<RwLock<Vec<i64>>>,
@@ -233,7 +235,7 @@ impl IvfFlatCcIndex {
         // Search in selected clusters
         let mut all_results: Vec<(i64, f32)> = Vec::new();
 
-        let mut scan_cluster = |cluster_id: usize, acc: &mut Vec<(i64, f32)>| {
+        let scan_cluster = |cluster_id: usize, acc: &mut Vec<(i64, f32)>| {
             if let Some(list) = inverted_lists.get(&cluster_id) {
                 for (id, vector) in list {
                     let dist = l2_distance(query, vector);
@@ -342,7 +344,7 @@ mod tests {
             index_type: IndexType::IvfFlatCc,
             metric_type: MetricType::L2,
             dim: 128,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_cc(100, 10, 1024),
         };
 
@@ -359,7 +361,7 @@ mod tests {
             index_type: IndexType::IvfFlatCc,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_cc(2, 1, 100),
         };
 
@@ -399,7 +401,7 @@ mod tests {
             index_type: IndexType::IvfFlatCc,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_cc(2, 1, 100),
         };
 
@@ -444,7 +446,7 @@ mod tests {
             index_type: IndexType::IvfFlatCc,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_cc(2, 1, 100),
         };
 
@@ -487,7 +489,7 @@ mod tests {
         for handle in handles {
             let result = handle.join().unwrap();
             assert!(result.ids.len() <= 2, "Result count should be <= top_k");
-            assert!(result.ids.len() > 0, "Should have at least 1 result");
+            assert!(!result.ids.is_empty(), "Should have at least 1 result");
         }
     }
 
@@ -497,7 +499,7 @@ mod tests {
             index_type: IndexType::IvfFlatCc,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_cc(2, 1, 100),
         };
 

@@ -1,5 +1,7 @@
 use crate::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use crate::benchmark::{average_recall_at_k, confidence_from_recall, write_report, BenchmarkReport, BenchmarkReportRow};
+use crate::benchmark::{
+    average_recall_at_k, confidence_from_recall, write_report, BenchmarkReport, BenchmarkReportRow,
+};
 use crate::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
 use crate::faiss::sparse_inverted::SparseVector;
 use crate::faiss::{
@@ -40,7 +42,13 @@ fn compute_ground_truth(base: &[f32], queries: &[f32], dim: usize, k: usize) -> 
             })
             .collect();
         pairs.sort_by(|a, b| a.1.partial_cmp(&b.1).expect("distance compare"));
-        gt.push(pairs.into_iter().take(k).map(|(idx, _)| idx as i32).collect());
+        gt.push(
+            pairs
+                .into_iter()
+                .take(k)
+                .map(|(idx, _)| idx as i32)
+                .collect(),
+        );
     }
 
     gt
@@ -74,7 +82,12 @@ fn explanation_for(index: &str, confidence: &str) -> String {
     }
 }
 
-fn make_row(index: &str, qps: f64, recall_at_10: f64, ground_truth_source: &str) -> BenchmarkReportRow {
+fn make_row(
+    index: &str,
+    qps: f64,
+    recall_at_10: f64,
+    ground_truth_source: &str,
+) -> BenchmarkReportRow {
     let confidence = confidence_from_recall(recall_at_10, RECALL_GATE).to_string();
     BenchmarkReportRow {
         index: index.to_string(),
@@ -193,8 +206,7 @@ fn bench_diskann(base: &[f32], queries: &[f32], gt: &[Vec<i32>]) -> BenchmarkRep
 }
 
 fn bench_scann(base: &[f32], queries: &[f32], gt: &[Vec<i32>]) -> BenchmarkReportRow {
-    let mut index =
-        ScaNNIndex::new(DIM, ScaNNConfig::new(64, 16, 128)).expect("create scann");
+    let mut index = ScaNNIndex::new(DIM, ScaNNConfig::new(64, 16, 128)).expect("create scann");
     index.train(base, Some(queries));
     index.add(base, None);
 
@@ -300,7 +312,11 @@ fn sparse_dot(a: &SparseVector, b: &SparseVector) -> f32 {
     a.dot(b)
 }
 
-fn compute_sparse_ground_truth(base: &[SparseVector], queries: &[SparseVector], k: usize) -> Vec<Vec<i32>> {
+fn compute_sparse_ground_truth(
+    base: &[SparseVector],
+    queries: &[SparseVector],
+    k: usize,
+) -> Vec<Vec<i32>> {
     let mut gt = Vec::with_capacity(queries.len());
     for q in queries {
         let mut pairs: Vec<(usize, f32)> = base
@@ -309,7 +325,13 @@ fn compute_sparse_ground_truth(base: &[SparseVector], queries: &[SparseVector], 
             .map(|(idx, b)| (idx, sparse_dot(q, b)))
             .collect();
         pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).expect("sparse score compare"));
-        gt.push(pairs.into_iter().take(k).map(|(idx, _)| idx as i32).collect());
+        gt.push(
+            pairs
+                .into_iter()
+                .take(k)
+                .map(|(idx, _)| idx as i32)
+                .collect(),
+        );
     }
     gt
 }
@@ -336,7 +358,12 @@ fn bench_sparse_wand() -> BenchmarkReportRow {
     let qps = QUERY_SIZE as f64 / elapsed;
     let recall_at_10 = average_recall_at_k(&all_results, &gt, TOP_K);
 
-    make_row("SparseWand", qps, recall_at_10, "sparse_exact_ip_bruteforce")
+    make_row(
+        "SparseWand",
+        qps,
+        recall_at_10,
+        "sparse_exact_ip_bruteforce",
+    )
 }
 
 pub fn build_recall_gated_baseline_report() -> BenchmarkReport {
@@ -376,7 +403,9 @@ pub fn build_recall_gated_baseline_report() -> BenchmarkReport {
     }
 }
 
-pub fn generate_recall_gated_baseline_report(path: &str) -> Result<BenchmarkReport, Box<dyn Error>> {
+pub fn generate_recall_gated_baseline_report(
+    path: &str,
+) -> Result<BenchmarkReport, Box<dyn Error>> {
     let report = build_recall_gated_baseline_report();
     write_report(path, &report)?;
     Ok(report)

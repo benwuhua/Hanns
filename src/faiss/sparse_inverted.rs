@@ -134,7 +134,6 @@ pub enum SparseMetricType {
     Bm25,
 }
 
-
 /// BM25 参数
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bm25Params {
@@ -185,8 +184,7 @@ pub struct PostingEntry {
 pub type PostingList = Vec<PostingEntry>;
 
 /// 搜索算法
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InvertedIndexAlgo {
     /// TAAT 朴素算法 (Term-At-A-Time)
     #[default]
@@ -196,7 +194,6 @@ pub enum InvertedIndexAlgo {
     /// DAAT MaxScore 算法
     DaatMaxScore,
 }
-
 
 /// 近似搜索参数
 #[derive(Debug, Clone)]
@@ -345,8 +342,8 @@ impl SparseInvertedIndex {
             version: SPARSE_INVERTED_SNAPSHOT_VERSION,
             index: self.clone(),
         };
-        let bytes = bincode::serialize(&snapshot)
-            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        let bytes =
+            bincode::serialize(&snapshot).map_err(|e| IndexError::Unsupported(e.to_string()))?;
         let mut file = File::create(path).map_err(|e| IndexError::Unsupported(e.to_string()))?;
         file.write_all(&bytes)
             .and_then(|_| file.flush())
@@ -675,7 +672,10 @@ pub struct SparseInvertedSearcher<'a> {
     algorithm: InvertedIndexAlgo,
 }
 
-pub(crate) fn dataset_row_to_sparse(dataset: &Dataset, row: usize) -> Result<SparseVector, IndexError> {
+pub(crate) fn dataset_row_to_sparse(
+    dataset: &Dataset,
+    row: usize,
+) -> Result<SparseVector, IndexError> {
     dataset
         .get_vector(row)
         .map(|v| SparseVector::from_dense(v, 0.0))
@@ -759,8 +759,7 @@ impl Index for SparseInvertedIndex {
                 .ids()
                 .and_then(|ids| ids.get(row).copied())
                 .unwrap_or(base + row as i64);
-            SparseInvertedIndex::add(self, &sparse, doc_id)
-                .map_err(IndexError::Unsupported)?;
+            SparseInvertedIndex::add(self, &sparse, doc_id).map_err(IndexError::Unsupported)?;
         }
         Ok(dataset.num_vectors())
     }
@@ -896,7 +895,11 @@ impl<'a> SparseInvertedSearcher<'a> {
         let query_terms: Vec<(u32, f32)> = query
             .elements
             .iter()
-            .filter_map(|elem| self.index.get_inner_dim_id(elem.dim).map(|inner_id| (inner_id, elem.val)))
+            .filter_map(|elem| {
+                self.index
+                    .get_inner_dim_id(elem.dim)
+                    .map(|inner_id| (inner_id, elem.val))
+            })
             .collect();
 
         if query_terms.is_empty() {
@@ -922,7 +925,9 @@ impl<'a> SparseInvertedSearcher<'a> {
             // 对该 doc_id 聚合所有命中 term 的贡献，并同步推进所有等于该 doc 的 cursor
             let mut score = 0.0f32;
             for (i, (term_idx, qval)) in query_terms.iter().enumerate() {
-                while let Some((doc_id, val)) = self.index.get_posting_entry(*term_idx as usize, cursors[i]) {
+                while let Some((doc_id, val)) =
+                    self.index.get_posting_entry(*term_idx as usize, cursors[i])
+                {
                     if doc_id < min_doc_id {
                         cursors[i] += 1;
                         continue;
@@ -1188,10 +1193,16 @@ mod tests {
         let query = SparseVector::from_pairs(&[(3, 2.0), (100, 1.0), (7, 0.7)]);
         let bitset = vec![false, true, false]; // 过滤 doc 1
 
-        let taat = SparseInvertedSearcher::new(&index, InvertedIndexAlgo::TaatNaive)
-            .search(&query, 3, Some(&bitset));
-        let wand = SparseInvertedSearcher::new(&index, InvertedIndexAlgo::DaatWand)
-            .search(&query, 3, Some(&bitset));
+        let taat = SparseInvertedSearcher::new(&index, InvertedIndexAlgo::TaatNaive).search(
+            &query,
+            3,
+            Some(&bitset),
+        );
+        let wand = SparseInvertedSearcher::new(&index, InvertedIndexAlgo::DaatWand).search(
+            &query,
+            3,
+            Some(&bitset),
+        );
 
         assert_eq!(wand, taat);
     }
@@ -1228,7 +1239,8 @@ mod tests {
         assert_eq!(loaded.count(), index.count());
         assert_eq!(loaded.dim(), index.dim());
 
-        let query = Dataset::from_vectors(vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.2, 0.0, 0.0, 0.0, 3.0], 10);
+        let query =
+            Dataset::from_vectors(vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.2, 0.0, 0.0, 0.0, 3.0], 10);
         let mut bitset = crate::bitset::BitsetView::new(12);
         bitset.set(10, true);
 

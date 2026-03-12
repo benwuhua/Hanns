@@ -378,13 +378,11 @@ unsafe fn l2_neon_sq_ptr(a: *const f32, b: *const f32, dim: usize) -> f32 {
 #[target_feature(enable = "sse4.2")]
 unsafe fn horizontal_sum_sse(sum: std::arch::x86_64::__m128) -> f32 {
     use std::arch::x86_64::*;
-    unsafe {
-        let hi = _mm_movehl_ps(sum, sum);
-        let sum2 = _mm_add_ps(sum, hi);
-        let shuf = _mm_shuffle_ps(sum2, sum2, 0x01);
-        let sum3 = _mm_add_ss(sum2, shuf);
-        _mm_cvtss_f32(sum3)
-    }
+    let hi = _mm_movehl_ps(sum, sum);
+    let sum2 = _mm_add_ps(sum, hi);
+    let shuf = _mm_shuffle_ps(sum2, sum2, 0x01);
+    let sum3 = _mm_add_ss(sum2, shuf);
+    _mm_cvtss_f32(sum3)
 }
 
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
@@ -402,12 +400,13 @@ unsafe fn horizontal_sum_avx2(sum: std::arch::x86_64::__m256) -> f32 {
 /// L2 距离（AVX-512）
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
+#[allow(clippy::incompatible_msrv)]
 #[target_feature(enable = "avx512f,avx512bw")]
 unsafe fn l2_avx512(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::*;
     let mut sum = _mm512_setzero();
     let chunks = a.len() / 16;
-    let remainder = a.len() % 16;
+    let _remainder = a.len() % 16;
 
     for i in 0..chunks {
         let va = _mm512_loadu_ps(&a[i * 16]);
@@ -431,6 +430,7 @@ unsafe fn l2_avx512(a: &[f32], b: &[f32]) -> f32 {
 /// L2 平方距离（AVX-512）- 避免 sqrt
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
+#[allow(clippy::incompatible_msrv)]
 #[target_feature(enable = "avx512f,avx512bw")]
 unsafe fn l2_avx512_sq(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::*;
@@ -458,6 +458,7 @@ unsafe fn l2_avx512_sq(a: &[f32], b: &[f32]) -> f32 {
 
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
+#[allow(clippy::incompatible_msrv)]
 #[target_feature(enable = "avx512f,avx512bw")]
 unsafe fn l2_avx512_sq_ptr(a: *const f32, b: *const f32, dim: usize) -> f32 {
     use std::arch::x86_64::*;
@@ -488,7 +489,7 @@ fn l2_neon(a: &[f32], b: &[f32]) -> f32 {
     unsafe {
         let mut sum = vdupq_n_f32(0.0);
         let chunks = a.len() / 4;
-        let remainder = a.len() % 4;
+        let _remainder = a.len() % 4;
 
         for i in 0..chunks {
             let va = vld1q_f32(&a[i * 4]);
@@ -675,6 +676,10 @@ pub fn l2_batch_4_scalar(
 
 /// AVX2 版本：一次计算 1 个查询向量与 4 个数据库向量的 L2 平方距离
 /// 使用 FMA (Fused Multiply-Add) 指令加速
+///
+/// # Safety
+/// - `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim`
+///   readable `f32` values
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
 #[target_feature(enable = "avx2,fma")]
@@ -752,6 +757,10 @@ pub unsafe fn l2_batch_4_avx2(
 }
 
 /// ARM NEON 版本：一次计算 1 个查询向量与 4 个数据库向量的 L2 平方距离
+///
+/// # Safety
+/// - `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim`
+///   readable `f32` values
 #[cfg(all(feature = "simd", target_arch = "aarch64"))]
 #[inline]
 pub unsafe fn l2_batch_4_neon(
@@ -841,8 +850,13 @@ pub unsafe fn l2_batch_4_neon(
 
 /// AVX512 版本：一次计算 1 个查询向量与 4 个数据库向量的 L2 平方距离
 /// 使用 AVX512 FMA 指令加速，每次处理 16 个元素
+///
+/// # Safety
+/// - `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim`
+///   readable `f32` values
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
+#[allow(clippy::incompatible_msrv)]
 #[target_feature(enable = "avx512f,avx512bw")]
 pub unsafe fn l2_batch_4_avx512(
     query: *const f32,
@@ -1111,6 +1125,10 @@ pub fn ip_batch_4_scalar(
 
 /// AVX2 版本：一次计算 1 个查询向量与 4 个数据库向量的内积
 /// 使用 FMA (Fused Multiply-Add) 指令加速
+///
+/// # Safety
+/// - `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim`
+///   readable `f32` values
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
 #[target_feature(enable = "avx2,fma")]
@@ -1182,6 +1200,10 @@ pub unsafe fn ip_batch_4_avx2(
 }
 
 /// ARM NEON 版本：一次计算 1 个查询向量与 4 个数据库向量的内积
+///
+/// # Safety
+/// - `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim`
+///   readable `f32` values
 #[cfg(all(feature = "simd", target_arch = "aarch64"))]
 #[inline]
 pub unsafe fn ip_batch_4_neon(
@@ -1265,8 +1287,13 @@ pub unsafe fn ip_batch_4_neon(
 
 /// AVX512 版本：一次计算 1 个查询向量与 4 个数据库向量的内积
 /// 使用 AVX512 FMA 指令加速，每次处理 16 个元素
+///
+/// # Safety
+/// - `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim`
+///   readable `f32` values
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
+#[allow(clippy::incompatible_msrv)]
 #[target_feature(enable = "avx512f")]
 pub unsafe fn ip_batch_4_avx512(
     query: *const f32,
@@ -1532,6 +1559,7 @@ fn ip_neon(a: &[f32], b: &[f32]) -> f32 {
 /// 内积（AVX-512）
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
+#[allow(clippy::incompatible_msrv)]
 #[target_feature(enable = "avx512f")]
 unsafe fn ip_avx512(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::*;
@@ -1690,7 +1718,7 @@ unsafe fn l1_sse(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::*;
     let mut sum = _mm_setzero_ps();
     let chunks = a.len() / 4;
-    let remainder = a.len() % 4;
+    let _remainder = a.len() % 4;
 
     for i in 0..chunks {
         let va = _mm_loadu_ps(&a[i * 4]);
@@ -1724,7 +1752,7 @@ unsafe fn l1_avx2(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::*;
     let mut sum = _mm256_setzero_ps();
     let chunks = a.len() / 8;
-    let remainder = a.len() % 8;
+    let _remainder = a.len() % 8;
 
     for i in 0..chunks {
         let va = _mm256_loadu_ps(&a[i * 8]);
@@ -1751,12 +1779,13 @@ unsafe fn l1_avx2(a: &[f32], b: &[f32]) -> f32 {
 /// L1 距离（AVX-512）- 16 元素并行
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
+#[allow(clippy::incompatible_msrv)]
 #[target_feature(enable = "avx512f")]
 unsafe fn l1_avx512(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::*;
     let mut sum = _mm512_setzero();
     let chunks = a.len() / 16;
-    let remainder = a.len() % 16;
+    let _remainder = a.len() % 16;
 
     for i in 0..chunks {
         let va = _mm512_loadu_ps(&a[i * 16]);
@@ -1785,7 +1814,7 @@ fn l1_neon(a: &[f32], b: &[f32]) -> f32 {
     unsafe {
         let mut sum = vdupq_n_f32(0.0);
         let chunks = a.len() / 4;
-        let remainder = a.len() % 4;
+        let _remainder = a.len() % 4;
 
         for i in 0..chunks {
             let va = vld1q_f32(&a[i * 4]);
@@ -1853,7 +1882,7 @@ unsafe fn linf_sse(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::*;
     let mut max_val = _mm_setzero_ps();
     let chunks = a.len() / 4;
-    let remainder = a.len() % 4;
+    let _remainder = a.len() % 4;
 
     for i in 0..chunks {
         let va = _mm_loadu_ps(&a[i * 4]);
@@ -1885,7 +1914,7 @@ unsafe fn linf_avx2(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::*;
     let mut max_val = _mm256_setzero_ps();
     let chunks = a.len() / 8;
-    let remainder = a.len() % 8;
+    let _remainder = a.len() % 8;
 
     for i in 0..chunks {
         let va = _mm256_loadu_ps(&a[i * 8]);
@@ -1914,12 +1943,13 @@ unsafe fn linf_avx2(a: &[f32], b: &[f32]) -> f32 {
 /// Linf 距离（AVX-512）- 16 元素并行
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
+#[allow(clippy::incompatible_msrv)]
 #[target_feature(enable = "avx512f")]
 unsafe fn linf_avx512(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::*;
     let mut max_val = _mm512_setzero();
     let chunks = a.len() / 16;
-    let remainder = a.len() % 16;
+    let _remainder = a.len() % 16;
 
     for i in 0..chunks {
         let va = _mm512_loadu_ps(&a[i * 16]);
@@ -1947,7 +1977,7 @@ fn linf_neon(a: &[f32], b: &[f32]) -> f32 {
     unsafe {
         let mut max_val = vdupq_n_f32(0.0);
         let chunks = a.len() / 4;
-        let remainder = a.len() % 4;
+        let _remainder = a.len() % 4;
 
         for i in 0..chunks {
             let va = vld1q_f32(&a[i * 4]);
@@ -2344,9 +2374,7 @@ mod tests {
     #[test]
     #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     fn test_x86_simd_l2_reduction_matches_scalar_on_irregular_input() {
-        let a: Vec<f32> = (0..37)
-            .map(|i| ((i as f32 * 1.75) % 11.0) - 3.5)
-            .collect();
+        let a: Vec<f32> = (0..37).map(|i| ((i as f32 * 1.75) % 11.0) - 3.5).collect();
         let b: Vec<f32> = (0..37)
             .map(|i| (((i as f32 + 5.0) * 0.85) % 7.0) + 1.25)
             .collect();
@@ -2357,15 +2385,27 @@ mod tests {
         if std::is_x86_feature_detected!("sse4.2") {
             let sse_sq = unsafe { l2_sse_sq(&a, &b) };
             let sse = unsafe { l2_sse(&a, &b) };
-            assert!((sse_sq - scalar_sq).abs() < 5e-4, "sse sq mismatch: {sse_sq} vs {scalar_sq}");
-            assert!((sse - scalar).abs() < 5e-4, "sse mismatch: {sse} vs {scalar}");
+            assert!(
+                (sse_sq - scalar_sq).abs() < 5e-4,
+                "sse sq mismatch: {sse_sq} vs {scalar_sq}"
+            );
+            assert!(
+                (sse - scalar).abs() < 5e-4,
+                "sse mismatch: {sse} vs {scalar}"
+            );
         }
 
         if std::is_x86_feature_detected!("avx2") {
             let avx2_sq = unsafe { l2_avx2_sq(&a, &b) };
             let avx2 = unsafe { l2_avx2(&a, &b) };
-            assert!((avx2_sq - scalar_sq).abs() < 5e-4, "avx2 sq mismatch: {avx2_sq} vs {scalar_sq}");
-            assert!((avx2 - scalar).abs() < 5e-4, "avx2 mismatch: {avx2} vs {scalar}");
+            assert!(
+                (avx2_sq - scalar_sq).abs() < 5e-4,
+                "avx2 sq mismatch: {avx2_sq} vs {scalar_sq}"
+            );
+            assert!(
+                (avx2 - scalar).abs() < 5e-4,
+                "avx2 mismatch: {avx2} vs {scalar}"
+            );
         }
     }
 }
@@ -2506,7 +2546,7 @@ unsafe fn jaccard_counts_popcnt(a: &[u8], b: &[u8]) -> (usize, usize) {
     let mut union_count = 0usize;
 
     let chunks = a.len() / 8;
-    let remainder = a.len() % 8;
+    let _remainder = a.len() % 8;
 
     // Process 8 bytes at a time
     for i in 0..chunks {

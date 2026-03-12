@@ -638,12 +638,12 @@ mod tests {
         let mut vectors = vec![0u8; 32 * 3];
         // Vector 0: all zeros
         // Vector 1: all ones
-        for i in 32..64 {
-            vectors[i] = 0xff;
+        for value in vectors.iter_mut().take(64).skip(32) {
+            *value = 0xff;
         }
         // Vector 2: mixed
-        for i in 64..96 {
-            vectors[i] = 0x0f;
+        for value in vectors.iter_mut().take(96).skip(64) {
+            *value = 0x0f;
         }
         let ids = vec![0, 1, 2];
 

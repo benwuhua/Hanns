@@ -26,25 +26,99 @@
 
 #![allow(dead_code)]
 
-use jni::objects::{JByteArray, JClass, JFloatArray, JLongArray, JObjectArray};
+use jni::objects::{JByteArray, JClass, JFloatArray, JLongArray};
 use jni::sys::{jfloat, jint, jlong};
 use jni::JNIEnv;
 use std::collections::HashMap;
+use std::fs;
 use std::sync::Mutex;
+use tempfile::NamedTempFile;
 
 use crate::api::{
-    IndexConfig, IndexParams, IndexType, MetricType, SearchRequest, SearchResult as ApiSearchResult,
+    DataType, IndexConfig, IndexParams, IndexType, KnowhereError, MetricType, SearchRequest,
+    SearchResult as ApiSearchResult,
 };
 use crate::faiss::{DiskAnnIndex, HnswIndex, IvfPqIndex, MemIndex};
-use crate::index::Index;
+
+enum RegisteredIndex {
+    Mem(MemIndex),
+    Hnsw(HnswIndex),
+    IvfPq(IvfPqIndex),
+    DiskAnn(DiskAnnIndex),
+}
+
+impl RegisteredIndex {
+    fn add(&mut self, vectors: &[f32], ids: Option<&[i64]>) -> crate::api::Result<usize> {
+        match self {
+            RegisteredIndex::Mem(idx) => match idx.add(vectors, ids) {
+                Ok(count) => Ok(count),
+                Err(err) if needs_training(&err) => {
+                    idx.train(vectors)?;
+                    idx.add(vectors, ids)
+                }
+                Err(err) => Err(err),
+            },
+            RegisteredIndex::Hnsw(idx) => match idx.add(vectors, ids) {
+                Ok(count) => Ok(count),
+                Err(err) if needs_training(&err) => {
+                    idx.train(vectors)?;
+                    idx.add(vectors, ids)
+                }
+                Err(err) => Err(err),
+            },
+            RegisteredIndex::IvfPq(idx) => match idx.add(vectors, ids) {
+                Ok(count) => Ok(count),
+                Err(err) if needs_training(&err) => {
+                    idx.train(vectors)?;
+                    idx.add(vectors, ids)
+                }
+                Err(err) => Err(err),
+            },
+            RegisteredIndex::DiskAnn(idx) => match idx.add(vectors, ids) {
+                Ok(count) => Ok(count),
+                Err(err) if needs_training(&err) => {
+                    idx.train(vectors)?;
+                    idx.add(vectors, ids)
+                }
+                Err(err) => Err(err),
+            },
+        }
+    }
+
+    fn search(&self, query: &[f32], req: &SearchRequest) -> crate::api::Result<ApiSearchResult> {
+        match self {
+            RegisteredIndex::Mem(idx) => idx.search(query, req),
+            RegisteredIndex::Hnsw(idx) => idx.search(query, req),
+            RegisteredIndex::IvfPq(idx) => idx.search(query, req),
+            RegisteredIndex::DiskAnn(idx) => idx.search(query, req),
+        }
+    }
+
+    fn serialize_to_bytes(&self) -> crate::api::Result<Vec<u8>> {
+        match self {
+            RegisteredIndex::Mem(idx) => idx.serialize_to_memory(),
+            RegisteredIndex::Hnsw(idx) => save_to_temp_bytes(|path| idx.save(path)),
+            RegisteredIndex::IvfPq(idx) => save_to_temp_bytes(|path| idx.save(path)),
+            RegisteredIndex::DiskAnn(idx) => save_to_temp_bytes(|path| idx.save(path)),
+        }
+    }
+}
 
 /// 全局索引注册表
-static INDEX_REGISTRY: Mutex<Option<HashMap<jlong, Box<dyn Index + Send + Sync>>>> =
-    Mutex::new(None);
+static INDEX_REGISTRY: Mutex<Option<HashMap<jlong, RegisteredIndex>>> = Mutex::new(None);
+static RESULT_REGISTRY: Mutex<Option<HashMap<jlong, ApiSearchResult>>> = Mutex::new(None);
 
-fn get_registry(
-) -> std::sync::MutexGuard<'static, Option<HashMap<jlong, Box<dyn Index + Send + Sync>>>> {
+fn get_registry() -> std::sync::MutexGuard<'static, Option<HashMap<jlong, RegisteredIndex>>> {
     let mut guard = INDEX_REGISTRY.lock().unwrap();
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard
+}
+
+fn get_result_registry() -> std::sync::MutexGuard<'static, Option<HashMap<jlong, ApiSearchResult>>>
+{
+    let mut guard = RESULT_REGISTRY.lock().unwrap();
     if guard.is_none() {
         *guard = Some(HashMap::new());
     }
@@ -64,6 +138,12 @@ pub fn init() {
     let mut guard = get_registry();
     if guard.is_none() {
         *guard = Some(HashMap::new());
+    }
+    drop(guard);
+
+    let mut result_guard = get_result_registry();
+    if result_guard.is_none() {
+        *result_guard = Some(HashMap::new());
     }
 }
 
@@ -89,6 +169,161 @@ fn parse_metric_type(t: i32) -> MetricType {
     }
 }
 
+fn build_config(
+    index_type: IndexType,
+    dim: usize,
+    metric_type: MetricType,
+    params: IndexParams,
+) -> IndexConfig {
+    IndexConfig {
+        index_type,
+        metric_type,
+        dim,
+        data_type: DataType::Float,
+        params,
+    }
+}
+
+fn build_registered_index(config: &IndexConfig) -> crate::api::Result<RegisteredIndex> {
+    match config.index_type {
+        IndexType::Flat | IndexType::IvfFlat => Ok(RegisteredIndex::Mem(MemIndex::new(config)?)),
+        IndexType::Hnsw => Ok(RegisteredIndex::Hnsw(HnswIndex::new(config)?)),
+        IndexType::IvfPq => Ok(RegisteredIndex::IvfPq(IvfPqIndex::new(config)?)),
+        IndexType::DiskAnn => Ok(RegisteredIndex::DiskAnn(DiskAnnIndex::new(config)?)),
+        _ => Err(KnowhereError::InvalidArg(format!(
+            "unsupported JNI index type: {:?}",
+            config.index_type
+        ))),
+    }
+}
+
+fn read_u32_at(bytes: &[u8], offset: usize) -> crate::api::Result<u32> {
+    let slice = bytes
+        .get(offset..offset + 4)
+        .ok_or_else(|| KnowhereError::Codec("data too short".to_string()))?;
+    Ok(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+fn save_to_temp_bytes<F>(save_fn: F) -> crate::api::Result<Vec<u8>>
+where
+    F: FnOnce(&std::path::Path) -> crate::api::Result<()>,
+{
+    let file = NamedTempFile::new()?;
+    save_fn(file.path())?;
+    Ok(fs::read(file.path())?)
+}
+
+fn load_from_temp_bytes<F>(bytes: &[u8], load_fn: F) -> crate::api::Result<()>
+where
+    F: FnOnce(&std::path::Path) -> crate::api::Result<()>,
+{
+    let file = NamedTempFile::new()?;
+    fs::write(file.path(), bytes)?;
+    load_fn(file.path())
+}
+
+fn needs_training(err: &KnowhereError) -> bool {
+    matches!(err, KnowhereError::IndexNotTrained(_))
+        || matches!(err, KnowhereError::InvalidArg(message) if message.contains("trained first"))
+}
+
+fn read_float_array(env: &mut JNIEnv, array: &JFloatArray) -> Option<Vec<f32>> {
+    let len = env.get_array_length(array).ok()? as usize;
+    let mut values = vec![0.0f32; len];
+    env.get_float_array_region(array, 0, &mut values).ok()?;
+    Some(values)
+}
+
+fn read_long_array(env: &mut JNIEnv, array: &JLongArray) -> Option<Vec<i64>> {
+    if array.is_null() {
+        return None;
+    }
+    let len = env.get_array_length(array).ok()? as usize;
+    let mut values = vec![0i64; len];
+    env.get_long_array_region(array, 0, &mut values).ok()?;
+    Some(values)
+}
+
+fn build_result_array<'a>(env: &mut JNIEnv<'a>, values: &[jlong]) -> JLongArray<'a> {
+    match env.new_long_array(values.len() as jint) {
+        Ok(array) => {
+            let _ = env.set_long_array_region(&array, 0, values);
+            array
+        }
+        Err(_) => JLongArray::default(),
+    }
+}
+
+fn build_distance_array<'a>(env: &mut JNIEnv<'a>, values: &[jfloat]) -> JFloatArray<'a> {
+    match env.new_float_array(values.len() as jint) {
+        Ok(array) => {
+            let _ = env.set_float_array_region(&array, 0, values);
+            array
+        }
+        Err(_) => JFloatArray::default(),
+    }
+}
+
+fn build_byte_array<'a>(env: &mut JNIEnv<'a>, values: &[u8]) -> JByteArray<'a> {
+    match env.new_byte_array(values.len() as jint) {
+        Ok(array) => {
+            let payload: Vec<i8> = values.iter().map(|&value| value as i8).collect();
+            let _ = env.set_byte_array_region(&array, 0, &payload);
+            array
+        }
+        Err(_) => JByteArray::default(),
+    }
+}
+
+fn deserialize_registered_index(bytes: &[u8]) -> crate::api::Result<RegisteredIndex> {
+    if bytes.starts_with(b"KWIX") {
+        let dim = read_u32_at(bytes, 8)? as usize;
+        let config = build_config(IndexType::Flat, dim, MetricType::L2, IndexParams::default());
+        let mut index = MemIndex::new(&config)?;
+        index.deserialize_from_memory(bytes)?;
+        return Ok(RegisteredIndex::Mem(index));
+    }
+
+    if bytes.starts_with(b"HNSW") {
+        let dim = read_u32_at(bytes, 8)? as usize;
+        let config = build_config(IndexType::Hnsw, dim, MetricType::L2, IndexParams::default());
+        let mut index = HnswIndex::new(&config)?;
+        load_from_temp_bytes(bytes, |path| index.load(path))?;
+        return Ok(RegisteredIndex::Hnsw(index));
+    }
+
+    if bytes.starts_with(b"DANN") {
+        let dim = read_u32_at(bytes, 8)? as usize;
+        let config = build_config(
+            IndexType::DiskAnn,
+            dim,
+            MetricType::L2,
+            IndexParams::default(),
+        );
+        let mut index = DiskAnnIndex::new(&config)?;
+        load_from_temp_bytes(bytes, |path| index.load(path))?;
+        return Ok(RegisteredIndex::DiskAnn(index));
+    }
+
+    if bytes.starts_with(b"IVFPQ") {
+        let dim = read_u32_at(bytes, 9)? as usize;
+        let params = IndexParams {
+            nlist: Some(read_u32_at(bytes, 13)? as usize),
+            m: Some(read_u32_at(bytes, 17)? as usize),
+            nbits_per_idx: Some(read_u32_at(bytes, 21)? as usize),
+            ..Default::default()
+        };
+        let config = build_config(IndexType::IvfPq, dim, MetricType::L2, params);
+        let mut index = IvfPqIndex::new(&config)?;
+        load_from_temp_bytes(bytes, |path| index.load(path))?;
+        return Ok(RegisteredIndex::IvfPq(index));
+    }
+
+    Err(KnowhereError::Codec(
+        "unsupported JNI serialization format".to_string(),
+    ))
+}
+
 /// 创建索引
 #[no_mangle]
 pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_createIndex(
@@ -102,46 +337,23 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_createIndex(
 ) -> jlong {
     init();
 
-    let config = IndexConfig {
-        index_type: parse_index_type(index_type as i32),
-        dim: dim as usize,
-        metric_type: parse_metric_type(metric_type as i32),
-        params: IndexParams {
-            ef_construction: ef_construction as usize,
-            ef_search: ef_search as usize,
+    let config = build_config(
+        parse_index_type(index_type),
+        dim as usize,
+        parse_metric_type(metric_type),
+        IndexParams {
+            ef_construction: Some(ef_construction as usize),
+            ef_search: Some(ef_search as usize),
             ..Default::default()
         },
-    };
+    );
 
-    let index: Box<dyn Index + Send + Sync> = match config.index_type {
-        IndexType::Flat | IndexType::IvfFlat => match MemIndex::new(config.clone()) {
-            Ok(idx) => Box::new(idx),
-            Err(e) => {
-                tracing::error!("Failed to create MemIndex: {:?}", e);
-                return 0;
-            }
-        },
-        IndexType::Hnsw => match HnswIndex::new(config.clone(), config.params.clone()) {
-            Ok(idx) => Box::new(idx),
-            Err(e) => {
-                tracing::error!("Failed to create HnswIndex: {:?}", e);
-                return 0;
-            }
-        },
-        IndexType::IvfPq => match IvfPqIndex::new(config.clone()) {
-            Ok(idx) => Box::new(idx),
-            Err(e) => {
-                tracing::error!("Failed to create IvfPqIndex: {:?}", e);
-                return 0;
-            }
-        },
-        IndexType::DiskAnn => match DiskAnnIndex::new(config.clone()) {
-            Ok(idx) => Box::new(idx),
-            Err(e) => {
-                tracing::error!("Failed to create DiskAnnIndex: {:?}", e);
-                return 0;
-            }
-        },
+    let index = match build_registered_index(&config) {
+        Ok(index) => index,
+        Err(e) => {
+            tracing::error!("Failed to create JNI index: {:?}", e);
+            return 0;
+        }
     };
 
     let handle = next_handle();
@@ -172,37 +384,32 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_addIndex(
     handle: jlong,
     vectors: JFloatArray,
     ids: JLongArray,
-    _num_vectors: jint,
+    num_vectors: jint,
 ) -> jint {
-    let guard = match get_registry().ok() {
-        Some(g) => g,
+    let vectors = match read_float_array(&mut env, &vectors) {
+        Some(values) => values,
         None => return -1,
     };
 
-    let index = match guard.as_ref().and_then(|r| r.get(&handle)) {
-        Some(i) => i,
+    let ids = read_long_array(&mut env, &ids);
+
+    let mut guard = get_registry();
+    let registry = match guard.as_mut() {
+        Some(registry) => registry,
+        None => return -1,
+    };
+    let index = match registry.get_mut(&handle) {
+        Some(index) => index,
         None => return -1,
     };
 
-    // 获取向量数据
-    let vec_slice = match env.get_array_elements(&vectors, jni::objects::ReleaseMode::NoCopyBack) {
-        Ok(s) => s,
-        Err(_) => return -1,
-    };
+    if let Some(ref row_ids) = ids {
+        if num_vectors < 0 || row_ids.len() != num_vectors as usize {
+            return -1;
+        }
+    }
 
-    // 获取 IDs
-    let ids_slice = match env.get_array_elements(&ids, jni::objects::ReleaseMode::NoCopyBack) {
-        Ok(s) => s,
-        Err(_) => return -1,
-    };
-
-    let ids: Option<Vec<i64>> = if !ids.is_null() {
-        Some(ids_slice.iter().map(|&x| x as i64).collect())
-    } else {
-        None
-    };
-
-    match index.add(&vec_slice, ids.as_deref()) {
+    match index.add(&vectors, ids.as_deref()) {
         Ok(n) => n as jint,
         Err(e) => {
             tracing::error!("Add failed: {:?}", e);
@@ -221,32 +428,35 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_search(
     k: jint,
     _num_queries: jint,
 ) -> jlong {
-    let guard = match get_registry().ok() {
-        Some(g) => g,
+    let query = match read_float_array(&mut env, &query) {
+        Some(values) => values,
         None => return 0,
-    };
-
-    let index = match guard.as_ref().and_then(|r| r.get(&handle)) {
-        Some(i) => i,
-        None => return 0,
-    };
-
-    // 获取查询向量
-    let query_slice = match env.get_array_elements(&query, jni::objects::ReleaseMode::NoCopyBack) {
-        Ok(s) => s,
-        Err(_) => 0,
     };
 
     let req = SearchRequest {
-        k: k as usize,
-        ..Default::default()
+        top_k: k as usize,
+        nprobe: 10,
+        filter: None,
+        params: None,
+        radius: None,
     };
 
-    match index.search(&query_slice, &req) {
+    let guard = get_registry();
+    let registry = match guard.as_ref() {
+        Some(registry) => registry,
+        None => return 0,
+    };
+    let index = match registry.get(&handle) {
+        Some(index) => index,
+        None => return 0,
+    };
+
+    match index.search(&query, &req) {
         Ok(result) => {
-            // 返回结果指针（简化实现，实际需要更好的内存管理）
-            let result_ptr = Box::into_raw(Box::new(result));
-            result_ptr as jlong
+            let result_handle = next_handle();
+            let mut result_guard = get_result_registry();
+            result_guard.as_mut().unwrap().insert(result_handle, result);
+            result_handle
         }
         Err(e) => {
             tracing::error!("Search failed: {:?}", e);
@@ -257,61 +467,55 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_search(
 
 /// 获取搜索结果 IDs
 #[no_mangle]
-pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_getResultIds(
-    mut env: JNIEnv,
-    _class: JClass,
+pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_getResultIds<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
     result_ptr: jlong,
-) -> JLongArray {
+) -> JLongArray<'a> {
     if result_ptr == 0 {
-        return JObjectArray::null(&env).into();
+        return JLongArray::default();
     }
 
-    let result = unsafe { &*(result_ptr as *const ApiSearchResult) };
+    let guard = get_result_registry();
+    let result = match guard
+        .as_ref()
+        .and_then(|registry| registry.get(&result_ptr))
+    {
+        Some(result) => result,
+        None => return JLongArray::default(),
+    };
 
-    // 展平 IDs
-    let mut ids: Vec<jlong> = Vec::new();
-    for &ids_batch in &result.distances {
-        // 这里简化处理，实际需要正确的 ID 提取
-        ids.push(ids_batch as jlong);
-    }
-
-    match env.new_long_array(ids.len() as jint) {
-        Ok(arr) => {
-            let _ = env.set_array_region(&arr, 0, &ids);
-            arr.into()
-        }
-        Err(_) => JObjectArray::null(&env).into(),
-    }
+    let ids: Vec<jlong> = result.ids.iter().copied().map(|id| id as jlong).collect();
+    build_result_array(&mut env, &ids)
 }
 
 /// 获取搜索结果距离
 #[no_mangle]
-pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_getResultDistances(
-    mut env: JNIEnv,
-    _class: JClass,
+pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_getResultDistances<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
     result_ptr: jlong,
-) -> JFloatArray {
+) -> JFloatArray<'a> {
     if result_ptr == 0 {
-        return JObjectArray::null(&env).into();
+        return JFloatArray::default();
     }
 
-    let result = unsafe { &*(result_ptr as *const ApiSearchResult) };
+    let guard = get_result_registry();
+    let result = match guard
+        .as_ref()
+        .and_then(|registry| registry.get(&result_ptr))
+    {
+        Some(result) => result,
+        None => return JFloatArray::default(),
+    };
 
-    // 展平距离
     let distances: Vec<jfloat> = result
         .distances
         .iter()
-        .flat_map(|d| d.iter())
-        .map(|&x| x as jfloat)
+        .copied()
+        .map(|distance| distance as jfloat)
         .collect();
-
-    match env.new_float_array(distances.len() as jint) {
-        Ok(arr) => {
-            let _ = env.set_array_region(&arr, 0, &distances);
-            arr.into()
-        }
-        Err(_) => JObjectArray::null(&env).into(),
-    }
+    build_distance_array(&mut env, &distances)
 }
 
 /// 释放搜索结果
@@ -322,54 +526,39 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_freeResult(
     result_ptr: jlong,
 ) {
     if result_ptr != 0 {
-        unsafe {
-            let _ = Box::from_raw(result_ptr as *mut ApiSearchResult);
+        let mut guard = get_result_registry();
+        if let Some(registry) = guard.as_mut() {
+            registry.remove(&result_ptr);
         }
     }
 }
 
 /// 序列化索引
 #[no_mangle]
-pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_serializeIndex(
-    mut env: JNIEnv,
-    _class: JClass,
+pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_serializeIndex<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
     handle: jlong,
-) -> JByteArray {
+) -> JByteArray<'a> {
     if handle == 0 {
-        return JObjectArray::null(&env).into();
+        return JByteArray::default();
     }
 
-    let guard = match get_registry().ok() {
-        Some(g) => g,
-        None => return JObjectArray::null(&env).into(),
+    let guard = get_registry();
+    let registry = match guard.as_ref() {
+        Some(registry) => registry,
+        None => return JByteArray::default(),
+    };
+    let index = match registry.get(&handle) {
+        Some(index) => index,
+        None => return JByteArray::default(),
     };
 
-    let index = match guard.as_ref().and_then(|r| r.get(&handle)) {
-        Some(i) => i,
-        None => return JObjectArray::null(&env).into(),
-    };
-
-    // 使用 Index trait 的 serialize_to_memory 方法
-    match index.serialize_to_memory() {
-        Ok(data) => {
-            match env.new_byte_array(data.len() as jint) {
-                Ok(arr) => {
-                    // 将 Vec<u8> 转换为 jbyte 数组
-                    let slice: &[i8] = unsafe {
-                        std::slice::from_raw_parts(data.as_ptr() as *const i8, data.len())
-                    };
-                    if env.set_array_region(&arr, 0, slice).is_ok() {
-                        arr.into()
-                    } else {
-                        JObjectArray::null(&env).into()
-                    }
-                }
-                Err(_) => JObjectArray::null(&env).into(),
-            }
-        }
+    match index.serialize_to_bytes() {
+        Ok(bytes) => build_byte_array(&mut env, &bytes),
         Err(e) => {
             tracing::error!("Serialize failed: {:?}", e);
-            JObjectArray::null(&env).into()
+            JByteArray::default()
         }
     }
 }
@@ -377,7 +566,7 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_serializeIndex(
 /// 反序列化索引
 #[no_mangle]
 pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_deserializeIndex(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _class: JClass,
     data: JByteArray,
 ) -> jlong {
@@ -385,66 +574,19 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_deserializeIndex(
         return 0;
     }
 
-    // 获取字节数组长度
-    let len = match env.get_array_length(&data) {
-        Ok(l) => l as usize,
+    let bytes = match env.convert_byte_array(&data) {
+        Ok(bytes) => bytes,
         Err(_) => return 0,
     };
-
-    if len == 0 {
+    if bytes.is_empty() {
         return 0;
     }
 
-    // 获取字节数据
-    let mut buf = vec![0i8; len];
-    match env.get_array_region(&data, 0, &mut buf) {
-        Ok(()) => {}
-        Err(_) => return 0,
-    }
-
-    let bytes: Vec<u8> =
-        unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, len).to_vec() };
-
-    // 解析头部获取维度等信息
-    if bytes.len() < 21 {
-        tracing::error!("deserialize: data too short");
-        return 0;
-    }
-
-    let magic = &bytes[0..4];
-    if magic != b"KWIX" {
-        tracing::error!("deserialize: invalid magic");
-        return 0;
-    }
-
-    // 从序列化数据中提取维度来创建正确的索引类型
-    let dim = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
-    let num = u64::from_le_bytes([
-        bytes[12], bytes[13], bytes[14], bytes[15], bytes[16], bytes[17], bytes[18], bytes[19],
-    ]) as usize;
-
-    // 创建 MemIndex 并反序列化
-    // 注意: 实际应用中需要保存索引类型信息
-    let config = IndexConfig {
-        index_type: IndexType::Flat,
-        dim,
-        metric_type: MetricType::L2,
-        params: IndexParams::default(),
-    };
-
-    let mut index = match MemIndex::new(config) {
-        Ok(idx) => idx,
-        Err(e) => {
-            tracing::error!("Failed to create index for deserialization: {:?}", e);
-            return 0;
-        }
-    };
-
-    match index.deserialize_from_memory(&bytes) {
-        Ok(()) => {
+    match deserialize_registered_index(&bytes) {
+        Ok(index) => {
             let handle = next_handle();
             let mut guard = get_registry();
-            guard.as_mut().unwrap().insert(handle, Box::new(index));
+            guard.as_mut().unwrap().insert(handle, index);
             handle
         }
         Err(e) => {

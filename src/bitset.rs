@@ -520,6 +520,9 @@ impl BitXor for &BitsetView {
 
 /// AVX2 optimized batch test for x86_64
 /// Tests 256 bits (32 bytes) at once using AVX2 instructions
+///
+/// # Safety
+/// The current CPU must support AVX2 before calling this function.
 #[inline]
 #[target_feature(enable = "avx2")]
 #[cfg(target_arch = "x86_64")]
@@ -590,6 +593,9 @@ pub fn test_batch_fallback(data: &[u8], start_bit: usize) -> bool {
 
 /// AVX2 optimized count of zero bits for x86_64
 /// Counts zero bits in 256-bit (32 bytes) batches
+///
+/// # Safety
+/// The current CPU must support AVX2 before calling this function.
 #[inline]
 #[target_feature(enable = "avx2")]
 #[cfg(target_arch = "x86_64")]
@@ -955,7 +961,7 @@ mod tests {
 
         // 统计 0 的个数
         let zeros = count_zero_batch_auto(&data_some_set);
-        assert_eq!(zeros, 8 + 8 + 0 + 8 * 29); // 2 个全 0 字节，1 个全 1 字节，29 个全 0 字节
+        assert_eq!(zeros, 8 * 31); // 31 个全 0 字节，1 个全 1 字节
     }
 
     #[test]
@@ -1057,14 +1063,14 @@ mod tests {
         use std::arch::x86_64::*;
 
         // Test AVX2 load and test operations
-        let data = vec![0u8; 32];
+        let data = [0u8; 32];
         let ptr = data.as_ptr();
         let batch = _mm256_loadu_si256(ptr as *const __m256i);
         let result = _mm256_testz_si256(batch, batch);
         assert!(result != 0, "All-zero data should test as zero");
 
         // Test with all ones
-        let data_ones = vec![0xFFu8; 32];
+        let data_ones = [0xFFu8; 32];
         let ptr = data_ones.as_ptr();
         let batch = _mm256_loadu_si256(ptr as *const __m256i);
         let result = _mm256_testz_si256(batch, batch);
@@ -1092,7 +1098,7 @@ mod tests {
         use std::arch::aarch64::*;
 
         // Test NEON load and compare operations
-        let data = vec![0u8; 16];
+        let data = [0u8; 16];
         let ptr = data.as_ptr();
         let batch = vld1q_u8(ptr);
         let zero = vdupq_n_u8(0);
@@ -1104,7 +1110,7 @@ mod tests {
         );
 
         // Test with all ones
-        let data_ones = vec![0xFFu8; 16];
+        let data_ones = [0xFFu8; 16];
         let ptr = data_ones.as_ptr();
         let batch = vld1q_u8(ptr);
         let cmp = vceqq_u8(batch, zero);

@@ -99,6 +99,7 @@ fn build_hnsw_index(
     (index, build_time)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn search_with_adaptive_ef(
     index: &HnswIndex,
     query: &[f32],
@@ -149,7 +150,7 @@ fn print_adaptive_k_comparison(results: &[AdaptiveEfResult], build_time_ms: f64)
         let dr10 = result.recall_at_10 - baseline.recall_at_10;
         let dqps = ((result.qps - baseline.qps) / baseline.qps) * 100.0;
         println!("| {:>5} | {:>10.2} | {:>9} | {:>10.2} | {:>5.0} | {:>5.3} | {:>5.3} | {:>5.3} | {:+>6.3} | {:+>6.1} |",
-            result.top_k, result.adaptive_k, result.actual_ef, result.search_time_ms, result.qps, 
+            result.top_k, result.adaptive_k, result.actual_ef, result.search_time_ms, result.qps,
             result.recall_at_1, result.recall_at_10, result.recall_at_100, dr10, dqps);
     }
     println!("{:-<120}", "");

@@ -30,7 +30,7 @@ struct RunResult {
 #[derive(Debug)]
 struct ScaleSummary {
     nbase: usize,
-    runs: Vec<RunResult>,
+    _runs: Vec<RunResult>,
     qps_mean: f64,
     qps_std: f64,
     r10_mean: f64,
@@ -144,7 +144,7 @@ fn bench_048_ivf_flat_perf_regression() {
 
         summaries.push(ScaleSummary {
             nbase,
-            runs,
+            _runs: runs,
             qps_mean,
             qps_std,
             r10_mean,

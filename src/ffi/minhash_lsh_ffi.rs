@@ -371,7 +371,7 @@ mod tests {
                 knowhere_minhash_lsh_save(ptr::null_mut(), ptr::null()),
                 CMinHashError::InvalidArg as i32
             );
-            assert_eq!(knowhere_minhash_lsh_has_raw_data(ptr::null_mut()), false);
+            assert!(!knowhere_minhash_lsh_has_raw_data(ptr::null_mut()));
             assert_eq!(knowhere_minhash_lsh_count(ptr::null_mut()), 0);
             assert_eq!(knowhere_minhash_lsh_size(ptr::null_mut()), 0);
 

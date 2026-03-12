@@ -1,52 +1,114 @@
-# KnowHere-Rust
+# knowhere-rs
 
-Rust 实现的向量搜索引擎，对齐 Milvus KnowHere。
+`knowhere-rs` 是一个面向 non-GPU 向量检索场景的 Rust 实现，当前按 remote-first workflow 持续收口生产契约、benchmark truth 和最终验收门。
 
-## 特性
+## Current Status
 
-- **BitsetView** - 软删除支持
-- **Dataset** - 数据集抽象
-- **Metrics** - 距离度量 (L2/IP/Cosine/Hamming)
-- **SIMD** - ARM NEON / x86 SSE/AVX 支持
-- **Index Trait** - 统一索引接口
-- **FFI** - C API 暴露
+- Authority environment: 现有 remote x86 机器是唯一权威执行面；本地 `cargo` 结果只用于快速预筛
+- HNSW: `functional-but-not-leading`
+- IVF-PQ: `no-go`
+- DiskANN: `constrained`
+- Final performance leadership criterion: `criterion_met=false`
+- Production governance: remote `fmt/clippy/build`、cross-cutting `ffi/serialize/bench_json_export`、以及 operator docs gates 已关闭
+- Project-level verdict: `final-production-acceptance` 已归档为 `production_accepted=false`；当前 remote x86 evidence 不支持最终 non-GPU production replacement claim
 
-## 构建
+当前 benchmark / verdict truth 见：
+
+- `benchmark_results/final_core_path_classification.json`
+- `benchmark_results/final_performance_leadership_proof.json`
+- `benchmark_results/final_production_acceptance.json`
+- `TASK_QUEUE.md`
+- `GAP_ANALYSIS.md`
+- `docs/PARITY_AUDIT.md`
+
+## Remote-First Workflow
+
+1. 初始化 authority workspace
 
 ```bash
-cargo build --release
+bash init.sh
 ```
 
-或使用脚本：
+2. 读取 durable state
+
+- `long-task-guide.md`
+- `task-progress.md`
+- `feature-list.json`
+
+3. 本地只做预筛
+
 ```bash
-./build.sh release
+cargo test --lib ffi -- --nocapture
+cargo test --lib serialize -- --nocapture
 ```
 
-## 测试
+4. 在 remote x86 上执行真正的验收命令
 
 ```bash
-cargo test
+bash scripts/remote/test.sh --command "cargo test --lib -q"
+bash scripts/remote/build.sh --no-all-targets
 ```
 
-## 项目结构
+5. 更新 durable state 并校验
 
+```bash
+python3 scripts/validate_features.py feature-list.json
 ```
+
+需要隔离远端 cache / logs 时，使用 feature-specific 目录：
+
+```bash
+KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-<feature> \
+KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-<feature> \
+bash scripts/remote/test.sh --command "cargo test --lib ffi -- --nocapture"
+```
+
+## Common Commands
+
+本地预筛：
+
+```bash
+cargo build --verbose
+cargo test --lib --verbose
+cargo test --tests --verbose
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+Authority replay：
+
+```bash
+bash init.sh
+bash scripts/remote/test.sh --command "cargo test --lib -q"
+bash scripts/remote/build.sh --no-all-targets
+```
+
+## Durable State
+
+未来 session 或人工操作默认从这些文件恢复上下文：
+
+- `task-progress.md`: 当前 focus、最近 session、fresh verification
+- `feature-list.json`: feature inventory、依赖、verification steps
+- `TASK_QUEUE.md`: 当前大任务面板
+- `GAP_ANALYSIS.md`: 项目级缺口与完成定义
+- `docs/PARITY_AUDIT.md`: 审计轨迹与阶段性 verdict
+- `docs/FFI_CAPABILITY_MATRIX.md`: FFI contract 视图
+
+## Repository Layout
+
+```text
 src/
-├── bitset.rs    # 软删除
-├── dataset.rs   # 数据集
-├── metrics.rs   # 距离度量
-├── simd.rs     # SIMD 计算
-├── index.rs    # Index Trait
-├── ffi.rs       # C API
-└── faiss/      # 索引实现
-    ├── mem_index.rs   # Flat
-    ├── hnsw.rs      # HNSW
-    ├── ivfpq.rs     # IVF-PQ
-    └── diskann.rs   # DiskANN
+  faiss/         core index implementations
+  ffi/           FFI-facing helpers
+  benchmark/     benchmark artifact/report schema helpers
+tests/           integration and regression tests
+benches/         Criterion microbenchmarks
+scripts/remote/  remote authority bootstrap/test/build wrappers
+docs/            design notes, parity audit, and operator docs
 ```
 
-## 测试结果
+## Notes
 
-- 总计: **34 tests passed**
-- 编译: ✅
-- 构建: ✅
+- 不要把本地 benchmark 或本地 test 结果当成最终 acceptance evidence
+- 不要在没有 remote verification 的情况下把 feature 标成 `passing`
+- 当前仓库已经形成 durable multi-session workflow；开始工作前优先读取 `long-task-guide.md`

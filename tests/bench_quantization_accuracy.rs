@@ -85,6 +85,7 @@ fn run_flat_bench(
 }
 
 /// 运行 SQ8 benchmark
+#[allow(clippy::too_many_arguments)]
 fn run_sq8_bench(
     train_data: &[f32],
     base_data: &[f32],
@@ -157,6 +158,7 @@ fn run_sq8_bench(
 }
 
 /// 运行 PQ benchmark
+#[allow(clippy::too_many_arguments)]
 fn run_pq_bench(
     train_data: &[f32],
     base_data: &[f32],
@@ -251,6 +253,7 @@ fn run_pq_bench(
 }
 
 /// 运行 RaBitQ benchmark
+#[allow(clippy::too_many_arguments)]
 fn run_rabitq_bench(
     train_data: &[f32],
     base_data: &[f32],
@@ -262,7 +265,7 @@ fn run_rabitq_bench(
     nprobe: usize,
     nbits: usize,
 ) -> BenchmarkResult {
-    let compression_ratio = (32.0 / nbits as f32); // 相对于 float32
+    let compression_ratio = 32.0 / nbits as f32; // 相对于 float32
     println!(
         "\n  测试 RaBitQ {}bits ({:.0}x 压缩，nlist={}, nprobe={})...",
         nbits, compression_ratio, nlist, nprobe
@@ -490,7 +493,14 @@ fn bench_quantization_accuracy() {
     println!("│ 量化方法           │ 压缩比     │  R@1     │  R@10    │  R@100   │");
     println!("├────────────────────┼────────────┼──────────┼──────────┼──────────┤");
     for result in &results {
-        if result.error.is_none() {
+        if let Some(error) = result.error.as_deref() {
+            println!(
+                "│ {:<18} │ {:>8.1}x │ {:>17} │",
+                result.name,
+                result.compression_ratio,
+                format!("❌ {}", error),
+            );
+        } else {
             println!(
                 "│ {:<18} │ {:>8.1}x │ {:>8.3} │ {:>8.3} │ {:>8.3} │",
                 result.name,
@@ -498,13 +508,6 @@ fn bench_quantization_accuracy() {
                 result.recall_at_1,
                 result.recall_at_10,
                 result.recall_at_100,
-            );
-        } else {
-            println!(
-                "│ {:<18} │ {:>8.1}x │ {:>17} │",
-                result.name,
-                result.compression_ratio,
-                format!("❌ {}", result.error.as_ref().unwrap()),
             );
         }
     }

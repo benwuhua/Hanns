@@ -10,26 +10,26 @@ mod ffi {
         type FaissIndex;
         
         fn faiss_index_new_flat(dim: i32, metric: i32) -> *mut FaissIndex;
-        fn faiss_index_free(index: *mut FaissIndex);
-        fn faiss_index_ntotal(index: *const FaissIndex) -> i64;
-        fn faiss_index_d(index: *const FaissIndex) -> i32;
-        fn faiss_index_is_trained(index: *const FaissIndex) -> bool;
+        unsafe fn faiss_index_free(index: *mut FaissIndex);
+        unsafe fn faiss_index_ntotal(index: *const FaissIndex) -> i64;
+        unsafe fn faiss_index_d(index: *const FaissIndex) -> i32;
+        unsafe fn faiss_index_is_trained(index: *const FaissIndex) -> bool;
         
         // Index operations
-        fn faiss_index_train(index: *mut FaissIndex, x: *const f32, n: i64) -> i32;
-        fn faiss_index_add(index: *mut FaissIndex, x: *const f32, n: i64) -> i32;
-        fn faiss_index_search(
+        unsafe fn faiss_index_train(index: *mut FaissIndex, x: *const f32, n: i64) -> i32;
+        unsafe fn faiss_index_add(index: *mut FaissIndex, x: *const f32, n: i64) -> i32;
+        unsafe fn faiss_index_search(
             index: *mut FaissIndex,
             x: *const f32,
             k: i32,
             distances: *mut f32,
             labels: *mut i64,
         ) -> i32;
-        fn faiss_index_reset(index: *mut FaissIndex) -> i32;
+        unsafe fn faiss_index_reset(index: *mut FaissIndex) -> i32;
         
         // Serialization
-        fn faiss_index_write(index: *mut FaissIndex, path: *const c_char) -> i32;
-        fn faiss_index_read(path: *const c_char) -> *mut FaissIndex;
+        unsafe fn faiss_index_write(index: *mut FaissIndex, path: *const c_char) -> i32;
+        unsafe fn faiss_index_read(path: *const c_char) -> *mut FaissIndex;
     }
 }
 

@@ -169,7 +169,7 @@ fn benchmark_flat_range_validation(
             min_distance: min_dist,
             max_distance: max_dist,
             mean_distance: mean_dist,
-            std_dev: std_dev,
+            std_dev,
             validation_passed: validation_passed && l2_valid,
         };
 
@@ -213,11 +213,11 @@ fn test_range_search_validation_unit() {
     let mut query_vectors = vec![0.0f32; num_queries * dim];
 
     // Fill with random values
-    for i in 0..(num_vectors * dim) {
-        base_vectors[i] = (i as f32 * 0.01) % 10.0;
+    for (i, value) in base_vectors.iter_mut().enumerate() {
+        *value = (i as f32 * 0.01) % 10.0;
     }
-    for i in 0..(num_queries * dim) {
-        query_vectors[i] = (i as f32 * 0.02) % 10.0;
+    for (i, value) in query_vectors.iter_mut().enumerate() {
+        *value = (i as f32 * 0.02) % 10.0;
     }
 
     let config = IndexConfig {
@@ -319,8 +319,8 @@ fn test_range_search_radius_monotonicity() {
     let num_vectors = 500;
 
     let mut base_vectors = vec![0.0f32; num_vectors * dim];
-    for i in 0..(num_vectors * dim) {
-        base_vectors[i] = (i as f32 * 0.01) % 5.0;
+    for (i, value) in base_vectors.iter_mut().enumerate() {
+        *value = (i as f32 * 0.01) % 5.0;
     }
 
     let config = IndexConfig {

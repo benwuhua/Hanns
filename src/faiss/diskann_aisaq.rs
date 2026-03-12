@@ -11,9 +11,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-#[cfg(all(feature = "async-io", target_os = "linux"))]
-use io_uring::{IoUring, types::Fd};
-
 use crate::api::{IndexConfig, KnowhereError, MetricType, Result, SearchResult};
 use crate::faiss::pq::PqEncoder;
 use crate::simd;
@@ -407,9 +404,7 @@ impl PageCache {
     pub fn open<P: AsRef<Path>>(path: P, page_size: usize, cache_bytes: usize) -> Result<Self> {
         let file = OpenOptions::new().read(true).open(path)?;
         let mmap = unsafe { Mmap::map(&file)? };
-        let capacity_pages = cache_bytes
-            .div_ceil(page_size.max(1))
-            .max(1);
+        let capacity_pages = cache_bytes.div_ceil(page_size.max(1)).max(1);
 
         Ok(Self {
             page_size: page_size.max(1),
@@ -465,7 +460,11 @@ impl PageCache {
 
         let mut bytes = Vec::with_capacity(len);
         for (index, (_, page)) in page_buffers.iter().enumerate() {
-            let slice_start = if index == 0 { offset % self.page_size } else { 0 };
+            let slice_start = if index == 0 {
+                offset % self.page_size
+            } else {
+                0
+            };
             let slice_end = if index == page_buffers.len() - 1 {
                 ((end - 1) % self.page_size) + 1
             } else {
@@ -474,7 +473,10 @@ impl PageCache {
             bytes.extend_from_slice(&page[slice_start..slice_end]);
         }
 
-        Ok(PageRead { bytes, pages_loaded })
+        Ok(PageRead {
+            bytes,
+            pages_loaded,
+        })
     }
 
     pub fn stats(&self) -> PageCacheStats {
@@ -607,8 +609,9 @@ impl PQFlashIndex {
             self.pq_code_size = encoder.m;
             self.pq_encoder = Some(encoder);
             self.flash_layout.inline_pq_bytes = self.pq_code_size.max(self.config.inline_pq);
-            self.flash_layout.node_bytes =
-                self.flash_layout.vector_bytes + self.flash_layout.neighbor_bytes + self.flash_layout.inline_pq_bytes;
+            self.flash_layout.node_bytes = self.flash_layout.vector_bytes
+                + self.flash_layout.neighbor_bytes
+                + self.flash_layout.inline_pq_bytes;
         }
 
         self.trained = true;
@@ -727,7 +730,10 @@ impl PQFlashIndex {
         let page_cache = PageCache::open(
             file_group.data_path(),
             metadata.flash_layout.page_size,
-            metadata.config.pq_read_page_cache_size.max(metadata.flash_layout.page_size),
+            metadata
+                .config
+                .pq_read_page_cache_size
+                .max(metadata.flash_layout.page_size),
         )?;
 
         Ok(Self {
@@ -789,11 +795,7 @@ impl PQFlashIndex {
             });
         }
 
-        let max_visit = self
-            .config
-            .search_list_size
-            .max(k)
-            .min(self.len());
+        let max_visit = self.config.search_list_size.max(k).min(self.len());
 
         while expanded.len() < max_visit {
             let candidate = match frontier.pop() {
@@ -1044,16 +1046,24 @@ impl PQFlashIndex {
 
         if let Some(storage) = &self.storage {
             let offset = node_id as usize * self.flash_layout.node_bytes;
-            let page_read = storage.page_cache.read(offset, self.flash_layout.node_bytes)?;
+            let page_read = storage
+                .page_cache
+                .read(offset, self.flash_layout.node_bytes)?;
             let loaded = self.deserialize_node(node_id, &page_read.bytes)?;
             match access_mode {
                 NodeAccessMode::None => {}
-                NodeAccessMode::Node => {
-                    io.record_node_access(node_id, self.flash_layout.node_bytes, page_read.pages_loaded)
-                }
+                NodeAccessMode::Node => io.record_node_access(
+                    node_id,
+                    self.flash_layout.node_bytes,
+                    page_read.pages_loaded,
+                ),
                 NodeAccessMode::Pq => {
                     if !loaded.inline_pq.is_empty() {
-                        io.record_pq_access(node_id, loaded.inline_pq.len(), page_read.pages_loaded);
+                        io.record_pq_access(
+                            node_id,
+                            loaded.inline_pq.len(),
+                            page_read.pages_loaded,
+                        );
                     }
                 }
             }

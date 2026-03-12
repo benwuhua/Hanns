@@ -19,18 +19,35 @@ use knowhere_rs::faiss::HnswIndex;
 #[cfg(feature = "long-tests")]
 use knowhere_rs::MetricType;
 use serde_json::Value;
-use std::fs;
 #[cfg(feature = "long-tests")]
 use std::env;
+use std::fs;
 #[cfg(feature = "long-tests")]
 use std::time::Instant;
 
 const HNSW_FINAL_VERDICT_PATH: &str = "benchmark_results/hnsw_p3_002_final_verdict.json";
+const FINAL_PERFORMANCE_LEADERSHIP_PROOF_PATH: &str =
+    "benchmark_results/final_performance_leadership_proof.json";
 
 fn load_hnsw_final_verdict() -> Value {
     let content = fs::read_to_string(HNSW_FINAL_VERDICT_PATH)
         .expect("family verdict artifact must exist for the HNSW compare lane");
     serde_json::from_str(&content).expect("family verdict artifact must be valid JSON")
+}
+
+fn load_final_performance_leadership_proof() -> Value {
+    let content = fs::read_to_string(FINAL_PERFORMANCE_LEADERSHIP_PROOF_PATH)
+        .expect("final leadership proof artifact must exist for the HNSW compare lane");
+    serde_json::from_str(&content).expect("final leadership proof artifact must be valid JSON")
+}
+
+fn find_family<'a>(artifact: &'a Value, family: &str) -> &'a Value {
+    artifact["families"]
+        .as_array()
+        .expect("families must be an array")
+        .iter()
+        .find(|entry| entry["family"] == family)
+        .unwrap_or_else(|| panic!("family entry for {family} must exist"))
 }
 
 #[test]
@@ -39,7 +56,10 @@ fn hnsw_compare_lane_blocks_leadership_claims_until_native_gap_closes() {
 
     assert_eq!(verdict["family"], "HNSW");
     assert_eq!(verdict["classification"], "functional-but-not-leading");
-    assert_eq!(verdict["leadership_verdict"], "no_go_for_performance_leadership");
+    assert_eq!(
+        verdict["leadership_verdict"],
+        "no_go_for_performance_leadership"
+    );
     assert_eq!(verdict["leadership_claim_allowed"], false);
     assert!(
         verdict["summary"]
@@ -48,6 +68,44 @@ fn hnsw_compare_lane_blocks_leadership_claims_until_native_gap_closes() {
             .contains("14.8x"),
         "summary must disclose the current throughput gap that blocks leadership claims"
     );
+}
+
+#[test]
+fn final_performance_proof_artifact_records_the_unmet_completion_criterion() {
+    let proof = load_final_performance_leadership_proof();
+    let hnsw = find_family(&proof, "HNSW");
+    let ivfpq = find_family(&proof, "IVF-PQ");
+    let diskann = find_family(&proof, "DiskANN");
+
+    assert_eq!(proof["task_id"], "FINAL-PERFORMANCE-LEADERSHIP-PROOF");
+    assert_eq!(proof["authority_scope"], "remote_x86_only");
+    assert_eq!(proof["criterion_met"], false);
+    assert_eq!(
+        proof["baseline_stop_go_source"],
+        "benchmark_results/baseline_p3_001_stop_go_verdict.json"
+    );
+    assert_eq!(
+        proof["final_core_path_classification_source"],
+        "benchmark_results/final_core_path_classification.json"
+    );
+
+    assert_eq!(hnsw["classification"], "functional-but-not-leading");
+    assert_eq!(
+        hnsw["leadership_status"],
+        "trusted_but_blocked_by_native_qps_gap"
+    );
+    assert_eq!(hnsw["leadership_claim_allowed"], false);
+
+    assert_eq!(ivfpq["classification"], "no-go");
+    assert_eq!(ivfpq["leadership_status"], "family_no_go");
+    assert_eq!(ivfpq["leadership_claim_allowed"], false);
+
+    assert_eq!(diskann["classification"], "constrained");
+    assert_eq!(
+        diskann["leadership_status"],
+        "constrained_non_comparable_lane"
+    );
+    assert_eq!(diskann["leadership_claim_allowed"], false);
 }
 
 /// 从 SIFT1M 加载数据集（支持子集）
@@ -114,7 +172,7 @@ struct HnswResult {
     recall_at_1: f64,
     recall_at_10: f64,
     recall_at_100: f64,
-    params: String,
+    _params: String,
 }
 
 /// 运行 HNSW benchmark
@@ -185,7 +243,7 @@ fn run_hnsw_benchmark(
         recall_at_1: r1,
         recall_at_10: r10,
         recall_at_100: r100,
-        params: format!("M={}, ef_c={}, ef_s={}", m, ef_construction, ef_search),
+        _params: format!("M={}, ef_c={}, ef_s={}", m, ef_construction, ef_search),
     }
 }
 

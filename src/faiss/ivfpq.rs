@@ -148,9 +148,7 @@ impl IvfPqIndex {
         // K-means++ initialization for better cluster quality
         // First centroid: random
         let first_idx = rng.gen_range(0..n) * self.dim;
-        for j in 0..self.dim {
-            centroids[j] = vectors[first_idx + j];
-        }
+        centroids[..self.dim].copy_from_slice(&vectors[first_idx..self.dim + first_idx]);
 
         // Remaining centroids: choose with probability proportional to D(x)^2
         use rand::distributions::WeightedIndex;
@@ -512,7 +510,10 @@ impl IvfPqIndex {
             // Find nearest clusters (coarse quantizer)
             let mut cluster_dists: Vec<(usize, f32)> = (0..self.nlist)
                 .map(|c| {
-                    let dist = l2_distance_sq(query_vec, &self.centroids[c * self.dim..(c + 1) * self.dim]);
+                    let dist = l2_distance_sq(
+                        query_vec,
+                        &self.centroids[c * self.dim..(c + 1) * self.dim],
+                    );
                     (c, dist)
                 })
                 .collect();
@@ -730,6 +731,10 @@ impl IvfPqIndex {
         self.ids.len()
     }
 
+    pub fn is_trained(&self) -> bool {
+        self.trained
+    }
+
     pub fn save(&self, path: &std::path::Path) -> Result<()> {
         use std::io::Write;
 
@@ -911,7 +916,7 @@ mod tests {
             index_type: IndexType::IvfPq,
             metric_type: MetricType::L2,
             dim: 16,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 nlist: Some(4),
                 nprobe: Some(4),

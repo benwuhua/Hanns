@@ -136,8 +136,6 @@ fn test_opt013_ivf_flat_fast_build() {
     // 验收标准
     println!("✅ 验收标准:");
     let build_ok = build_time < 2000.0;
-    // R@1 and R@10 are the key metrics for IVF quality; R@100 is not meaningful for small datasets
-    let recall_ok = recall_at_1 >= 0.95 && recall_at_10 >= 0.95;
 
     println!(
         "   构建时间 <2s: {} ({:.2}ms)",

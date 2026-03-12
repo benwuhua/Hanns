@@ -19,7 +19,6 @@
 //! ```
 
 use knowhere_rs::api::{IndexConfig, IndexParams, SearchRequest};
-use knowhere_rs::benchmark::average_recall_at_k;
 use knowhere_rs::faiss::HnswIndex;
 use knowhere_rs::IndexType;
 use knowhere_rs::MetricType;
@@ -151,7 +150,7 @@ fn benchmark_shuffle_build() {
         .iter()
         .enumerate()
         .map(|(i, result)| {
-            let result_ids: Vec<i64> = result.ids.iter().copied().collect();
+            let result_ids = result.ids.to_vec();
             // average_recall_at_k expects &[Vec<i64>] for ground truth and &[Vec<i32>] for results
             // We need to call it differently
             compute_recall(&gt[i], &result_ids)

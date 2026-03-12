@@ -715,15 +715,11 @@ impl Index for HnswPqIndex {
     }
 
     fn save(&self, _path: &str) -> Result<(), IndexError> {
-        Err(IndexError::Unsupported(
-            HNSW_PQ_SAVE_UNSUPPORTED_MSG.into(),
-        ))
+        Err(IndexError::Unsupported(HNSW_PQ_SAVE_UNSUPPORTED_MSG.into()))
     }
 
     fn load(&mut self, _path: &str) -> Result<(), IndexError> {
-        Err(IndexError::Unsupported(
-            HNSW_PQ_LOAD_UNSUPPORTED_MSG.into(),
-        ))
+        Err(IndexError::Unsupported(HNSW_PQ_LOAD_UNSUPPORTED_MSG.into()))
     }
 
     fn has_raw_data(&self) -> bool {
@@ -751,11 +747,8 @@ impl Index for HnswPqIndex {
         let results = self.search(&vectors[0..self.config.dim], top_k, bitset)?;
 
         // Convert to iterator format: Vec<(id, distance)>
-        let iter_results: Vec<(i64, f32)> = results
-            .ids
-            .into_iter()
-            .zip(results.distances.into_iter())
-            .collect();
+        let iter_results: Vec<(i64, f32)> =
+            results.ids.into_iter().zip(results.distances).collect();
 
         Ok(Box::new(HnswPqAnnIterator::new(iter_results)))
     }

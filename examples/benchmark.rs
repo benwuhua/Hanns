@@ -11,8 +11,8 @@ const TOP_K: usize = 10;
 
 fn generate_vectors(n: usize, dim: usize) -> Vec<f32> {
     let mut vectors = vec![0.0f32; n * dim];
-    for i in 0..vectors.len() {
-        vectors[i] = (i as f32 * 0.01).sin().abs();
+    for (i, value) in vectors.iter_mut().enumerate() {
+        *value = (i as f32 * 0.01).sin().abs();
     }
     vectors
 }

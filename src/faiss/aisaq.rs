@@ -335,16 +335,16 @@ impl AisaqIndex {
 
             let neighbors: Vec<usize> = self.nodes[node_id].neighbors.clone();
             for &neighbor in &neighbors {
-                if neighbor < self.nodes.len()
-                    && !self.nodes[neighbor].neighbors.contains(&node_id) {
-                        self.nodes[neighbor].neighbors.push(node_id);
-                    }
+                if neighbor < self.nodes.len() && !self.nodes[neighbor].neighbors.contains(&node_id)
+                {
+                    self.nodes[neighbor].neighbors.push(node_id);
+                }
             }
         }
     }
 
     /// Refine results with exact distances
-    fn refine_results(&self, query: &[f32], results: &mut Vec<(usize, f32)>) {
+    fn refine_results(&self, query: &[f32], results: &mut [(usize, f32)]) {
         for (id, dist) in results.iter_mut() {
             if *id < self.nodes.len() {
                 *dist = self.compute_distance(query, &self.nodes[*id].data);
@@ -601,13 +601,18 @@ impl Index for AisaqIndex {
         Ok(self.nodes.len())
     }
 
-    fn search(&self, query: &Dataset, top_k: usize) -> std::result::Result<IndexSearchResult, IndexError> {
+    fn search(
+        &self,
+        query: &Dataset,
+        top_k: usize,
+    ) -> std::result::Result<IndexSearchResult, IndexError> {
         let query_vectors = query.vectors();
         if query_vectors.len() / self.dim != 1 {
             return Err(IndexError::DimMismatch);
         }
 
-        let result = self.search(query_vectors, top_k)
+        let result = self
+            .search(query_vectors, top_k)
             .map_err(|e| IndexError::Unsupported(e.to_string()))?;
 
         Ok(IndexSearchResult::new(
@@ -628,7 +633,8 @@ impl Index for AisaqIndex {
             return Err(IndexError::DimMismatch);
         }
 
-        let result = self.search(query_vectors, top_k)
+        let result = self
+            .search(query_vectors, top_k)
             .map_err(|e| IndexError::Unsupported(e.to_string()))?;
 
         // Filter results
@@ -652,10 +658,12 @@ impl Index for AisaqIndex {
     fn get_vector_by_ids(&self, ids: &[i64]) -> std::result::Result<Vec<f32>, IndexError> {
         if !self.has_raw_data() {
             return Err(IndexError::Unsupported(
-                "get_vector_by_ids not supported for AISAQ without raw-data metric semantics".into(),
+                "get_vector_by_ids not supported for AISAQ without raw-data metric semantics"
+                    .into(),
             ));
         }
-        let vectors = self.get_vector_by_ids(ids)
+        let vectors = self
+            .get_vector_by_ids(ids)
             .map_err(|e| IndexError::Unsupported(e.to_string()))?;
         // Flatten results (Vec<Vec<f32>> -> flat Vec<f32>)
         let mut result = Vec::with_capacity(ids.len() * self.dim);
@@ -670,8 +678,7 @@ impl Index for AisaqIndex {
     }
 
     fn save(&self, path: &str) -> std::result::Result<(), IndexError> {
-        let mut file = File::create(path)
-            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        let mut file = File::create(path).map_err(|e| IndexError::Unsupported(e.to_string()))?;
 
         // Serialize index metadata
         let metadata = SerializedAisaqIndex {
@@ -684,8 +691,8 @@ impl Index for AisaqIndex {
             node_count: self.nodes.len(),
         };
 
-        let metadata_bytes = bincode::serialize(&metadata)
-            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        let metadata_bytes =
+            bincode::serialize(&metadata).map_err(|e| IndexError::Unsupported(e.to_string()))?;
         let metadata_len = metadata_bytes.len() as u64;
 
         file.write_all(&metadata_len.to_le_bytes())
@@ -728,8 +735,7 @@ impl Index for AisaqIndex {
     }
 
     fn load(&mut self, path: &str) -> std::result::Result<(), IndexError> {
-        let mut file = File::open(path)
-            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        let mut file = File::open(path).map_err(|e| IndexError::Unsupported(e.to_string()))?;
 
         // Read metadata
         let mut metadata_len_bytes = [0u8; 8];
@@ -820,8 +826,8 @@ impl Index for AisaqIndex {
             is_trained: self.is_trained,
             node_count: self.nodes.len(),
         };
-        let metadata_bytes = bincode::serialize(&metadata)
-            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        let metadata_bytes =
+            bincode::serialize(&metadata).map_err(|e| IndexError::Unsupported(e.to_string()))?;
         let metadata_len = metadata_bytes.len() as u64;
         buffer.extend_from_slice(&metadata_len.to_le_bytes());
         buffer.extend_from_slice(&metadata_bytes);
@@ -898,7 +904,9 @@ impl Index for AisaqIndex {
 
             // Read PQ code length
             if cursor + 4 > data.len() {
-                return Err(IndexError::Unsupported("data truncated at pq_code length".into()));
+                return Err(IndexError::Unsupported(
+                    "data truncated at pq_code length".into(),
+                ));
             }
             let len_bytes = &data[cursor..cursor + 4];
             cursor += 4;
@@ -916,11 +924,14 @@ impl Index for AisaqIndex {
 
             // Read neighbors
             if cursor + 4 > data.len() {
-                return Err(IndexError::Unsupported("data truncated at neighbor count".into()));
+                return Err(IndexError::Unsupported(
+                    "data truncated at neighbor count".into(),
+                ));
             }
             let neighbor_count_bytes = &data[cursor..cursor + 4];
             cursor += 4;
-            let neighbor_count = u32::from_le_bytes(neighbor_count_bytes.try_into().unwrap()) as usize;
+            let neighbor_count =
+                u32::from_le_bytes(neighbor_count_bytes.try_into().unwrap()) as usize;
             let mut neighbors = Vec::with_capacity(neighbor_count);
             for _ in 0..neighbor_count {
                 if cursor + 4 > data.len() {
@@ -951,18 +962,13 @@ impl Index for AisaqIndex {
         if query_vectors.len() / self.dim != 1 {
             return Err(IndexError::DimMismatch);
         }
-        let result = self.search(query_vectors, 100)
+        let result = self
+            .search(query_vectors, 100)
             .map_err(|e| IndexError::Unsupported(e.to_string()))?;
-        
-        let results: Vec<(i64, f32)> = result.ids
-            .into_iter()
-            .zip(result.distances.into_iter())
-            .collect();
-        
-        Ok(Box::new(AisaqAnnIterator {
-            results,
-            pos: 0,
-        }))
+
+        let results: Vec<(i64, f32)> = result.ids.into_iter().zip(result.distances).collect();
+
+        Ok(Box::new(AisaqAnnIterator { results, pos: 0 }))
     }
 }
 
@@ -1066,10 +1072,10 @@ mod tests_index_trait {
         let data: Vec<f32> = (0..16).map(|i| i as f32).collect();
         let dataset = Dataset::from_vectors(data, 4);
         Index::add(&mut index, &dataset).unwrap();
-        
+
         let query = Dataset::from_vectors(vec![1.0, 2.0, 3.0, 4.0], 4);
         let mut iter = Index::create_ann_iterator(&index, &query, None).unwrap();
-        
+
         let mut count = 0;
         while iter.next().is_some() {
             count += 1;

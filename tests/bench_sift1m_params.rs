@@ -77,7 +77,7 @@ fn bench_flat(dataset: &SiftDataset, nq: usize) -> Vec<ParamResult> {
     let build_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
     tracker.record_index_overhead((dataset.num_base() * 4) as u64);
-    let mem_mb = tracker.total_memory_mb() as f64 / 1024.0;
+    let mem_mb = tracker.total_memory_mb() / 1024.0;
 
     let t0 = Instant::now();
     let mut all_res: Vec<Vec<i64>> = Vec::with_capacity(nq);
@@ -156,7 +156,7 @@ fn bench_hnsw(dataset: &SiftDataset, nq: usize) -> Vec<ParamResult> {
 
         let overhead = estimate_hnsw_overhead(dataset.num_base(), dataset.dim(), 16);
         tracker.record_index_overhead(overhead);
-        let mem_mb = tracker.total_memory_mb() as f64 / 1024.0;
+        let mem_mb = tracker.total_memory_mb() / 1024.0;
 
         let t0 = Instant::now();
         let mut all_res: Vec<Vec<i64>> = Vec::with_capacity(nq);
@@ -236,7 +236,7 @@ fn bench_ivf_flat(dataset: &SiftDataset, nq: usize) -> Vec<ParamResult> {
 
         let overhead = estimate_ivf_overhead(dataset.num_base(), dataset.dim(), nlist);
         tracker.record_index_overhead(overhead);
-        let mem_mb = tracker.total_memory_mb() as f64 / 1024.0;
+        let mem_mb = tracker.total_memory_mb() / 1024.0;
 
         let t0 = Instant::now();
         let mut all_res: Vec<Vec<i64>> = Vec::with_capacity(nq);
@@ -319,7 +319,7 @@ fn bench_ivf_pq(dataset: &SiftDataset, nq: usize) -> Vec<ParamResult> {
 
         let overhead = estimate_ivf_overhead(dataset.num_base(), dataset.dim(), nlist);
         tracker.record_index_overhead(overhead);
-        let mem_mb = tracker.total_memory_mb() as f64 / 1024.0;
+        let mem_mb = tracker.total_memory_mb() / 1024.0;
 
         let t0 = Instant::now();
         let mut all_res: Vec<Vec<i64>> = Vec::with_capacity(nq);
@@ -401,7 +401,7 @@ fn bench_ivf_sq8(dataset: &SiftDataset, nq: usize) -> Vec<ParamResult> {
 
         let overhead = estimate_ivf_overhead(dataset.num_base(), dataset.dim(), nlist);
         tracker.record_index_overhead(overhead);
-        let mem_mb = tracker.total_memory_mb() as f64 / 1024.0;
+        let mem_mb = tracker.total_memory_mb() / 1024.0;
 
         let t0 = Instant::now();
         let mut all_res: Vec<Vec<i64>> = Vec::with_capacity(nq);
@@ -470,7 +470,7 @@ fn bench_rabitq(dataset: &SiftDataset, nq: usize) -> Vec<ParamResult> {
 
         let overhead = estimate_ivf_overhead(dataset.num_base(), dataset.dim(), nlist);
         tracker.record_index_overhead(overhead);
-        let mem_mb = tracker.total_memory_mb() as f64 / 1024.0;
+        let mem_mb = tracker.total_memory_mb() / 1024.0;
 
         let t0 = Instant::now();
         let mut all_res: Vec<Vec<i64>> = Vec::with_capacity(nq);

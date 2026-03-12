@@ -132,7 +132,6 @@ impl Default for Counter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
     use std::time::Duration;
 
     #[test]
@@ -150,7 +149,7 @@ mod tests {
     #[test]
     fn test_timer() {
         let _timer = Timer::new("test");
-        thread::sleep(Duration::from_millis(1));
+        std::thread::sleep(Duration::from_millis(1));
     }
 
     #[test]

@@ -12,6 +12,7 @@ use std::fs::File;
 use std::io::{Read, Seek, Write};
 
 type Result<T> = std::result::Result<T, KnowhereError>;
+type BatchSearchResults = (Vec<Vec<i64>>, Vec<Vec<f32>>);
 
 /// Key type for hash values
 pub type KeyType = u64;
@@ -380,6 +381,12 @@ impl MinHashBandIndex {
     }
 }
 
+impl Default for MinHashBandIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Result handler for MinHash-LSH search
 #[derive(Debug)]
 pub struct MinHashLSHResultHandler {
@@ -742,7 +749,7 @@ impl MinHashLSHIndex {
         nq: usize,
         topk: usize,
         id_selectors: Option<&[BitsetView]>,
-    ) -> Result<(Vec<Vec<i64>>, Vec<Vec<f32>>)> {
+    ) -> Result<BatchSearchResults> {
         self.batch_search_with_interrupt(queries, nq, topk, id_selectors, &Interrupt::new())
     }
 
@@ -754,7 +761,7 @@ impl MinHashLSHIndex {
         topk: usize,
         id_selectors: Option<&[BitsetView]>,
         interrupt: &Interrupt,
-    ) -> Result<(Vec<Vec<i64>>, Vec<Vec<f32>>)> {
+    ) -> Result<BatchSearchResults> {
         let mut all_ids = Vec::with_capacity(nq);
         let mut all_distances = Vec::with_capacity(nq);
 
@@ -1052,10 +1059,9 @@ impl MinHashLSHIndex {
             let offset = i * element_size;
             let end = offset + element_size;
 
-            if end <= x.len() && end <= y.len()
-                && x[offset..end] == y[offset..end] {
-                    matches += 1;
-                }
+            if end <= x.len() && end <= y.len() && x[offset..end] == y[offset..end] {
+                matches += 1;
+            }
         }
 
         // Jaccard distance = 1 - Jaccard similarity
@@ -1090,8 +1096,11 @@ impl MinHashLSHIndex {
                 let end = start + vec_size;
 
                 if end <= self.raw_data.len() {
-                    let dist =
-                        Self::jaccard_distance(query, &self.raw_data[start..end], self.mh_vec_element_size);
+                    let dist = Self::jaccard_distance(
+                        query,
+                        &self.raw_data[start..end],
+                        self.mh_vec_element_size,
+                    );
                     (id, dist)
                 } else {
                     (id, 1.0) // Invalid, assign maximum distance
@@ -1135,7 +1144,11 @@ impl MinHashLSHIndex {
         let (candidate_ids, _) = self.search(query, refine_k, id_selector)?;
 
         // Filter out invalid IDs
-        let valid_candidates: Vec<i64> = candidate_ids.iter().filter(|&&id| id >= 0).cloned().collect();
+        let valid_candidates: Vec<i64> = candidate_ids
+            .iter()
+            .filter(|&&id| id >= 0)
+            .cloned()
+            .collect();
 
         if valid_candidates.is_empty() {
             return Ok((vec![-1; topk], vec![0.0; topk]));
@@ -1143,6 +1156,12 @@ impl MinHashLSHIndex {
 
         // Phase 2: Jaccard re-ranking
         self.jaccard_knn_search_by_ids(query, &valid_candidates, topk)
+    }
+}
+
+impl Default for MinHashLSHIndex {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1280,17 +1299,7 @@ mod tests {
         let vec_len = 8;
         let elem_size = 8;
         let num_vectors = 50;
-        let mut data = Vec::new();
-
-        // Vector 0: all zeros
-        for _ in 0..vec_len * elem_size {
-            data.push(0u8);
-        }
-
-        // Vector 1: also all zeros (identical to vector 0)
-        for _ in 0..vec_len * elem_size {
-            data.push(0u8);
-        }
+        let mut data = vec![0u8; 2 * vec_len * elem_size];
 
         // Remaining vectors: random
         for i in 2..num_vectors {
@@ -1339,7 +1348,9 @@ mod tests {
 
         // Candidate IDs (including the correct one)
         let candidates = vec![0i64, 5, 10, 15];
-        let (ids, dists) = index.jaccard_knn_search_by_ids(&query, &candidates, 3).unwrap();
+        let (ids, dists) = index
+            .jaccard_knn_search_by_ids(&query, &candidates, 3)
+            .unwrap();
 
         assert!(ids.len() <= 3);
         assert_eq!(ids.len(), dists.len());

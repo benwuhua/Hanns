@@ -1,27 +1,30 @@
 //! Build script for knowhere-rs with Faiss support
+#[cfg(feature = "faiss-cxx")]
+fn first_existing_include<'a>(paths: &'a [&'a str]) -> Option<&'a str> {
+    paths
+        .iter()
+        .copied()
+        .find(|path| std::path::Path::new(path).exists())
+}
 
 fn main() {
     #[cfg(feature = "faiss-cxx")]
     {
-        // Generate C++ bindings using cxx-build
-        // Note: This requires faiss library to be installed
-        // On macOS: brew install faiss
-        // On Linux: apt-get install libfaiss-dev
-        let result = cxx_build::bridge("src/faiss/ffi.rs")
-            .flag("-std=c++17")
-            .flag("-O3")
-            .include("/opt/homebrew/include")
-            .include("/usr/local/include")
-            .include("/usr/include")
-            .compile("knowhere-faiss");
+        let include_paths = [
+            "/opt/homebrew/include",
+            "/usr/local/include",
+            "/usr/include",
+        ];
+        let mut bridge = cxx_build::bridge("src/faiss/ffi.rs");
 
-        match result {
-            Ok(_) => println!("cargo:rerun-if-changed=src/faiss/ffi.rs"),
-            Err(e) => {
-                // If Faiss is not installed, continue without it
-                println!("cargo:warning=Faiss not found, FFI will be stub: {}", e);
-            }
+        bridge.flag("-std=c++17").flag("-O3");
+
+        if let Some(include_path) = first_existing_include(&include_paths) {
+            bridge.include(include_path);
         }
+
+        bridge.compile("knowhere-faiss");
+        println!("cargo:rerun-if-changed=src/faiss/ffi.rs");
     }
 
     println!("cargo:rerun-if-changed=src/");

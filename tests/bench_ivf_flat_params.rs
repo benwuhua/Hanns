@@ -116,12 +116,12 @@ fn calculate_recall(results: &[Vec<i64>], ground_truth: &[Vec<i64>], k: usize) -
 #[derive(Debug, Clone)]
 struct BenchmarkResult {
     name: String,
-    nlist: usize,
-    nprobe: usize,
-    kmeans_type: String,
+    _nlist: usize,
+    _nprobe: usize,
+    _kmeans_type: String,
     train_time_ms: f64,
     build_time_ms: f64,
-    search_time_ms: f64,
+    _search_time_ms: f64,
     qps: f64,
     recall_at_10: f64,
     recall_at_50: f64,
@@ -129,6 +129,7 @@ struct BenchmarkResult {
 }
 
 /// 测试 IVF-Flat 配置
+#[allow(clippy::too_many_arguments)]
 fn benchmark_ivf_flat_config(
     name: &str,
     vectors: &[f32],
@@ -194,12 +195,12 @@ fn benchmark_ivf_flat_config(
 
     BenchmarkResult {
         name: name.to_string(),
-        nlist,
-        nprobe,
-        kmeans_type,
+        _nlist: nlist,
+        _nprobe: nprobe,
+        _kmeans_type: kmeans_type,
         train_time_ms: train_time,
         build_time_ms: build_time,
-        search_time_ms: search_time,
+        _search_time_ms: search_time,
         qps: num_queries as f64 / (search_time / 1000.0),
         recall_at_10,
         recall_at_50,

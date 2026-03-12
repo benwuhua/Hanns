@@ -27,8 +27,8 @@ fn test_hnsw_get_vector_by_ids() {
 
     // Create test data
     let mut vectors = vec![0.0f32; num_vectors * dim];
-    for i in 0..(num_vectors * dim) {
-        vectors[i] = (i as f32 * 0.01) % 10.0;
+    for (i, value) in vectors.iter_mut().enumerate() {
+        *value = (i as f32 * 0.01) % 10.0;
     }
 
     // Build HNSW index
@@ -65,7 +65,11 @@ fn test_hnsw_get_vector_by_ids() {
     // Test get_vector_by_ids with multiple IDs
     let ids = vec![0i64, 50, 99];
     let retrieved = index.get_vector_by_ids(&ids).unwrap();
-    assert_eq!(retrieved.len(), 3 * dim, "Should retrieve three full vectors");
+    assert_eq!(
+        retrieved.len(),
+        3 * dim,
+        "Should retrieve three full vectors"
+    );
 
     // Verify all three vectors
     for (idx, &id) in ids.iter().enumerate() {
@@ -91,8 +95,8 @@ fn test_hnsw_get_vector_by_ids_errors() {
     let num_vectors = 50;
 
     let mut vectors = vec![0.0f32; num_vectors * dim];
-    for i in 0..(num_vectors * dim) {
-        vectors[i] = (i as f32 * 0.01) % 5.0;
+    for (i, value) in vectors.iter_mut().enumerate() {
+        *value = (i as f32 * 0.01) % 5.0;
     }
 
     let config = IndexConfig {
@@ -128,13 +132,13 @@ fn test_hnsw_ann_iterator() {
     let num_queries = 5;
 
     let mut vectors = vec![0.0f32; num_vectors * dim];
-    for i in 0..(num_vectors * dim) {
-        vectors[i] = (i as f32 * 0.01) % 10.0;
+    for (i, value) in vectors.iter_mut().enumerate() {
+        *value = (i as f32 * 0.01) % 10.0;
     }
 
     let mut query_vectors = vec![0.0f32; num_queries * dim];
-    for i in 0..(num_queries * dim) {
-        query_vectors[i] = (i as f32 * 0.02) % 10.0;
+    for (i, value) in query_vectors.iter_mut().enumerate() {
+        *value = (i as f32 * 0.02) % 10.0;
     }
 
     let config = IndexConfig {
@@ -155,7 +159,10 @@ fn test_hnsw_ann_iterator() {
 
     // Retrieve first result
     let first = iterator.next();
-    assert!(first.is_some(), "Iterator should return at least one result");
+    assert!(
+        first.is_some(),
+        "Iterator should return at least one result"
+    );
 
     let (id, distance) = first.unwrap();
     println!("First result: id={}, distance={:.4}", id, distance);
@@ -182,8 +189,8 @@ fn test_hnsw_serialize_deserialize() {
     let num_vectors = 100;
 
     let mut vectors = vec![0.0f32; num_vectors * dim];
-    for i in 0..(num_vectors * dim) {
-        vectors[i] = (i as f32 * 0.01) % 10.0;
+    for (i, value) in vectors.iter_mut().enumerate() {
+        *value = (i as f32 * 0.01) % 10.0;
     }
 
     let config = IndexConfig {
@@ -210,8 +217,8 @@ fn test_hnsw_serialize_deserialize() {
 
     // Verify both indexes return same search results
     let mut query = vec![0.0f32; dim];
-    for i in 0..dim {
-        query[i] = (i as f32 * 0.05) % 10.0;
+    for (i, value) in query.iter_mut().enumerate() {
+        *value = (i as f32 * 0.05) % 10.0;
     }
 
     let req = SearchRequest {
@@ -225,9 +232,17 @@ fn test_hnsw_serialize_deserialize() {
     let result1 = index1.search(&query, &req).unwrap();
     let result2 = index2.search(&query, &req).unwrap();
 
-    assert_eq!(result1.ids.len(), result2.ids.len(), "Result count should match");
+    assert_eq!(
+        result1.ids.len(),
+        result2.ids.len(),
+        "Result count should match"
+    );
     for i in 0..result1.ids.len() {
-        assert_eq!(result1.ids[i], result2.ids[i], "Result IDs should match at position {}", i);
+        assert_eq!(
+            result1.ids[i], result2.ids[i],
+            "Result IDs should match at position {}",
+            i
+        );
         assert!(
             (result1.distances[i] - result2.distances[i]).abs() < 1e-6,
             "Result distances should match at position {}",
@@ -245,8 +260,8 @@ fn test_hnsw_range_search() {
     let num_vectors = 100;
 
     let mut vectors = vec![0.0f32; num_vectors * dim];
-    for i in 0..(num_vectors * dim) {
-        vectors[i] = (i as f32 * 0.01) % 10.0;
+    for (i, value) in vectors.iter_mut().enumerate() {
+        *value = (i as f32 * 0.01) % 10.0;
     }
 
     let config = IndexConfig {
@@ -270,11 +285,7 @@ fn test_hnsw_range_search() {
             println!("Range search returned {} results", result.ids.len());
             // Verify all distances are within radius
             for &dist in &result.distances {
-                assert!(
-                    dist <= 5.0 + 0.001,
-                    "Distance {} exceeds radius 5.0",
-                    dist
-                );
+                assert!(dist <= 5.0 + 0.001, "Distance {} exceeds radius 5.0", dist);
             }
             println!("✅ Range search test passed");
         }
@@ -330,7 +341,10 @@ fn test_hnsw_build_quality_signals_survive_save_load() {
         "layer-0 average degree should stay meaningfully populated, got {:.2}",
         avg_l0
     );
-    assert!(index.max_level() >= 1, "build should produce a multi-layer graph");
+    assert!(
+        index.max_level() >= 1,
+        "build should produce a multi-layer graph"
+    );
 
     let temp_file = NamedTempFile::new().unwrap();
     let path = temp_file.path();
@@ -348,8 +362,7 @@ fn test_hnsw_build_quality_signals_survive_save_load() {
 
     let restored_stats = restored.layer_neighbor_count_stats(0).unwrap();
     assert_eq!(
-        max_l0,
-        restored_stats.1,
+        max_l0, restored_stats.1,
         "save/load should preserve layer-0 degree bounds"
     );
     assert!(

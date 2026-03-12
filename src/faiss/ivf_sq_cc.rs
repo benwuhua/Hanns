@@ -18,6 +18,8 @@ use crate::api::{IndexConfig, KnowhereError, Result, SearchRequest, SearchResult
 use crate::executor::l2_distance;
 use crate::quantization::ScalarQuantizer;
 
+type ConcurrentIvfSqLists = Arc<RwLock<HashMap<usize, Vec<(i64, Vec<u8>)>>>>;
+
 /// IVF-SQ-CC Index - 并发版本，使用标量量化压缩残差
 ///
 /// 特点：
@@ -36,7 +38,7 @@ pub struct IvfSqCcIndex {
     /// Cluster centroids (protected by RwLock)
     centroids: Arc<RwLock<Vec<f32>>>,
     /// Inverted lists: cluster_id -> list of (vector_id, quantized residual)
-    inverted_lists: Arc<RwLock<HashMap<usize, Vec<(i64, Vec<u8>)>>>>,
+    inverted_lists: ConcurrentIvfSqLists,
     /// Scalar quantizer for residuals (protected by RwLock)
     quantizer: Arc<RwLock<ScalarQuantizer>>,
     /// All vectors (for reference, protected by RwLock)
@@ -273,7 +275,12 @@ impl IvfSqCcIndex {
 
         // Find nearest nprobe clusters
         let mut cluster_dists: Vec<(usize, f32)> = (0..self.nlist)
-            .map(|c| (c, l2_distance(query, &centroids[c * self.dim..(c + 1) * self.dim])))
+            .map(|c| {
+                (
+                    c,
+                    l2_distance(query, &centroids[c * self.dim..(c + 1) * self.dim]),
+                )
+            })
             .collect();
 
         cluster_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
@@ -288,7 +295,7 @@ impl IvfSqCcIndex {
         // Search in selected clusters
         let mut all_results: Vec<(i64, f32)> = Vec::new();
 
-        let mut scan_cluster = |cluster_id: usize, acc: &mut Vec<(i64, f32)>| {
+        let scan_cluster = |cluster_id: usize, acc: &mut Vec<(i64, f32)>| {
             if let Some(list) = inverted_lists.get(&cluster_id) {
                 for (id, quantized) in list {
                     // Decode residual
@@ -410,7 +417,7 @@ mod tests {
             index_type: IndexType::IvfFlatCc,
             metric_type: MetricType::L2,
             dim: 128,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_cc(100, 10, 1024),
         };
 
@@ -427,7 +434,7 @@ mod tests {
             index_type: IndexType::IvfFlatCc,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_cc(2, 1, 100),
         };
 
@@ -465,7 +472,7 @@ mod tests {
             index_type: IndexType::IvfFlatCc,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_cc(2, 1, 100),
         };
 
@@ -508,7 +515,7 @@ mod tests {
             index_type: IndexType::IvfFlatCc,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_cc(2, 1, 100),
         };
 
@@ -559,7 +566,7 @@ mod tests {
             index_type: IndexType::IvfFlatCc,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_cc(2, 1, 100),
         };
 
@@ -590,7 +597,7 @@ mod tests {
             index_type: IndexType::IvfFlatCc,
             metric_type: MetricType::L2,
             dim: 4,
-                    data_type: crate::api::DataType::Float,
+            data_type: crate::api::DataType::Float,
             params: IndexParams::ivf_cc(2, 1, 100),
         };
 

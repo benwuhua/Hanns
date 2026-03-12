@@ -8,6 +8,11 @@
 - Helper scripts and dataset utilities live in `scripts/` (for example `scripts/download_sift1m.sh`).
 - C headers are under `include/`; examples are in `examples/`; design notes and reports are in `docs/` and root `*.md` files.
 
+## Authority Workflow
+- The existing remote x86 machine is the only authoritative execution surface for long-task production acceptance and benchmark/verdict claims.
+- Local `cargo` commands are for quick iteration and smoke checks only.
+- Before marking a feature `passing`, run `bash init.sh` and the feature's recorded remote verification steps.
+
 ## Build, Test, and Development Commands
 - `cargo build --verbose`: debug build of the library and binaries.
 - `cargo build --release --verbose`: optimized build for benchmarks/perf checks.
@@ -17,6 +22,9 @@
 - `cargo fmt --all -- --check`: formatting gate used by CI.
 - `cargo test --release --test perf_test -- --nocapture --test-threads=1`: optional perf smoke test used on main branch CI.
 - `./build.sh release`: project wrapper for release build.
+- `bash init.sh`: sync the current workspace to the remote x86 authority machine and print the resolved config.
+- `bash scripts/remote/test.sh --command "<cargo command>"`: authoritative remote test execution wrapper.
+- `bash scripts/remote/build.sh --no-all-targets`: authoritative remote build smoke when the feature only needs the production build lane.
 
 ## Coding Style & Naming Conventions
 - Rust edition is 2021 (`Cargo.toml`); keep code `rustfmt`-clean and clippy-clean.
@@ -28,6 +36,7 @@
 - Put cross-module behavior tests in `tests/` and name files by feature, e.g. `test_diskann_aisaq.rs`.
 - For benchmarks, use `benches/*.rs` with Criterion (`cargo bench`).
 - Run at least `fmt`, `clippy`, `cargo test --lib`, and `cargo test --tests` before opening a PR.
+- For long-task production features, treat those local commands as prefilters only; the remote-x86 verification steps in `feature-list.json` are the acceptance gate.
 
 ## Commit & Pull Request Guidelines
 - Follow Conventional Commit style seen in history: `feat(scope): ...`, `fix(scope): ...`, or `feat: ...`.

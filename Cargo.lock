@@ -772,6 +772,7 @@ dependencies = [
  "clap",
  "criterion",
  "cxx",
+ "cxx-build",
  "hdf5",
  "hdrhistogram",
  "io-uring",

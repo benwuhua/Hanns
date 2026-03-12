@@ -20,11 +20,7 @@ fn parse_header(line: &str) -> Option<(String, String, String, f64)> {
         return None;
     }
 
-    let dataset = parts[0]
-        .rsplit(']')
-        .next()?
-        .trim()
-        .to_string();
+    let dataset = parts[0].rsplit(']').next()?.trim().to_string();
     let index = parts[1].to_string();
 
     let mut params_parts: Vec<String> = parts[2..]
@@ -61,12 +57,7 @@ fn parse_thread_line(line: &str) -> Option<(u32, f64, f64)> {
         .trim()
         .parse()
         .ok()?;
-    let qps = line
-        .split("VPS =")
-        .nth(1)?
-        .trim()
-        .parse()
-        .ok()?;
+    let qps = line.split("VPS =").nth(1)?.trim().parse().ok()?;
 
     Some((thread_num, runtime_seconds, qps))
 }
@@ -116,7 +107,11 @@ fn select_native_benchmark_row(
 ) -> Result<NativeBenchmarkRow, String> {
     let filtered: Vec<NativeBenchmarkRow> = candidates
         .into_iter()
-        .filter(|row| min_recall_at_10.map(|min| row.recall_at_10 >= min).unwrap_or(true))
+        .filter(|row| {
+            min_recall_at_10
+                .map(|min| row.recall_at_10 >= min)
+                .unwrap_or(true)
+        })
         .collect();
 
     if filtered.is_empty() {
@@ -130,16 +125,22 @@ fn select_native_benchmark_row(
         return filtered
             .into_iter()
             .filter(|row| row.thread_num == thread_num)
-            .max_by(|a, b| a.qps.partial_cmp(&b.qps).unwrap_or(std::cmp::Ordering::Equal))
+            .max_by(|a, b| {
+                a.qps
+                    .partial_cmp(&b.qps)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .ok_or_else(|| format!("thread_num {} not found in benchmark output", thread_num));
     }
 
     filtered
         .into_iter()
         .max_by(|a, b| {
-            a.thread_num
-                .cmp(&b.thread_num)
-                .then_with(|| a.qps.partial_cmp(&b.qps).unwrap_or(std::cmp::Ordering::Equal))
+            a.thread_num.cmp(&b.thread_num).then_with(|| {
+                a.qps
+                    .partial_cmp(&b.qps)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
         })
         .ok_or_else(|| "no benchmark rows after parsing".to_string())
 }
@@ -162,31 +163,37 @@ fn main() {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--input" => input_path = args.next(),
-            "--thread-num" => {
-                thread_num = args
-                    .next()
-                    .and_then(|value| value.parse::<u32>().ok())
-            }
+            "--thread-num" => thread_num = args.next().and_then(|value| value.parse::<u32>().ok()),
             "--min-recall-at-10" => {
-                min_recall_at_10 = args
-                    .next()
-                    .and_then(|value| value.parse::<f64>().ok())
+                min_recall_at_10 = args.next().and_then(|value| value.parse::<f64>().ok())
             }
             "--all" => emit_all = true,
             "-h" | "--help" => {
-                print_usage(&env::args().next().unwrap_or_else(|| "native_benchmark_qps_parser".to_string()));
+                print_usage(
+                    &env::args()
+                        .next()
+                        .unwrap_or_else(|| "native_benchmark_qps_parser".to_string()),
+                );
                 return;
             }
             _ => {
                 eprintln!("unknown argument: {arg}");
-                print_usage(&env::args().next().unwrap_or_else(|| "native_benchmark_qps_parser".to_string()));
+                print_usage(
+                    &env::args()
+                        .next()
+                        .unwrap_or_else(|| "native_benchmark_qps_parser".to_string()),
+                );
                 std::process::exit(2);
             }
         }
     }
 
     let Some(input_path) = input_path else {
-        print_usage(&env::args().next().unwrap_or_else(|| "native_benchmark_qps_parser".to_string()));
+        print_usage(
+            &env::args()
+                .next()
+                .unwrap_or_else(|| "native_benchmark_qps_parser".to_string()),
+        );
         std::process::exit(2);
     };
 
@@ -207,12 +214,18 @@ fn main() {
     };
 
     if emit_all {
-        println!("{}", serde_json::to_string_pretty(&candidates).expect("serialize rows"));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&candidates).expect("serialize rows")
+        );
         return;
     }
 
     match select_native_benchmark_row(candidates, thread_num, min_recall_at_10) {
-        Ok(row) => println!("{}", serde_json::to_string_pretty(&row).expect("serialize row")),
+        Ok(row) => println!(
+            "{}",
+            serde_json::to_string_pretty(&row).expect("serialize row")
+        ),
         Err(err) => {
             eprintln!("parse failed: {err}");
             std::process::exit(1);
@@ -257,7 +270,8 @@ mod tests {
     #[test]
     fn rejects_missing_thread() {
         let rows = parse_native_benchmark_log_rows(SAMPLE).expect("parse sample");
-        let err = select_native_benchmark_row(rows, Some(16), None).expect_err("missing thread should fail");
+        let err = select_native_benchmark_row(rows, Some(16), None)
+            .expect_err("missing thread should fail");
         assert!(err.contains("thread_num 16 not found"));
     }
 
@@ -292,7 +306,8 @@ mod tests {
 ================================================================================
 "#;
         let rows = parse_native_benchmark_log_rows(sample).expect("parse sample");
-        let row = select_native_benchmark_row(rows, Some(8), Some(0.95)).expect("select best thread row");
+        let row =
+            select_native_benchmark_row(rows, Some(8), Some(0.95)).expect("select best thread row");
         assert_eq!(row.thread_num, 8);
         assert_eq!(row.index, "HNSW(BF16)");
         assert!((row.qps - 15144.811).abs() < 1e-9);

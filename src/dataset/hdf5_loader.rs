@@ -181,14 +181,12 @@ pub fn load_hdf5_dataset<P: AsRef<Path>>(path: P) -> Result<Hdf5Dataset> {
         )));
     }
 
-    if !neighbors.is_empty() && !distances.is_empty() {
-        if neighbors[0].len() != distances[0].len() {
-            return Err(Hdf5LoaderError::InvalidShape(format!(
-                "Neighbors cols {} != Distances cols {}",
-                neighbors[0].len(),
-                distances[0].len()
-            )));
-        }
+    if !neighbors.is_empty() && !distances.is_empty() && neighbors[0].len() != distances[0].len() {
+        return Err(Hdf5LoaderError::InvalidShape(format!(
+            "Neighbors cols {} != Distances cols {}",
+            neighbors[0].len(),
+            distances[0].len()
+        )));
     }
 
     // Verify test queries match ground truth rows

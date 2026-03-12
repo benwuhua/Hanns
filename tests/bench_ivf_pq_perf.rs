@@ -1,20 +1,54 @@
-#![cfg(feature = "long-tests")]
 //! IVF-PQ Performance Validation (BENCH-046)
 //!
 //! Purpose: Validate IVF-PQ QPS and recall after BUG-005 fix
 //! Config: 50K base, 100 queries, nlist=100, nprobe=16, M=8, nbits=8
 //! Target: QPS vs C++, R@10 >= 90%
 
+#[cfg(feature = "long-tests")]
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+#[cfg(feature = "long-tests")]
 use knowhere_rs::faiss::ivfpq::IvfPqIndex;
+use serde_json::Value;
+use std::fs;
+#[cfg(feature = "long-tests")]
 use std::time::Instant;
 
+const IVFPQ_FINAL_VERDICT_PATH: &str = "benchmark_results/ivfpq_p3_003_final_verdict.json";
+
+fn load_ivfpq_final_verdict() -> Value {
+    let content = fs::read_to_string(IVFPQ_FINAL_VERDICT_PATH)
+        .expect("family verdict artifact must exist for the IVF-PQ verdict lane");
+    serde_json::from_str(&content).expect("family verdict artifact must be valid JSON")
+}
+
+#[test]
+fn ivfpq_verdict_lane_archives_family_as_no_go() {
+    let verdict = load_ivfpq_final_verdict();
+
+    assert_eq!(verdict["family"], "IVF-PQ");
+    assert_eq!(verdict["classification"], "no-go");
+    assert_eq!(
+        verdict["leadership_verdict"],
+        "no_go_for_production_and_leadership"
+    );
+    assert_eq!(verdict["leadership_claim_allowed"], false);
+    assert!(
+        verdict["summary"]
+            .as_str()
+            .expect("summary must be a string")
+            .contains("recall"),
+        "summary must explain that the current no-go verdict is driven by sub-gate recall evidence"
+    );
+}
+
+#[cfg(feature = "long-tests")]
 fn generate_random_vectors(n: usize, dim: usize) -> Vec<f32> {
     (0..n * dim)
         .map(|i| ((i % 100) as f32 / 100.0 - 0.5) * 2.0)
         .collect()
 }
 
+#[cfg(feature = "long-tests")]
 #[test]
 #[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_ivf_pq_perf_50k() {
@@ -116,6 +150,7 @@ fn test_ivf_pq_perf_50k() {
     println!("      R@10 target: >= 90% (verified in BUG-005 fix)");
 }
 
+#[cfg(feature = "long-tests")]
 #[test]
 #[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_ivf_pq_perf_10k() {

@@ -739,28 +739,15 @@ fn test_sift1m_benchmark() {
     println!("\nRunning SIFT1M benchmark with {} queries", num_queries);
 
     // Run benchmarks for all index types
-    let mut results = Vec::new();
-
-    // Flat (baseline)
-    results.push(benchmark_flat(&dataset, num_queries));
-
-    // HNSW (high recall)
-    results.push(benchmark_hnsw(&dataset, num_queries));
-
-    // IVF-Flat (cluster-based)
-    results.push(benchmark_ivf_flat(&dataset, num_queries));
-
-    // IVF-PQ (quantization, high compression)
-    results.push(benchmark_ivf_pq(&dataset, num_queries));
-
-    // IVF-SQ8 (scalar quantization, 8-bit)
-    results.push(benchmark_ivf_sq8(&dataset, num_queries));
-
-    // RaBitQ (binary quantization)
-    results.push(benchmark_rabitq(&dataset, num_queries));
-
-    // ScaNN (anisotropic quantization)
-    results.push(benchmark_scann(&dataset, num_queries));
+    let results = vec![
+        benchmark_flat(&dataset, num_queries),
+        benchmark_hnsw(&dataset, num_queries),
+        benchmark_ivf_flat(&dataset, num_queries),
+        benchmark_ivf_pq(&dataset, num_queries),
+        benchmark_ivf_sq8(&dataset, num_queries),
+        benchmark_rabitq(&dataset, num_queries),
+        benchmark_scann(&dataset, num_queries),
+    ];
 
     // Print summary table
     BenchmarkResult::print_table(&results);
@@ -791,11 +778,12 @@ fn test_sift1m_quick() {
     println!("\nRunning quick SIFT1M test with {} queries", num_queries);
 
     // Quick test: Flat, HNSW, IVF-Flat, IVF-PQ (most representative)
-    let mut results = Vec::new();
-    results.push(benchmark_flat(&dataset, num_queries));
-    results.push(benchmark_hnsw(&dataset, num_queries));
-    results.push(benchmark_ivf_flat(&dataset, num_queries));
-    results.push(benchmark_ivf_pq(&dataset, num_queries));
+    let results = vec![
+        benchmark_flat(&dataset, num_queries),
+        benchmark_hnsw(&dataset, num_queries),
+        benchmark_ivf_flat(&dataset, num_queries),
+        benchmark_ivf_pq(&dataset, num_queries),
+    ];
 
     BenchmarkResult::print_table(&results);
 

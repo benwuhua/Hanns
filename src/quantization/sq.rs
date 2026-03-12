@@ -71,7 +71,7 @@ impl ScalarQuantizer {
             .iter()
             .map(|&v| {
                 let scaled = (v - self.offset) * self.scale;
-                
+
                 scaled.clamp(0.0, levels - 1.0).round() as u8
             })
             .collect()

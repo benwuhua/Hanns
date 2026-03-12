@@ -15,16 +15,33 @@
 //! DATASET=gist1m NUM_QUERIES=100 cargo test --test bench_compare test_bench_compare_gist1m -- --nocapture
 //! ```
 
+#[cfg(feature = "long-tests")]
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
+#[cfg(feature = "long-tests")]
 use knowhere_rs::benchmark::{average_recall_at_k, BenchmarkResult};
+#[cfg(feature = "long-tests")]
 use knowhere_rs::dataset::{
     load_deep1m_complete, load_gist1m_complete, load_sift1m_complete, DeepDataset, GistDataset,
     SiftDataset,
 };
+#[cfg(feature = "long-tests")]
 use knowhere_rs::faiss::{HnswIndex, IvfFlatIndex, MemIndex as FlatIndex};
+#[cfg(feature = "long-tests")]
 use knowhere_rs::MetricType;
+use serde_json::Value;
+#[cfg(feature = "long-tests")]
 use std::env;
+use std::fs;
+#[cfg(feature = "long-tests")]
 use std::time::Instant;
+
+const DISKANN_FINAL_VERDICT_PATH: &str = "benchmark_results/diskann_p3_004_final_verdict.json";
+
+fn load_diskann_final_verdict() -> Value {
+    let content = fs::read_to_string(DISKANN_FINAL_VERDICT_PATH)
+        .expect("DiskANN family verdict artifact must exist for the compare lane");
+    serde_json::from_str(&content).expect("DiskANN family verdict artifact must be valid JSON")
+}
 
 #[test]
 fn compare_lane_excludes_diskann_until_it_is_native_comparable() {
@@ -39,7 +56,22 @@ fn compare_lane_excludes_diskann_until_it_is_native_comparable() {
     );
 }
 
+#[test]
+fn compare_lane_matches_diskann_family_final_verdict() {
+    let verdict = load_diskann_final_verdict();
+    let indexes = compare_lane_index_names();
+
+    assert_eq!(verdict["family"], "DiskANN");
+    assert_eq!(verdict["classification"], "constrained");
+    assert_eq!(verdict["leadership_claim_allowed"], false);
+    assert!(
+        !indexes.contains(&"DiskANN"),
+        "compare lane must keep excluding DiskANN while the family verdict is constrained"
+    );
+}
+
 /// Dataset type enum
+#[cfg(feature = "long-tests")]
 #[derive(Debug, Clone, Copy)]
 enum DatasetType {
     Sift1m,
@@ -51,6 +83,7 @@ fn compare_lane_index_names() -> Vec<&'static str> {
     vec!["Flat", "HNSW", "IVF-Flat"]
 }
 
+#[cfg(feature = "long-tests")]
 impl DatasetType {
     fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
@@ -70,12 +103,14 @@ impl DatasetType {
 }
 
 /// Unified dataset wrapper
+#[cfg(feature = "long-tests")]
 enum UnifiedDataset {
     Sift(SiftDataset),
     Deep(DeepDataset),
     Gist(GistDataset),
 }
 
+#[cfg(feature = "long-tests")]
 impl UnifiedDataset {
     fn dim(&self) -> usize {
         match self {
@@ -90,14 +125,6 @@ impl UnifiedDataset {
             UnifiedDataset::Sift(ds) => ds.num_base(),
             UnifiedDataset::Deep(ds) => ds.num_base(),
             UnifiedDataset::Gist(ds) => ds.num_base(),
-        }
-    }
-
-    fn num_query(&self) -> usize {
-        match self {
-            UnifiedDataset::Sift(ds) => ds.num_query(),
-            UnifiedDataset::Deep(ds) => ds.num_query(),
-            UnifiedDataset::Gist(ds) => ds.num_query(),
         }
     }
 
@@ -127,6 +154,7 @@ impl UnifiedDataset {
 }
 
 /// Load dataset based on type
+#[cfg(feature = "long-tests")]
 fn load_dataset(dataset_type: DatasetType) -> Option<UnifiedDataset> {
     let base_path = env::var("DATASET_PATH").unwrap_or_else(|_| "./data".to_string());
 
@@ -192,6 +220,7 @@ fn load_dataset(dataset_type: DatasetType) -> Option<UnifiedDataset> {
 }
 
 /// Benchmark Flat index
+#[cfg(feature = "long-tests")]
 fn benchmark_flat(dataset: &UnifiedDataset, num_queries: usize) -> BenchmarkResult {
     let index_name = "Flat";
     println!("\nBenchmarking {} index...", index_name);
@@ -261,6 +290,7 @@ fn benchmark_flat(dataset: &UnifiedDataset, num_queries: usize) -> BenchmarkResu
 }
 
 /// Benchmark HNSW index
+#[cfg(feature = "long-tests")]
 fn benchmark_hnsw(dataset: &UnifiedDataset, num_queries: usize) -> BenchmarkResult {
     let index_name = "HNSW";
     println!("\nBenchmarking {} index...", index_name);
@@ -337,6 +367,7 @@ fn benchmark_hnsw(dataset: &UnifiedDataset, num_queries: usize) -> BenchmarkResu
 }
 
 /// Benchmark IVF-Flat index
+#[cfg(feature = "long-tests")]
 fn benchmark_ivf_flat(dataset: &UnifiedDataset, num_queries: usize) -> BenchmarkResult {
     let index_name = "IVF-Flat";
     println!("\nBenchmarking {} index...", index_name);
@@ -416,6 +447,7 @@ fn benchmark_ivf_flat(dataset: &UnifiedDataset, num_queries: usize) -> Benchmark
 }
 
 /// Run all benchmarks for a dataset
+#[cfg(feature = "long-tests")]
 fn run_benchmarks(dataset_type: DatasetType, num_queries: usize, json_output: Option<&str>) {
     println!("\n{}", "=".repeat(70));
     println!("Knowhere-rs Benchmark: {}", dataset_type.name());

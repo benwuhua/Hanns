@@ -102,6 +102,7 @@ struct MTestResult {
 }
 
 /// Benchmark HNSW with specific M value
+#[allow(clippy::too_many_arguments)]
 fn benchmark_hnsw_m(
     base: &[f32],
     query: &[f32],

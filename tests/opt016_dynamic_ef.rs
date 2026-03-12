@@ -122,7 +122,6 @@ fn test_dynamic_ef_recall_improvement() {
     let query = generate_vectors(10, dim);
 
     // 计算 ground truth (brute force)
-    let mut ground_truth_count = 0;
     for q_idx in 0..10 {
         let q = &query[q_idx * dim..(q_idx + 1) * dim];
         let mut distances: Vec<(usize, f32)> = Vec::with_capacity(n);
@@ -132,7 +131,6 @@ fn test_dynamic_ef_recall_improvement() {
             distances.push((i, dist));
         }
         distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        ground_truth_count += distances.len().min(100);
     }
 
     // 测试大 top_k 查询 (top_k=100)

@@ -101,21 +101,6 @@ impl AnnIterator {
         }
     }
 
-    /// Get next result
-    pub fn next(&mut self) -> Option<IterResult> {
-        if self.pos >= self.results.len() {
-            return None;
-        }
-        let result = IterResult {
-            id: self.results[self.pos].0,
-            distance: self.results[self.pos].1,
-            index: self.returned,
-        };
-        self.pos += 1;
-        self.returned += 1;
-        Some(result)
-    }
-
     /// Peek at next result without consuming
     pub fn peek(&self) -> Option<IterResult> {
         if self.pos >= self.results.len() {
@@ -136,6 +121,24 @@ impl AnnIterator {
     /// Get total results returned so far
     pub fn count(&self) -> usize {
         self.returned
+    }
+}
+
+impl Iterator for AnnIterator {
+    type Item = IterResult;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos >= self.results.len() {
+            return None;
+        }
+        let result = IterResult {
+            id: self.results[self.pos].0,
+            distance: self.results[self.pos].1,
+            index: self.returned,
+        };
+        self.pos += 1;
+        self.returned += 1;
+        Some(result)
     }
 }
 

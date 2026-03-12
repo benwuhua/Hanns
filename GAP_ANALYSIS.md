@@ -1,6 +1,6 @@
 # Knowhere-RS Gap Analysis (Non-GPU)
 
-Last updated: 2026-03-11 15:38 UTC
+Last updated: 2026-03-12 05:56 UTC
 Scope: Non-GPU production parity against C++ knowhere
 
 ## 1. Baseline and Method
@@ -54,15 +54,29 @@ Evaluation dimensions:
   - 量化差距：QPS 726 vs 15144.811（**20.9x**）at recall@10≥0.95
   - 根因：建图质量差距（邻居选择算法），非搜索路径 bug
   - 证据：`benchmark_results/baseline_p3_001_stop_go_verdict.json`
-- ✅ `IVFPQ-P3-003`: **no-go**（recall@10≈0.442）
-- ✅ `DISKANN-P3-004`: **no-go for parity**（`DiskAnnIndex` 是简化 Vamana + placeholder PQ；`PQFlashIndex` 是受限 AISAQ skeleton；默认 benchmark lane 与 compare lane 现已都显式披露并执行这一边界）
+- ✅ `IVFPQ-P3-003`: **no-go**
+  - family-level final verdict 已归档到 `benchmark_results/ivfpq_p3_003_final_verdict.json`
+  - `ivfpq_p1_002_focused.json`、`recall_gated_baseline.json`、`cross_dataset_sampling.json` 一致表明 IVF-PQ 仍未越过 `0.8` recall gate，且 confidence 仍非 trusted
+  - 默认 benchmark lane 现已改为真实 regressions：`tests/bench_ivf_pq_perf.rs`、`tests/bench_recall_gated_baseline.rs`、`tests/bench_cross_dataset_sampling.rs` 不再是 `0 tests` 壳
+- ✅ `DISKANN-P3-004`: **constrained**
+  - `benchmark_results/diskann_p3_004_final_verdict.json` 已把 DiskANN family-level final classification 归档为 `constrained`
+  - `benchmark_results/diskann_p3_004_benchmark_gate.json` 继续把 benchmark lane 固化为 `no_go_for_native_comparable_benchmark`
+  - authority-refreshed `benchmark_results/cross_dataset_sampling.json` 现已包含三个 DiskANN sampled rows，且 recall 仍全部低于 `0.8` gate、confidence 仍为非 trusted
+  - 默认 library / benchmark / compare lanes (`cargo test --lib diskann -- --nocapture`, `tests/bench_diskann_1m.rs`, `tests/bench_compare.rs`) 现已共同阻止把这条功能可用但受限的 Vamana/AISAQ 实现误读为 native-comparable DiskANN
+- ✅ `FINAL-CORE-CLASSIFICATION`: core CPU paths 的最终分类已形成统一 rollup
+  - `benchmark_results/final_core_path_classification.json` 现已统一归档 HNSW=`functional-but-not-leading`、IVF-PQ=`no-go`、DiskANN=`constrained`
+  - `tests/bench_recall_gated_baseline.rs` 与 `tests/bench_cross_dataset_sampling.rs` 现已将这一 rollup 锁到现有 authority-backed baseline/cross-dataset artifacts，而不再只靠分散 family verdict docs
+- ✅ `FINAL-PERFORMANCE-LEADERSHIP-PROOF`: 最终 performance-leadership criterion 已被明确归档为未满足
+  - `benchmark_results/final_performance_leadership_proof.json` 现已把项目级 completion criterion 写成 `criterion_met=false`
+  - `tests/bench_hnsw_cpp_compare.rs` 现已将这个结论锁到 HNSW 的 authority-backed same-schema blocker 和 `benchmark_results/final_core_path_classification.json`
+  - 当前结论是“项目尚未证明任何一条 core CPU lane 具备可信 leadership”，而不是“证据不足待定”
 - ✅ `HNSW-P3-002`: **functional-but-not-leading**
   - layer-0 语义差异、same-schema HDF5 refresh、以及 HNSW FFI / persistence contract 均已 authority 收口
   - 当前 family 级最终结论已归档到 `benchmark_results/hnsw_p3_002_final_verdict.json`：Rust HNSW 具备可信 recall 与生产契约，但在当前 trusted same-schema lane 上 native 仍约快 `14.8x`，因此继续阻止 leadership claim
-- 🚧 `IVFPQ-P3-003`: benchmark chain 已收口为可回放 no-go 证据
-  - 已用 `ivfpq-hot-path-audit` 把真实 hot path 和 placeholder scaffold 分离
-  - coarse/ADC regressions 与 remote benchmark refresh 均已完成；当前结论是不具备 leadership claim，而不是缺少 benchmark 事实
-- [ ] `PROD-P3-005`: 最终生产验收门（只在前 4 个任务收口后复核）
+- ✅ `FINAL-PRODUCTION-ACCEPTANCE`: 项目级最终 verdict 已归档为 `not accepted`
+  - `benchmark_results/final_production_acceptance.json` 现已明确记录：production engineering gates 全部关闭，但 project-level acceptance 仍为 `false`
+  - authority `fmt/clippy/full_regression` gate 已在最终 verdict feature 下复跑通过，且 `tests/test_final_production_acceptance.rs` 已把该 verdict 锁进默认 `cargo test --tests -q` surface
+  - 当前 blocker 不是“还没验完”，而是已经归档的事实：`benchmark_results/final_performance_leadership_proof.json` 仍为 `criterion_met=false`，`benchmark_results/final_core_path_classification.json` 仍是 HNSW=`functional-but-not-leading`、IVF-PQ=`no-go`、DiskANN=`constrained`
 
 ## 3. Validation Gaps
 
@@ -83,12 +97,8 @@ Primary modules for closure verification:
 
 ## 5. Completion Definition
 
-Parity/governance tail-closure is closed, but the project as a whole is not:
+All tracked features are now closed, and the final project-level verdict is explicit:
 
-1. `PARITY-P2-001` 已完成：HNSW-PQ 的高级接口/持久化语义已被稳定约束。
-2. `OPT-P2-004` 已完成：`Index factory/legality` 的状态在 queue/gap/audit 中一致，不再因历史残留被误判为活跃缺口。
-3. 下一阶段不再是“补入口”，而是按大任务稳定推进：
-   - 先建立可信基线
-   - 再分别验证 `HNSW`、`IVF-PQ`
-   - 再诚实收口 `DiskANN/PQ`
-   - 最后统一过生产验收门。
+1. queue / roadmap / gap / audit / feature inventory 已全部同步到同一个最终状态。
+2. 当前项目结论不是“待定”，而是 `not accepted on current remote x86 evidence`。
+3. 若未来继续投入，必须由新的 authority artifact 改变 leadership 或 core-path verdict chain，而不是靠文档重述或本地结果翻案。
