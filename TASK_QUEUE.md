@@ -1,13 +1,13 @@
 # Builder 任务队列
-> 最后更新: 2026-03-12 08:45 UTC | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
+> 最后更新: 2026-03-12 09:03 UTC | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
 
 ## 当前大任务面板
 
-- [x] **HNSW-REOPEN-001**: 重开 HNSW 核心算法攻关线
-  - 当前子阶段: `round2_hard_stop_archived` ✅
-  - 当前结论: 第一轮 HNSW reopen 只拿到 mixed evidence；第二轮虽然把 synthetic candidate-search profile 明显做轻，但 fresh authority same-schema HNSW row 反而从 `710.962` qps 回落到 `521.031` qps（约 `-26.7%`），native BF16 仍在 `10519.683` qps 左右，导致 native-over-Rust gap 从 `14.8x` 扩大到 `20.2x`。因此当前 tracked reopen line 以 `hard_stop` 收口，历史 family verdict 保持不变
-  - 当前证据: `benchmark_results/hnsw_reopen_round2_baseline.json` + `benchmark_results/hnsw_reopen_candidate_search_profile_round2.json` + `benchmark_results/hnsw_reopen_round2_authority_summary.json`
-  - 下一步: 无；只有当出现新的 authority-backed HNSW hypothesis 时，才允许开启新的 reopen line
+- [ ] **HNSW-REOPEN-001**: 重开 HNSW 核心算法攻关线
+  - 当前子阶段: `round3_distance_compute_profiler` 🔄
+  - 当前结论: 第二轮 HNSW reopen 已经被 authority evidence 判成 `hard_stop`，但第三轮现已正式激活。新的 baseline `benchmark_results/hnsw_reopen_round3_baseline.json` 明确把热点收敛到 `distance_compute_inner_loop`：round 2 synthetic profile 已明显改善 `entry_descent`，但 authority same-schema HNSW row 仍从 `710.962` qps 回落到 `521.031` qps，native BF16 仍在 `10519.683` qps 左右，因此 round 3 只允许围绕距离热路径做新的 authority-backed 假设
+  - 当前证据: `benchmark_results/hnsw_reopen_round3_baseline.json` + `benchmark_results/hnsw_reopen_round2_authority_summary.json` + `benchmark_results/hnsw_reopen_candidate_search_profile_round2.json`
+  - 下一步: 执行 `hnsw-distance-compute-profiler`，把 `distance_compute` 拆成 upper-layer、layer-0、node-node 三类可解释来源，再决定 L2 fast path 的最小切口
   - 范围约束: 只重开 HNSW；IVF-PQ、DiskANN、以及项目级 final acceptance 继续保持 archived state，直到 HNSW 真的拿到更强 authority evidence
 
 - [x] **BASELINE-P3-001**: 建立可信的 native-vs-rs recall-gated 基线

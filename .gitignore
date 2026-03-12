@@ -41,6 +41,9 @@ benchmark_results/*
 !benchmark_results/hnsw_reopen_round2_baseline.json
 !benchmark_results/hnsw_reopen_candidate_search_profile_round2.json
 !benchmark_results/hnsw_reopen_round2_authority_summary.json
+!benchmark_results/hnsw_reopen_round3_baseline.json
+!benchmark_results/hnsw_reopen_distance_compute_profile_round3.json
+!benchmark_results/hnsw_reopen_round3_authority_summary.json
 !benchmark_results/ivfpq_p1_002_focused.json
 !benchmark_results/ivfpq_p3_003_final_verdict.json
 !benchmark_results/native_hnsw_sift128.full.json

@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-12 08:45
-Sync baseline: d586788295e093c6599d8456c54d8d161b1c6f12 from origin/main
+Last updated: 2026-03-12 09:03
+Sync baseline: c87ab4915cca1a0ed68252cbf2701352e8cb6af7 from main
 
 ## 轮次记录
+- 2026-03-12 09:03: **builder-loop：收口 `hnsw-reopen-round3-activation`，把第三轮 HNSW 的 distance-compute 线正式挂回 durable workflow（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round2_authority_summary.json`、`benchmark_results/hnsw_reopen_candidate_search_profile_round2.json`、`benchmark_results/hnsw_p3_002_final_verdict.json`、`tests/bench_hnsw_reopen_round2.rs`、`docs/superpowers/specs/2026-03-12-hnsw-reopen-round3-distance-compute-design.md`、`docs/superpowers/plans/2026-03-12-hnsw-reopen-round3-distance-compute.md`。
+  2. 阶段结论：round 2 已经被 authority evidence 判成 `hard_stop`，所以 round 3 不能再泛泛地说“继续优化 candidate-search”。最小诚实切口是把 HNSW 的 active hypothesis 收窄到 `distance_compute_inner_loop`，并把这个新假设写回 durable workflow，而不是继续停在 `39/39` 的终态叙事里。
+  3. 本轮执行：新增 `tests/bench_hnsw_reopen_round3.rs`，并先用缺失 `benchmark_results/hnsw_reopen_round3_baseline.json` 的失败做 TDD red；随后新增该 baseline artifact，明确把 round 2 hard-stop 冻结成 round 3 起点：same-schema Rust HNSW 仍为 `521.031` qps、native BF16 仍为 `10519.683` qps、历史 HNSW family verdict 仍为 `functional-but-not-leading`，而新的 round-3 target 改为 `distance_compute_inner_loop`。最后扩展 `feature-list.json`、`task-progress.md`、`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`DEV_ROADMAP.md`、`RELEASE_NOTES.md`，把 repo 从 round-2 hard-stop 终态切到新的 `43-feature` round-3 reopen line。
+  4. 验证结果：本地 `cargo test --test bench_hnsw_reopen_round3 -- --nocapture` 先红后绿；`bash init.sh` 通过；第一次 authority replay 因为我把 replay 和 `init.sh` 并行跑而不算最终证据，串行 replay `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round3 -q"` 返回 `test=ok`，日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T090426Z_16155.log`；`python3 scripts/validate_features.py feature-list.json` 返回 `VALID - 43 features (40 passing, 3 failing); workflow/doc checks passed`。
+  5. 后续主缺口：当前不再缺“round 3 有没有启动”的治理动作，真正的下一条 feature 是 `hnsw-distance-compute-profiler`。只有当新的 profiler 把 `distance_compute` 拆成更小的可解释来源之后，L2 fast path 的最小实现切口才有意义。
+  状态：Phase 6 Active（round 3 activated；distance-compute profiler is next）。
 - 2026-03-12 08:45: **builder-loop：收口 `hnsw-round2-authority-same-schema-rerun`，用 fresh authority same-schema evidence 给第二轮 HNSW reopen 终判（plan+exec）**
   1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round2_baseline.json`、`benchmark_results/hnsw_reopen_candidate_search_profile_round2.json`、`benchmark_results/hnsw_p3_002_final_verdict.json`、`tests/bench_hnsw_reopen_round2.rs`。
   2. 阶段结论：第二轮 core rework 之后，真正要回答的问题已经不是“synthetic profile 有没有改善”，而是“same-schema authority lane 有没有跟着改善”。因此本轮只做三件事：重跑真实 HDF5 Rust row、重跑 native capture、再把 round-2 profile 和 contract 都刷成 fresh evidence。

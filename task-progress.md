@@ -12,13 +12,32 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `none`
-- Next feature: `none`
+- Current focus: `hnsw-distance-compute-profiler`
+- Next feature: `hnsw-distance-compute-profiler`
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 39/39 features passing (100%)
+- Progress: 40/43 features passing (93%)
 
 ## Session Log
+
+### Session 48 - 2026-03-12
+- Focus: `hnsw-reopen-round3-activation`
+- Completed:
+  - added `tests/bench_hnsw_reopen_round3.rs` as a new default-lane regression for the round-3 distance-compute line, then used the missing `benchmark_results/hnsw_reopen_round3_baseline.json` failure as the TDD red signal for reopening HNSW after the round-2 hard stop
+  - created `benchmark_results/hnsw_reopen_round3_baseline.json`, freezing round 2 as the new round-3 baseline: HNSW remains `functional-but-not-leading`, round 2 ended as a `hard_stop`, and the active hypothesis is now `distance_compute_inner_loop`
+  - reopened the durable workflow state for a third HNSW line by adding four new round-3 features and repointing the queue/gap/roadmap/audit docs at `distance_compute_inner_loop` as the next explicit same-schema QPS hypothesis
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round3 -- --nocapture` -> initial `FAIL` (missing `benchmark_results/hnsw_reopen_round3_baseline.json`), then `ok`
+  - `bash init.sh` -> `ok`
+  - first authority replay was started before `init.sh` finished syncing and failed without becoming final evidence; the serialized replay passed: `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round3 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T090426Z_16155.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 43 features (40 passing, 3 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-reopen-round3-activation` is now `passing`
+  - round 3 is active, and the next tracked feature is `hnsw-distance-compute-profiler`
+- Notes:
+  - this activation feature does not claim any new HNSW performance win; it only formalizes round 3 around the `distance_compute_inner_loop` hypothesis and prevents the repo from drifting back into the round-2 hard-stop terminal narrative while new HNSW work is active
+  - the historical HNSW family verdict remains unchanged until the round-3 same-schema authority rerun says otherwise
+- Git Commits: pending
 
 ### Session 47 - 2026-03-12
 - Focus: `hnsw-round2-authority-same-schema-rerun`

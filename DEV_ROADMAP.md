@@ -1,6 +1,6 @@
 # Knowhere-RS Development Roadmap (Non-GPU)
 
-Last updated: 2026-03-12 08:45 UTC
+Last updated: 2026-03-12 09:03 UTC
 
 ## Goal
 
@@ -153,7 +153,7 @@ Exit criteria:
 - Production-relevant persistence / FFI metadata semantics are stable and auditable.
 - At least one core non-GPU path shows repeatable, recall-gated performance leadership over native knowhere. Not met on the current authority evidence; the final program verdict is therefore archived as `not accepted` in `benchmark_results/final_production_acceptance.json`.
 
-## Phase 6: HNSW Reopen Algorithm Push — ✅ Closed (round 2 hard-stop archived)
+## Phase 6: HNSW Reopen Algorithm Push — 🔄 Active (round 3 distance-compute line)
 
 Objective:
 
@@ -162,11 +162,15 @@ Objective:
 
 Active scoped tasks:
 
-- `hnsw-reopen-round2-activation`: closed; round 1 is now frozen into `benchmark_results/hnsw_reopen_round2_baseline.json`, and the second HNSW reopen line is officially active
-- `hnsw-candidate-search-profiler`: closed; `benchmark_results/hnsw_reopen_candidate_search_profile_round2.json` now pins round-2 authority evidence to `entry_descent` first and `distance_compute` second, replacing the old monolithic `candidate_search` bucket
+- `hnsw-reopen-round2-activation`: closed; round 1 is frozen into `benchmark_results/hnsw_reopen_round2_baseline.json`
+- `hnsw-candidate-search-profiler`: closed; `benchmark_results/hnsw_reopen_candidate_search_profile_round2.json` now pins round-2 authority evidence to `entry_descent` and `distance_compute`
 - `hnsw-candidate-search-core-rework`: closed; the shared HNSW candidate-search core now uses greedy fast descent for `ef<=1`, the unfiltered query path no longer pays the old broad upper-layer descent, and `SearchScratch` no longer writes an unused `touched` list
-- `hnsw-round2-authority-same-schema-rerun`: closed; fresh authority evidence is now archived in `benchmark_results/hnsw_reopen_round2_authority_summary.json`, which keeps the historical HNSW family verdict unchanged and closes round 2 as `hard_stop`
+- `hnsw-round2-authority-same-schema-rerun`: closed; fresh authority evidence is archived in `benchmark_results/hnsw_reopen_round2_authority_summary.json`, which keeps the historical HNSW family verdict unchanged and closes round 2 as `hard_stop`
+- `hnsw-reopen-round3-activation`: closed; `benchmark_results/hnsw_reopen_round3_baseline.json` now freezes round 2 as a hard-stop baseline and officially activates the third HNSW line around `distance_compute_inner_loop`
+- `hnsw-distance-compute-profiler`: active; split the remaining `distance_compute` hotspot into actionable sub-paths before touching the L2 fast path
+- `hnsw-distance-l2-fast-path-rework`: pending; only start after the round-3 profiler says which distance path dominates
+- `hnsw-round3-authority-same-schema-rerun`: pending; only fresh same-schema authority evidence can tell whether round 3 justifies a later verdict-refresh feature
 
 Phase exit criteria:
 
-- HNSW round 2 produced a fresh same-schema authority result, and the repo explicitly recorded the outcome as `hard_stop` instead of drifting back into untracked reopen work. ✅
+- HNSW round 3 produces a fresh same-schema authority result after the distance-compute cut, and the repo explicitly records whether that result justifies a follow-on verdict-refresh feature or another stop. 

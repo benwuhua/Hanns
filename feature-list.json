@@ -656,6 +656,77 @@
       "dependencies": [
         "hnsw-candidate-search-core-rework"
       ]
+    },
+    {
+      "id": "hnsw-reopen-round3-activation",
+      "category": "hnsw-reopen",
+      "title": "Activate HNSW reopen round 3",
+      "description": "Freeze the round-2 hard-stop result into a new round-3 baseline, reactivate durable workflow state, and explicitly retarget HNSW improvement work at distance-compute-driven same-schema QPS gains.",
+      "priority": "high",
+      "status": "passing",
+      "verification_steps": [
+        "bash init.sh",
+        "cargo test --test bench_hnsw_reopen_round3 -- --nocapture",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_round3 -q\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "hnsw-round2-authority-same-schema-rerun"
+      ]
+    },
+    {
+      "id": "hnsw-distance-compute-profiler",
+      "category": "hnsw-reopen",
+      "title": "Profile HNSW round 3 distance compute",
+      "description": "Split the current distance_compute hotspot into smaller measurable buckets so the next HNSW algorithm cut is driven by real authority-backed evidence rather than by one large synthetic timing bucket.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash init.sh",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command \"cargo test --features long-tests --test bench_hnsw_reopen_round3_profile -- --ignored --nocapture\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_round3 -q\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "hnsw-reopen-round3-activation"
+      ]
+    },
+    {
+      "id": "hnsw-distance-l2-fast-path-rework",
+      "category": "hnsw-reopen",
+      "title": "Rework the HNSW L2 distance hot path",
+      "description": "Add a focused L2 fast path for the unfiltered HNSW search hot loop so query-to-node distance work can pursue same-schema QPS gains without API, FFI, or storage-format drift.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash init.sh",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_cpp_compare -q\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command \"cargo test --features long-tests --test bench_hnsw_reopen_round3_profile -- --ignored --nocapture\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_round3 -q\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "hnsw-distance-compute-profiler"
+      ]
+    },
+    {
+      "id": "hnsw-round3-authority-same-schema-rerun",
+      "category": "hnsw-reopen",
+      "title": "Refresh round 3 same-schema authority evidence",
+      "description": "Re-run the remote same-schema recall-gated HNSW benchmark after the round-3 distance-compute rework and decide whether a later HNSW verdict-refresh feature is justified or the new reopen line should stop.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash init.sh",
+        "bash scripts/remote/test.sh --command \"cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95\"",
+        "bash scripts/remote/native_hnsw_qps_capture.sh --gtest-filter Benchmark_float_qps.TEST_HNSW",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command \"cargo test --features long-tests --test bench_hnsw_reopen_round3_profile -- --ignored --nocapture\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_round3 -q\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "hnsw-distance-l2-fast-path-rework"
+      ]
     }
   ]
 }
