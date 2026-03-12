@@ -2,12 +2,20 @@ use serde_json::Value;
 use std::fs;
 
 const HNSW_REOPEN_ROUND4_BASELINE_PATH: &str = "benchmark_results/hnsw_reopen_round4_baseline.json";
+const HNSW_REOPEN_ROUND4_AUDIT_PATH: &str =
+    "benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json";
 
 fn load_hnsw_reopen_round4_baseline() -> Value {
     let content = fs::read_to_string(HNSW_REOPEN_ROUND4_BASELINE_PATH)
         .expect("HNSW reopen round 4 baseline artifact must exist for the round 4 lane");
     serde_json::from_str(&content)
         .expect("HNSW reopen round 4 baseline artifact must be valid JSON")
+}
+
+fn load_hnsw_reopen_round4_audit() -> Value {
+    let content = fs::read_to_string(HNSW_REOPEN_ROUND4_AUDIT_PATH)
+        .expect("HNSW reopen round 4 audit artifact must exist before the audit lane can pass");
+    serde_json::from_str(&content).expect("HNSW reopen round 4 audit artifact must be valid JSON")
 }
 
 #[test]
@@ -36,5 +44,47 @@ fn hnsw_reopen_round4_requires_activation_baseline_artifact() {
             .expect("summary must be a string")
             .contains("functional-but-not-leading"),
         "summary must disclose the unchanged historical HNSW verdict"
+    );
+}
+
+#[test]
+fn hnsw_reopen_round4_requires_layer0_audit_artifact() {
+    let audit = load_hnsw_reopen_round4_audit();
+
+    assert_eq!(audit["task_id"], "HNSW-REOPEN-LAYER0-SEARCHER-AUDIT-ROUND4");
+    assert_eq!(audit["family"], "HNSW");
+    assert_eq!(audit["authority_scope"], "remote_x86_only");
+    assert_eq!(
+        audit["round4_baseline_source"],
+        "benchmark_results/hnsw_reopen_round4_baseline.json"
+    );
+    assert_eq!(
+        audit["native_reference_files"][0],
+        "thirdparty/faiss/faiss/cppcontrib/knowhere/impl/HnswSearcher.h"
+    );
+    assert_eq!(audit["rust_reference_files"][0], "src/faiss/hnsw.rs");
+    assert_eq!(
+        audit["search_core_shape"]["rust_layer0_candidate_container"],
+        "dual_binary_heap"
+    );
+    assert_eq!(
+        audit["search_core_shape"]["native_layer0_candidate_container"],
+        "NeighborSetDoublePopList"
+    );
+    assert_eq!(
+        audit["batch_distance_mode"]["rust_layer0_query_distance"],
+        "scalar_pointer_fast_path"
+    );
+    assert_eq!(audit["batch_distance_mode"]["rust_batch_enabled"], false);
+    assert_eq!(audit["batch_distance_mode"]["rust_batch_width"], 1);
+    assert_eq!(
+        audit["batch_distance_call_counts"]["layer0_batch4_calls"],
+        0
+    );
+    assert!(
+        audit["distance_compute_call_counts"]["layer0_query_distance_calls"]
+            .as_u64()
+            .is_some_and(|calls| calls > 0),
+        "round 4 audit artifact must preserve measured layer-0 query distance calls"
     );
 }

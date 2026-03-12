@@ -12,13 +12,35 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `hnsw-layer0-searcher-audit`
-- Next feature: `hnsw-layer0-searcher-core-rework`
+- Current focus: `hnsw-layer0-searcher-core-rework`
+- Next feature: `hnsw-round4-authority-same-schema-rerun`
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 44/47 features passing (94%)
+- Progress: 45/47 features passing (96%)
 
 ## Session Log
+
+### Session 53 - 2026-03-12
+- Focus: `hnsw-layer0-searcher-audit`
+- Completed:
+  - tightened `tests/bench_hnsw_reopen_round4.rs` so the default lane now requires `benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json`, then used the missing-artifact failure as the TDD red signal for the real round-4 audit slice
+  - extended `src/faiss/hnsw.rs` candidate-search profile reporting with explicit round-4 metadata for the current layer-0 search-core shape and batch-distance mode, then added `tests/bench_hnsw_reopen_round4_profile.rs` to generate a tracked audit artifact instead of relying on prose-only code comparisons
+  - created `benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json`, which now pins the native-vs-Rust structural gap into authority-backed facts: native layer-0 uses `NeighborSetDoublePopList + distances_batch_4`, while the current Rust path still uses `dual_binary_heap + scalar_pointer_fast_path`, `layer0_batch4_calls` remains `0`, and `layer0_query_distance` still accounts for `31.400ms` of the measured `38.399ms` distance bucket
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round4 -- --nocapture` -> initial `FAIL` (missing `benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json`), then `ok`
+  - `cargo test --features long-tests --test bench_hnsw_reopen_round4_profile -- --ignored --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (rustfmt wanted the new round-4 audit assertions wrapped), then `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round4 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round4 bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_round4_profile -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T113413Z_36164.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round4 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round4 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round4 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T113455Z_36352.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 47 features (45 passing, 2 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-layer0-searcher-audit` is now `passing`
+  - round 4 now has an authority-backed audit of the native and Rust layer-0 searcher shapes, and the next tracked feature is `hnsw-layer0-searcher-core-rework`
+- Notes:
+  - this feature still does not claim any same-schema HNSW win; it only makes the current search-core gap measurable and falsifiable before the first round-4 algorithm cut
+  - the new audit artifact keeps the historical HNSW family verdict unchanged and narrows the next rework to ordered-pool parity plus batched layer-0 query distance
+- Git Commits: pending
 
 ### Session 52 - 2026-03-12
 - Focus: `hnsw-reopen-round4-activation`

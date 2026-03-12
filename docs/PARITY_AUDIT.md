@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-12 11:22
-Sync baseline: 50f474770366f75176c56b602b184ac6635cb28b from main
+Last updated: 2026-03-12 11:35
+Sync baseline: 767d467ed26dc1120bdf89349008677d9517b96a from main
 
 ## 轮次记录
+- 2026-03-12 11:35: **builder-loop：收口 `hnsw-layer0-searcher-audit`，把第四轮 HNSW 的 native-vs-Rust layer-0 结构差异锁成 authority-backed artifact（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round4_baseline.json`、`tests/bench_hnsw_reopen_round4.rs`、`src/faiss/hnsw.rs`、`docs/superpowers/plans/2026-03-12-hnsw-round4-layer0-searcher-parity.md`。
+  2. 阶段结论：round 4 activation 已经足够说明“下一条假设是 layer-0 parity”，但还不足以支撑真正的算法改动，因为 repo 里还缺一个 authority-backed artifact 来把 native `NeighborSetDoublePopList + distances_batch_4` 和当前 Rust `dual_binary_heap + scalar_pointer_fast_path` 的差异固定成可执行事实。没有这层 audit，后续 core rework 仍然会退回到只改热点 helper 的试错。
+  3. 本轮执行：先把 `tests/bench_hnsw_reopen_round4.rs` 升级成要求 `benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json` 的默认-lane contract，并用缺失 artifact 的失败做 TDD red；随后在 `src/faiss/hnsw.rs` 的 candidate-search profile report 上补充 round-4 所需的 `search_core_shape`、`batch_distance_mode`、`batch_distance_call_counts` 元数据，再新增 `tests/bench_hnsw_reopen_round4_profile.rs` 生成 authority-backed audit artifact。最终生成的 artifact 明确记录：native layer-0 search uses `NeighborSetDoublePopList + distances_batch_4`，当前 Rust still uses `dual_binary_heap + scalar_pointer_fast_path`，`layer0_batch4_calls=0`，而 `layer0_query_distance≈31.400ms` of the measured `38.399ms` distance bucket。
+  4. 验证结果：本地 `cargo test --test bench_hnsw_reopen_round4 -- --nocapture` 先因缺失 `benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json` 失败再转绿；本地 `cargo test --features long-tests --test bench_hnsw_reopen_round4_profile -- --ignored --nocapture` 通过；`cargo fmt --all -- --check` 先红后绿；`bash init.sh` 通过；authority round-4 long-test replay 通过，日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T113413Z_36164.log`；authority round-4 contract replay 通过，日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T113455Z_36352.log`。
+  5. 后续主缺口：round 4 现在已经不缺“结构差异是否真实存在”的证据，下一条 tracked feature 必须是 `hnsw-layer0-searcher-core-rework`。在新的 same-schema authority artifact 真正改善之前，历史 HNSW family verdict 继续保持不动。
+  状态：Phase 6 Active（round-4 audit closed；layer-0 search-core rework is next）。
 - 2026-03-12 11:22: **builder-loop：收口 `hnsw-reopen-round4-activation`，把第四轮 HNSW layer-0 parity 攻关线正式挂回 durable workflow（plan+exec）**
   1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round3_authority_summary.json`、`benchmark_results/hnsw_reopen_distance_compute_profile_round3.json`、`tests/bench_hnsw_reopen_round4.rs`、`docs/superpowers/plans/2026-03-12-hnsw-round4-layer0-searcher-parity.md`。
   2. 阶段结论：round 3 已经诚实结束，但 repo 不能继续停在“43/43 全部关闭”的终态叙事里，否则第四轮 layer-0 parity 攻关会再次变成隐式 work。激活 round 4 的真正目的，不是宣称 HNSW 已经接近 native，而是把新的 native-vs-Rust layer-0 searcher hypothesis、工单边界和 authority acceptance 面固定下来。

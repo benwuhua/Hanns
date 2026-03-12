@@ -1,6 +1,6 @@
 # Knowhere-RS Gap Analysis (Non-GPU)
 
-Last updated: 2026-03-12 11:22 UTC
+Last updated: 2026-03-12 11:35 UTC
 Scope: Non-GPU production parity against C++ knowhere
 
 ## 1. Baseline and Method
@@ -42,8 +42,8 @@ Evaluation dimensions:
   - `benchmark_results/hnsw_reopen_round2_authority_summary.json` still records the round-2 hard stop: the authority lane moved from `710.962` down to `521.031` qps while native BF16 stayed near `10519.683`.
   - `benchmark_results/hnsw_reopen_round3_authority_summary.json` still records the round-3 soft stop: Rust HNSW improved from `521.031` to `553.060` qps while recall improved from `0.9923` to `0.9943`, but native also moved to `10792.646` qps, so the throughput gap only narrowed from `20.2x` to `19.5x`.
   - `benchmark_results/hnsw_reopen_round4_baseline.json` now freezes that soft-stop outcome as the starting point for a narrower round-4 hypothesis: native-vs-Rust `layer0_searcher_parity`.
-  - The fresh profile evidence from `benchmark_results/hnsw_reopen_distance_compute_profile_round3.json` still says the dominant remaining search-time blocker is `layer0_query_distance`, so the active round-4 line now targets the shape of the layer-0 search core rather than generic distance helpers.
-  - The tracked reopen line is therefore no longer closed: round 4 is active, the historical family verdict is unchanged, and the next required artifact is an authority-backed audit of the native and Rust layer-0 searcher structures.
+  - `benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json` now locks the structural parity gap into measurable facts: native layer-0 uses `NeighborSetDoublePopList + distances_batch_4`, current Rust still uses `dual_binary_heap + scalar_pointer_fast_path`, `layer0_batch4_calls` remains `0`, and `layer0_query_distance` still dominates the measured distance bucket at about `31.400ms` of `38.399ms`.
+  - The tracked reopen line is therefore no longer waiting on another audit artifact: round 4 is active, the historical family verdict is unchanged, and the next required step is the first real ordered-pool / batch-distance core rework on the Rust layer-0 search path.
 - ✅ `CORE-P0-001`: 远端 x86 SIMD 验证链已恢复可执行并取得新鲜证据。最新复核中，本地 `cargo test --lib -q`、远端 `cargo test --features simd simd::tests -- --nocapture`、远端 `cargo test --lib --features simd test_x86_simd_l2_reduction_matches_scalar_on_irregular_input -- --nocapture` 均已通过；`default+simd` 不再因 toolchain/脚本漂移阻断后续核心路径工作。
 - ✅ `HNSW-P1-001`: HNSW 已完成首轮远端 before/after artifact 落地；当前证据显示 recall 基本持平（`0.217 -> 0.215`）但 qps 大幅提升（`~1621 -> ~19235`），由于 recall 仍低于可信阈值，这条结果已被诚实归档为 `recheck required / no-go`，不再作为当前活动 blocker。
 - ✅ `IVFPQ-P1-002`: IVF/PQ 已完成 focused reality audit，并留下 `benchmark_results/ivfpq_p1_002_focused.json` 作为可审计 no-go / recheck-required artifact。结论已明确：`src/faiss/ivf.rs` 是 placeholder coarse-assignment scaffold，真实热点路径在 `src/faiss/ivfpq.rs`。

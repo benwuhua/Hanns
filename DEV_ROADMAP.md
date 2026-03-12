@@ -1,6 +1,6 @@
 # Knowhere-RS Development Roadmap (Non-GPU)
 
-Last updated: 2026-03-12 11:22 UTC
+Last updated: 2026-03-12 11:35 UTC
 
 ## Goal
 
@@ -171,8 +171,8 @@ Active scoped tasks:
 - `hnsw-distance-l2-fast-path-rework`: closed; the round-3 `L2 + no filter` search path now uses a pointer-backed distance helper inside the upper-layer and layer-0 hot loops, and the refreshed synthetic profile shows `distance_compute` falling from `40.165ms` to `38.528ms` while sample-search qps rises to `2069.930`
 - `hnsw-round3-authority-same-schema-rerun`: closed; `benchmark_results/hnsw_reopen_round3_authority_summary.json` now records the real same-schema result: Rust HNSW improved to `553.060` qps with recall `0.9943`, but native also rose to `10792.646` qps, so round 3 closes as `soft_stop` and does not justify a later verdict-refresh feature
 - `hnsw-reopen-round4-activation`: closed; `benchmark_results/hnsw_reopen_round4_baseline.json` now freezes round 3 as a soft-stop baseline and officially activates the fourth HNSW line around `layer0_searcher_parity`
-- `hnsw-layer0-searcher-audit`: active; the next artifact must pin native `NeighborSetDoublePopList + distances_batch_4` against the Rust `BinaryHeap + one-by-one distance` layer-0 search core so the next rework is driven by a real parity gap rather than another broad hotspot label
-- `hnsw-layer0-searcher-core-rework`: queued; after the audit, replace the current layer-0 `L2 + no-filter` search core with a scratch-owned ordered-pool path and batch distance helpers that more closely match native searcher behavior
+- `hnsw-layer0-searcher-audit`: closed; `benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json` now pins native `NeighborSetDoublePopList + distances_batch_4` against the Rust `dual_binary_heap + scalar_pointer_fast_path` layer-0 search core, and records the round-4 pre-rework profile shape (`layer0_query_distance≈31.400ms`, `layer0_batch4_calls=0`, `sample-search qps≈2070.439`)
+- `hnsw-layer0-searcher-core-rework`: active; the next rework must replace the current layer-0 `L2 + no-filter` search core with a scratch-owned ordered-pool path and batch distance helpers that more closely match native searcher behavior
 - `hnsw-round4-authority-same-schema-rerun`: queued; once the layer-0 parity rework lands, rerun the same-schema Rust/native authority lane and decide whether round 4 is another stop or the first reopen line strong enough to justify a verdict-refresh discussion
 
 Phase exit criteria:

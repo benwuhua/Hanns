@@ -264,11 +264,37 @@ pub struct HnswDistanceComputeProfileCallCounts {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct HnswLayer0SearchCoreShape {
+    pub native_layer0_candidate_container: String,
+    pub rust_layer0_candidate_container: String,
+    pub rust_frontier_container: String,
+    pub rust_result_container: String,
+    pub rust_scratch_reuse_scope: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HnswLayer0BatchDistanceMode {
+    pub native_layer0_query_distance: String,
+    pub rust_layer0_query_distance: String,
+    pub rust_batch_enabled: bool,
+    pub rust_batch_width: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HnswLayer0BatchDistanceCallCounts {
+    pub layer0_batch4_calls: u64,
+    pub layer0_scalar_distance_calls: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct HnswCandidateSearchProfileReport {
     pub candidate_search_breakdown: HnswCandidateSearchProfileBreakdown,
     pub call_counts: HnswCandidateSearchProfileCallCounts,
     pub distance_compute_breakdown: HnswDistanceComputeProfileBreakdown,
     pub distance_compute_call_counts: HnswDistanceComputeProfileCallCounts,
+    pub search_core_shape: HnswLayer0SearchCoreShape,
+    pub batch_distance_mode: HnswLayer0BatchDistanceMode,
+    pub batch_distance_call_counts: HnswLayer0BatchDistanceCallCounts,
     pub hotspot_ranking: Vec<HnswBuildProfileHotspot>,
     pub recommended_next_target: String,
     pub total_profiled_ms: f64,
@@ -485,6 +511,32 @@ impl HnswCandidateSearchProfileStats {
         }
     }
 
+    fn search_core_shape(&self) -> HnswLayer0SearchCoreShape {
+        HnswLayer0SearchCoreShape {
+            native_layer0_candidate_container: "NeighborSetDoublePopList".to_string(),
+            rust_layer0_candidate_container: "dual_binary_heap".to_string(),
+            rust_frontier_container: "BinaryHeap<QueryCandidate>".to_string(),
+            rust_result_container: "BinaryHeap<ResultCandidate>".to_string(),
+            rust_scratch_reuse_scope: "visited_epoch_only".to_string(),
+        }
+    }
+
+    fn batch_distance_mode(&self) -> HnswLayer0BatchDistanceMode {
+        HnswLayer0BatchDistanceMode {
+            native_layer0_query_distance: "distances_batch_4".to_string(),
+            rust_layer0_query_distance: "scalar_pointer_fast_path".to_string(),
+            rust_batch_enabled: false,
+            rust_batch_width: 1,
+        }
+    }
+
+    fn batch_distance_call_counts(&self) -> HnswLayer0BatchDistanceCallCounts {
+        HnswLayer0BatchDistanceCallCounts {
+            layer0_batch4_calls: 0,
+            layer0_scalar_distance_calls: self.layer0_query_distance_calls,
+        }
+    }
+
     fn total_profiled_ms(&self) -> f64 {
         self.entry_descent.as_secs_f64() * 1000.0
             + self.frontier_ops.as_secs_f64() * 1000.0
@@ -561,6 +613,9 @@ impl HnswCandidateSearchProfileStats {
             call_counts: self.call_counts(),
             distance_compute_breakdown: self.distance_compute_breakdown(),
             distance_compute_call_counts: self.distance_compute_call_counts(),
+            search_core_shape: self.search_core_shape(),
+            batch_distance_mode: self.batch_distance_mode(),
+            batch_distance_call_counts: self.batch_distance_call_counts(),
             hotspot_ranking: self.hotspot_ranking(),
             recommended_next_target: self.recommended_next_target(),
             total_profiled_ms: self.total_profiled_ms(),
