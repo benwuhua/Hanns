@@ -48,7 +48,7 @@
 - Notes:
   - this round introduces a real layer-0 memory-layout cut (flat adjacency cache) without touching persistence format yet
   - next HNSW progression should be an authority same-schema rerun to quantify whether the layout cut materially moves trusted QPS
-- Git Commits: pending
+- Git Commits: `a4c7c3b`
 
 ### Session 59 - 2026-03-12
 - Focus: `hnsw-layer0-prefetch-audit-round6`
