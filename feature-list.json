@@ -886,6 +886,33 @@
       "dependencies": [
         "hnsw-round5-stability-gate"
       ]
+    },
+    {
+      "id": "hnsw-layer0-flat-graph-audit-round7",
+      "category": "hnsw-reopen",
+      "title": "Audit HNSW layer-0 flat graph neighbor layout",
+      "description": "Add a flat u32 layer-0 adjacency layout for the L2 ordered-pool search loop, then generate and gate a round-7 audit artifact that records neighbor layout mode and flat-graph read counts.",
+      "priority": "high",
+      "status": "passing",
+      "verification_steps": [
+        "bash init.sh",
+        "cargo fmt --all -- --check",
+        "cargo test --lib hnsw::tests::test_search_layer_idx_l2_ordered_pool_matches_heap_layer0_results -- --nocapture",
+        "cargo test --lib hnsw::tests::test_candidate_profile_reports_layer0_flat_graph_layout -- --nocapture",
+        "cargo test --features long-tests --test bench_hnsw_reopen_round7_profile -- --ignored --nocapture",
+        "cargo test --test bench_hnsw_reopen_round7_flat_graph -- --nocapture",
+        "cargo test --test bench_hnsw_reopen_round6_prefetch -- --nocapture",
+        "cargo test --test bench_hnsw_reopen_round5 -- --nocapture",
+        "bash scripts/remote/sync.sh --mode rsync",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round7 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round7 bash scripts/remote/test.sh --command \"cargo test --features long-tests --test bench_hnsw_reopen_round7_profile -- --ignored --nocapture\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round7 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round7 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_round7_flat_graph -q\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round7 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round7 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_round6_prefetch -q\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round7 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round7 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_round5 -q\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "hnsw-layer0-prefetch-audit-round6"
+      ]
     }
   ]
 }

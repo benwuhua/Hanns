@@ -14,11 +14,41 @@
 - Phase: worker-active
 - Current focus: `none`
 - Next feature: `none`
-- Last updated: 2026-03-12
+- Last updated: 2026-03-13
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 51/51 features passing (100%)
+- Progress: 52/52 features passing (100%)
 
 ## Session Log
+
+### Session 60 - 2026-03-13
+- Focus: `hnsw-layer0-flat-graph-audit-round7`
+- Completed:
+  - added `tests/bench_hnsw_reopen_round7_flat_graph.rs` as a new default-lane contract so round-7 now requires `benchmark_results/hnsw_reopen_layer0_flat_graph_audit_round7.json` and explicit flat-neighbor-layout evidence fields
+  - extended `src/faiss/hnsw.rs` with a layer-0 flat adjacency cache (`Layer0FlatGraph`) and wired the ordered-pool L2 loop to read neighbors from flat `u32` adjacency when available; candidate-search profiling now records `rust_layer0_neighbor_layout`, `rust_layer0_neighbor_id_type`, and `layer0_flat_graph_neighbor_reads`
+  - added `tests/bench_hnsw_reopen_round7_profile.rs` and generated `benchmark_results/hnsw_reopen_layer0_flat_graph_audit_round7.json`; the artifact now records `rust_layer0_neighbor_layout=flat_u32_adjacency`, `rust_layer0_neighbor_id_type=u32`, and non-zero `layer0_flat_graph_neighbor_reads`
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round7_flat_graph -- --nocapture` -> initial `FAIL` (missing round-7 artifact), then `ok`
+  - `cargo test --lib hnsw::tests::test_candidate_profile_reports_layer0_flat_graph_layout -- --nocapture` -> `ok`
+  - `cargo test --lib hnsw::tests::test_search_layer_idx_l2_ordered_pool_matches_heap_layer0_results -- --nocapture` -> `ok`
+  - `cargo test --features long-tests --test bench_hnsw_reopen_round7_profile -- --ignored --nocapture` -> `ok`
+  - `cargo test --test bench_hnsw_reopen_round6_prefetch -- --nocapture` -> `ok`
+  - `cargo test --test bench_hnsw_reopen_round5 -- --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (rustfmt diffs), then `ok` after `cargo fmt --all`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round7 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round7 bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_round7_profile -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round7/test_20260312T161904Z_5936.log`)
+  - `bash scripts/remote/sync.sh --mode rsync` -> `sync_mode=rsync`
+  - first parallel remote replay hit wrapper lock (`status=conflict`, `/data/work/knowhere-rs-logs-hnsw-reopen-round7/test_20260312T162038Z_6703.log`, `/data/work/knowhere-rs-logs-hnsw-reopen-round7/test_20260312T162038Z_6760.log`); serialized replays then passed:
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round7 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round7 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round7_flat_graph -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round7/test_20260312T162038Z_6702.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round7 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round7 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round6_prefetch -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round7/test_20260312T162120Z_7120.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round7 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round7 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round5 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round7/test_20260312T162148Z_7360.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 52 features (52 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-layer0-flat-graph-audit-round7` is now `passing`
+  - all tracked features remain `passing`
+- Notes:
+  - this round introduces a real layer-0 memory-layout cut (flat adjacency cache) without touching persistence format yet
+  - next HNSW progression should be an authority same-schema rerun to quantify whether the layout cut materially moves trusted QPS
+- Git Commits: pending
 
 ### Session 59 - 2026-03-12
 - Focus: `hnsw-layer0-prefetch-audit-round6`

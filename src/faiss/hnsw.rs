@@ -230,6 +230,33 @@ impl Layer0OrderedResults {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+struct Layer0FlatGraph {
+    max_neighbors: usize,
+    degrees: Vec<usize>,
+    neighbors: Vec<u32>,
+    enabled: bool,
+}
+
+impl Layer0FlatGraph {
+    fn clear(&mut self) {
+        self.max_neighbors = 0;
+        self.degrees.clear();
+        self.neighbors.clear();
+        self.enabled = false;
+    }
+
+    fn is_enabled_for(&self, node_count: usize) -> bool {
+        self.enabled && self.max_neighbors > 0 && self.degrees.len() == node_count
+    }
+
+    fn neighbors_for(&self, node_idx: usize) -> &[u32] {
+        let degree = self.degrees[node_idx];
+        let start = node_idx * self.max_neighbors;
+        &self.neighbors[start..start + degree]
+    }
+}
+
 struct SearchScratch {
     visited_epoch: Vec<u32>,
     epoch: u32,
@@ -319,7 +346,9 @@ pub struct HnswCandidateSearchProfileStats {
     pruned_candidates: u64,
     layer0_batch4_calls: u64,
     layer0_vector_prefetches: u64,
+    layer0_flat_graph_neighbor_reads: u64,
     layer0_ordered_pool_enabled: bool,
+    layer0_flat_graph_enabled: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -363,6 +392,8 @@ pub struct HnswLayer0SearchCoreShape {
     pub rust_frontier_container: String,
     pub rust_result_container: String,
     pub rust_scratch_reuse_scope: String,
+    pub rust_layer0_neighbor_layout: String,
+    pub rust_layer0_neighbor_id_type: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -392,6 +423,11 @@ pub struct HnswLayer0PrefetchCallCounts {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct HnswLayer0NeighborAccessCallCounts {
+    pub layer0_flat_graph_neighbor_reads: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct HnswCandidateSearchProfileReport {
     pub candidate_search_breakdown: HnswCandidateSearchProfileBreakdown,
     pub call_counts: HnswCandidateSearchProfileCallCounts,
@@ -402,6 +438,7 @@ pub struct HnswCandidateSearchProfileReport {
     pub batch_distance_call_counts: HnswLayer0BatchDistanceCallCounts,
     pub prefetch_mode: HnswLayer0PrefetchMode,
     pub prefetch_call_counts: HnswLayer0PrefetchCallCounts,
+    pub layer0_neighbor_access_call_counts: HnswLayer0NeighborAccessCallCounts,
     pub hotspot_ranking: Vec<HnswBuildProfileHotspot>,
     pub recommended_next_target: String,
     pub total_profiled_ms: f64,
@@ -584,6 +621,14 @@ impl HnswCandidateSearchProfileStats {
         self.layer0_ordered_pool_enabled = true;
     }
 
+    fn mark_layer0_flat_graph_enabled(&mut self, enabled: bool) {
+        self.layer0_flat_graph_enabled = enabled;
+    }
+
+    fn record_layer0_flat_graph_neighbor_reads(&mut self, reads: u64) {
+        self.layer0_flat_graph_neighbor_reads += reads;
+    }
+
     fn record_layer0_vector_prefetch(&mut self) {
         self.layer0_vector_prefetches += 1;
     }
@@ -654,6 +699,16 @@ impl HnswCandidateSearchProfileStats {
             } else {
                 "visited_epoch_only".to_string()
             },
+            rust_layer0_neighbor_layout: if self.layer0_flat_graph_enabled {
+                "flat_u32_adjacency".to_string()
+            } else {
+                "vec_i64_per_node".to_string()
+            },
+            rust_layer0_neighbor_id_type: if self.layer0_flat_graph_enabled {
+                "u32".to_string()
+            } else {
+                "i64".to_string()
+            },
         }
     }
 
@@ -694,6 +749,12 @@ impl HnswCandidateSearchProfileStats {
     fn prefetch_call_counts(&self) -> HnswLayer0PrefetchCallCounts {
         HnswLayer0PrefetchCallCounts {
             layer0_vector_prefetches: self.layer0_vector_prefetches,
+        }
+    }
+
+    fn layer0_neighbor_access_call_counts(&self) -> HnswLayer0NeighborAccessCallCounts {
+        HnswLayer0NeighborAccessCallCounts {
+            layer0_flat_graph_neighbor_reads: self.layer0_flat_graph_neighbor_reads,
         }
     }
 
@@ -778,6 +839,7 @@ impl HnswCandidateSearchProfileStats {
             batch_distance_call_counts: self.batch_distance_call_counts(),
             prefetch_mode: self.prefetch_mode(),
             prefetch_call_counts: self.prefetch_call_counts(),
+            layer0_neighbor_access_call_counts: self.layer0_neighbor_access_call_counts(),
             hotspot_ranking: self.hotspot_ranking(),
             recommended_next_target: self.recommended_next_target(),
             total_profiled_ms: self.total_profiled_ms(),
@@ -831,6 +893,7 @@ pub struct HnswIndex {
     // OPT-015: ids Vec kept only for custom ID support, not used in hot path
     ids: Vec<i64>,
     node_info: Vec<NodeInfo>,
+    layer0_flat_graph: Layer0FlatGraph,
     next_id: i64,
     trained: bool,
     dim: usize,
@@ -937,6 +1000,7 @@ impl HnswIndex {
             vectors: Vec::new(),
             ids: Vec::new(),
             node_info: Vec::new(),
+            layer0_flat_graph: Layer0FlatGraph::default(),
             next_id: 0,
             trained: false,
             dim: config.dim,
@@ -973,6 +1037,45 @@ impl HnswIndex {
         } else {
             self.m
         }
+    }
+
+    fn refresh_layer0_flat_graph(&mut self) {
+        self.layer0_flat_graph.clear();
+
+        let node_count = self.node_info.len();
+        if node_count == 0 || self.m_max0 == 0 || node_count > (u32::MAX as usize) {
+            return;
+        }
+
+        let max_neighbors = self.m_max0;
+        self.layer0_flat_graph.max_neighbors = max_neighbors;
+        self.layer0_flat_graph.degrees.resize(node_count, 0);
+        self.layer0_flat_graph
+            .neighbors
+            .resize(node_count * max_neighbors, u32::MAX);
+
+        for node_idx in 0..node_count {
+            if self.node_info[node_idx].layer_neighbors.is_empty() {
+                continue;
+            }
+
+            let ids = &self.node_info[node_idx].layer_neighbors[0].ids;
+            let mut degree = 0usize;
+            for &nbr_id in ids {
+                if degree >= max_neighbors {
+                    break;
+                }
+                let nbr_idx = self.get_idx_from_id_fast(nbr_id);
+                if nbr_idx < node_count {
+                    self.layer0_flat_graph.neighbors[node_idx * max_neighbors + degree] =
+                        nbr_idx as u32;
+                    degree += 1;
+                }
+            }
+            self.layer0_flat_graph.degrees[node_idx] = degree;
+        }
+
+        self.layer0_flat_graph.enabled = true;
     }
 
     pub fn train(&mut self, vectors: &[f32]) -> Result<()> {
@@ -1085,6 +1188,7 @@ impl HnswIndex {
             }
         }
 
+        self.refresh_layer0_flat_graph();
         Ok(n)
     }
 
@@ -1158,6 +1262,7 @@ impl HnswIndex {
             }
         }
 
+        self.refresh_layer0_flat_graph();
         Ok(n)
     }
 
@@ -1469,6 +1574,7 @@ impl HnswIndex {
             }
         }
 
+        self.refresh_layer0_flat_graph();
         Ok(n)
     }
 
@@ -1696,6 +1802,7 @@ impl HnswIndex {
         if self.entry_point.is_none() {
             self.entry_point = Some(assigned_id);
             self.max_level = node_level;
+            self.refresh_layer0_flat_graph();
             return Ok(assigned_id);
         }
 
@@ -1708,6 +1815,7 @@ impl HnswIndex {
             self.entry_point = Some(assigned_id);
         }
 
+        self.refresh_layer0_flat_graph();
         Ok(assigned_id)
     }
 
@@ -3280,6 +3388,7 @@ impl HnswIndex {
         }
 
         let num_nodes = self.node_info.len();
+        let use_flat_graph = level == 0 && self.layer0_flat_graph.is_enabled_for(num_nodes);
         let query_ptr = query.as_ptr();
         let base_ptr = self.vectors.as_ptr();
         let visited_start = Instant::now();
@@ -3288,6 +3397,7 @@ impl HnswIndex {
         if let Some(stats) = profile.as_deref_mut() {
             stats.start_layer0_candidate_search();
             stats.record_visited_ops(visited_start.elapsed(), 0);
+            stats.mark_layer0_flat_graph_enabled(use_flat_graph);
         }
 
         let distance_start = Instant::now();
@@ -3345,59 +3455,118 @@ impl HnswIndex {
                 continue;
             }
 
-            let neighbors = &node_info.layer_neighbors[level].ids;
             let mut batch_indices = [0usize; 4];
             let mut batch_len = 0usize;
 
-            for (neighbor_offset, &nbr_id) in neighbors.iter().enumerate() {
-                if neighbor_offset + 1 < neighbors.len() {
-                    let next_nbr_idx = self.get_idx_from_id_fast(neighbors[neighbor_offset + 1]);
-                    if next_nbr_idx < num_nodes {
-                        let prefetched =
-                            unsafe { self.prefetch_l2_vector_idx(base_ptr, next_nbr_idx) };
-                        if prefetched {
-                            if let Some(stats) = profile.as_deref_mut() {
-                                stats.record_layer0_vector_prefetch();
+            if use_flat_graph {
+                let neighbors = self.layer0_flat_graph.neighbors_for(candidate.idx);
+                if let Some(stats) = profile.as_deref_mut() {
+                    stats.record_layer0_flat_graph_neighbor_reads(neighbors.len() as u64);
+                }
+                for (neighbor_offset, &nbr_u32) in neighbors.iter().enumerate() {
+                    if neighbor_offset + 1 < neighbors.len() {
+                        let next_nbr_idx = neighbors[neighbor_offset + 1] as usize;
+                        if next_nbr_idx < num_nodes {
+                            let prefetched =
+                                unsafe { self.prefetch_l2_vector_idx(base_ptr, next_nbr_idx) };
+                            if prefetched {
+                                if let Some(stats) = profile.as_deref_mut() {
+                                    stats.record_layer0_vector_prefetch();
+                                }
                             }
                         }
                     }
-                }
 
-                let nbr_idx = self.get_idx_from_id_fast(nbr_id);
-                if nbr_idx >= num_nodes {
-                    continue;
-                }
+                    let nbr_idx = nbr_u32 as usize;
+                    if nbr_idx >= num_nodes {
+                        continue;
+                    }
 
-                let visited_start = Instant::now();
-                let marked = scratch.mark_visited(nbr_idx);
-                if let Some(stats) = profile.as_deref_mut() {
-                    stats.record_visited_ops(visited_start.elapsed(), u64::from(marked));
-                }
-                if !marked {
-                    continue;
-                }
-
-                batch_indices[batch_len] = nbr_idx;
-                batch_len += 1;
-
-                if batch_len == 4 {
-                    let distance_start = Instant::now();
-                    let distances = unsafe {
-                        self.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, batch_indices)
-                    };
+                    let visited_start = Instant::now();
+                    let marked = scratch.mark_visited(nbr_idx);
                     if let Some(stats) = profile.as_deref_mut() {
-                        stats.record_layer0_query_distance_batch4(distance_start.elapsed());
+                        stats.record_visited_ops(visited_start.elapsed(), u64::from(marked));
                     }
-                    for (offset, nbr_dist) in distances.into_iter().enumerate() {
-                        self.process_layer0_l2_candidate(
-                            batch_indices[offset],
-                            nbr_dist,
-                            ef,
-                            scratch,
-                            &mut profile,
-                        );
+                    if !marked {
+                        continue;
                     }
-                    batch_len = 0;
+
+                    batch_indices[batch_len] = nbr_idx;
+                    batch_len += 1;
+
+                    if batch_len == 4 {
+                        let distance_start = Instant::now();
+                        let distances = unsafe {
+                            self.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, batch_indices)
+                        };
+                        if let Some(stats) = profile.as_deref_mut() {
+                            stats.record_layer0_query_distance_batch4(distance_start.elapsed());
+                        }
+                        for (offset, nbr_dist) in distances.into_iter().enumerate() {
+                            self.process_layer0_l2_candidate(
+                                batch_indices[offset],
+                                nbr_dist,
+                                ef,
+                                scratch,
+                                &mut profile,
+                            );
+                        }
+                        batch_len = 0;
+                    }
+                }
+            } else {
+                let neighbors = &node_info.layer_neighbors[level].ids;
+                for (neighbor_offset, &nbr_id) in neighbors.iter().enumerate() {
+                    if neighbor_offset + 1 < neighbors.len() {
+                        let next_nbr_idx =
+                            self.get_idx_from_id_fast(neighbors[neighbor_offset + 1]);
+                        if next_nbr_idx < num_nodes {
+                            let prefetched =
+                                unsafe { self.prefetch_l2_vector_idx(base_ptr, next_nbr_idx) };
+                            if prefetched {
+                                if let Some(stats) = profile.as_deref_mut() {
+                                    stats.record_layer0_vector_prefetch();
+                                }
+                            }
+                        }
+                    }
+
+                    let nbr_idx = self.get_idx_from_id_fast(nbr_id);
+                    if nbr_idx >= num_nodes {
+                        continue;
+                    }
+
+                    let visited_start = Instant::now();
+                    let marked = scratch.mark_visited(nbr_idx);
+                    if let Some(stats) = profile.as_deref_mut() {
+                        stats.record_visited_ops(visited_start.elapsed(), u64::from(marked));
+                    }
+                    if !marked {
+                        continue;
+                    }
+
+                    batch_indices[batch_len] = nbr_idx;
+                    batch_len += 1;
+
+                    if batch_len == 4 {
+                        let distance_start = Instant::now();
+                        let distances = unsafe {
+                            self.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, batch_indices)
+                        };
+                        if let Some(stats) = profile.as_deref_mut() {
+                            stats.record_layer0_query_distance_batch4(distance_start.elapsed());
+                        }
+                        for (offset, nbr_dist) in distances.into_iter().enumerate() {
+                            self.process_layer0_l2_candidate(
+                                batch_indices[offset],
+                                nbr_dist,
+                                ef,
+                                scratch,
+                                &mut profile,
+                            );
+                        }
+                        batch_len = 0;
+                    }
                 }
             }
 
@@ -4172,6 +4341,7 @@ impl HnswIndex {
             self.entry_point = None;
         }
 
+        self.refresh_layer0_flat_graph();
         self.trained = true;
         Ok(())
     }
@@ -4319,6 +4489,7 @@ impl HnswIndex {
             for (idx, level) in repair_tasks {
                 self.repair_graph_connectivity_internal(idx, level);
             }
+            self.refresh_layer0_flat_graph();
         }
 
         count
@@ -4342,6 +4513,7 @@ impl HnswIndex {
                 self.repair_graph_connectivity_internal(idx, level);
                 stats.record(HnswBuildProfileStage::Repair, stage_start.elapsed());
             }
+            self.refresh_layer0_flat_graph();
         }
 
         count
@@ -4983,6 +5155,7 @@ mod tests {
             }
         }
 
+        index.refresh_layer0_flat_graph();
         index
     }
 
@@ -5162,6 +5335,28 @@ mod tests {
         assert_eq!(
             ordered, heap,
             "ordered layer-0 search must preserve the heap-based candidate ordering and distances"
+        );
+    }
+
+    #[test]
+    fn test_candidate_profile_reports_layer0_flat_graph_layout() {
+        let index = deterministic_upper_layer_index();
+        let queries = vec![11.8, 0.0, 1.2, 0.0];
+        let report = index
+            .candidate_search_profile_report(&queries, 8, 2)
+            .expect("candidate search profile should succeed");
+
+        assert_eq!(
+            report.search_core_shape.rust_layer0_neighbor_layout,
+            "flat_u32_adjacency"
+        );
+        assert_eq!(report.search_core_shape.rust_layer0_neighbor_id_type, "u32");
+        assert!(
+            report
+                .layer0_neighbor_access_call_counts
+                .layer0_flat_graph_neighbor_reads
+                > 0,
+            "profile report must include non-zero flat graph neighbor reads"
         );
     }
 
