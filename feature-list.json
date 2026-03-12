@@ -697,7 +697,7 @@
       "title": "Rework the HNSW L2 distance hot path",
       "description": "Add a focused L2 fast path for the unfiltered HNSW search hot loop so query-to-node distance work can pursue same-schema QPS gains without API, FFI, or storage-format drift.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash init.sh",
         "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_cpp_compare -q\"",

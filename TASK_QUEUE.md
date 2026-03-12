@@ -1,13 +1,13 @@
 # Builder 任务队列
-> 最后更新: 2026-03-12 09:13 UTC | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
+> 最后更新: 2026-03-12 09:29 UTC | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
 
 ## 当前大任务面板
 
 - [ ] **HNSW-REOPEN-001**: 重开 HNSW 核心算法攻关线
-  - 当前子阶段: `round3_l2_fast_path_rework` 🔄
-  - 当前结论: 第二轮 HNSW reopen 已经被 authority evidence 判成 `hard_stop`，但第三轮现已拿到第一份 distance-compute focused artifact。`benchmark_results/hnsw_reopen_distance_compute_profile_round3.json` 证明 aggregate `distance_compute≈40.165ms` 里，`layer0_query_distance≈32.500ms` 是主热点（约占 distance bucket `80.9%`），`upper_layer_query_distance≈7.665ms` 次之，而 `node_node_distance=0`。因此下一条 rework 不该再做泛化 candidate-search 调整，而应直接针对 layer-0 的 L2 `query -> node` 热路径
+  - 当前子阶段: `round3_authority_same_schema_rerun` 🔄
+  - 当前结论: 第三轮 HNSW 的 L2 fast path 已经拿到正向 synthetic/profile 证据。刷新后的 `benchmark_results/hnsw_reopen_distance_compute_profile_round3.json` 显示 aggregate `distance_compute` 从 `40.165ms` 降到 `38.528ms`，其中主热点 `layer0_query_distance` 从 `32.500ms` 降到 `31.244ms`，sample-search qps 也从 `2023.694` 升到 `2069.930`。这说明 round-3 的最小 L2 `query -> node` 指针化切口已经有效，但它还没有回答 authority same-schema lane 是否随之改善
   - 当前证据: `benchmark_results/hnsw_reopen_round3_baseline.json` + `benchmark_results/hnsw_reopen_distance_compute_profile_round3.json` + `benchmark_results/hnsw_reopen_round2_authority_summary.json`
-  - 下一步: 执行 `hnsw-distance-l2-fast-path-rework`，只在 `L2 + no filter` 搜索热路径里做最小 fast path 实验，并保持 API/FFI/持久化边界不动
+  - 下一步: 执行 `hnsw-round3-authority-same-schema-rerun`，重跑真实 recall-gated same-schema Rust/native evidence，判断这次 synthetic 改善能否兑现到 authority qps，而不是继续停留在本地/合成 profile 上
   - 范围约束: 只重开 HNSW；IVF-PQ、DiskANN、以及项目级 final acceptance 继续保持 archived state，直到 HNSW 真的拿到更强 authority evidence
 
 - [x] **BASELINE-P3-001**: 建立可信的 native-vs-rs recall-gated 基线

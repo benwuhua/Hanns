@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-12 09:13
+Last updated: 2026-03-12 09:29
 Sync baseline: c87ab4915cca1a0ed68252cbf2701352e8cb6af7 from main
 
 ## 轮次记录
+- 2026-03-12 09:29: **builder-loop：收口 `hnsw-distance-l2-fast-path-rework`，把第三轮 HNSW 的 layer-0 L2 热路径真正改成 pointer fast path（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_distance_compute_profile_round3.json`、`src/faiss/hnsw.rs`、`tests/bench_hnsw_reopen_round3.rs`、`docs/superpowers/plans/2026-03-12-hnsw-reopen-round3-distance-compute.md`。
+  2. 阶段结论：round 3 的 profiler 已经明确把主热点缩到 `layer0_query_distance`，因此这轮不该再做宽泛 candidate-search 改写，而应只验证一个更小的假设：把 `L2 + no filter` 搜索内层从 slice-based distance 调度切成 pointer-backed fast path，能不能在不改 API/FFI/持久化边界的前提下，真实降低 distance bucket。
+  3. 本轮执行：先沿用 round-3 TDD regressions 并补上 focused L2 fast-path 回归；第一次实现虽然完成了外层分派，但 synthetic profile 反而略退，root cause 是 helper 仍在每次 hop 上重建切片。随后把 `src/faiss/hnsw.rs` 的 L2 fast path 改成 `simd::l2_distance_sq_ptr`，在 upper-layer greedy descent 与 layer-0 candidate-expansion 内缓存 `query_ptr/base_ptr`，并把过滤路径回归从不稳定的“必须返回全部允许 id”收窄到稳定的 predicate contract。
+  4. 验证结果：本地 `cargo test hnsw --lib -- --nocapture` 先因 overfit 的 filtered-search 断言失败再转绿；`cargo test test_search_single_l2_fast_matches_generic_and_filter_path_stays_stable --lib -- --nocapture`、`cargo test --test bench_hnsw_cpp_compare -q`、`cargo test --test bench_hnsw_reopen_round2 -q`、`cargo test --test bench_hnsw_reopen_round3 -q` 全部通过；`cargo test --features long-tests --test bench_hnsw_reopen_round3_profile -- --ignored --nocapture` 刷新 artifact 后，aggregate `distance_compute` 从 `40.165ms` 降到 `38.528ms`，`layer0_query_distance` 从 `32.500ms` 降到 `31.244ms`，sample-search qps 从 `2023.694` 升到 `2069.930`；`cargo fmt --all -- --check` 先红后绿；`bash init.sh` 通过；authority replays `bench_hnsw_cpp_compare`、`bench_hnsw_reopen_round3_profile`、`bench_hnsw_reopen_round3` 分别通过，日志是 `/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T092732Z_20631.log`、`/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T092751Z_20701.log`、`/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T092835Z_20832.log`。
+  5. 后续主缺口：当前已经不缺“synthetic/profile 能否被这刀 L2 fast path 改善”的答案，真正剩下的问题只有一个：`hnsw-round3-authority-same-schema-rerun` 必须重跑真实 recall-gated same-schema Rust/native evidence，判断这次 profile 改善是不是也能兑现到 authority qps，而不是继续停留在 safety contracts 上。
+  状态：Phase 6 Active（round-3 L2 fast path rework closed；authority same-schema rerun is next）。
 - 2026-03-12 09:13: **builder-loop：收口 `hnsw-distance-compute-profiler`，把第三轮 HNSW 的 `distance_compute` 再拆成 authority-backed 子热点（plan+exec）**
   1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round3_baseline.json`、`tests/bench_hnsw_reopen_round3.rs`、`src/faiss/hnsw.rs`、`docs/superpowers/plans/2026-03-12-hnsw-reopen-round3-distance-compute.md`。
   2. 阶段结论：round 3 不再缺“distance_compute 是不是当前主热点”这个大结论，缺的是把它拆成下一刀算法改动能直接利用的子来源。只有在 authority surface 上把 `distance_compute` 分解成更小热点，后续 L2 fast path rework 才不会继续围绕一个过宽的 timing bucket 试错。

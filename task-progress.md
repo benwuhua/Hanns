@@ -12,13 +12,39 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `hnsw-distance-l2-fast-path-rework`
-- Next feature: `hnsw-distance-l2-fast-path-rework`
+- Current focus: `hnsw-round3-authority-same-schema-rerun`
+- Next feature: `hnsw-round3-authority-same-schema-rerun`
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 41/43 features passing (95%)
+- Progress: 42/43 features passing (98%)
 
 ## Session Log
+
+### Session 50 - 2026-03-12
+- Focus: `hnsw-distance-l2-fast-path-rework`
+- Completed:
+  - kept the round-3 TDD regressions focused on semantic equivalence, then narrowed the new filtered-search assertion from an over-strong "must return every allowed id" claim to the stable predicate contract HNSW actually guarantees
+  - switched the new `L2 + no filter` HNSW fast path in `src/faiss/hnsw.rs` from slice-based `query -> node` distance calls to a pointer-backed `simd::l2_distance_sq_ptr` helper, caching `query_ptr` and `base_ptr` inside the upper-layer greedy descent and layer-0 candidate-expansion loops instead of reconstructing slices on every hop
+  - refreshed `benchmark_results/hnsw_reopen_distance_compute_profile_round3.json`; the round-3 synthetic profile now improved in the intended direction: aggregate `distance_compute` dropped from `40.165ms` to `38.528ms`, `layer0_query_distance` dropped from `32.500ms` to `31.244ms`, and sample-search qps rose from `2023.694` to `2069.930`
+- Verification:
+  - `cargo test hnsw --lib -- --nocapture` -> initial `FAIL` (new filtered-search regression overfit exact membership on a graph search that only guarantees predicate-safe results), then `ok`
+  - `cargo test test_search_single_l2_fast_matches_generic_and_filter_path_stays_stable --lib -- --nocapture` -> `ok`
+  - `cargo test --test bench_hnsw_cpp_compare -q` -> `ok`
+  - `cargo test --test bench_hnsw_reopen_round2 -q` -> `ok`
+  - `cargo test --test bench_hnsw_reopen_round3 -q` -> `ok`
+  - `cargo test --features long-tests --test bench_hnsw_reopen_round3_profile -- --ignored --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (rustfmt wanted the new L2 helper call sites wrapped), then `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_cpp_compare -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T092732Z_20631.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_round3_profile -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T092751Z_20701.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round3 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round3 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round3 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round3/test_20260312T092835Z_20832.log`)
+- Result:
+  - `hnsw-distance-l2-fast-path-rework` is now `passing`
+  - the next tracked feature is `hnsw-round3-authority-same-schema-rerun`
+- Notes:
+  - this feature only earned a synthetic/profile win; it does not yet change the historical HNSW family verdict or the round-3 stop/go state on the real same-schema lane
+  - the next session must now answer the only question that matters: whether the fresh L2 fast path improves the authority same-schema Rust HNSW row enough to justify a later verdict-refresh feature
+- Git Commits: pending
 
 ### Session 49 - 2026-03-12
 - Focus: `hnsw-distance-compute-profiler`

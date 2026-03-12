@@ -1,6 +1,6 @@
 # Knowhere-RS Gap Analysis (Non-GPU)
 
-Last updated: 2026-03-12 09:13 UTC
+Last updated: 2026-03-12 09:29 UTC
 Scope: Non-GPU production parity against C++ knowhere
 
 ## 1. Baseline and Method
@@ -41,9 +41,9 @@ Evaluation dimensions:
   - `benchmark_results/hnsw_p3_002_final_verdict.json` remains the current historical truth: HNSW is still `functional-but-not-leading`.
   - `benchmark_results/hnsw_reopen_round2_authority_summary.json` still records the round-2 hard stop: the authority lane moved from `710.962` down to `521.031` qps while native BF16 stayed near `10519.683`.
   - `benchmark_results/hnsw_reopen_round3_baseline.json` now freezes that hard-stop outcome as the starting point for a narrower round-3 hypothesis: `distance_compute_inner_loop`.
-  - `benchmark_results/hnsw_reopen_distance_compute_profile_round3.json` now answers the first round-3 profiling question: the dominant remaining cost is `layer0_query_distance≈32.500ms`, which is about `80.9%` of the aggregate `distance_compute≈40.165ms`; `upper_layer_query_distance≈7.665ms`, and `node_node_distance=0`.
-  - The current active question is therefore no longer “which distance source dominates?” but “can the layer-0 L2 `query -> node` path be specialized without another authority regression?”
-  - The next tracked feature is `hnsw-distance-l2-fast-path-rework`.
+  - `benchmark_results/hnsw_reopen_distance_compute_profile_round3.json` now includes the first round-3 rework refresh: aggregate `distance_compute` moved from `40.165ms` down to `38.528ms`, the dominant `layer0_query_distance` bucket moved from `32.500ms` down to `31.244ms`, `upper_layer_query_distance` also dropped to `7.284ms`, and sample-search qps rose from `2023.694` to `2069.930`.
+  - The current active question is therefore no longer “can the layer-0 L2 `query -> node` path be specialized?” but “does this synthetic/profile gain survive the real same-schema authority lane?”
+  - The next tracked feature is `hnsw-round3-authority-same-schema-rerun`.
 - ✅ `CORE-P0-001`: 远端 x86 SIMD 验证链已恢复可执行并取得新鲜证据。最新复核中，本地 `cargo test --lib -q`、远端 `cargo test --features simd simd::tests -- --nocapture`、远端 `cargo test --lib --features simd test_x86_simd_l2_reduction_matches_scalar_on_irregular_input -- --nocapture` 均已通过；`default+simd` 不再因 toolchain/脚本漂移阻断后续核心路径工作。
 - ✅ `HNSW-P1-001`: HNSW 已完成首轮远端 before/after artifact 落地；当前证据显示 recall 基本持平（`0.217 -> 0.215`）但 qps 大幅提升（`~1621 -> ~19235`），由于 recall 仍低于可信阈值，这条结果已被诚实归档为 `recheck required / no-go`，不再作为当前活动 blocker。
 - ✅ `IVFPQ-P1-002`: IVF/PQ 已完成 focused reality audit，并留下 `benchmark_results/ivfpq_p1_002_focused.json` 作为可审计 no-go / recheck-required artifact。结论已明确：`src/faiss/ivf.rs` 是 placeholder coarse-assignment scaffold，真实热点路径在 `src/faiss/ivfpq.rs`。

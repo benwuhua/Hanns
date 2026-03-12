@@ -2199,6 +2199,22 @@ impl HnswIndex {
         }
     }
 
+    #[inline(always)]
+    unsafe fn l2_distance_to_idx_ptr(
+        &self,
+        query_ptr: *const f32,
+        base_ptr: *const f32,
+        idx: usize,
+    ) -> f32 {
+        debug_assert!(idx < self.vectors.len() / self.dim);
+        simd::l2_distance_sq_ptr(query_ptr, base_ptr.add(idx * self.dim), self.dim)
+    }
+
+    #[inline]
+    fn l2_distance_to_idx(&self, query: &[f32], idx: usize) -> f32 {
+        unsafe { self.l2_distance_to_idx_ptr(query.as_ptr(), self.vectors.as_ptr(), idx) }
+    }
+
     pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<ApiSearchResult> {
         if self.vectors.is_empty() {
             return Err(crate::api::KnowhereError::InvalidArg(
@@ -2379,6 +2395,18 @@ impl HnswIndex {
         )
     }
 
+    fn greedy_upper_layer_descent_l2_with_entry_dist(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+        entry_dist: f32,
+    ) -> (usize, f32) {
+        self.greedy_upper_layer_descent_l2_with_entry_dist_optional_profile(
+            query, entry_idx, level, entry_dist, None,
+        )
+    }
+
     fn greedy_upper_layer_descent_idx_with_entry_dist_optional_profile(
         &self,
         query: &[f32],
@@ -2424,6 +2452,53 @@ impl HnswIndex {
         (best_idx, best_dist)
     }
 
+    fn greedy_upper_layer_descent_l2_with_entry_dist_optional_profile(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+        entry_dist: f32,
+        mut profile: Option<&mut HnswCandidateSearchProfileStats>,
+    ) -> (usize, f32) {
+        let num_nodes = self.node_info.len();
+        let query_ptr = query.as_ptr();
+        let base_ptr = self.vectors.as_ptr();
+        let mut best_idx = entry_idx;
+        let mut best_dist = entry_dist;
+
+        loop {
+            let node_info = &self.node_info[best_idx];
+            if level > node_info.max_layer {
+                break;
+            }
+
+            let mut improved = false;
+            for &nbr_id in &node_info.layer_neighbors[level].ids {
+                let nbr_idx = self.get_idx_from_id_fast(nbr_id);
+                if nbr_idx >= num_nodes || nbr_idx == best_idx {
+                    continue;
+                }
+
+                let distance_start = Instant::now();
+                let nbr_dist = unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) };
+                if let Some(stats) = profile.as_deref_mut() {
+                    stats.record_upper_layer_query_distance(distance_start.elapsed(), 1);
+                }
+                if nbr_dist < best_dist {
+                    best_idx = nbr_idx;
+                    best_dist = nbr_dist;
+                    improved = true;
+                }
+            }
+
+            if !improved {
+                break;
+            }
+        }
+
+        (best_idx, best_dist)
+    }
+
     fn search_layer_idx_with_scratch(
         &self,
         query: &[f32],
@@ -2433,6 +2508,20 @@ impl HnswIndex {
         scratch: &mut SearchScratch,
     ) -> Vec<(usize, f32)> {
         self.search_layer_idx_with_optional_profile(query, entry_idx, level, ef, scratch, None)
+    }
+
+    fn search_layer_idx_l2_with_scratch(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+        ef: usize,
+        scratch: &mut SearchScratch,
+        profile: Option<&mut HnswCandidateSearchProfileStats>,
+    ) -> Vec<(usize, f32)> {
+        self.search_layer_idx_l2_with_optional_profile(
+            query, entry_idx, level, ef, scratch, profile,
+        )
     }
 
     fn search_layer_idx_with_optional_profile(
@@ -2630,6 +2719,203 @@ impl HnswIndex {
         sorted
     }
 
+    fn search_layer_idx_l2_with_optional_profile(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+        ef: usize,
+        scratch: &mut SearchScratch,
+        mut profile: Option<&mut HnswCandidateSearchProfileStats>,
+    ) -> Vec<(usize, f32)> {
+        if ef <= 1 {
+            let (best_idx, best_dist) = self.greedy_upper_layer_descent_l2_with_entry_dist(
+                query,
+                entry_idx,
+                level,
+                self.l2_distance_to_idx(query, entry_idx),
+            );
+            return vec![(best_idx, best_dist)];
+        }
+
+        use std::collections::BinaryHeap;
+
+        #[derive(Clone, Copy, PartialEq)]
+        struct MinDist(f32);
+
+        impl Eq for MinDist {}
+
+        impl PartialOrd for MinDist {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        impl Ord for MinDist {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                match (self.0.is_nan(), other.0.is_nan()) {
+                    (true, true) => std::cmp::Ordering::Equal,
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    (false, false) => other
+                        .0
+                        .partial_cmp(&self.0)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                }
+            }
+        }
+
+        #[derive(Clone, Copy, PartialEq)]
+        struct MaxDist(f32);
+
+        impl Eq for MaxDist {}
+
+        impl PartialOrd for MaxDist {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        impl Ord for MaxDist {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                match (self.0.is_nan(), other.0.is_nan()) {
+                    (true, true) => std::cmp::Ordering::Equal,
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    (false, false) => self
+                        .0
+                        .partial_cmp(&other.0)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                }
+            }
+        }
+
+        let num_nodes = self.node_info.len();
+        let query_ptr = query.as_ptr();
+        let base_ptr = self.vectors.as_ptr();
+        let visited_start = Instant::now();
+        scratch.prepare(num_nodes);
+        if let Some(stats) = profile.as_deref_mut() {
+            stats.start_layer0_candidate_search();
+            stats.record_visited_ops(visited_start.elapsed(), 0);
+        }
+
+        let mut candidates: BinaryHeap<(MinDist, usize)> = BinaryHeap::with_capacity(ef * 2);
+        let mut results: BinaryHeap<(MaxDist, usize)> = BinaryHeap::with_capacity(ef);
+
+        let distance_start = Instant::now();
+        let entry_dist = unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, entry_idx) };
+        if let Some(stats) = profile.as_deref_mut() {
+            stats.record_layer0_query_distance(distance_start.elapsed(), 1);
+        }
+
+        let frontier_start = Instant::now();
+        candidates.push((MinDist(entry_dist), entry_idx));
+        results.push((MaxDist(entry_dist), entry_idx));
+        if let Some(stats) = profile.as_deref_mut() {
+            stats.record_frontier_ops(frontier_start.elapsed(), 2, 0);
+        }
+
+        let visited_start = Instant::now();
+        let entry_marked = scratch.mark_visited(entry_idx);
+        if let Some(stats) = profile.as_deref_mut() {
+            stats.record_visited_ops(visited_start.elapsed(), u64::from(entry_marked));
+        }
+
+        loop {
+            let frontier_start = Instant::now();
+            let Some((MinDist(cand_dist), cand_idx)) = candidates.pop() else {
+                if let Some(stats) = profile.as_deref_mut() {
+                    stats.record_frontier_ops(frontier_start.elapsed(), 0, 0);
+                }
+                break;
+            };
+            if let Some(stats) = profile.as_deref_mut() {
+                stats.record_frontier_ops(frontier_start.elapsed(), 0, 1);
+            }
+
+            let pruning_start = Instant::now();
+            if results.len() >= ef {
+                if let Some(&(MaxDist(worst_dist), _)) = results.peek() {
+                    if cand_dist > worst_dist {
+                        if let Some(stats) = profile.as_deref_mut() {
+                            stats.record_candidate_pruning(pruning_start.elapsed(), 1);
+                        }
+                        break;
+                    }
+                }
+            }
+            if let Some(stats) = profile.as_deref_mut() {
+                stats.record_candidate_pruning(pruning_start.elapsed(), 0);
+            }
+
+            let node_info = &self.node_info[cand_idx];
+            if level > node_info.max_layer {
+                continue;
+            }
+
+            let neighbors = &node_info.layer_neighbors[level].ids;
+            for &nbr_id in neighbors {
+                let nbr_idx = self.get_idx_from_id_fast(nbr_id);
+                if nbr_idx >= num_nodes {
+                    continue;
+                }
+
+                let visited_start = Instant::now();
+                let marked = scratch.mark_visited(nbr_idx);
+                if let Some(stats) = profile.as_deref_mut() {
+                    stats.record_visited_ops(visited_start.elapsed(), u64::from(marked));
+                }
+                if !marked {
+                    continue;
+                }
+
+                let distance_start = Instant::now();
+                let nbr_dist = unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) };
+                if let Some(stats) = profile.as_deref_mut() {
+                    stats.record_layer0_query_distance(distance_start.elapsed(), 1);
+                }
+
+                let pruning_start = Instant::now();
+                let should_add = results.len() < ef
+                    || nbr_dist
+                        < results
+                            .peek()
+                            .map(|&(MaxDist(d), _)| d)
+                            .unwrap_or(f32::INFINITY);
+                if let Some(stats) = profile.as_deref_mut() {
+                    stats.record_candidate_pruning(pruning_start.elapsed(), u64::from(!should_add));
+                }
+
+                if should_add {
+                    let frontier_start = Instant::now();
+                    let mut result_pops = 0;
+                    if results.len() >= ef {
+                        results.pop();
+                        result_pops = 1;
+                    }
+                    results.push((MaxDist(nbr_dist), nbr_idx));
+                    candidates.push((MinDist(nbr_dist), nbr_idx));
+                    if let Some(stats) = profile.as_deref_mut() {
+                        stats.record_frontier_ops(frontier_start.elapsed(), 2, result_pops);
+                    }
+                }
+            }
+        }
+
+        let frontier_start = Instant::now();
+        let mut sorted: Vec<(usize, f32)> = results
+            .into_sorted_vec()
+            .into_iter()
+            .map(|(MaxDist(dist), idx)| (idx, dist))
+            .collect();
+        sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        if let Some(stats) = profile.as_deref_mut() {
+            stats.record_frontier_ops(frontier_start.elapsed(), 0, sorted.len() as u64);
+        }
+        sorted
+    }
+
     fn search_single_candidate_profiled(
         &self,
         query: &[f32],
@@ -2637,6 +2923,10 @@ impl HnswIndex {
         k: usize,
         stats: &mut HnswCandidateSearchProfileStats,
     ) -> Vec<(i64, f32)> {
+        if self.metric_type == MetricType::L2 {
+            return self.search_single_candidate_profiled_l2(query, ef, k, stats);
+        }
+
         if self.ids.is_empty() || self.entry_point.is_none() {
             return vec![];
         }
@@ -2670,6 +2960,65 @@ impl HnswIndex {
         }
 
         let results = self.search_layer_idx_with_optional_profile(
+            query,
+            best_ep_idx,
+            0,
+            ef,
+            &mut scratch,
+            Some(stats),
+        );
+
+        let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
+        for (idx, dist) in results {
+            final_results.push((self.get_id_from_idx(idx), dist));
+            if final_results.len() >= k {
+                break;
+            }
+        }
+
+        final_results
+    }
+
+    fn search_single_candidate_profiled_l2(
+        &self,
+        query: &[f32],
+        ef: usize,
+        k: usize,
+        stats: &mut HnswCandidateSearchProfileStats,
+    ) -> Vec<(i64, f32)> {
+        if self.ids.is_empty() || self.entry_point.is_none() {
+            return vec![];
+        }
+
+        let mut scratch = SearchScratch::new();
+        let mut curr_ep_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
+
+        let distance_start = Instant::now();
+        let mut curr_ep_dist = self.l2_distance_to_idx(query, curr_ep_idx);
+        let mut best_ep_dist = curr_ep_dist;
+        stats.record_upper_layer_query_distance(distance_start.elapsed(), 1);
+        let mut best_ep_idx = curr_ep_idx;
+
+        for level in (1..=self.max_level).rev() {
+            let entry_start = Instant::now();
+            let (next_idx, next_dist) = self
+                .greedy_upper_layer_descent_l2_with_entry_dist_optional_profile(
+                    query,
+                    curr_ep_idx,
+                    level,
+                    curr_ep_dist,
+                    Some(stats),
+                );
+            curr_ep_idx = next_idx;
+            curr_ep_dist = next_dist;
+            if next_dist < best_ep_dist {
+                best_ep_idx = next_idx;
+                best_ep_dist = next_dist;
+            }
+            stats.record_entry_descent(entry_start.elapsed());
+        }
+
+        let results = self.search_layer_idx_l2_with_scratch(
             query,
             best_ep_idx,
             0,
@@ -2725,6 +3074,10 @@ impl HnswIndex {
     ) -> Vec<(i64, f32)> {
         if self.ids.is_empty() || self.entry_point.is_none() {
             return vec![];
+        }
+
+        if self.metric_type == MetricType::L2 && filter.is_none() {
+            return self.search_single_l2_unfiltered(query, ef, k);
         }
 
         let filter_fn = |id: i64| {
@@ -2810,6 +3163,46 @@ impl HnswIndex {
                 if final_results.len() >= k {
                     break;
                 }
+            }
+        }
+
+        final_results
+    }
+
+    fn search_single_l2_unfiltered(&self, query: &[f32], ef: usize, k: usize) -> Vec<(i64, f32)> {
+        if self.ids.is_empty() || self.entry_point.is_none() {
+            return vec![];
+        }
+
+        let mut scratch = SearchScratch::new();
+        let mut curr_ep_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
+        let mut best_ep_idx = curr_ep_idx;
+        let mut curr_ep_dist = self.l2_distance_to_idx(query, curr_ep_idx);
+        let mut best_ep_dist = curr_ep_dist;
+
+        for level in (1..=self.max_level).rev() {
+            let (next_idx, next_dist) = self.greedy_upper_layer_descent_l2_with_entry_dist(
+                query,
+                curr_ep_idx,
+                level,
+                curr_ep_dist,
+            );
+            curr_ep_idx = next_idx;
+            curr_ep_dist = next_dist;
+            if next_dist < best_ep_dist {
+                best_ep_idx = next_idx;
+                best_ep_dist = next_dist;
+            }
+        }
+
+        let results =
+            self.search_layer_idx_l2_with_scratch(query, best_ep_idx, 0, ef, &mut scratch, None);
+
+        let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
+        for (idx, dist) in results {
+            final_results.push((self.get_id_from_idx(idx), dist));
+            if final_results.len() >= k {
+                break;
             }
         }
 
@@ -4150,6 +4543,89 @@ mod tests {
             with_scratch,
             vec![greedy],
             "ef=1 shared layer search should reuse the greedy upper-layer descent result"
+        );
+    }
+
+    #[test]
+    fn test_greedy_upper_layer_descent_l2_fast_matches_generic() {
+        let index = deterministic_upper_layer_index();
+        let query = [11.8, 0.0];
+        let entry_dist = index.distance(&query, 0);
+
+        let generic =
+            index.greedy_upper_layer_descent_idx_with_entry_dist(&query, 0, 2, entry_dist);
+        let fast = index.greedy_upper_layer_descent_l2_with_entry_dist(&query, 0, 2, entry_dist);
+
+        assert_eq!(
+            fast, generic,
+            "L2 fast upper-layer descent must preserve the generic greedy result"
+        );
+    }
+
+    #[test]
+    fn test_search_layer_idx_l2_fast_matches_generic_layer0_results() {
+        let index = deterministic_upper_layer_index();
+        let query = [11.8, 0.0];
+        let mut generic_scratch = SearchScratch::new();
+        let mut fast_scratch = SearchScratch::new();
+
+        let generic = index.search_layer_idx_with_scratch(&query, 0, 0, 3, &mut generic_scratch);
+        let fast = index.search_layer_idx_l2_with_scratch(&query, 0, 0, 3, &mut fast_scratch, None);
+
+        assert_eq!(
+            fast, generic,
+            "L2 fast layer-0 search must preserve generic candidate ordering and distances"
+        );
+    }
+
+    #[test]
+    fn test_search_single_l2_fast_matches_generic_and_filter_path_stays_stable() {
+        use crate::api::search::IdsPredicate;
+        use std::sync::Arc;
+
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                ef_search: Some(32),
+                ..Default::default()
+            },
+        };
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0,
+        ];
+        let ids = vec![0, 1, 2, 3];
+        index.train(&vectors).unwrap();
+        index.add(&vectors, Some(&ids)).unwrap();
+
+        let query = vec![0.5, 0.0, 0.0, 0.0];
+        let generic = index.search_single(&query, 32, 4, &None);
+        let fast = index.search_single_l2_unfiltered(&query, 32, 4);
+
+        assert_eq!(
+            fast, generic,
+            "L2 fast unfiltered search must preserve the generic search results"
+        );
+
+        let ids_predicate = IdsPredicate { ids: vec![0, 2] };
+        let filtered = index.search_single(
+            &query,
+            32,
+            2,
+            &(Some(Arc::new(ids_predicate) as Arc<dyn Predicate>)),
+        );
+        let filtered_ids = filtered.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        assert!(
+            !filtered_ids.is_empty(),
+            "filtered searches must still return in-predicate results"
+        );
+        assert!(
+            filtered_ids.iter().all(|id| matches!(id, 0 | 2)),
+            "filtered searches must keep using the generic path and never leak filtered-out ids"
         );
     }
 

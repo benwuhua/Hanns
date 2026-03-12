@@ -1,6 +1,6 @@
 # Knowhere-RS Development Roadmap (Non-GPU)
 
-Last updated: 2026-03-12 09:13 UTC
+Last updated: 2026-03-12 09:29 UTC
 
 ## Goal
 
@@ -168,8 +168,8 @@ Active scoped tasks:
 - `hnsw-round2-authority-same-schema-rerun`: closed; fresh authority evidence is archived in `benchmark_results/hnsw_reopen_round2_authority_summary.json`, which keeps the historical HNSW family verdict unchanged and closes round 2 as `hard_stop`
 - `hnsw-reopen-round3-activation`: closed; `benchmark_results/hnsw_reopen_round3_baseline.json` now freezes round 2 as a hard-stop baseline and officially activates the third HNSW line around `distance_compute_inner_loop`
 - `hnsw-distance-compute-profiler`: closed; `benchmark_results/hnsw_reopen_distance_compute_profile_round3.json` now shows `layer0_query_distance` as the dominant remaining search-time distance cost while `node_node_distance` stays at zero on this lane
-- `hnsw-distance-l2-fast-path-rework`: active; target the layer-0 `L2 + no filter` `query -> node` hot path without broadening scope into layout or API changes
-- `hnsw-round3-authority-same-schema-rerun`: pending; only fresh same-schema authority evidence can tell whether round 3 justifies a later verdict-refresh feature
+- `hnsw-distance-l2-fast-path-rework`: closed; the round-3 `L2 + no filter` search path now uses a pointer-backed distance helper inside the upper-layer and layer-0 hot loops, and the refreshed synthetic profile shows `distance_compute` falling from `40.165ms` to `38.528ms` while sample-search qps rises to `2069.930`
+- `hnsw-round3-authority-same-schema-rerun`: active; only a fresh same-schema authority rerun can tell whether the new L2 fast path changes the real HDF5 Rust row enough to justify a later verdict-refresh feature
 
 Phase exit criteria:
 
