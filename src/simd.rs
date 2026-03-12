@@ -4,6 +4,7 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 
 use crate::metrics::Distance;
+use std::sync::OnceLock;
 
 /// CPU 特性检测
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,27 +138,42 @@ pub fn l2_distance_sq(a: &[f32], b: &[f32]) -> f32 {
 /// # Safety
 /// - `a` 和 `b` 必须分别指向至少 `dim` 个有效 `f32`
 /// - 两段内存必须允许只读访问
+pub type L2DistanceSqPtrKernel = unsafe fn(*const f32, *const f32, usize) -> f32;
+
+static L2_DISTANCE_SQ_PTR_KERNEL: OnceLock<L2DistanceSqPtrKernel> = OnceLock::new();
+
 #[inline]
-pub unsafe fn l2_distance_sq_ptr(a: *const f32, b: *const f32, dim: usize) -> f32 {
+fn select_l2_distance_sq_ptr_kernel() -> L2DistanceSqPtrKernel {
     #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     {
         if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512bw") {
-            return l2_avx512_sq_ptr(a, b, dim);
+            return l2_avx512_sq_ptr;
         }
         if std::is_x86_feature_detected!("avx2") {
-            return l2_avx2_sq_ptr(a, b, dim);
+            return l2_avx2_sq_ptr;
         }
         if std::is_x86_feature_detected!("sse4.2") {
-            return l2_sse_sq_ptr(a, b, dim);
+            return l2_sse_sq_ptr;
         }
     }
     #[cfg(all(feature = "simd", target_arch = "aarch64"))]
     {
         if std::arch::is_aarch64_feature_detected!("neon") {
-            return l2_neon_sq_ptr(a, b, dim);
+            return l2_neon_sq_ptr;
         }
     }
-    l2_scalar_sq_ptr(a, b, dim)
+    l2_scalar_sq_ptr
+}
+
+#[inline]
+pub fn l2_distance_sq_ptr_kernel() -> L2DistanceSqPtrKernel {
+    *L2_DISTANCE_SQ_PTR_KERNEL.get_or_init(select_l2_distance_sq_ptr_kernel)
+}
+
+#[inline]
+pub unsafe fn l2_distance_sq_ptr(a: *const f32, b: *const f32, dim: usize) -> f32 {
+    let kernel = l2_distance_sq_ptr_kernel();
+    kernel(a, b, dim)
 }
 
 #[inline]
@@ -2183,6 +2199,25 @@ mod tests {
         let actual = unsafe { l2_distance_sq_ptr(a.as_ptr(), b.as_ptr(), a.len()) };
 
         assert!((expected - actual).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_l2_distance_sq_ptr_kernel_matches_dispatch_result() {
+        let a: Vec<f32> = (0..191).map(|i| i as f32 * 0.13).collect();
+        let b: Vec<f32> = (0..191).map(|i| 42.0 - i as f32 * 0.07).collect();
+
+        let expected = unsafe { l2_distance_sq_ptr(a.as_ptr(), b.as_ptr(), a.len()) };
+        let kernel = l2_distance_sq_ptr_kernel();
+        let actual = unsafe { kernel(a.as_ptr(), b.as_ptr(), a.len()) };
+
+        assert!((expected - actual).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_l2_distance_sq_ptr_kernel_is_stable() {
+        let first = l2_distance_sq_ptr_kernel() as usize;
+        let second = l2_distance_sq_ptr_kernel() as usize;
+        assert_eq!(first, second, "kernel resolution should be cached");
     }
 
     #[test]

@@ -798,6 +798,30 @@
       "dependencies": [
         "hnsw-layer0-searcher-core-rework"
       ]
+    },
+    {
+      "id": "hnsw-distance-dispatch-cache-rework",
+      "category": "hnsw-reopen",
+      "title": "Cache HNSW metric and L2 SIMD distance dispatch",
+      "description": "Remove repeated distance dispatch overhead in HNSW hot loops by resolving metric-to-distance function pointers once per index instance and caching the selected L2 pointer kernel once per process.",
+      "priority": "high",
+      "status": "passing",
+      "verification_steps": [
+        "bash init.sh",
+        "cargo test --lib simd::tests::test_l2_distance_sq_ptr_kernel_is_stable -- --nocapture",
+        "cargo test --lib simd::tests::test_l2_distance_sq_ptr_kernel_matches_dispatch_result -- --nocapture",
+        "cargo test --lib hnsw::tests::test_load_refreshes_metric_distance_dispatch -- --nocapture",
+        "cargo test hnsw --lib -- --nocapture",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round5 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round5 bash scripts/remote/test.sh --command \"cargo test --lib simd::tests::test_l2_distance_sq_ptr_kernel_is_stable -q\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round5 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round5 bash scripts/remote/test.sh --command \"cargo test --lib simd::tests::test_l2_distance_sq_ptr_kernel_matches_dispatch_result -q\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round5 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round5 bash scripts/remote/test.sh --command \"cargo test --lib hnsw::tests::test_load_refreshes_metric_distance_dispatch -q\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round5 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round5 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_cpp_compare -q\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round5 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round5 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_round4 -q\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "hnsw-round4-authority-same-schema-rerun"
+      ]
     }
   ]
 }

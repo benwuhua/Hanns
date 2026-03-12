@@ -23,6 +23,7 @@ use crate::index::{Index as IndexTrait, IndexError, SearchResult as IndexSearchR
 use crate::simd;
 
 type BatchNeighborResults = (usize, usize, Vec<Vec<(usize, f32)>>);
+type DistanceToIdxFn = fn(&HnswIndex, &[f32], usize) -> f32;
 
 /// Maximum number of layers in the HNSW graph
 const MAX_LAYERS: usize = 16;
@@ -800,6 +801,8 @@ pub struct HnswIndex {
     m_max0: usize,
     level_multiplier: f32,
     metric_type: MetricType,
+    distance_to_idx_fn: DistanceToIdxFn,
+    l2_distance_sq_ptr_kernel: simd::L2DistanceSqPtrKernel,
     // OPT-015: Flag to indicate if we're using sequential IDs (idx == id)
     use_sequential_ids: bool,
     // OPT-024: Number of threads for parallel build
@@ -807,6 +810,49 @@ pub struct HnswIndex {
 }
 
 impl HnswIndex {
+    #[inline]
+    fn resolve_distance_to_idx_fn(metric_type: MetricType) -> DistanceToIdxFn {
+        match metric_type {
+            MetricType::L2 => Self::distance_to_idx_l2_dispatch,
+            MetricType::Ip => Self::distance_to_idx_ip_dispatch,
+            MetricType::Cosine => Self::distance_to_idx_cosine_dispatch,
+            MetricType::Hamming => Self::distance_to_idx_hamming_dispatch,
+        }
+    }
+
+    #[inline(always)]
+    fn distance_to_idx_l2_dispatch(index: &HnswIndex, query: &[f32], idx: usize) -> f32 {
+        unsafe { index.l2_distance_to_idx_ptr(query.as_ptr(), index.vectors.as_ptr(), idx) }
+    }
+
+    #[inline(always)]
+    fn distance_to_idx_ip_dispatch(index: &HnswIndex, query: &[f32], idx: usize) -> f32 {
+        let start = idx * index.dim;
+        let stored = &index.vectors[start..start + index.dim];
+        -simd::inner_product(query, stored)
+    }
+
+    #[inline(always)]
+    fn distance_to_idx_cosine_dispatch(index: &HnswIndex, query: &[f32], idx: usize) -> f32 {
+        let start = idx * index.dim;
+        let stored = &index.vectors[start..start + index.dim];
+        let ip = simd::inner_product(query, stored);
+        let q_norm_sq = simd::inner_product(query, query);
+        let v_norm_sq = simd::inner_product(stored, stored);
+        let q_norm = q_norm_sq.sqrt();
+        let v_norm = v_norm_sq.sqrt();
+        if q_norm > 0.0 && v_norm > 0.0 {
+            1.0 - ip / (q_norm * v_norm)
+        } else {
+            1.0
+        }
+    }
+
+    #[inline(always)]
+    fn distance_to_idx_hamming_dispatch(_index: &HnswIndex, _query: &[f32], _idx: usize) -> f32 {
+        panic!("Hamming distance not supported for HNSW - use BinaryHnswIndex");
+    }
+
     pub fn new(config: &IndexConfig) -> Result<Self> {
         if config.dim == 0 {
             return Err(crate::api::KnowhereError::InvalidArg(
@@ -843,6 +889,8 @@ impl HnswIndex {
                 .map(|n| n.get())
                 .unwrap_or(4)
         });
+        let distance_to_idx_fn = Self::resolve_distance_to_idx_fn(config.metric_type);
+        let l2_distance_sq_ptr_kernel = simd::l2_distance_sq_ptr_kernel();
 
         Ok(Self {
             config: config.clone(),
@@ -860,6 +908,8 @@ impl HnswIndex {
             max_level: 0,
             level_multiplier,
             metric_type: config.metric_type,
+            distance_to_idx_fn,
+            l2_distance_sq_ptr_kernel,
             use_sequential_ids: true,
             num_threads,
         })
@@ -2350,37 +2400,8 @@ impl HnswIndex {
     /// Calculate distance based on metric type
     #[inline]
     fn distance(&self, query: &[f32], idx: usize) -> f32 {
-        let start = idx * self.dim;
-        let stored = &self.vectors[start..start + self.dim];
-
-        match self.metric_type {
-            MetricType::L2 => {
-                // OPT-023: Use SIMD-optimized L2 squared distance
-                simd::l2_distance_sq(query, stored)
-            }
-            MetricType::Ip => {
-                // OPT-023: Use SIMD-optimized inner product, negate for distance
-                -simd::inner_product(query, stored)
-            }
-            MetricType::Hamming => {
-                // Hamming distance not supported for float HNSW - use BinaryHnswIndex instead
-                panic!("Hamming distance not supported for HNSW - use BinaryHnswIndex");
-            }
-            MetricType::Cosine => {
-                // OPT-023: Use SIMD for cosine distance components
-                // Cosine distance = 1 - (dot product) / (norm_q * norm_v)
-                let ip = simd::inner_product(query, stored);
-                let q_norm_sq = simd::inner_product(query, query);
-                let v_norm_sq = simd::inner_product(stored, stored);
-                let q_norm = q_norm_sq.sqrt();
-                let v_norm = v_norm_sq.sqrt();
-                if q_norm > 0.0 && v_norm > 0.0 {
-                    1.0 - ip / (q_norm * v_norm)
-                } else {
-                    1.0
-                }
-            }
-        }
+        debug_assert_eq!(query.len(), self.dim);
+        (self.distance_to_idx_fn)(self, query, idx)
     }
 
     #[inline(always)]
@@ -2391,7 +2412,7 @@ impl HnswIndex {
         idx: usize,
     ) -> f32 {
         debug_assert!(idx < self.vectors.len() / self.dim);
-        simd::l2_distance_sq_ptr(query_ptr, base_ptr.add(idx * self.dim), self.dim)
+        (self.l2_distance_sq_ptr_kernel)(query_ptr, base_ptr.add(idx * self.dim), self.dim)
     }
 
     #[inline]
@@ -4006,6 +4027,8 @@ impl HnswIndex {
         let mut buf1 = [0u8; 1];
         file.read_exact(&mut buf1)?;
         self.metric_type = MetricType::from_bytes(buf1[0]);
+        self.distance_to_idx_fn = Self::resolve_distance_to_idx_fn(self.metric_type);
+        self.l2_distance_sq_ptr_kernel = simd::l2_distance_sq_ptr_kernel();
 
         // Number of vectors
         let mut buf8 = [0u8; 8];
@@ -6118,6 +6141,60 @@ mod tests {
         }
 
         println!("✅ API compatibility test passed");
+    }
+
+    #[test]
+    fn test_load_refreshes_metric_distance_dispatch() {
+        let ip_config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::Ip,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        };
+
+        let vectors = vec![
+            1.0f32, 0.0f32, //
+            0.0f32, 1.0f32, //
+        ];
+
+        let mut original = HnswIndex::new(&ip_config).expect("create source index");
+        original.train(&vectors).expect("train source index");
+        original.add(&vectors, None).expect("add vectors");
+
+        let temp_path = std::env::temp_dir().join(format!(
+            "hnsw_metric_dispatch_{}_{}.bin",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock before epoch")
+                .as_nanos()
+        ));
+        original.save(&temp_path).expect("save source index");
+
+        let l2_config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        };
+        let mut reloaded = HnswIndex::new(&l2_config).expect("create destination index");
+        reloaded.load(&temp_path).expect("load saved index");
+        let _ = std::fs::remove_file(&temp_path);
+
+        assert_eq!(reloaded.metric_type(), MetricType::Ip);
+        let query = [1.0f32, 0.0f32];
+        let dist_self = reloaded.distance(&query, 0);
+        let dist_other = reloaded.distance(&query, 1);
+        assert!(
+            (dist_self + 1.0).abs() < 1e-6,
+            "expected IP distance -1.0 for aligned vector, got {dist_self}"
+        );
+        assert!(
+            dist_other.abs() < 1e-6,
+            "expected IP distance 0.0 for orthogonal vector, got {dist_other}"
+        );
     }
 
     #[test]

@@ -16,9 +16,35 @@
 - Next feature: `none`
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 47/47 features passing (100%)
+- Progress: 48/48 features passing (100%)
 
 ## Session Log
+
+### Session 56 - 2026-03-12
+- Focus: `hnsw-distance-dispatch-cache-rework`
+- Completed:
+  - added TDD regressions in `src/simd.rs` to require a stable, reusable L2 pointer-kernel resolver (`l2_distance_sq_ptr_kernel`) instead of per-call CPU feature probing
+  - reworked `src/simd.rs` so `l2_distance_sq_ptr` now routes through a process-wide cached kernel selected once via `OnceLock`, keeping x86/aarch64 scalar fallbacks unchanged
+  - reworked `src/faiss/hnsw.rs` so index instances resolve metric dispatch once (`distance_to_idx_fn`) and reuse the cached L2 pointer kernel in hot loops; added a persistence regression proving `load()` refreshes dispatch state when metric differs from constructor config
+- Verification:
+  - `cargo test --lib simd::tests::test_l2_distance_sq_ptr_kernel_is_stable -- --nocapture` -> `ok`
+  - `cargo test --lib simd::tests::test_l2_distance_sq_ptr_kernel_matches_dispatch_result -- --nocapture` -> `ok`
+  - `cargo test --lib hnsw::tests::test_load_refreshes_metric_distance_dispatch -- --nocapture` -> `ok`
+  - `cargo test hnsw --lib -- --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round5 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round5 bash scripts/remote/test.sh --command "cargo test --lib simd::tests::test_l2_distance_sq_ptr_kernel_is_stable -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round5/test_20260312T130859Z_50622.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round5 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round5 bash scripts/remote/test.sh --command "cargo test --lib simd::tests::test_l2_distance_sq_ptr_kernel_matches_dispatch_result -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round5/test_20260312T130957Z_50754.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round5 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round5 bash scripts/remote/test.sh --command "cargo test --lib hnsw::tests::test_load_refreshes_metric_distance_dispatch -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round5/test_20260312T131030Z_50831.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round5 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round5 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_cpp_compare -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round5/test_20260312T131055Z_50904.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round5 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round5 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round4 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round5/test_20260312T131131Z_51003.log`)
+- Result:
+  - `hnsw-distance-dispatch-cache-rework` is now `passing`
+  - all tracked features are now `passing` again
+- Notes:
+  - this feature closes distance-dispatch overhead plumbing only; it does not yet claim a same-schema QPS verdict move
+  - the next meaningful HNSW step should be a fresh authority same-schema rerun focused on measuring this dispatch cut on the real lane
+- Git Commits: pending
 
 ### Session 55 - 2026-03-12
 - Focus: `hnsw-round4-authority-same-schema-rerun`
