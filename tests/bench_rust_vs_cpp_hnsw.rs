@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! Rust vs C++ knowhere HNSW 性能对比
 //!
 //! 公平对比：使用相同的数据集、相同的 HNSW 参数 (M, ef_construction, ef_search)
@@ -204,6 +205,7 @@ fn run_cpp_benchmark(dataset: &str) -> (f64, f64, f64, f64, f64, f64, f64) {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_rust_vs_cpp_hnsw_sift1m() {
     println!("\n=== Rust vs C++ HNSW 对比 (SIFT1M) ===\n");
 
@@ -263,6 +265,7 @@ fn test_rust_vs_cpp_hnsw_sift1m() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_rust_vs_cpp_hnsw_deep1m() {
     println!("\n=== Rust vs C++ HNSW 对比 (Deep1M) ===\n");
 

@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! HNSW Shuffle 构建 Benchmark
 //!
 //! 测试随机插入顺序对 HNSW 图质量的影响
@@ -254,6 +255,7 @@ fn compute_recall(ground_truth: &[i64], results: &[i64]) -> f64 {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_hnsw_shuffle_benchmark() {
     benchmark_shuffle_build();
 }

@@ -2,16 +2,27 @@
 //!
 //! 目的：找出为什么不同数据分布导致性能差异 5-10 倍
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType};
+use knowhere_rs::faiss::IvfPqIndex;
+
+#[cfg(feature = "long-tests")]
+use knowhere_rs::api::SearchRequest;
+#[cfg(feature = "long-tests")]
 use knowhere_rs::faiss::IvfFlatIndex;
+#[cfg(feature = "long-tests")]
 use rand::{rngs::StdRng, Rng, SeedableRng};
+#[cfg(feature = "long-tests")]
 use std::time::Instant;
 
+#[cfg(feature = "long-tests")]
 const DIM: usize = 128;
+#[cfg(feature = "long-tests")]
 const NLIST: usize = 100;
+#[cfg(feature = "long-tests")]
 const NPROBE: usize = 16;
 
 /// 确定性模式数据（quick_ivf_perf 使用）
+#[cfg(feature = "long-tests")]
 fn gen_pattern_data(n: usize, dim: usize) -> Vec<f32> {
     (0..n * dim)
         .map(|i| ((i % 100) as f32 / 100.0 - 0.5) * 2.0)
@@ -19,11 +30,13 @@ fn gen_pattern_data(n: usize, dim: usize) -> Vec<f32> {
 }
 
 /// 真正伪随机数据（BENCH-048 使用）
+#[cfg(feature = "long-tests")]
 fn gen_random_data(seed: u64, n: usize, dim: usize) -> Vec<f32> {
     let mut rng = StdRng::seed_from_u64(seed);
     (0..n * dim).map(|_| rng.gen::<f32>()).collect()
 }
 
+#[cfg(feature = "long-tests")]
 fn analyze_distribution(name: &str, data: &[f32], dim: usize) {
     let n = data.len() / dim;
 
@@ -88,6 +101,55 @@ fn analyze_distribution(name: &str, data: &[f32], dim: usize) {
     );
 }
 
+#[test]
+fn ivfpq_coarse_clusters_stay_populated_for_separated_data() {
+    let dim = 4;
+    let nlist = 4;
+    let points_per_cluster = 16;
+
+    let config = IndexConfig {
+        index_type: IndexType::IvfPq,
+        metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
+        dim,
+        params: IndexParams {
+            nlist: Some(nlist),
+            nprobe: Some(2),
+            m: Some(2),
+            nbits_per_idx: Some(8),
+            ..Default::default()
+        },
+    };
+
+    let mut data = Vec::with_capacity(nlist * points_per_cluster * dim);
+    for cluster in 0..nlist {
+        let center = cluster as f32 * 100.0;
+        for offset in 0..points_per_cluster {
+            let value = center + offset as f32 * 0.01;
+            data.extend_from_slice(&[value, value + 0.1, value + 0.2, value + 0.3]);
+        }
+    }
+
+    let mut index = IvfPqIndex::new(&config).unwrap();
+    index.train(&data).unwrap();
+    index.add(&data, None).unwrap();
+
+    let audit = index.hot_path_audit();
+
+    assert_eq!(audit.list_lengths.len(), nlist);
+    assert_eq!(
+        audit.list_lengths.iter().sum::<usize>(),
+        nlist * points_per_cluster
+    );
+    assert!(
+        audit.list_lengths.iter().all(|&len| len > 0),
+        "separated training data should not collapse all inserts into a subset of coarse lists: {:?}",
+        audit.list_lengths
+    );
+    assert_eq!(audit.centroids.len(), nlist * dim);
+}
+
+#[cfg(feature = "long-tests")]
 #[test]
 fn diagnose_cluster_distribution() {
     println!("\n========================================");

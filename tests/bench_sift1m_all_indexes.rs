@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! BENCH-050: SIFT1M 全索引性能基准测试
 //!
 //! 当前包含：
@@ -342,6 +343,7 @@ fn generate_report(results: &[BenchResult], dataset_size: usize, num_queries: us
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn bench_sift1m_all_indexes() {
     println!("╔════════════════════════════════════════════════════════╗");
     println!("║  BENCH-050: SIFT1M 全索引性能基准测试                 ║");

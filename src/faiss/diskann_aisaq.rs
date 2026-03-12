@@ -166,6 +166,19 @@ impl PageCacheStats {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AisaqScopeAudit {
+    pub dim: usize,
+    pub node_count: usize,
+    pub entry_point_count: usize,
+    pub uses_flash_layout: bool,
+    pub uses_beam_search_io: bool,
+    pub uses_mmap_backed_pages: bool,
+    pub has_page_cache: bool,
+    pub native_comparable: bool,
+    pub comparability_reason: &'static str,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AsyncReadEngine {
     SyncMmap,
@@ -834,6 +847,20 @@ impl PQFlashIndex {
         );
         result.num_visited = io.stats().nodes_visited;
         Ok(result)
+    }
+
+    pub fn scope_audit(&self) -> AisaqScopeAudit {
+        AisaqScopeAudit {
+            dim: self.dim,
+            node_count: self.len(),
+            entry_point_count: self.entry_points.len(),
+            uses_flash_layout: true,
+            uses_beam_search_io: true,
+            uses_mmap_backed_pages: self.storage.is_some(),
+            has_page_cache: self.storage.is_some(),
+            native_comparable: false,
+            comparability_reason: "PQFlashIndex exposes a real flash-layout/page-cache AISAQ skeleton, but graph construction and IO remain simplified rather than native-comparable DiskANN",
+        }
     }
 
     pub fn flash_layout(&self) -> &FlashLayout {

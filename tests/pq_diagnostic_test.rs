@@ -1,10 +1,9 @@
 // PQ 诊断测试 - 快速验证修复方案
 
-use knowhere_rs::api::{IndexConfig, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::ivfpq::IvfPqIndex;
-use knowhere_rs::quantization::pq::{PQConfig, ProductQuantizer};
+use knowhere_rs::quantization::{ResidualPQConfig, ResidualProductQuantizer};
 use knowhere_rs::simd::{l2_distance, l2_distance_sq};
 
+#[cfg(feature = "long-tests")]
 fn main() {
     println!("=== PQ 诊断测试 ===\n");
 
@@ -18,6 +17,52 @@ fn main() {
     test_ivf_pq_recall();
 }
 
+#[test]
+fn pq_distance_consistency_regression() {
+    let a = vec![1.0, 2.0, 3.0, 4.0];
+    let b = vec![2.0, 3.0, 4.0, 5.0];
+
+    let l2 = l2_distance(&a, &b);
+    let l2_sq = l2_distance_sq(&a, &b);
+
+    assert!((l2 - l2_sq.sqrt()).abs() < 0.0001);
+}
+
+#[test]
+fn residual_pq_adc_prefers_self_code_over_far_cluster_code() {
+    let dim = 16;
+    let nlist = 4;
+    let points_per_cluster = 24;
+
+    let mut vectors = Vec::with_capacity(nlist * points_per_cluster * dim);
+    for cluster in 0..nlist {
+        let base = cluster as f32 * 100.0;
+        for point in 0..points_per_cluster {
+            for d in 0..dim {
+                vectors.push(base + d as f32 * 0.01 + point as f32 * 0.001);
+            }
+        }
+    }
+
+    let total = nlist * points_per_cluster;
+    let mut rpq = ResidualProductQuantizer::new(ResidualPQConfig::new(dim, 8, 4, 8)).unwrap();
+    rpq.train(total, &vectors).unwrap();
+
+    for i in 0..8 {
+        let query = &vectors[i * dim..(i + 1) * dim];
+        let far_idx = total - 1 - i;
+        let far_vector = &vectors[far_idx * dim..(far_idx + 1) * dim];
+
+        let self_code = rpq.encode(query).unwrap();
+        let far_code = rpq.encode(far_vector).unwrap();
+        assert!(
+            rpq.compute_distance(query, &self_code) < rpq.compute_distance(query, &far_code),
+            "residual PQ ADC should rank the query's own code ahead of a far-cluster code"
+        );
+    }
+}
+
+#[cfg(feature = "long-tests")]
 fn test_distance_consistency() {
     println!("测试 1: 距离函数一致性");
 
@@ -39,6 +84,7 @@ fn test_distance_consistency() {
     }
 }
 
+#[cfg(feature = "long-tests")]
 fn test_pure_pq_recall() {
     println!("测试 2: 纯 PQ 召回率（不使用 IVF）");
 
@@ -123,6 +169,7 @@ fn test_pure_pq_recall() {
     }
 }
 
+#[cfg(feature = "long-tests")]
 fn test_ivf_pq_recall() {
     println!("测试 3: IVF-PQ 召回率");
 

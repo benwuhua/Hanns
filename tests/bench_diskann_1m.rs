@@ -166,11 +166,28 @@ fn generate_report(results: &[BenchResult], base_size: usize, num_queries: usize
     report.push_str("- Ground truth computed via brute-force L2 distance\n");
     report.push_str("- DiskANN uses PQ compression + beam search\n");
     report.push_str("- Benchmark uses in-memory mode (Phase 1-2 implementation)\n");
+    report.push_str("- This harness exercises a constrained Rust AISAQ skeleton, not a native-comparable SSD DiskANN pipeline\n");
 
     report
 }
 
 #[test]
+fn diskann_benchmark_report_states_constrained_scope() {
+    let report = generate_report(&[], 1024, 16);
+
+    assert!(
+        report.contains("Benchmark uses in-memory mode"),
+        "report must disclose that this benchmark is not exercising a native SSD path"
+    );
+    assert!(
+        report.contains("not a native-comparable SSD DiskANN pipeline"),
+        "report must explicitly block parity/leadership interpretation"
+    );
+}
+
+#[cfg(feature = "long-tests")]
+#[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_diskann_1m_benchmark() {
     let base_size = env::var("SIFT_BASE_SIZE")
         .ok()
@@ -247,6 +264,7 @@ fn test_diskann_1m_benchmark() {
     println!("\nReport saved to {}", REPORT_PATH);
 }
 
+#[cfg(feature = "long-tests")]
 #[test]
 #[ignore]
 fn test_diskann_1m_full() {
@@ -256,7 +274,9 @@ fn test_diskann_1m_full() {
     test_diskann_1m_benchmark();
 }
 
+#[cfg(feature = "long-tests")]
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_diskann_100k_quick() {
     // Quick 100K benchmark for validation
     std::env::set_var("SIFT_BASE_SIZE", "100000");

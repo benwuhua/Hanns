@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! GIST1M Benchmark Test
 //!
 //! Benchmark Flat, HNSW, and IVF-Flat indexes on GIST1M dataset.
@@ -338,6 +339,7 @@ fn benchmark_ivf_flat(dataset: &GistDataset, num_queries: usize) -> BenchmarkRes
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_gist1m_benchmark() {
     // Try to load dataset
     let dataset = match try_load_gist1m() {
@@ -381,6 +383,7 @@ fn test_gist1m_benchmark() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_gist1m_quick() {
     // Quick test with small dataset subset
     let dataset = match try_load_gist1m() {

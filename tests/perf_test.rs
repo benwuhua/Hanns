@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! knowhere-rs 性能测试
 //! 对比不同索引类型的性能
 //!
@@ -368,6 +369,7 @@ fn test_ivf_flat_index_fast(n: usize, dim: usize) -> PerfResult {
 }
 
 #[test]
+#[ignore = "performance benchmark; excluded from default regression"]
 fn test_performance_comparison_small() {
     println!("\n=== 小规模测试 (10K 向量，128 维) ===\n");
 
@@ -401,6 +403,7 @@ fn test_performance_comparison_small() {
 }
 
 #[test]
+#[ignore = "performance benchmark; excluded from default regression"]
 fn test_performance_comparison_100k() {
     println!("\n=== 中等规模测试 (100K 向量，128 维) ===\n");
 
@@ -434,6 +437,7 @@ fn test_performance_comparison_100k() {
 }
 
 #[test]
+#[ignore = "performance benchmark; excluded from default regression"]
 fn test_performance_comparison_1m() {
     println!("\n=== 大规模测试 (1M 向量，128 维) ===\n");
 
@@ -467,6 +471,7 @@ fn test_performance_comparison_1m() {
 }
 
 #[test]
+#[ignore = "performance benchmark; excluded from default regression"]
 fn test_ivf_flat_build_optimization() {
     println!("\n=== OPT-013: IVF-Flat 构建优化对比测试 (5K 向量，128 维) ===\n");
 
@@ -644,6 +649,7 @@ fn test_hnsw_adaptive_ef(
 }
 
 #[test]
+#[ignore = "performance benchmark; excluded from default regression"]
 fn test_opt030_adaptive_ef() {
     println!("\n╔═══════════════════════════════════════════════════════════╗");
     println!("║         OPT-030: 自适应 ef 策略性能测试                  ║");

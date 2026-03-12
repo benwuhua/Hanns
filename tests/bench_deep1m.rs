@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! Deep1M Benchmark Test
 //!
 //! Benchmark Flat, HNSW, and IVF-Flat indexes on Deep1M dataset.
@@ -341,6 +342,7 @@ fn benchmark_ivf_flat(dataset: &DeepDataset, num_queries: usize) -> BenchmarkRes
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_deep1m_benchmark() {
     // Try to load dataset
     let dataset = match try_load_deep1m() {
@@ -384,6 +386,7 @@ fn test_deep1m_benchmark() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_deep1m_quick() {
     // Quick test with small dataset subset
     let dataset = match try_load_deep1m() {

@@ -1,11 +1,11 @@
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType};
+use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
 use knowhere_rs::faiss::HnswIndex;
 use knowhere_rs::MetricType;
-use rand::Rng;
-use std::collections::{HashSet, VecDeque};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
-fn generate_vectors(n: usize, dim: usize) -> Vec<f32> {
-    let mut rng = rand::thread_rng();
+fn generate_vectors(seed: u64, n: usize, dim: usize) -> Vec<f32> {
+    let mut rng = StdRng::seed_from_u64(seed);
     (0..n * dim).map(|_| rng.gen::<f32>()).collect()
 }
 
@@ -13,46 +13,25 @@ fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
 }
 
-/// BFS to check connectivity from entry point
-fn count_reachable_nodes(index: &HnswIndex, start_idx: usize) -> usize {
-    let mut visited = HashSet::new();
-    let mut queue = VecDeque::new();
-
-    visited.insert(start_idx);
-    queue.push_back(start_idx);
-
-    while let Some(curr_idx) = queue.pop_front() {
-        // Get neighbors at layer 0
-        let stats = index.get_graph_stats();
-        // We need to access internal node_info, but it's private...
-        // Instead, let's use a different approach
-    }
-
-    visited.len()
-}
-
 #[test]
 fn debug_graph_connectivity() {
-    let n = 10000;
-    let dim = 128;
-    let vectors = generate_vectors(n, dim);
-    let query = generate_vectors(1, dim);
-
-    // Compute ground truth
+    let n = 4000;
+    let dim = 64;
+    let vectors = generate_vectors(20260311, n, dim);
+    let query = generate_vectors(20260312, 1, dim);
     let q = &query[0..dim];
+
     let mut gt_distances: Vec<(usize, f32)> = (0..n)
         .map(|j| {
-            let b = &vectors[j * dim..(j + 1) * dim];
-            (j, l2_distance_squared(q, b))
+            let start = j * dim;
+            (j, l2_distance_squared(q, &vectors[start..start + dim]))
         })
         .collect();
     gt_distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-
     let gt_top10: Vec<usize> = gt_distances.iter().take(10).map(|(id, _)| *id).collect();
 
     println!("Ground truth top-10: {:?}", gt_top10);
 
-    // Build HNSW with different M values
     for m in [8, 16, 32] {
         let config = IndexConfig {
             index_type: IndexType::Hnsw,
@@ -70,31 +49,57 @@ fn debug_graph_connectivity() {
         let mut index = HnswIndex::new(&config).unwrap();
         index.train(&vectors).unwrap();
         index.add(&vectors, None).unwrap();
+        let repaired = index.find_and_repair_unreachable();
 
-        let (max_layer, layer_dist, avg_neighbors) = index.get_graph_stats();
-
-        // Check connectivity at layer 0 using search from each GT node
-        println!(
-            "\nM={}, max_layer={}, avg_neighbors_l0={:.1}",
-            m, max_layer, avg_neighbors
+        let unreachable = index.find_unreachable_vectors();
+        assert!(
+            unreachable.is_empty(),
+            "M={} repair-backed build should not leave unreachable vectors after {} repairs: {:?}",
+            m,
+            repaired,
+            unreachable
         );
 
-        // Try searching from each GT top-10 node to see if they can be found
-        for (i, &gt_id) in gt_top10.iter().enumerate() {
-            let gt_vec = &vectors[gt_id * dim..(gt_id + 1) * dim];
-            let req = knowhere_rs::api::SearchRequest {
-                top_k: 1,
-                ..Default::default()
-            };
-            let result = index.search(gt_vec, &req).unwrap();
+        let (max_layer, _, avg_neighbors) = index.get_graph_stats();
+        let (_, max_l0, avg_l0) = index.layer_neighbor_count_stats(0).unwrap();
 
-            let found_self = result.ids.first().map(|id| *id as usize) == Some(gt_id);
-            println!(
-                "  GT#{} (id={}): can find itself = {}",
-                i + 1,
-                gt_id,
-                found_self
-            );
+        println!(
+            "M={}, repairs={}, max_layer={}, max_neighbors_l0={}, avg_neighbors_l0={:.1}",
+            m, repaired, max_layer, max_l0, avg_neighbors
+        );
+
+        assert!(max_layer >= 1, "M={} should build more than one layer", m);
+        assert!(
+            max_l0 <= m * 2 + repaired,
+            "M={} layer-0 degree should stay within 2*M plus repair slack, got {} after {} repairs",
+            m,
+            max_l0,
+            repaired
+        );
+        assert!(
+            avg_l0 >= m as f32,
+            "M={} layer-0 average degree should stay populated, got {:.2}",
+            m,
+            avg_l0
+        );
+
+        let req = SearchRequest {
+            top_k: 1,
+            ..Default::default()
+        };
+        let mut found_self = 0usize;
+        for &gt_id in &gt_top10 {
+            let start = gt_id * dim;
+            let gt_vec = &vectors[start..start + dim];
+            let result = index.search(gt_vec, &req).unwrap();
+            if result.ids.first().map(|id| *id as usize) == Some(gt_id) {
+                found_self += 1;
+            }
         }
+        assert_eq!(
+            found_self, 10,
+            "M={} should allow each GT top-10 vector to retrieve itself",
+            m
+        );
     }
 }

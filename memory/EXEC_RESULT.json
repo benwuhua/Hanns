@@ -1,0 +1,24 @@
+{
+  "task_id": "HNSW-P3-002",
+  "job": "builder-loop-level-multiplier",
+  "summary": "修复 HnswIndex::new() 的 level_multiplier 半落地 bug：此前高 M 默认层分布塌缩，且 IndexParams.ml override 没有真正进入热路径。新增回归后，最小修复为默认使用 reference M=16 的稳定层级分布，并 honor config.params.ml。",
+  "files_changed": [
+    "src/faiss/hnsw.rs:new() level_multiplier initialization",
+    "tests/test_hnsw_level_multiplier.rs"
+  ],
+  "checks_run": [
+    "cargo test --test test_hnsw_level_multiplier -- --nocapture -> 2 passed",
+    "cargo test --lib test_random_level_distribution -- --nocapture -> ok",
+    "cargo test --lib test_multilayer_structure -- --nocapture -> ok"
+  ],
+  "artifacts": [],
+  "gate_profile": "local_regression_only",
+  "current_state": "本地层级分布与 ml override 回归已修复，但仍缺 remote x86 benchmark 证据，不能据此宣称 HNSW parity gap 已被消除。",
+  "substage": "level_multiplier_fix_local_verified",
+  "next_action": "rerun_remote_hnsw_recall_gate_after_level_fix",
+  "remaining_blockers": [
+    "缺 remote x86 recall/QPS artifact，无法判断此修复对真实 stop/go 的影响大小",
+    "即使层级分布修复，remaining gap 仍可能来自 entry point 选择或图构建 heuristic"
+  ],
+  "updated_at": "2026-03-10T19:58:00Z"
+}

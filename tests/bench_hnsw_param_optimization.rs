@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! BENCH-024: HNSW 参数优化 Benchmark
 //!
 //! 测试不同 M / ef_construction / ef_search 组合对构建时间、搜索 QPS、
@@ -447,6 +448,7 @@ fn export_json(results: &[ParamResult], cfg: &BenchConfig) {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_hnsw_param_optimization() {
     println!("\n{}", "=".repeat(90));
     println!("BENCH-024: HNSW 参数优化 Benchmark");
@@ -524,6 +526,7 @@ fn test_hnsw_param_optimization() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_hnsw_param_optimization_quick() {
     env::set_var("QUICK", "1");
     test_hnsw_param_optimization();

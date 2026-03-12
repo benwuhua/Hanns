@@ -1,4 +1,7 @@
+#![cfg(feature = "long-tests")]
 //! 诊断 IVF-PQ 召回率问题
+//! 这个入口显式走 `src/faiss/ivfpq.rs` 的 residual-PQ hot path，
+//! 不代表 `src/faiss/ivf.rs` 的简化 coarse-assignment scaffold。
 //!
 //! 运行: cargo test --release --test debug_ivf_pq_recall -- --nocapture
 
@@ -40,6 +43,8 @@ fn compute_ground_truth(base: &[f32], queries: &[f32], dim: usize, k: usize) -> 
 fn debug_ivf_pq_recall() {
     println!("\n🔍 诊断 IVF-PQ 召回率问题");
     println!("==================================");
+    println!("   hot path: src/faiss/ivfpq.rs (residual PQ)");
+    println!("   placeholder scaffold: src/faiss/ivf.rs");
 
     let dim = 128;
     let n_base = 1000; // 小数据集便于调试

@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! OPT-013: IVF-Flat 构建优化验证测试
 
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
@@ -45,6 +46,7 @@ fn compute_ground_truth(
 }
 
 #[test]
+#[ignore]
 fn test_opt013_ivf_flat_fast_build() {
     println!("\n=== OPT-013: IVF-Flat 快速构建验证 ===\n");
 

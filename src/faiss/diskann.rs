@@ -98,6 +98,19 @@ pub struct DiskAnnStats {
     pub memory_usage_bytes: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiskAnnScopeAudit {
+    pub dim: usize,
+    pub max_degree: usize,
+    pub search_list_size: usize,
+    pub beamwidth: usize,
+    pub uses_vamana_graph: bool,
+    pub uses_placeholder_pq: bool,
+    pub has_flash_layout: bool,
+    pub native_comparable: bool,
+    pub comparability_reason: &'static str,
+}
+
 /// PQ-compressed vector placeholder.
 ///
 /// This is *not* native DiskANN's full PQ/SSD pipeline: it only stores a coarse
@@ -251,6 +264,20 @@ impl DiskAnnIndex {
             self.dann_config.search_list_size
         );
         Ok(())
+    }
+
+    pub fn scope_audit(&self) -> DiskAnnScopeAudit {
+        DiskAnnScopeAudit {
+            dim: self.dim,
+            max_degree: self.dann_config.max_degree,
+            search_list_size: self.dann_config.search_list_size,
+            beamwidth: self.dann_config.beamwidth,
+            uses_vamana_graph: true,
+            uses_placeholder_pq: true,
+            has_flash_layout: false,
+            native_comparable: false,
+            comparability_reason: "DiskAnnIndex remains a simplified Vamana path with placeholder PQ rather than a native-comparable SSD DiskANN pipeline",
+        }
     }
 
     /// Build PQ codes for compression
@@ -1241,6 +1268,20 @@ mod tests {
     }
 
     #[test]
+    fn test_diskann_pqcode_is_explicit_mean_quantization_placeholder() {
+        let mut pq = PQCode::new(2);
+        let vectors = vec![
+            0.0, 2.0, 4.0, 6.0, // subvector means: 1.0, 5.0
+            1.0, 1.0, 3.0, 7.0, // subvector means: 1.0, 5.0
+        ];
+        pq.encode(&vectors, 4);
+
+        assert_eq!(pq.codes.len(), 4);
+        assert_eq!(pq.codes[0], pq.codes[2]);
+        assert_eq!(pq.codes[1], pq.codes[3]);
+    }
+
+    #[test]
     fn test_diskann_raw_data_semantics_follow_metric_type() {
         use crate::index::Index;
 
@@ -1293,6 +1334,40 @@ mod tests {
 
         let err = Index::get_vector_by_ids(&index, &[7]).unwrap_err();
         assert!(matches!(err, IndexError::Unsupported(_)));
+    }
+
+    #[test]
+    fn test_diskann_scope_audit_locks_placeholder_boundary() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                max_degree: Some(16),
+                search_list_size: Some(32),
+                beamwidth: Some(4),
+                ..Default::default()
+            },
+        };
+
+        let index = DiskAnnIndex::new(&config).unwrap();
+        let audit = index.scope_audit();
+
+        assert_eq!(audit.dim, 4);
+        assert_eq!(audit.max_degree, 16);
+        assert_eq!(audit.search_list_size, 32);
+        assert_eq!(audit.beamwidth, 4);
+        assert!(audit.uses_vamana_graph);
+        assert!(audit.uses_placeholder_pq);
+        assert!(!audit.has_flash_layout);
+        assert!(!audit.native_comparable);
+        assert!(
+            audit
+                .comparability_reason
+                .contains("placeholder PQ"),
+            "audit should explain why DiskAnnIndex is not native-comparable"
+        );
     }
 }
 

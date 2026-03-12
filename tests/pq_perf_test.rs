@@ -4,17 +4,27 @@
 //! 1. OPQ + PQ achieves R@10 > 50% on SIFT1M-like data
 //! 2. Residual PQ improves recall by > 20% over standard PQ
 
-use knowhere_rs::api::SearchRequest;
-use knowhere_rs::faiss::{IvfOpqConfig, IvfOpqIndex};
 use knowhere_rs::quantization::{
-    OPQConfig, OptimizedProductQuantizer, PQConfig, ProductQuantizer, ResidualPQConfig,
-    ResidualProductQuantizer,
+    PQConfig, ProductQuantizer, ResidualPQConfig, ResidualProductQuantizer,
 };
+
+#[cfg(feature = "long-tests")]
+use knowhere_rs::api::SearchRequest;
+#[cfg(feature = "long-tests")]
+use knowhere_rs::faiss::{IvfOpqConfig, IvfOpqIndex};
+#[cfg(feature = "long-tests")]
+use knowhere_rs::quantization::OPQConfig;
+#[cfg(feature = "long-tests")]
+use knowhere_rs::quantization::OptimizedProductQuantizer;
+#[cfg(feature = "long-tests")]
 use rand::rngs::StdRng;
+#[cfg(feature = "long-tests")]
 use rand::Rng;
+#[cfg(feature = "long-tests")]
 use rand::SeedableRng;
 
 /// Generate SIFT-like random data (Gaussian distribution, normalized)
+#[cfg(feature = "long-tests")]
 fn generate_sift_like_data(n: usize, dim: usize, seed: u64) -> Vec<f32> {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut data = Vec::with_capacity(n * dim);
@@ -41,6 +51,7 @@ fn generate_sift_like_data(n: usize, dim: usize, seed: u64) -> Vec<f32> {
 }
 
 /// Compute ground truth nearest neighbors using brute force
+#[cfg(feature = "long-tests")]
 fn compute_ground_truth(
     queries: &[f32],
     database: &[f32],
@@ -81,6 +92,7 @@ fn compute_ground_truth(
 }
 
 /// Compute Recall@k
+#[cfg(feature = "long-tests")]
 fn compute_recall_at_k(results: &[Vec<usize>], ground_truth: &[Vec<usize>], k: usize) -> f32 {
     let mut total_recall = 0.0f32;
 
@@ -96,6 +108,60 @@ fn compute_recall_at_k(results: &[Vec<usize>], ground_truth: &[Vec<usize>], k: u
 }
 
 #[test]
+fn residual_pq_reconstruction_error_beats_standard_pq_on_clustered_data() {
+    let dim = 32;
+    let n_clusters = 4;
+    let points_per_cluster = 32;
+    let total = n_clusters * points_per_cluster;
+
+    let mut data = Vec::with_capacity(total * dim);
+    for cluster in 0..n_clusters {
+        let base = cluster as f32 * 50.0;
+        for point in 0..points_per_cluster {
+            for d in 0..dim {
+                data.push(base + d as f32 * 0.01 + point as f32 * 0.001);
+            }
+        }
+    }
+
+    let mut pq = ProductQuantizer::new(PQConfig::new(dim, 4, 8));
+    pq.train(total, &data).unwrap();
+
+    let mut rpq = ResidualProductQuantizer::new(ResidualPQConfig::new(dim, 8, 4, 8)).unwrap();
+    rpq.train(total, &data).unwrap();
+
+    let mut pq_mse = 0.0f32;
+    let mut rpq_mse = 0.0f32;
+
+    for i in 0..16 {
+        let vector = &data[i * dim..(i + 1) * dim];
+
+        let pq_code = pq.encode(vector).unwrap();
+        let pq_recon = pq.decode(&pq_code).unwrap();
+        let rpq_code = rpq.encode(vector).unwrap();
+        let rpq_recon = rpq.decode(&rpq_code).unwrap();
+
+        for j in 0..dim {
+            let pq_diff = vector[j] - pq_recon[j];
+            pq_mse += pq_diff * pq_diff;
+
+            let rpq_diff = vector[j] - rpq_recon[j];
+            rpq_mse += rpq_diff * rpq_diff;
+        }
+    }
+
+    pq_mse /= (16 * dim) as f32;
+    rpq_mse /= (16 * dim) as f32;
+
+    assert!(
+        rpq_mse < pq_mse,
+        "residual PQ should reconstruct clustered data better than plain PQ (rpq_mse={rpq_mse}, pq_mse={pq_mse})"
+    );
+}
+
+#[cfg(feature = "long-tests")]
+#[test]
+#[ignore]
 fn test_opq_recall_improvement() {
     let dim = 128;
     let n_train = 10000;
@@ -193,6 +259,8 @@ fn test_opq_recall_improvement() {
 }
 
 #[test]
+#[cfg(feature = "long-tests")]
+#[ignore]
 fn test_residual_pq_recall_improvement() {
     let dim = 128;
     let n_train = 10000;
@@ -281,6 +349,8 @@ fn test_residual_pq_recall_improvement() {
 }
 
 #[test]
+#[cfg(feature = "long-tests")]
+#[ignore]
 fn test_ivf_opq_index() {
     let dim = 128;
     let n_train = 10000;

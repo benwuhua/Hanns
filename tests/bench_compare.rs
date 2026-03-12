@@ -26,12 +26,29 @@ use knowhere_rs::MetricType;
 use std::env;
 use std::time::Instant;
 
+#[test]
+fn compare_lane_excludes_diskann_until_it_is_native_comparable() {
+    let indexes = compare_lane_index_names();
+
+    assert!(indexes.contains(&"Flat"));
+    assert!(indexes.contains(&"HNSW"));
+    assert!(indexes.contains(&"IVF-Flat"));
+    assert!(
+        !indexes.contains(&"DiskANN"),
+        "DiskANN must stay out of the compare lane until the implementation is native-comparable"
+    );
+}
+
 /// Dataset type enum
 #[derive(Debug, Clone, Copy)]
 enum DatasetType {
     Sift1m,
     Deep1m,
     Gist1m,
+}
+
+fn compare_lane_index_names() -> Vec<&'static str> {
+    vec!["Flat", "HNSW", "IVF-Flat"]
 }
 
 impl DatasetType {
@@ -437,7 +454,9 @@ fn run_benchmarks(dataset_type: DatasetType, num_queries: usize, json_output: Op
     }
 }
 
+#[cfg(feature = "long-tests")]
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_bench_compare_all() {
     let dataset_type_str = env::var("DATASET").unwrap_or_else(|_| "sift1m".to_string());
     let dataset_type = DatasetType::from_str(&dataset_type_str);
@@ -452,7 +471,9 @@ fn test_bench_compare_all() {
     run_benchmarks(dataset_type, num_queries, json_output.as_deref());
 }
 
+#[cfg(feature = "long-tests")]
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_bench_compare_sift1m() {
     let num_queries = env::var("NUM_QUERIES")
         .ok()
@@ -464,7 +485,9 @@ fn test_bench_compare_sift1m() {
     run_benchmarks(DatasetType::Sift1m, num_queries, json_output.as_deref());
 }
 
+#[cfg(feature = "long-tests")]
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_bench_compare_deep1m() {
     let num_queries = env::var("NUM_QUERIES")
         .ok()
@@ -476,7 +499,9 @@ fn test_bench_compare_deep1m() {
     run_benchmarks(DatasetType::Deep1m, num_queries, json_output.as_deref());
 }
 
+#[cfg(feature = "long-tests")]
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_bench_compare_gist1m() {
     let num_queries = env::var("NUM_QUERIES")
         .ok()

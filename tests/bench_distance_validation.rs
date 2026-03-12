@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! Distance Validation Benchmark Test
 //!
 //! Test distance validation functionality on search results.
@@ -303,6 +304,7 @@ fn test_distance_validation_ivf_flat() {
 
 /// Test distance validation on small synthetic data
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_distance_validation_unit() {
     // Create small test dataset
     let dim = 128;

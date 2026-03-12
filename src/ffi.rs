@@ -51,7 +51,7 @@ pub use interrupt_ffi::{
 use crate::api::{
     IndexConfig, IndexParams, IndexType, MetricType, SearchRequest, SearchResult as ApiSearchResult,
 };
-use crate::faiss::{HnswIndex, MemIndex, ScaNNConfig, ScaNNIndex};
+use crate::faiss::{HnswIndex, IvfPqIndex, MemIndex, ScaNNConfig, ScaNNIndex};
 use crate::index::Index;
 use serde::Serialize;
 use std::path::Path;
@@ -89,6 +89,7 @@ pub enum CIndexType {
     BinIvfFlat = 14,
     SparseWandCc = 15,
     MinHashLsh = 16,
+    IvfPq = 17,
 }
 
 /// Metric 类型枚举
@@ -286,6 +287,7 @@ struct IndexWrapper {
     ivf_rabitq: Option<crate::faiss::IvfRaBitqIndex>,
     hnsw_sq: Option<crate::faiss::HnswSqIndex>,
     hnsw_pq: Option<crate::faiss::HnswPqIndex>,
+    ivf_pq: Option<crate::faiss::IvfPqIndex>,
     bin_flat: Option<crate::faiss::BinFlatIndex>,
     binary_hnsw: Option<crate::faiss::BinaryHnswIndex>,
     ivf_sq8: Option<crate::faiss::IvfSq8Index>,
@@ -325,6 +327,7 @@ impl IndexWrapper {
             CIndexType::IvfRabitq => IndexType::IvfRabitq,
             CIndexType::HnswSq => IndexType::HnswSq,
             CIndexType::HnswPq => IndexType::HnswPq,
+            CIndexType::IvfPq => IndexType::IvfPq,
             CIndexType::BinFlat => IndexType::BinFlat,
             CIndexType::BinaryHnsw => IndexType::BinaryHnsw,
             CIndexType::IvfSq8 => IndexType::IvfSq8,
@@ -365,6 +368,7 @@ impl IndexWrapper {
                     ivf_rabitq: None,
                     hnsw_sq: None,
                     hnsw_pq: None,
+                    ivf_pq: None,
                     bin_flat: None,
                     binary_hnsw: None,
                     ivf_sq8: None,
@@ -398,6 +402,7 @@ impl IndexWrapper {
                     ivf_rabitq: None,
                     hnsw_sq: None,
                     hnsw_pq: None,
+                    ivf_pq: None,
                     bin_flat: None,
                     binary_hnsw: None,
                     ivf_sq8: None,
@@ -434,6 +439,7 @@ impl IndexWrapper {
                     ivf_rabitq: None,
                     hnsw_sq: None,
                     hnsw_pq: None,
+                    ivf_pq: None,
                     bin_flat: None,
                     binary_hnsw: None,
                     ivf_sq8: None,
@@ -513,6 +519,7 @@ impl IndexWrapper {
                     ivf_rabitq: None,
                     hnsw_sq: None,
                     hnsw_pq: None,
+                    ivf_pq: None,
                     bin_flat: None,
                     binary_hnsw: None,
                     ivf_sq8: None,
@@ -544,6 +551,7 @@ impl IndexWrapper {
                     ivf_rabitq: Some(ivf_rabitq),
                     hnsw_sq: None,
                     hnsw_pq: None,
+                    ivf_pq: None,
                     bin_flat: None,
                     binary_hnsw: None,
                     ivf_sq8: None,
@@ -588,6 +596,7 @@ impl IndexWrapper {
                     ivf_rabitq: None,
                     hnsw_sq: Some(hnsw_sq),
                     hnsw_pq: None,
+                    ivf_pq: None,
                     bin_flat: None,
                     binary_hnsw: None,
                     ivf_sq8: None,
@@ -626,6 +635,7 @@ impl IndexWrapper {
                     ivf_rabitq: None,
                     hnsw_sq: None,
                     hnsw_pq: Some(hnsw_pq),
+                    ivf_pq: None,
                     bin_flat: None,
                     binary_hnsw: None,
                     ivf_sq8: None,
@@ -672,6 +682,38 @@ impl IndexWrapper {
                     dim,
                 })
             }
+            CIndexType::IvfPq => {
+                let index_config = IndexConfig {
+                    index_type: IndexType::IvfPq,
+                    metric_type: metric,
+                    dim,
+                    data_type,
+                    params: IndexParams {
+                        nlist: Some(config.num_clusters.max(1)),
+                        nprobe: Some(config.nprobe.max(1)),
+                        ..Default::default()
+                    },
+                };
+                let ivf_pq = IvfPqIndex::new(&index_config).ok()?;
+                Some(Self {
+                    flat: None,
+                    hnsw: None,
+                    scann: None,
+                    hnsw_prq: None,
+                    ivf_rabitq: None,
+                    hnsw_sq: None,
+                    hnsw_pq: None,
+                    ivf_pq: Some(ivf_pq),
+                    bin_flat: None,
+                    binary_hnsw: None,
+                    ivf_sq8: None,
+                    bin_ivf_flat: None,
+                    dim,
+                    sparse_wand: None,
+                    sparse_wand_cc: None,
+                    minhash_lsh: None,
+                })
+            }
             CIndexType::BinFlat => {
                 // Binary Flat index for binary vectors with Hamming distance
                 let bin_flat = crate::faiss::BinFlatIndex::new(dim, metric);
@@ -683,6 +725,7 @@ impl IndexWrapper {
                     ivf_rabitq: None,
                     hnsw_sq: None,
                     hnsw_pq: None,
+                    ivf_pq: None,
                     bin_flat: Some(bin_flat),
                     binary_hnsw: None,
                     ivf_sq8: None,
@@ -717,6 +760,7 @@ impl IndexWrapper {
                         ivf_rabitq: None,
                         hnsw_sq: None,
                         hnsw_pq: None,
+                        ivf_pq: None,
                         bin_flat: None,
                         binary_hnsw: Some(hnsw),
                         ivf_sq8: None,
@@ -749,6 +793,7 @@ impl IndexWrapper {
                     ivf_rabitq: None,
                     hnsw_sq: None,
                     hnsw_pq: None,
+                    ivf_pq: None,
                     bin_flat: None,
                     binary_hnsw: None,
                     ivf_sq8: None,
@@ -775,6 +820,7 @@ impl IndexWrapper {
                     ivf_rabitq: None,
                     hnsw_sq: None,
                     hnsw_pq: None,
+                    ivf_pq: None,
                     bin_flat: None,
                     binary_hnsw: None,
                     ivf_sq8: None,
@@ -806,6 +852,7 @@ impl IndexWrapper {
                     ivf_rabitq: None,
                     hnsw_sq: None,
                     hnsw_pq: None,
+                    ivf_pq: None,
                     bin_flat: None,
                     binary_hnsw: None,
                     ivf_sq8: None,
@@ -827,6 +874,7 @@ impl IndexWrapper {
                     ivf_rabitq: None,
                     hnsw_sq: None,
                     hnsw_pq: None,
+                    ivf_pq: None,
                     bin_flat: None,
                     binary_hnsw: None,
                     ivf_sq8: None,
@@ -858,6 +906,8 @@ impl IndexWrapper {
         } else if let Some(ref mut idx) = self.hnsw_pq {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
         } else if let Some(ref mut idx) = self.ivf_sq8 {
+            idx.add(vectors, ids).map_err(|_| CError::Internal)
+        } else if let Some(ref mut idx) = self.ivf_pq {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
         } else if let Some(ref mut idx) = self.sparse_wand {
             // Sparse WAND: interpret vectors as sparse (dim, value) pairs
@@ -968,6 +1018,9 @@ impl IndexWrapper {
         } else if let Some(ref mut idx) = self.ivf_sq8 {
             idx.train(vectors).map_err(|_| CError::Internal)?;
             Ok(())
+        } else if let Some(ref mut idx) = self.ivf_pq {
+            idx.train(vectors).map_err(|_| CError::Internal)?;
+            Ok(())
         } else {
             Err(CError::InvalidArg)
         }
@@ -1035,6 +1088,22 @@ impl IndexWrapper {
                 elapsed_ms,
             ))
         } else if let Some(ref idx) = self.ivf_sq8 {
+            let req = SearchRequest {
+                top_k,
+                nprobe: 8,
+                filter: None,
+                params: None,
+                radius: None,
+            };
+            let start = std::time::Instant::now();
+            let results = idx.search(query, &req).map_err(|_| CError::Internal)?;
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            Ok(ApiSearchResult::new(
+                results.ids,
+                results.distances,
+                elapsed_ms,
+            ))
+        } else if let Some(ref idx) = self.ivf_pq {
             let req = SearchRequest {
                 top_k,
                 nprobe: 8,
@@ -1176,6 +1245,8 @@ impl IndexWrapper {
             idx.count()
         } else if let Some(ref idx) = self.ivf_sq8 {
             idx.ntotal()
+        } else if let Some(ref idx) = self.ivf_pq {
+            idx.ntotal()
         } else if let Some(ref idx) = self.sparse_wand {
             idx.n_rows()
         } else if let Some(ref idx) = self.sparse_wand_cc {
@@ -1195,6 +1266,8 @@ impl IndexWrapper {
         } else if let Some(ref idx) = self.hnsw_prq {
             idx.is_trained()
         } else if let Some(ref idx) = self.ivf_rabitq {
+            idx.is_trained()
+        } else if let Some(ref idx) = self.ivf_pq {
             idx.is_trained()
         } else if let Some(ref idx) = self.hnsw_pq {
             idx.is_trained()
@@ -1233,6 +1306,8 @@ impl IndexWrapper {
             // IvfSq8Index doesn't have size() method yet, estimate based on stored data
             // Use config.dim instead of private field
             idx.ntotal() * 8 // SQ8 uses 8 bits per dimension
+        } else if let Some(ref idx) = self.ivf_pq {
+            idx.ntotal() * self.dim
         } else if let Some(ref idx) = self.sparse_wand {
             idx.size()
         } else if let Some(ref idx) = self.sparse_wand_cc {
@@ -1266,6 +1341,8 @@ impl IndexWrapper {
             "BinaryHNSW"
         } else if self.ivf_sq8.is_some() {
             "IVF_SQ8"
+        } else if self.ivf_pq.is_some() {
+            "IVF_PQ"
         } else if self.bin_ivf_flat.is_some() {
             "BinIVFFlat"
         } else if self.sparse_wand.is_some() {
@@ -1316,6 +1393,8 @@ impl IndexWrapper {
             idx.has_raw_data()
         } else if let Some(ref idx) = self.ivf_sq8 {
             idx.has_raw_data()
+        } else if self.ivf_pq.is_some() {
+            false
         } else if let Some(ref idx) = self.sparse_wand {
             idx.has_raw_data()
         } else if let Some(ref idx) = self.minhash_lsh {
@@ -1338,7 +1417,7 @@ impl IndexWrapper {
             "supported" => "",
             "partial" => "only sparse indexes expose MV-only additional-scalar filtering via the current Rust FFI",
             _ if self.hnsw.is_some() => "HNSW does not expose additional-scalar filtering through the current Rust FFI",
-            _ if self.ivf_sq8.is_some() || self.ivf_rabitq.is_some() => {
+            _ if self.ivf_sq8.is_some() || self.ivf_rabitq.is_some() || self.ivf_pq.is_some() => {
                 "IVF variants do not expose additional-scalar filtering through the current Rust FFI"
             }
             _ if self.scann.is_some() => "ScaNN does not expose additional-scalar filtering through the current Rust FFI",
@@ -1380,6 +1459,12 @@ impl IndexWrapper {
                 get_vector_by_ids: "unsupported",
                 ann_iterator: "unsupported",
                 persistence: "unsupported",
+            }
+        } else if self.ivf_pq.is_some() {
+            IndexCapabilitySummary {
+                get_vector_by_ids: "unsupported",
+                ann_iterator: "unsupported",
+                persistence: "supported",
             }
         } else if self.hnsw_sq.is_some() {
             IndexCapabilitySummary {
@@ -1451,6 +1536,12 @@ impl IndexWrapper {
                 memory_serialize: "unsupported",
                 deserialize_from_file: "unsupported",
             }
+        } else if self.ivf_pq.is_some() {
+            PersistenceSemantics {
+                file_save_load: "supported",
+                memory_serialize: "unsupported",
+                deserialize_from_file: "supported",
+            }
         } else {
             PersistenceSemantics {
                 file_save_load: "unsupported",
@@ -1482,7 +1573,7 @@ impl IndexWrapper {
                 persistence,
                 metadata_granularity: "per-index-capability",
             }
-        } else if self.ivf_sq8.is_some() || self.ivf_rabitq.is_some() {
+        } else if self.ivf_sq8.is_some() || self.ivf_rabitq.is_some() || self.ivf_pq.is_some() {
             IndexMetaSemantics {
                 family: "ivf",
                 raw_data_gate: if self.has_raw_data() { "raw_vectors_retained" } else { "quantized_or_codebook_only" },
@@ -1613,9 +1704,14 @@ impl IndexWrapper {
                 }
                 Err(_) => Err(CError::NotFound),
             }
-        } else if let Some(ref _idx) = self.hnsw {
-            // HnswIndex doesn't have get_vector_by_ids yet
-            Err(CError::NotImplemented)
+        } else if let Some(ref idx) = self.hnsw {
+            match idx.get_vector_by_ids(ids) {
+                Ok(vectors) => {
+                    let num_found = vectors.len() / self.dim;
+                    Ok((vectors, num_found))
+                }
+                Err(_) => Err(CError::NotFound),
+            }
         } else if let Some(ref idx) = self.scann {
             match idx.get_vector_by_ids(ids) {
                 Ok(vectors) => {
@@ -4253,6 +4349,7 @@ mod tests {
         assert_eq!(hnsw_meta_json["semantics"]["persistence"]["deserialize_from_file"], "supported");
         assert_eq!(hnsw_meta_json["capabilities"]["ann_iterator"], "supported");
         assert_eq!(hnsw_meta_json["capabilities"]["persistence"], "supported");
+        assert_eq!(hnsw_meta_json["capabilities"]["get_vector_by_ids"], "supported");
         assert_eq!(hnsw_meta_json["additional_scalar"]["unsupported_reason"], "HNSW does not expose additional-scalar filtering through the current Rust FFI");
         assert_eq!(hnsw_meta_json["resource_contract"]["mmap_supported"], true);
         assert_eq!(hnsw_meta_json["resource_contract"]["disk_bytes"], "estimated_file_bytes");
@@ -4287,6 +4384,37 @@ mod tests {
         assert_eq!(ivf_meta_json["resource_contract"]["mmap_supported"], true);
         knowhere_free_cstring(ivf_meta_ptr);
         knowhere_free_index(ivf);
+
+        let ivfpq = knowhere_create_index(CIndexConfig {
+            index_type: CIndexType::IvfPq,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            num_clusters: 8,
+            nprobe: 2,
+            ..Default::default()
+        });
+        assert!(!ivfpq.is_null());
+        assert_eq!(knowhere_is_additional_scalar_supported(ivfpq, true), 0);
+        let ivfpq_meta_ptr = knowhere_get_index_meta(ivfpq);
+        assert!(!ivfpq_meta_ptr.is_null());
+        let ivfpq_meta_str = unsafe { std::ffi::CStr::from_ptr(ivfpq_meta_ptr) }
+            .to_str()
+            .unwrap();
+        let ivfpq_meta_json: serde_json::Value = serde_json::from_str(ivfpq_meta_str).unwrap();
+        assert_eq!(ivfpq_meta_json["index_type"], "IVF_PQ");
+        assert_eq!(ivfpq_meta_json["semantics"]["family"], "ivf");
+        assert_eq!(ivfpq_meta_json["semantics"]["raw_data_gate"], "quantized_or_codebook_only");
+        assert_eq!(ivfpq_meta_json["semantics"]["persistence_mode"], "file_save_load");
+        assert_eq!(ivfpq_meta_json["semantics"]["persistence"]["file_save_load"], "supported");
+        assert_eq!(ivfpq_meta_json["semantics"]["persistence"]["memory_serialize"], "unsupported");
+        assert_eq!(ivfpq_meta_json["semantics"]["persistence"]["deserialize_from_file"], "supported");
+        assert_eq!(ivfpq_meta_json["capabilities"]["get_vector_by_ids"], "unsupported");
+        assert_eq!(ivfpq_meta_json["capabilities"]["ann_iterator"], "unsupported");
+        assert_eq!(ivfpq_meta_json["capabilities"]["persistence"], "supported");
+        assert_eq!(ivfpq_meta_json["additional_scalar"]["unsupported_reason"], "IVF variants do not expose additional-scalar filtering through the current Rust FFI");
+        assert_eq!(ivfpq_meta_json["resource_contract"]["mmap_supported"], true);
+        knowhere_free_cstring(ivfpq_meta_ptr);
+        knowhere_free_index(ivfpq);
 
         #[cfg(feature = "scann")]
         {
@@ -5191,7 +5319,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_vector_by_ids_hnsw_not_implemented() {
+    fn test_get_vector_by_ids_hnsw() {
         let config = CIndexConfig {
             index_type: CIndexType::Hnsw,
             metric_type: CMetricType::L2,
@@ -5214,10 +5342,18 @@ mod tests {
         let add_result = knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 5, 16);
         assert_eq!(add_result, CError::Success as i32);
 
-        // HNSW get_vector_by_ids should return NULL (NotImplemented)
+        // HNSW get_vector_by_ids should return the stored raw vectors
         let query_ids: Vec<i64> = vec![0];
         let result = knowhere_get_vector_by_ids(index, query_ids.as_ptr(), query_ids.len(), 16);
-        assert!(result.is_null());
+        assert!(!result.is_null());
+
+        let result = unsafe { &*result };
+        assert_eq!(result.num_ids, 1);
+        assert_eq!(result.dim, 16);
+        let returned = unsafe { std::slice::from_raw_parts(result.vectors, result.num_ids * result.dim) };
+        assert_eq!(returned, &vectors[..16]);
+
+        knowhere_free_get_vector_result(result as *const _ as *mut _);
 
         knowhere_free_index(index);
     }

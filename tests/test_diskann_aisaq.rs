@@ -113,3 +113,33 @@ fn load_uses_mmap_backed_data_file() {
     assert!(stats.requests >= 1);
     assert!(loaded.page_cache().is_some());
 }
+
+#[test]
+fn scope_audit_reports_real_flash_skeleton_but_not_native_diskann_parity() {
+    let index = build_index();
+    let audit = index.scope_audit();
+
+    assert_eq!(audit.dim, 4);
+    assert_eq!(audit.node_count, 3);
+    assert_eq!(audit.entry_point_count, 1);
+    assert!(audit.uses_flash_layout);
+    assert!(audit.uses_beam_search_io);
+    assert!(!audit.uses_mmap_backed_pages);
+    assert!(!audit.native_comparable);
+    assert!(
+        audit
+            .comparability_reason
+            .contains("simplified"),
+        "audit should explain why PQFlashIndex is still a constrained AISAQ skeleton"
+    );
+
+    let dir = tempdir().expect("tempdir should build");
+    index.save(dir.path()).expect("save should succeed");
+    let loaded = PQFlashIndex::load(dir.path()).expect("load should succeed");
+    let loaded_audit = loaded.scope_audit();
+
+    assert!(loaded_audit.uses_flash_layout);
+    assert!(loaded_audit.uses_mmap_backed_pages);
+    assert!(loaded_audit.has_page_cache);
+    assert!(!loaded_audit.native_comparable);
+}

@@ -100,18 +100,34 @@ Objective:
 - Put first-priority engineering effort into the core implementation paths that actually determine competitiveness: `DISKANN / HNSW / IVF / PQ`.
 - Prove not only contract stability, but also at least one clear non-GPU performance advantage over native knowhere on a credible core path.
 
-Active scoped tasks:
+Active major tasks:
 
-- `DISKANN-P1-003`: fix Rust DiskANN’s distance-path issues and honestly classify the current `PQCode` simplification before using it in any leadership claim.
-- `PERF-P3-005`: once HNSW recall is trustworthy or a core path becomes recall-credible, generate the first recall-gated native-vs-rs baseline for a single core path (current default priority: `clustered_l2 + HNSW`).
+1. `BASELINE-P3-001`
+   - Build a credible remote x86 native-vs-rs baseline with the same dataset, schema, and recall gate.
+   - Current substage: `PERF-P3-005 / native_public_header_minimal_fix`
+
+2. `HNSW-P3-002`
+   - Turn HNSW into the first serious performance-lead candidate once the baseline is trustworthy.
+
+3. `IVFPQ-P3-003`
+   - Decide whether the real IVF-PQ hot path is performance-lead worthy after an honest, recall-gated audit.
+
+4. `DISKANN-P3-004`
+   - Close the realism gap around Rust DiskANN / PQ so its scope is technically honest and benchmark-comparable.
+
+5. `PROD-P3-005`
+   - Final production acceptance gate after the first four major tasks converge.
 
 Recently closed milestones:
 
 - `IVFPQ-P1-002`: IVF/PQ reality audit is now closed with an honest no-go artifact. `src/faiss/ivf.rs` has been explicitly classified as a placeholder coarse-assignment scaffold, while the real Rust IVF-PQ hot path remains `src/faiss/ivfpq.rs` (centroid search + residual ADC). The focused artifact `benchmark_results/ivfpq_p1_002_focused.json` reports recall@10 ≈ 0.442 with `confidence=recheck required`, so IVF/PQ does not yet qualify as the next performance-lead lane.
 
+- `DISKANN-P1-003`: DiskANN boundary closure is now also closed with an explicit constrained verdict. `src/faiss/diskann.rs` keeps the `l2_sqr -> simd::l2_distance_sq` fix, and `PQCode` is now regression-locked as a mean-quantization placeholder rather than native-comparable PQ. Therefore Rust DiskANN stays classified as a simplified Vamana-style implementation and does not enter the performance-lead lane.
+
 - `HNSW-P1-001`: first remote x86 HNSW before/after artifact chain is now landed and honest about its outcome: recall stayed roughly flat (`0.217 -> 0.215`) while qps jumped (`~1621 -> ~19235`), so the result is archived as `recheck required / no-go` evidence rather than a leadership claim.
 - `CORE-P0-001`: remote x86 SIMD verification lane 已恢复；远端 x86 focused SIMD required gates 已重新通过，`default+simd` 不再因旧 toolchain/脚本漂移缺少可信证据。
 - `PERF-P3-004`: remote x86 native benchmark harness 已打通；`scripts/remote/native_benchmark_probe.sh` 现可补齐 GTest/CMake/Conan runtime 依赖，并成功构建 `benchmark_float_qps`、执行 `--gtest_list_tests`、保持 parser schema 对齐。
+- `PERF-P3-005`: 现在被降级为 `BASELINE-P3-001` 内的一个子阶段，而不是长期独立主线；它的职责只是把 native baseline artifact 链打通或明确记成 `high-cost / no-go`。
 - `SEM-P3-001`: HNSW / IVF / Sparse / ScaNN 的 `GetVectorByIds` / `HasRawData` 语义尾项已完成 focused 收敛；missing-id、empty-index、lossy-index、reorder/raw-data gate 等边界现已具备可审计回归证据。
 - `ABI-P3-002`: FFI metadata / additional-scalar 已从最小稳定摘要提升为逐索引可解释 contract；HNSW / IVF / ScaNN / Sparse 的 capability / unsupported_reason / semantics 字段现已具备 focused FFI 回归覆盖。
 - `PERSIST-P3-003`: persistence / deserialize-from-file 语义矩阵与 focused regressions 已闭环；`file_save_load` / `memory_serialize` / `deserialize_from_file` 三类边界已在 queue/audit/capability docs 中统一为 stable contract。

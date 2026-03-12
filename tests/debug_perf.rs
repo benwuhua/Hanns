@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
 use knowhere_rs::benchmark::average_recall_at_k;
 use knowhere_rs::faiss::{HnswIndex, MemIndex as FlatIndex};

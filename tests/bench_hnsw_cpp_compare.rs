@@ -8,15 +8,50 @@
 //!
 //! 运行：cargo test --release --test bench_hnsw_cpp_compare -- --nocapture
 
+#[cfg(feature = "long-tests")]
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
+#[cfg(feature = "long-tests")]
 use knowhere_rs::benchmark::average_recall_at_k;
+#[cfg(feature = "long-tests")]
 use knowhere_rs::dataset::{load_sift1m_complete, SiftDataset};
+#[cfg(feature = "long-tests")]
 use knowhere_rs::faiss::HnswIndex;
+#[cfg(feature = "long-tests")]
 use knowhere_rs::MetricType;
+use serde_json::Value;
+use std::fs;
+#[cfg(feature = "long-tests")]
 use std::env;
+#[cfg(feature = "long-tests")]
 use std::time::Instant;
 
+const HNSW_FINAL_VERDICT_PATH: &str = "benchmark_results/hnsw_p3_002_final_verdict.json";
+
+fn load_hnsw_final_verdict() -> Value {
+    let content = fs::read_to_string(HNSW_FINAL_VERDICT_PATH)
+        .expect("family verdict artifact must exist for the HNSW compare lane");
+    serde_json::from_str(&content).expect("family verdict artifact must be valid JSON")
+}
+
+#[test]
+fn hnsw_compare_lane_blocks_leadership_claims_until_native_gap_closes() {
+    let verdict = load_hnsw_final_verdict();
+
+    assert_eq!(verdict["family"], "HNSW");
+    assert_eq!(verdict["classification"], "functional-but-not-leading");
+    assert_eq!(verdict["leadership_verdict"], "no_go_for_performance_leadership");
+    assert_eq!(verdict["leadership_claim_allowed"], false);
+    assert!(
+        verdict["summary"]
+            .as_str()
+            .expect("summary must be a string")
+            .contains("14.8x"),
+        "summary must disclose the current throughput gap that blocks leadership claims"
+    );
+}
+
 /// 从 SIFT1M 加载数据集（支持子集）
+#[cfg(feature = "long-tests")]
 fn load_dataset_with_subset(max_vectors: Option<usize>) -> Option<SiftDataset> {
     let path = env::var("SIFT1M_PATH").unwrap_or_else(|_| "./data/sift".to_string());
 
@@ -65,11 +100,13 @@ fn load_dataset_with_subset(max_vectors: Option<usize>) -> Option<SiftDataset> {
 }
 
 /// 从 SIFT1M 加载数据集
+#[cfg(feature = "long-tests")]
 fn load_dataset() -> Option<SiftDataset> {
     load_dataset_with_subset(None)
 }
 
 /// HNSW Benchmark 结果
+#[cfg(feature = "long-tests")]
 struct HnswResult {
     build_time_ms: f64,
     search_time_ms: f64,
@@ -81,6 +118,7 @@ struct HnswResult {
 }
 
 /// 运行 HNSW benchmark
+#[cfg(feature = "long-tests")]
 fn run_hnsw_benchmark(
     dataset: &SiftDataset,
     num_queries: usize,
@@ -151,7 +189,9 @@ fn run_hnsw_benchmark(
     }
 }
 
+#[cfg(feature = "long-tests")]
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_hnsw_vs_cpp_compare() {
     println!("\n=== BENCH-021: HNSW Rust vs C++ 公平对比 ===\n");
 
@@ -254,7 +294,9 @@ fn test_hnsw_vs_cpp_compare() {
     }
 }
 
+#[cfg(feature = "long-tests")]
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_hnsw_quick_compare() {
     // 快速测试 - 使用完整数据集，测试多个 ef_search 配置
     println!("\n=== HNSW Quick Compare (SIFT1M) ===\n");

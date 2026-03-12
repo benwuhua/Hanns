@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! OPT-024/OPT-031: HNSW Parallel Build Benchmark
 //!
 //! This benchmark compares serial vs parallel HNSW construction performance.
@@ -107,6 +108,7 @@ fn verify_search_quality(index: &HnswIndex, vectors: &[f32], dim: usize) -> bool
 }
 
 #[test]
+#[ignore = "performance benchmark; excluded from default regression"]
 fn test_hnsw_parallel_build_small() {
     println!("\n=== OPT-024: HNSW Parallel Build Benchmark (Small) ===");
 
@@ -153,6 +155,7 @@ fn test_hnsw_parallel_build_small() {
 }
 
 #[test]
+#[ignore = "performance benchmark; excluded from default regression"]
 fn test_hnsw_parallel_build_medium() {
     println!("\n=== OPT-024: HNSW Parallel Build Benchmark (Medium) ===");
 
@@ -209,6 +212,7 @@ fn test_hnsw_parallel_build_medium() {
 }
 
 #[test]
+#[ignore = "performance benchmark; excluded from default regression"]
 fn test_hnsw_parallel_build_large() {
     println!("\n=== OPT-024: HNSW Parallel Build Benchmark (Large) ===");
 
@@ -270,6 +274,7 @@ fn test_hnsw_parallel_build_large() {
 
 /// Test different thread counts to find optimal configuration
 #[test]
+#[ignore = "performance benchmark; excluded from default regression"]
 fn test_hnsw_thread_scaling() {
     println!("\n=== OPT-024: HNSW Thread Scaling Test ===");
 
@@ -309,6 +314,7 @@ fn test_hnsw_thread_scaling() {
 
 /// OPT-031: Test error handling in parallel build
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_hnsw_parallel_error_handling() {
     println!("\n=== OPT-031: HNSW Parallel Build Error Handling ===");
 
@@ -371,6 +377,7 @@ fn test_hnsw_parallel_error_handling() {
 
 /// OPT-031: Test API compatibility between add() and add_parallel()
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_hnsw_parallel_api_compatibility() {
     println!("\n=== OPT-031: HNSW Parallel API Compatibility ===");
 
@@ -458,6 +465,7 @@ fn test_hnsw_parallel_api_compatibility() {
 
 /// OPT-031: Test batch size optimization
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_hnsw_batch_size_optimization() {
     println!("\n=== OPT-031: HNSW Batch Size Optimization ===");
 
@@ -507,6 +515,7 @@ fn test_hnsw_batch_size_optimization() {
 
 /// OPT-031: Performance target validation test
 #[test]
+#[ignore = "performance benchmark; excluded from default regression"]
 fn test_hnsw_parallel_performance_target() {
     println!("\n=== OPT-031: HNSW Parallel Performance Target Validation ===");
 

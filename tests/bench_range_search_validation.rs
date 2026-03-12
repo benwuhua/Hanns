@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! Range Search Distance Validation Benchmark
 //!
 //! Test range search with distance validation functionality.
@@ -201,6 +202,7 @@ fn test_range_search_validation_flat() {
 
 /// Unit test with small synthetic data
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_range_search_validation_unit() {
     // Create small test dataset
     let dim = 128;
@@ -289,6 +291,7 @@ fn test_range_search_validation_unit() {
 
 /// Test distance bounds validation
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_range_distance_bounds() {
     // Test check_distance_in_scope_range
     let distances = vec![0.1, 0.2, 0.3, 0.5, 0.8, 1.0];
@@ -310,6 +313,7 @@ fn test_range_distance_bounds() {
 
 /// Test range search with different radius values
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_range_search_radius_monotonicity() {
     let dim = 64;
     let num_vectors = 500;

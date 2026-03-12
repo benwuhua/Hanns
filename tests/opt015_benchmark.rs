@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! OPT-015: HNSW 构建优化 - Benchmark 对比
 //!
 //! 测试不同参数配置对构建时间的影响

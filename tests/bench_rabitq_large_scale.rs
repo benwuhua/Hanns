@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! RaBitQ 大规模召回率测试
 //! 验证 OPT-038 在更大规模数据集上的效果
 //! 目标：R@10 > 80%
@@ -29,6 +30,7 @@ fn compute_recall(approx_ids: &[i64], ground_truth_ids: &[i64], k: usize) -> f32
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_rabitq_large_scale_recall() {
     println!("\n=== RaBitQ 大规模召回率测试 (BENCH-037) ===");
 
@@ -130,6 +132,7 @@ fn test_rabitq_large_scale_recall() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_rabitq_optimal_config() {
     println!("\n=== RaBitQ 最优配置探索 ===");
 

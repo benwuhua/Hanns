@@ -526,22 +526,21 @@ impl BitXor for &BitsetView {
 pub unsafe fn test_batch_avx2(data: &[u8], start_bit: usize) -> bool {
     use std::arch::x86_64::*;
 
-    // Ensure we have enough data
-    if data.len() < 32 {
-        return test_batch_fallback(data, start_bit);
+    let start_byte = start_bit / 8;
+    if start_byte >= data.len() {
+        return true;
     }
 
-    // Load 32 bytes (256 bits) into AVX2 register
-    let ptr = data.as_ptr().add(start_bit / 8);
-    let batch = _mm256_loadu_si256(ptr as *const __m256i);
+    let mut i = start_byte;
+    while i + 32 <= data.len() {
+        let batch = _mm256_loadu_si256(data.as_ptr().add(i) as *const __m256i);
+        if _mm256_testz_si256(batch, batch) == 0 {
+            return false;
+        }
+        i += 32;
+    }
 
-    // Test if all bits are zero
-    // _mm256_testz_si256 returns non-zero if (a & b) == 0
-    // We test batch & batch to check if batch is all zeros
-    let result = _mm256_testz_si256(batch, batch);
-
-    // Returns true if all bits are 0 (none set)
-    result != 0
+    data[i..].iter().all(|&byte| byte == 0)
 }
 
 /// NEON optimized batch test for ARM64
@@ -555,25 +554,23 @@ pub unsafe fn test_batch_avx2(data: &[u8], start_bit: usize) -> bool {
 pub unsafe fn test_batch_neon(data: &[u8], start_bit: usize) -> bool {
     use std::arch::aarch64::*;
 
-    // Ensure we have enough data
-    if data.len() < 16 {
-        return test_batch_fallback(data, start_bit);
+    let start_byte = start_bit / 8;
+    if start_byte >= data.len() {
+        return true;
     }
 
-    // Load 16 bytes (128 bits) into NEON register
-    let ptr = data.as_ptr().add(start_bit / 8);
-    let batch = vld1q_u8(ptr);
+    let mut i = start_byte;
+    while i + 16 <= data.len() {
+        let batch = vld1q_u8(data.as_ptr().add(i));
+        let zero = vdupq_n_u8(0);
+        let cmp = vceqq_u8(batch, zero);
+        if vminvq_u8(cmp) != 0xFF {
+            return false;
+        }
+        i += 16;
+    }
 
-    // Compare with zero vector
-    let zero = vdupq_n_u8(0);
-    let cmp = vceqq_u8(batch, zero);
-
-    // Check if all lanes are 0xFF (meaning all bytes were 0)
-    // vminvq_u8 returns the minimum value across all lanes
-    let min_val = vminvq_u8(cmp);
-
-    // If min_val is 0xFF, all bytes were zero
-    min_val == 0xFF
+    data[i..].iter().all(|&byte| byte == 0)
 }
 
 /// Fallback batch test for generic platforms
@@ -607,15 +604,11 @@ pub unsafe fn count_zero_batch_avx2(data: &[u8]) -> usize {
     while i + 32 <= len {
         let ptr = data.as_ptr().add(i);
         let batch = _mm256_loadu_si256(ptr as *const __m256i);
-
-        // Count set bits using _mm256_popcnt (via _mm256_sad_epu8 trick)
-        // Alternative: use _mm256_cmpeq_epi8 to compare with zero, then count
-        let zero = _mm256_setzero_si256();
-        let cmp = _mm256_cmpeq_epi8(batch, zero);
-
-        // Extract mask and count zeros
-        let mask = _mm256_movemask_epi8(cmp);
-        count += mask.count_ones() as usize;
+        let bytes: [u8; 32] = std::mem::transmute(batch);
+        count += bytes
+            .iter()
+            .map(|&byte| byte.count_zeros() as usize)
+            .sum::<usize>();
 
         i += 32;
     }
@@ -651,19 +644,11 @@ pub unsafe fn count_zero_batch_neon(data: &[u8]) -> usize {
     while i + 16 <= len {
         let ptr = data.as_ptr().add(i);
         let batch = vld1q_u8(ptr);
-
-        // Compare each byte with zero
-        let zero = vdupq_n_u8(0);
-        let cmp = vceqq_u8(batch, zero);
-
-        // Count zero bytes: cmp has 0xFF for zero bytes, 0x00 for non-zero
-        // Use vcntq_u8 to count bits, then shift right by 3 to get byte count
-        // Alternative: use vminvq_u8 to find max, or extract to array
-        let cmp_array: [u8; 16] = std::mem::transmute(cmp);
-        let zero_count = cmp_array.iter().filter(|&&x| x != 0).count();
-
-        // Each zero byte contributes 8 zero bits
-        count += zero_count * 8;
+        let bytes: [u8; 16] = std::mem::transmute(batch);
+        count += bytes
+            .iter()
+            .map(|&byte| byte.count_zeros() as usize)
+            .sum::<usize>();
 
         i += 16;
     }

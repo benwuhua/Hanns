@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! OPT-023: HNSW SIMD Search Performance Test
 //!
 //! This test measures the search performance improvement from SIMD optimization.

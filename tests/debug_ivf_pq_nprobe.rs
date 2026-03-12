@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! 诊断 IVF-PQ 召回率问题 - 测试不同 nprobe 和配置
 //!
 //! 运行: cargo test --release --test debug_ivf_pq_nprobe -- --nocapture

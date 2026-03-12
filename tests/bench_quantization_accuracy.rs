@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! 量化索引精度损失分析 Benchmark
 //!
 //! BENCH-033: 量化索引精度损失分析 - PQ/SQ 的召回率 vs 压缩比权衡
@@ -362,6 +363,7 @@ struct BenchmarkResult {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn bench_quantization_accuracy() {
     println!("╔══════════════════════════════════════════════════════════════╗");
     println!("║  BENCH-033: 量化索引精度损失分析                              ║");

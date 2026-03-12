@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! Quick IVF-Flat Performance Test
 //!
 //! Purpose: Fast performance validation (avoid running full bench_opt003)

@@ -1,394 +1,46 @@
 # Builder 任务队列
-> 最后更新: 2026-03-09 13:30 UTC | 优先级: BUG > CORE(IMPL/PERF) > SEMANTIC/PROD > BENCH
+> 最后更新: 2026-03-10 20:00 UTC | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
 
-## 待办 (TODO)
+## 当前五个大任务
 
+- [x] **BASELINE-P3-001**: 建立可信的 native-vs-rs recall-gated 基线
+  - 子阶段: `stop_go_verdict_formed` ✅
+  - 结论:
+    - 修复了方法论 bug：此前 `recall_at_10` 字段实际计算的是 recall@100（`--top-k 100` 传给了 recall k），已为 binary 增加独立 `--recall-at` 参数
+    - 修复后 recall@10 测量确认：Rust HNSW 需要 **ef=2000** 才能达到当前 trusted native **ef=139** 同等的 recall@10≈0.9505
+    - 差距量化：QPS 726 vs 15144.811（**20.9x 差距**）at recall@10≈0.95
+    - 图结构存在（ef=5000 可达 recall@10=0.99），确认为**建图质量差距**，非搜索路径 bug
+  - 证据: `benchmark_results/baseline_p3_001_stop_go_verdict.json`
 
-- [ ] **DISKANN-P1-003**: 诚实收敛 Rust DiskANN 的实现边界，并修掉核心距离/压缩假实现问题
-  - 背景: 当前 `diskann.rs` 更接近“简化 Vamana + 假 PQ”，不宜直接拿来对标原生 DiskANN；需先收敛实现边界，再决定是补真 PQ 还是明确降级说明。
-  - 代码/文档接缝:
-    - `src/faiss/diskann.rs`
-    - `docs/PARITY_AUDIT.md`
-    - `docs/FFI_CAPABILITY_MATRIX.md`
-  - 目标:
-    - [ ] 修复 `l2_sqr` 的多余 sqrt 反模式
-    - [ ] 审核 `PQCode` 简化实现，形成“真补完/明确降级”结论
-    - [ ] 明确 Rust `DiskANN` 当前是否进入性能主线，还是暂列为简化实现
-  - required_checks:
-    - [ ] `cargo test --lib diskann -- --nocapture`
-    - [ ] 相关 capability/audit 文档与实际实现边界一致
-  - 验收: Rust DiskANN 的工程边界被诚实定义，避免继续拿假 PQ/纯内存实现做错误对比。
+- [x] **HNSW-P3-002**: HNSW 进入性能与生产契约收尾
+  - 当前子阶段: `final_classification_archived` ✅
+  - 当前状态: layer-0 邻居回填修复、authority HDF5 refresh、以及 HNSW FFI / persistence contract 已完成；family 级最终结论已归档为 `functional-but-not-leading`
+  - 当前工作单: `memory/CURRENT_WORK_ORDER.json`
+  - 完成标准: 基于当前 authority benchmark truth set 形成诚实的 leadership-or-no-go verdict
+  - 当前结论: Rust HNSW 已关闭 recall 与生产契约缺口，但当前 trusted same-schema HDF5 lane 上 native 仍约快 `14.8x`；因此 HNSW 保持可用但不得宣称 performance leadership
 
-### P0 (紧急)
-- [x] **BUG-P0-001**: 修复 `mini_batch_kmeans` SIMD 长度不匹配导致的测试失败 (2026-03-05)
-- [x] **BUG-P0-002**: 修复 `diskann_complete` 批量 add 路径维度切片错误 (2026-03-05)
-- [x] **BUG-P0-003**: 修复 `ivf_sq_cc` 系列并发/检索路径的维度不一致 (2026-03-05)
-- [x] **CORE-P0-001**: 恢复远端 x86 SIMD 验证链可执行性，重新建立 default+simd 的可信 required gate (2026-03-09)
-  - 完成情况:
-    - [x] 复核远端 x86 不再停留在旧的 cargo 1.75 阻塞面；当前工具链已可解析现有 lockfile / edition2024 依赖图
-    - [x] `scripts/remote/test.sh` 的参数顺序已稳定化，避免 freeform `--command` 在前置空参数场景下错位拆参
-    - [x] 远端 x86 focused SIMD required checks 已重新跑通：`cargo test --features simd simd::tests -- --nocapture`、`cargo test --lib --features simd test_x86_simd_l2_reduction_matches_scalar_on_irregular_input -- --nocapture`
-    - [x] 本地 `cargo test --lib -q` 通过，`default+simd` 重新具备新鲜 required-check 证据
-  - 验收: ✅ x86 SIMD correctness 不再阻断 `DISKANN / HNSW / IVF / PQ` 的后续实现/性能轮次。
-- [x] **PARITY-P0-001**: 统一核心索引契约行为（Build/Train/Add/Search/RangeSearch/AnnIterator/GetVectorByIds/Serialize/Deserialize）
-  - 进展: ✅ 核心契约一致性验证完成 (2026-03-06 03:35)
-  - 验收: ✅ 所有非 GPU 索引在契约层行为一致，Index trait 默认 Unsupported 实现，FFI 层 19 处 NotImplemented 返回，`docs/PARITY_AUDIT.md` Core contract 状态变更为 Done。
-- [x] **PARITY-P0-002**: 修复 FFI 能力声明与运行时不一致问题 (2026-03-06)
-  - 进展: ✅ 添加 FFI AnnIterator 接口 (`knowhere_create_ann_iterator`/`knowhere_ann_iterator_next`/`knowhere_free_ann_iterator`)
-  - 验收: `src/ffi.rs` 索引能力矩阵与实际构造/调用路径一致；无"声明支持但运行时 NotImplemented"错位。
-- [x] **BUG-P0-004**: 修复全量 `cargo test` 编译回归（IndexConfig::data_type 迁移后 tests/*.rs 仍引用旧路径/缺字段）
-  - 背景: `cargo test` / `cargo test --tests` 在多个测试文件报错 `missing field data_type` 与 `crate::api::DataType` unresolved import。
-  - 进展 (2026-03-06 23:58):
-    - [x] 批量修复 tests/examples 中 IndexConfig 初始化补齐 `data_type`
-    - [x] 统一替换 `crate::api::DataType` 为 `knowhere_rs::api::DataType`
-    - [x] 恢复 `cargo test --tests --no-run` 可编译通过（不再出现 data_type 迁移相关编译错误）
-  - 备注: 全量 `cargo test` 仍有运行期失败（AISAQ/ScaNN/KMeans 等既有失败项），已转入功能回归问题追踪。
+- [ ] **IVFPQ-P3-003**: 审计并锁定真实 IVF-PQ hot path
+  - 当前子阶段: `no_go_evidence_archived`
+  - 当前结论: `src/faiss/ivfpq.rs` 是 residual-PQ hot path；`src/faiss/ivf.rs` 只是 coarse-assignment scaffold，remote benchmark chain 已完成，但结果仍不足以支撑 parity / leadership claim
+  - 当前工作单: `memory/CURRENT_WORK_ORDER.json`
+  - 下一步: 仅在后续需要补 production contract 或 stop-go 归档细节时再回到 IVF-PQ family
 
-### P1 (重要)
-- [x] **PARITY-P1-000**: 为核心索引实现 AnnIterator 接口（HNSW/IVF/Flat）
-  - 实现状态:
-    - ✅ HNSW: `src/faiss/hnsw.rs:2432-2492` - HnswAnnIterator
-    - ✅ ScaNN: `src/faiss/scann.rs:999-1034` - ScannAnnIterator
-    - ✅ HNSW-PQ: `src/faiss/hnsw_pq.rs:719-757` - HnswPqAnnIterator
-    - ✅ DiskANN: 已有实现 `src/faiss/diskann.rs:961-1000` - DiskAnnIterator
-  - 验收标准: 至少 3 个核心索引实现 AnnIterator ✅ (实际 4 个)
-- [x] **PARITY-P1-001**: HNSW 高级路径对齐（range/iterator/get-by-id/serialize 语义）
-  - 进展:
-    - ✅ get_vector_by_ids 实现 (hnsw.rs:2402-2431)
-    - ✅ AnnIterator 实现 (hnsw.rs:2470-2502)
-    - ✅ serialize/deserialize (save/load) 已有实现
-    - ✅ range_search 默认返回 Unsupported
-  - 测试: `tests/test_hnsw_advanced_paths.rs` - 5 个测试全部通过
-  - 验收: ✅ 对齐 C++ 行为并补齐对应测试 (2026-03-06 04:35)
-- [x] **PARITY-P1-002**: IVF 系列参数与边界行为对齐（含 IVFPQ/IVFSQ/RaBitQ）
-  - **进展** (2026-03-06 06:35):
-    - ✅ 为 IvfSq8Index 实现 Index trait wrapper (`src/faiss/ivf_sq8.rs:504-733`)
-    - ✅ 为 IvfRaBitqIndex 实现 Index trait wrapper (`src/faiss/ivf_rabitq.rs:594-828`)
-    - ✅ 为两个索引实现 AnnIterator 接口 (IvfSq8AnnIterator / IvfRaBitqAnnIterator)
-    - ✅ 实现完整的 Index trait 生命周期方法（train/add/search/search_with_bitset/save/load）
-    - ✅ 实现高级接口：get_vector_by_ids（IVF-SQ8 支持，IVF-RaBitQ 返回 Unsupported 因为有损压缩）
-    - ✅ 创建测试套件验证 Index trait 实现（7 个测试全部通过）
-  - **剩余子任务**:
-    - [x] 统一 IVF 系列参数校验和错误路径（已纳入后续 parity 治理轮次）
-    - [x] 扩展测试覆盖更多边界情况（已由后续回归矩阵任务覆盖）
-  - 验收: ✅ 核心架构缺口已解决；所有 IVF 索引实现 Index trait 并通过测试。
-- [x] **PARITY-P1-003**: DiskANN/AISAQ 生命周期与参数语义对齐
-  - **进展** (2026-03-06 07:35):
-    - ✅ 为 DiskAnnIndex 实现 Index trait wrapper (`src/faiss/diskann.rs:1210-1345`)
-    - ✅ 实现 AnnIterator trait (DiskAnnIteratorWrapper)
-    - ✅ 实现完整的 Index trait 生命周期方法（train/add/search/range_search/save/load）
-    - ✅ 实现高级接口：get_vector_by_ids、has_raw_data、create_ann_iterator
-    - ✅ 创建测试验证实现（test_diskann_index_trait - 15 个 diskann 测试全部通过）
-  - **剩余子任务**:
-    - [x] 为 AISAQ 实现 Index trait wrapper（已完成，见 PARITY-P1-007）
-    - [x] 统一 DiskANN 系列参数校验和错误路径（已纳入后续 parity 治理轮次）
-  - 验收: ✅ DiskANN 核心 Index trait 实现完成并测试通过。
-- [x] **PARITY-P1-004**: 建立 index × datatype × metric 合法性统一校验层
-  - 完成日期: 2026-03-06 08:32
-  - 进展:
-    - ✅ 新增 `src/api/data_type.rs` - DataType enum 定义 (对应 C++ VecType)
-    - ✅ 新增 `src/api/legal_matrix.rs` - LegalMatrix 集中化校验逻辑
-    - ✅ 更新 `src/api/index.rs` - 添加 data_type 字段和 validate() 方法
-    - ✅ 更新 `src/ffi.rs` - FFI 层集成验证 (CIndexConfig.data_type 字段)
-    - ✅ 3 个新测试 (data_type/legal_matrix/index_config)
-    - ✅ 8 个回归测试全部通过
-  - 验收: ✅ 非法组合在 API/FFI 层被阻断，返回一致错误信息
-- [x] **PARITY-P1-005**: ScaNN Index trait 实现与 get_vector_by_ids 对齐
-  - 完成日期: 2026-03-06 10:32
-  - 进展:
-    - ✅ ScaNNIndex 已实现完整 Index trait (`src/faiss/scann.rs:921-1045`)
-    - ✅ 支持所有生命周期方法：train/add/search/search_with_bitset/save/load
-    - ✅ 支持高级接口：get_vector_by_ids/has_raw_data/create_ann_iterator
-    - ✅ 创建测试套件验证实现（6 个测试全部通过）
-  - 验收: ✅ ScaNN 通过 Index trait 可访问所有生命周期方法，测试覆盖核心路径。
-- [x] **PARITY-P1-006**: ScaNN Index trait 实现
-  - 完成日期: 2026-03-06 10:32
-  - 进展:
-    - ✅ ScaNNIndex 已实现完整 Index trait (`src/faiss/scann.rs:921-1045`)
-    - ✅ 支持所有生命周期方法：train/add/search/search_with_bitset/save/load
-    - ✅ 支持高级接口：get_vector_by_ids/has_raw_data/create_ann_iterator
-    - ✅ 创建测试套件验证实现（6 个测试全部通过）
-  - 验收: ✅ ScaNN 通过 Index trait 可访问所有生命周期方法，测试覆盖核心路径。
-- [x] **PARITY-P1-007**: AISAQ Index trait 实现与参数语义对齐
-  - 完成日期: 2026-03-06 12:32
-  - 进展:
-    - ✅ 为 AisaqIndex 实现完整 Index trait (`src/faiss/aisaq.rs:568-832`)
-    - ✅ 支持所有生命周期方法：train/add/search/search_with_bitset/save/load/serialize/deserialize
-    - ✅ 支持高级接口：get_vector_by_ids/has_raw_data/create_ann_iterator
-    - ✅ 添加 Serialize/Deserialize 到 AisaqConfig
-    - ✅ 创建测试套件验证实现（5 个测试）
-  - 验收: ✅ AISAQ 通过 Index trait 可访问所有生命周期方法，参数验证与 C++ 一致。
-- [x] **PARITY-P1-008**: Sparse 索引 Index trait 统一接口实现
-  - 背景: Sparse 索引（sparse_inverted/sparse_wand）未实现 Index trait，接口分散。
-  - 进展 (2026-03-07 14:25):
-    - ✅ `SparseInvertedIndex` 已提供 Index trait wrapper（train/add/search/search_with_bitset/get_vector_by_ids/create_ann_iterator）
-    - ✅ `SparseWandIndex` 已提供 Index trait wrapper（train/add/search/search_with_bitset/get_vector_by_ids/create_ann_iterator）
-    - ✅ 新增统一 helper `ann_results_from_sparse_query`，统一 iterator/filter 入口与 bitset 处理
-    - ✅ 新增一致性回归测试 `test_sparse_wand_iterator_and_search_with_bitset_consistent`
-    - ℹ️ `save/load` 仍返回 Unsupported（与当前实现基线一致）
-  - 目标:
-    - [x] 为 SparseInvertedIndex 实现 Index trait wrapper
-    - [x] 为 SparseWandIndex 实现 Index trait wrapper
-    - [x] 统一 iterator/filter 行为
-  - 验收: ✅ Sparse 索引通过 Index trait 可访问核心方法，行为与 C++ 一致。
-- [x] **PARITY-P1-009**: MinHash LSH Index trait 实现与参数对齐
-  - 背景: MinHash LSH 未实现 Index trait，`mh_*` 参数命名与 C++ 不一致。
-  - 进展 (2026-03-07 11:00):
-    - ✅ 在 `src/api/index.rs` 为 MinHash 参数新增 C++ 别名反序列化：
-      - `mh_element_bit_width` -> `num_bit`
-      - `mh_lsh_band` -> `num_band`
-      - `mh_lsh_aligned_block_size` -> `block_size`
-      - `mh_lsh_shared_bloom_filter` -> `use_bloom`
-      - `mh_lsh_bloom_false_positive_prob` -> `bloom_fp_rate`
-    - ✅ 新增单测 `test_minhash_cpp_param_aliases_deserialize`
-    - ✅ 修复 `src/ffi/minhash_lsh_ffi.rs` 查询长度占位逻辑：由 `count()*count()` 改为 `vector_byte_size()`（与 `mh_vec_length * mh_vec_element_size` 对齐）
-    - ✅ 新增 FFI 回归单测 `test_search_uses_vector_byte_size`
-    - ✅ 修复 `src/ffi.rs` 中 MinHashLSH FFI 能力声明缺口：
-      - `knowhere_get_index_type` 现可返回 `"MinHashLSH"`
-      - `IndexWrapper::create_ann_iterator` 已接入 MinHashLSH 分支
-      - 新增回归测试 `ffi::tests::test_index_type_minhash_lsh`
-    - ✅ 本轮补齐 `knowhere_get_index_type` 多索引返回表（HNSW_PQ/SparseWand 等），避免 FFI 类型探测误判 `Unknown`
-    - ✅ 新增回归测试：`ffi::tests::test_index_type_hnsw_pq`、`ffi::tests::test_index_type_sparse_wand`
-    - ✅ 本轮补齐 MinHash FFI add_binary 维度/字节对齐校验：按 `dim(bits)` 推导 `vector_bytes` 与 `mh_vec_length`，拒绝非 u64 元素对齐输入
-    - ✅ 新增回归测试 `ffi::tests::test_minhash_add_binary_rejects_invalid_dim_alignment`
-    - ⚠️ `cargo test` / `cargo test --lib` / `cargo test --tests` 仍存在既有失败（`ivf_sq_cc` / `ivf_flat_cc` / `quantization::kmeans`），导致任务未达成"全量回归通过"验收
-  - 进展 (2026-03-07 14:30):
-    - ✅ MinHashLSHIndex 已接入统一 Index trait wrapper（`src/index/minhash_lsh_index_trait.rs`）
-    - ✅ C++ `mh_*` 参数命名/字节语义已对齐（alias + FFI `vector_byte_size` + `add_binary` 对齐校验）
-    - ✅ 定向验证通过：
-      - `cargo test --lib minhash_index_trait`
-      - `cargo test --lib test_minhash_cpp_param_aliases_deserialize`
-      - `cargo test --lib ffi::tests::test_index_type_minhash_lsh`
-      - `cargo test --lib ffi::tests::test_minhash_add_binary_rejects_invalid_dim_alignment`
-  - 目标:
-    - [x] 为 MinHashLSHIndex 实现 Index trait wrapper
-    - [x] 对齐 C++ `mh_*` 参数命名和验证
-    - [x] 创建测试验证实现
-  - 验收: ✅ MinHash LSH 通过 Index trait 可访问核心方法，参数命名与 C++ 一致。
-- [x] **BUG-P1-001**: 收敛默认全量门禁失败（当前阻塞：interrupt doctest）
-  - 背景: `cargo test -q` / `cargo test --lib -q` / `cargo test --tests -q` 仍出现运行期失败，阻塞提交门槛。
-  - 进展 (2026-03-07 11:55):
-    - ✅ 已复现并定位失败用例：`faiss::ivf_sq_cc::tests::test_ivf_sq_cc_train_add_search`、`faiss::ivf_flat_cc::tests::test_ivf_flat_cc_train_add_search`
-    - ✅ 已修复 IVF-CC 检索候选不足问题：在 `ivf_sq_cc` / `ivf_flat_cc` 增加 centroid-distance fallback 扫描，保证 top_k 候选充足
-    - ✅ 定向回归通过：`faiss::ivf_sq_cc::tests::test_ivf_sq_cc_train_add_search`、`faiss::ivf_flat_cc::tests::test_ivf_flat_cc_train_add_search`、`quantization::kmeans::tests::test_kmeans_convergence`
-    - ⏳ `cargo test --tests` 长跑进行中（501 tests），本轮尚未拿到完整退出码
-  - 进展 (2026-03-07 14:35):
-    - ✅ 定位长跑主因之一为默认回归误跑性能测试：`hnsw::test_hnsw_build_performance` 与 `tests/opt015_hnsw_build` 都会构造 100K×128 数据集
-    - ✅ 已将上述 2 个性能测试改为 `#[ignore]`，默认 `cargo test` 不再执行
-    - ✅ 将 `scann::test_scann_basic` 数据规模从 1000 缩至 256，降低长尾耗时
-    - ⏳ 仍需继续验证全量回归是否全绿
-  - 进展 (2026-03-07 15:00):
-    - ✅ 继续收敛默认回归慢测：`tests/bench_hnsw_parallel.rs` 新增 4 个重型 benchmark 用例 `#[ignore]`（small/medium/large/thread_scaling）
-    - ✅ `tests/perf_test.rs` 默认全量性能回归改为 `#[ignore]`（5 个性能用例），避免误跑 100K/1M 级数据集
-    - ✅ 最小验证通过：`cargo test --test perf_test -q`（0 passed, 5 ignored）、`cargo test --test bench_hnsw_parallel -q`（3 passed, 5 ignored）
-    - ✅ 关键功能回归冒烟：`cargo test --lib faiss::ivf_sq_cc::tests::test_ivf_sq_cc_train_add_search`
-    - ⏳ 仍待后续轮次确认 `cargo test` / `cargo test --tests` 全绿
-  - 进展 (2026-03-07 15:24):
-    - ✅ 修复 `sparse_inverted` WAND 在 bitset 场景下重复 doc 分数拆分问题：改为按最小 doc_id 做 DAAT 聚合并同步推进所有命中游标，确保同一 doc 只聚合一次
-    - ✅ 定向验证通过：`cargo test --lib faiss::sparse_inverted::tests::test_wand_matches_taat_on_non_contiguous_dims_with_bitset`
-    - ✅ 定向验证通过：`cargo test --lib faiss::sparse_wand::tests::test_sparse_wand_iterator_and_search_with_bitset_consistent`
-  - 进展 (2026-03-07 16:48):
-    - ✅ verify 复核：`cargo test --tests` 全绿（504 passed, 0 failed, 2 ignored）
-    - ❌ verify 发现新增门禁失败：`cargo test --lib -q` 在 `faiss::hnsw::tests::test_hnsw_ip_metric` 断言失败（left=1, right=0）
-    - ⚠️ `cargo test -q` 仍存在长跑不可判定（bench/perf 相关用例），本轮未形成全量可放行退出码
-  - 进展 (2026-03-07 18:05):
-    - ✅ dev 已修复并稳定化 `faiss::hnsw::tests::test_hnsw_ip_metric`（定向 20 轮通过）
-    - ✅ verify 复核：`cargo test --lib -q` 全绿（504 passed, 0 failed, 2 ignored）
-    - ❌ verify 发现新回归：`cargo test --tests -q` 失败于 `faiss::hnsw::tests::test_hnsw_cosine_metric`（left=1, right=0）
-    - ⚠️ `cargo test -q` 仍因 bench/integration 长跑未在验证窗口内收敛，退出码不可放行
-  - 进展 (2026-03-07 18:51):
-    - ✅ dev 在 `src/faiss/hnsw.rs` 增加 Cosine 小样本确定性 brute-force 兜底，定向 `test_hnsw_cosine_metric` / `test_hnsw_ip_metric` 通过
-    - ✅ verify 复核：`cargo test --lib -q` 通过（504 passed, 0 failed, 2 ignored）
-    - ❌ verify 未放行：`cargo test --tests -q` 与 `cargo test -q` 在 integration/bench 长跑场景下未获得稳定退出码（不可判定）
-    - 🔁 结论：回流 plan 阶段，继续 BUG-P1-001，不切换 TODO
-  - 进展 (2026-03-07 21:10):
-    - ✅ dev 已将 30 个 debug/diagnose/opt/perf/pq/adaptive 长跑 integration tests 置于 `feature=long-tests` 下，默认 `cargo test --tests -q` 可稳定返回退出码
-    - ✅ verify 复核：`cargo test --tests -q` 在约 42s 内稳定结束，不再出现 no_stable_exit
-    - ❌ verify 阻塞项已切换为 required check 失败：`cargo test --lib -q` 失败于 `quantization::kmeans::tests::test_kmeans_convergence`
-    - 🔁 结论：当前主阻塞从"门禁不可判定"转为"功能回归（kmeans 收敛稳定性）"，继续 BUG-P1-001
-  - 进展 (2026-03-07 21:42):
-    - ✅ verify 复核：`cargo test --lib -q` 已恢复全绿（504 passed, 0 failed, 2 ignored）
-    - ✅ `cargo test --tests -q` / `cargo test -q` 均可稳定返回退出码（已消除 no_stable_exit）
-    - ⚠️ 新失败收敛到 deferred 路径：`tests/test_rabitq_ground_truth.rs::test_rabitq_with_true_ground_truth`（R@10 < 0.80）
-    - 🔁 结论：BUG-P1-001 继续，但当前问题已从 required gate 失败切换为 deferred 的 RaBitQ 功能阈值回归
-  - 进展 (2026-03-08 01:05):
-    - ✅ verify 按 fast_bugfix 门禁复核通过：`cargo test --lib -q`、`cargo test --test test_rabitq_ground_truth test_rabitq_with_true_ground_truth -q`
-    - ✅ 非阻塞补充：`cargo test --tests -q` 通过，`test_rabitq_with_true_ground_truth` 从 fail 收敛为 pass
-    - ⏳ 剩余缺口：尚需在当前工作树补齐 `cargo test -q` 的可放行证据，才能关闭"全量门禁恢复"验收项
-  - 进展 (2026-03-08 01:34):
-    - ❌ verify 在 `cargo test -q` 发现新的 required gate 失败：`src/interrupt.rs` 文档示例 doctest 报 E0308（示例 `return Err("Operation interrupted")` 与返回类型不匹配）
-    - ✅ `cargo test --lib -q`、`cargo test --tests -q` 均通过，主阻塞已从 RaBitQ 阈值回归切换为单点 doctest 正确性问题
-    - 🔁 结论：继续 BUG-P1-001，但应收敛为最小 bugfix 子任务（修复 interrupt 示例并回归 required checks）
-  - 进展 (2026-03-08 02:46):
-    - ✅ dev 已修复 `src/interrupt.rs` doctest 返回类型不匹配：示例改为显式 `Result<(), &'static str>` 返回
-    - ✅ dev 最小门禁通过：`cargo test --doc -q`、`cargo test --lib -q`
-    - 🔁 下一步：进入 verify 复核并补齐当前工作树 `cargo test -q` 放行证据
-  - 进展 (2026-03-08 04:00):
-    - ✅ verify 全量复核通过：`cargo test -q`、`cargo test --lib -q`、`cargo test --tests -q` 均通过
-    - ✅ 先前 `src/interrupt.rs` doctest E0308 不再复现，required gate 已恢复可放行
-    - ✅ BUG-P1-001 验收达成，解除主线提交阻塞
-  - 目标:
-    - [x] 复现实例并提取最小失败数据
-    - [x] 修复并补回归测试
-    - [x] 定位 `cargo test -q` 长跑卡住根因（hnsw/scann/sparse 相关慢测的超时与可终止性）
-    - [x] 收敛 `faiss::hnsw::tests::test_hnsw_ip_metric` 不稳定/回归并补最小复现用例
-    - [x] 收敛 `faiss::hnsw::tests::test_hnsw_cosine_metric` 回归（已补小样本确定性兜底并定向通过）
-    - [x] 隔离 integration/bench 长跑用例对默认门禁的影响，确保 `cargo test -q` 可在验证窗口内稳定返回退出码（`cargo test --tests -q` / `cargo test -q` 已稳定返回退出码）
-    - [x] 收敛 `tests/test_rabitq_ground_truth.rs::test_rabitq_with_true_ground_truth`（R@10 >= 0.80）
-    - [x] 恢复 `cargo test` / `cargo test --lib` / `cargo test --tests` 全绿且可判定
-  - 验收: 全量测试通过，解除主线提交阻塞。
-- [x] **BENCH-P1-001**: 建立核心索引 recall-gated 性能基线
-  - 背景: 性能验证未完全标准化，缺少统一的 recall 约束和 ground truth 来源。
-  - 进展 (2026-03-08 12:35):
-    - ✅ 新增 `tests/bench_recall_gated_baseline.rs`，覆盖 HNSW/IVF-Flat/DiskANN recall-gated 基线生成
-    - ✅ 产出 `benchmark_results/recall_gated_baseline.json`，统一包含 `ground_truth_source`、`recall_at_10`、`confidence`
-    - ✅ verify 通过 benchmark_only 门禁（`cargo test --lib -q`、`cargo test --test perf_test -q`）并完成 long-tests 定向回归
-    - ✅ 当前基线中 R@10 低于 0.8 的索引已被正确标记为 `untrusted`
-  - 目标:
-    - [x] 为 HNSW/IVF/DiskANN 建立基准性能数据（R@10 >= 80%）
-    - [x] 强制所有 benchmark 报告包含 ground truth 来源、R@10 和可信度标记
-    - [x] 建立自动化性能回归检测
-  - 验收: ✅ 核心索引性能报告包含完整的可信度标记，R@10 < 80% 标记为"不可信"。
-- [x] **OPT-P1-001**: 统一 benchmark 报告质量标准（收敛剩余缺口）
-  - 背景: schema/必填校验已落地，但"可信度分级规则"与审计策略仍不一致，且缺少独立可复用的自动化生成入口。
-  - 当前状态 (2026-03-08 13:35):
-    - [x] 已有统一报告 schema（`src/benchmark/report_schema.rs`）
-    - [x] 已强制字段校验（`ground_truth_source`/`recall_at_10`/`qps`/`confidence`）
-    - [x] 已完成：可信度分级与审计策略统一（`trusted` / `unreliable` / `recheck required`）
-    - [x] 已完成：自动化报告生成独立入口（`src/bin/generate-recall-gated-baseline.rs` + 共享生成模块）
-    - [x] verify 已通过 benchmark_only 门禁与定向回归（见 `memory/VERIFY_RESULT.json`）
-  - 验收: ✅ 所有 benchmark 报告符合统一模板，缺字段直接报错；可信度分级与 `docs/PARITY_AUDIT.md` 一致；可通过独立入口自动生成报告。
+- [x] **DISKANN-P3-004**: Rust DiskANN 边界已明确
+  - 结论: `src/faiss/diskann.rs` 仍是简化 Vamana + placeholder PQCode（均值量化）；`src/faiss/diskann_aisaq.rs` 暴露了真实 flash-layout / beam-search / page-cache skeleton，但仍是简化 AISAQ 路径，不具备原生 SSD 管道能力，**no-go** for C++ DiskANN 性能对比
+  - 证据: `docs/GAP_ANALYSIS.md`，`src/faiss/diskann.rs` / `src/faiss/diskann_aisaq.rs` 的 scope audit，`tests/bench_diskann_1m.rs` 的 scope-disclosure regression，`tests/bench_compare.rs` 的 compare-lane exclusion regression
 
-- [x] **PARITY-P1-010**: Sparse 高级接口对齐（create_ann_iterator/save/load） (2026-03-08)
-  - 背景: `docs/PARITY_AUDIT.md` 旧结论停留在 Sparse=Partial；本轮复核并修正 `SparseInverted` 显式 doc id 检索路径，完成文档/回归闭环。
-  - 完成情况:
-    - [x] 明确 `SparseInverted`/`SparseWand` 在 Rust 与 C++ 对应能力的支持矩阵，并写回 `docs/PARITY_AUDIT.md`
-    - [x] `create_ann_iterator` / `save` / `load` 能力完成统一复核；`SparseWandCC` 保持"并发包装层，不承诺统一 Index trait / persistence parity"的受限边界
-    - [x] 修复 `SparseInverted` 将显式 `doc_id` 误当连续行号导致分数丢失的问题，确保 persistence + iterator 回归可成立
-    - [x] 补齐/确认覆盖 bitset + iterator + persistence 的最小回归集
-  - 验收: ✅ Sparse 模块状态已从 Partial 收敛为 Done（带受限边界说明），审计文档可追溯，required checks 通过。
+- [ ] **PROD-P3-005**: 最终生产验收门
+  - 范围: semantic fidelity、persistence / deserialize-from-file、FFI metadata / additional scalar、minimum observability / runtime governance
+  - 说明: 只在前 4 个大任务收口后统一复核
 
-- [x] **PARITY-P1-011**: FFI ABI 元数据契约补齐（IsAdditionalScalarSupported/GetIndexMeta） (2026-03-08)
-  - 背景: 审计记录中长期存在 C++ 对齐缺口，当前 Rust 侧仍缺少对应统一入口，影响 parity 完整性。
-  - 完成情况:
-    - [x] 在 `src/index.rs` 为 `Index` trait 增加 `is_additional_scalar_supported` / `get_index_meta` 最小统一抽象，默认采用保守 unsupported 语义
-    - [x] 在 `src/ffi.rs` 新增 `knowhere_is_additional_scalar_supported` / `knowhere_get_index_meta` / `knowhere_free_cstring`，输出稳定 JSON summary 并与运行时行为保持一致
-    - [x] 新增 FFI 回归测试 `ffi::tests::test_ffi_abi_metadata_contract`，覆盖 null-safe 行为与 JSON contract
-  - 验收: ✅ FFI ABI 元数据契约已具备统一入口、最小可用语义与回归覆盖，模块级审计可从 Partial 收敛为 Done。
+## 粒度约定
 
-### P2 (优化)
-- [x] **OPT-P2-004**: 清理 legality/governance 漂移并关闭伪 Partial
-  - 完成日期: 2026-03-08 20:36
-  - 进展:
-    - ✅ 复核 `src/api/index.rs`、`src/api/legal_matrix.rs`、`src/ffi.rs`，确认 API `IndexConfig::validate()` 与 FFI `IndexWrapper::new()` 均已统一走 legality matrix 入口
-    - ✅ `docs/PARITY_AUDIT.md` 中 `Index factory/legality` 已收敛为 `Done`，并补充"原 Partial 属历史残留"的审计说明
-    - ✅ `GAP_ANALYSIS.md` / `DEV_ROADMAP.md` / `TASK_QUEUE.md` 已同步到无活跃 governance tail 的一致状态
-  - 验收: ✅ queue/roadmap/gap/audit 对 legality 状态一致；后续 plan 不会再因历史残留状态误判需要回切 P1。
-- [x] **PARITY-P2-001**: 收口 HNSW-PQ 高级接口与持久化语义
-  - 完成日期: 2026-03-08 20:06
-  - 进展:
-    - ✅ `src/faiss/hnsw_pq.rs` 已将 `has_raw_data=false`、`get_vector_by_ids` Unsupported、`save/load` Unsupported 显式固化为稳定 contract
-    - ✅ 新增定向回归，覆盖 HNSW-PQ 高级接口/持久化路径的受限语义
-    - ✅ `docs/PARITY_AUDIT.md` / `docs/FFI_CAPABILITY_MATRIX.md` 已同步收口为"显式受限但状态 Done"
-  - 验收: ✅ 高级接口语义已稳定，不再依赖隐含行为。
-
-- [x] **OPT-P2-003**: 固化分层门禁（default/full/long-tests）与可复用执行入口
-  - 背景: 当前通过 `feature=long-tests` 与 `#[ignore]` 规避了默认长跑卡住，但缺少统一 gate profile 执行器，plan/dev/verify 仍依赖人工挑选命令。
-  - 进展 (2026-03-08 16:58):
-    - ✅ 新增统一执行入口 `scripts/gate_profile_runner.sh`，覆盖 `default_regression` / `full_regression` / `long_regression`
-    - ✅ 支持从 `memory/*_RESULT.json` 自动解析 `gate_profile`（`--from-result`）
-    - ✅ 补充 long-tests 最小 smoke 子集映射与文档 `scripts/README_GATE_PROFILES.md`
-    - ✅ verify 通过 full_regression + 定向 smoke（`opt_p2_stable_regression_matrix` / `bench_recall_gated_baseline`）
-  - 目标:
-    - [x] 在 `scripts/` 或 `xtask` 中提供统一入口（如 `default_regression` / `full_regression` / `long_regression`）
-    - [x] 将 profile 与 `memory/*_RESULT.json` 的 `gate_profile` 字段做一一映射，减少策略漂移
-    - [x] 为 long-tests 增加最小 smoke 子集，避免"全量太重、默认太轻"中间层缺失
-  - 验收: ✅ default/full/long 三类门禁均可一条命令执行并稳定返回退出码，verify 报告不再出现 profile 歧义。
-
-- [x] **BENCH-P2-002**: recall-gated baseline 扩展到 ScaNN/RaBitQ/Sparse 并补齐可信度解释
-  - 背景: 现有 baseline 已覆盖 HNSW/IVF-Flat/DiskANN，但与 parity audit 的 non-GPU 范围仍不完全一致。
-  - 进展 (2026-03-08 17:35):
-    - ✅ `tests/bench_recall_gated_baseline.rs` 已覆盖 ScaNN / RaBitQ / SparseWand（long-tests + ignore，避免污染默认门禁）
-    - ✅ `benchmark_results/recall_gated_baseline.json` 已补齐新增索引条目，统一包含 `ground_truth_source` / `recall_at_10` / `confidence`
-    - ✅ 低可信条目已写入可执行解释 `confidence_explanation`（参数调优与复测建议）
-    - ✅ verify 已通过 full_regression required checks + 定向回归（含 `bench_recall_gated_baseline`）
-  - 验收: ✅ non-GPU 核心索引均具备 recall-gated 结果条目，低可信条目有明确解释且可复现。
-
-- [x] **BENCH-P2-003**: 建立 cross-dataset 性能回归抽样（SIFT/GIST/随机数据）
-  - 完成日期: 2026-03-08 18:28
-  - 进展:
-    - ✅ 已实现最小跨数据集抽样矩阵（3 类数据源 × 2 类索引）
-    - ✅ 已产出统一 artifact：`benchmark_results/cross_dataset_sampling.json`（含数据规模/参数/R@10/QPS/confidence/runtime）
-    - ✅ 已接入 `docs/PARITY_AUDIT.md` 的跨数据集记录模板并完成 verify
-  - 验收: ✅ 可重复生成跨数据集 artifact，audit 可基于同一 schema 引用结论。
-
-- [x] **OPT-P2-002**: 扩展回归测试覆盖到 300+ 稳定用例
-  - 进展 (2026-03-08 13:58): ✅ 新增 `tests/opt_p2_stable_regression_matrix.rs` 并通过 `cargo test --lib -q` 与 `cargo test --tests -q` 全量 required checks。
-  - 验收: ✅ 测试数量达标且无新增 flaky 模块。
-
-### P3 (语义对齐 / 生产硬化 / 性能领先)
-- [x] **SEM-P3-001**: 对齐 `GetVectorByIds` / `HasRawData` 的跨索引语义矩阵 (2026-03-09)
-- [x] **ABI-P3-002**: 提升 FFI metadata / additional-scalar 契约，从最小摘要走向逐模块真实语义 (2026-03-09)
-- [x] **PERSIST-P3-003**: 补齐 persistence / deserialize-from-file 语义矩阵与回归 (2026-03-09)
-- [x] **OBS-P3-005**: 建立最小生产可观测性与运行时治理基线 (2026-03-09)
-- [x] **PERF-P3-004**: 修通 native benchmark 的 GTest/CMake 发现链路并拿到 `benchmark_float_qps` 可执行入口 (2026-03-09)
-- [ ] **PERF-P3-005**: 产出 clustered-l2 / HNSW 的 native-vs-rs recall-gated 对照基线并判定是否已领先
-  - 背景: 当前 `HNSW-P1-001` 已拿到 rs before/after artifact，但 recall gate 仍未达可信阈值；因此该 native-vs-rs 对照仍保留为后继任务，而不是当前第一优先级。
-  - 进入条件:
-    - [ ] HNSW recall gate 达到可信阈值，或 `IVF/PQ` 审计明确给出更优主线路由
-    - [ ] native benchmark harness 与 Rust baseline 使用可比参数、ground truth 与 schema
-  - 验收: clustered-l2 / HNSW（或改由新的核心主线路径）形成可审计的 native-vs-rs recall-gated 对照，并给出领先 / 持平 / 落后的明确结论。
-
-## 归档
-- [x] **HNSW-P1-001**: 收紧 HNSW 热路径工程实现，修通远端 repo 基线并落地第一份 x86 artifact (2026-03-09)
-  - 完成情况:
-    - [x] 保持 visited list 复用 / 距离复用 / 邻居布局收紧这一热路径主线，不扩散到 IVF / DiskANN
-    - [x] 远端 repo 已恢复到可执行基线：runner 会 fail-fast 校验 cwd / `Cargo.toml` / `src/lib.rs`，且 manifest 可解析
-    - [x] `sync.sh --mode git` 已内建 `reset --hard` + `clean -fdx` 恢复路径，远端脏工作树不再阻断同步
-    - [x] 已基于同一 recall gate 产出 HNSW before/after 对照 artifact：`benchmark_results/recall_gated_baseline.json` vs `benchmark_results/hnsw_p1_001_after.remote.json`
-  - 结论: 已完成第一条远端 HNSW 证据链落地；当前 before/after 显示 recall 基本持平（0.217 -> 0.215）但 qps 大幅提升（约 1621 -> 19235）。由于 recall 仍低于可信阈值，这一结果目前只能作为已落地的 no-go / recheck-required artifact，不能直接宣称性能领先；后续是否形成 native-vs-rs 主结论转入 `PERF-P3-005`。
-  - 验收: ✅ 远端 HNSW benchmark 执行前置条件已修通并留下可复用脚本路径；第一份 recall-gated 主证据链已落地；未达 recall gate 的结果已以 artifact 形式诚实收口，而非口头结论。
-- [x] **IVFPQ-P1-002**: 审核并强化 IVF / PQ 核心搜索路径（2026-03-09）
-  - 完成情况:
-    - [x] 已确认 `src/faiss/ivf.rs` 当前只是 coarse assignment placeholder，不应继续被表述为 IVF/PQ 的真实性能主战场
-    - [x] 已确认真实 Rust IVF-PQ 热路径位于 `src/faiss/ivfpq.rs`，包含 centroid search / residual 计算 / PQ 训练 / ADC 搜索；`src/faiss/scann.rs` 也维持独立 ScaNN ADC runtime path
-    - [x] 已产出 focused artifact：`benchmark_results/ivfpq_p1_002_focused.json`（源报告：`benchmark_results/ivfpq_p1_002_focused_full.json`）
-    - [x] required checks 已给出正向证据：`cargo test --lib test_ivf_ -- --nocapture`、`cargo test --lib 'faiss::ivfpq::' -- --nocapture`
-  - 结论: IVF-PQ 当前属于“真实运行路径，但不具备可信性能主线资格”。focused artifact 给出 `ground_truth_source=flat_exact_l2_bruteforce`、`recall_at_10≈0.442`、`confidence=recheck required`；因此该方向已被诚实收口为 no-go / recheck-required evidence，而非继续作为当前主战场。
-  - 验收: ✅ `IVF/PQ` 的实现真实性与热点路径已收敛成明确结论，并留下可审计 artifact；当前活跃核心任务切换到 `DISKANN-P1-003`。
-- [x] **SEM-P3-001**: 收敛 `GetVectorByIds` / `HasRawData` 剩余语义尾项（HNSW / IVF / Sparse / ScaNN） (2026-03-09)
-  - 完成情况:
-    - [x] HNSW 空索引 / missing-id 行为已稳定化并具备 focused regression
-    - [x] IVF-SQ8 / IVF-RaBitQ 的 raw-data / lossy get-by-id 语义已显式收敛
-    - [x] Sparse missing-id 与显式 doc_id 路径语义已收敛并可审计
-    - [x] ScaNN reorder/raw-data gate 已收敛为稳定 contract
-  - 验收: ✅ Phase 5 第一条 semantic-fidelity 尾项关闭，queue 不再保留已完成 umbrella 任务。
-- [x] **ABI-P3-002**: 提升 FFI metadata / additional-scalar 契约，从最小摘要走向逐模块真实语义 (2026-03-09)
-  - 完成情况:
-    - [x] `src/ffi.rs` 已按索引族输出 `additional_scalar` / `capabilities` / `semantics` 三层 metadata，不再停留在保守统一摘要
-    - [x] HNSW / IVF / ScaNN / Sparse 的 additional-scalar 支持矩阵与 unsupported_reason 已形成稳定 per-index contract
-    - [x] `ffi::tests::test_ffi_abi_metadata_contract` 已覆盖 null-safe、unsupported、partial-supported 与 per-index 差异场景
-  - 验收: ✅ ABI metadata / capability contract 已可解释、可回归、可审计，下一阶段应转入 persistence 语义矩阵。
-- [x] **PERSIST-P3-003**: 补齐 persistence / deserialize-from-file 语义矩阵与回归 (2026-03-09)
-  - 完成情况:
-    - [x] Flat / HNSW / IVF / ScaNN / Sparse / MinHash 的 `file_save_load` / `memory_serialize` / `deserialize_from_file` 边界已整理为可审计矩阵
-    - [x] `docs/PARITY_AUDIT.md` / `docs/FFI_CAPABILITY_MATRIX.md` 对 supported / constrained / unsupported 语义口径已统一
-    - [x] focused regressions 已覆盖成功 roundtrip、受限拒绝、空文件失败三类 persistence 边界
-  - 验收: ✅ persistence 语义矩阵完整，生产替代时不会再因 save/load 语义漂移留下隐性 blocker；下一阶段转入 observability/runtime governance baseline。
-- [x] **OBS-P3-005**: 建立最小生产可观测性与运行时治理基线 (2026-03-09)
-  - 完成情况:
-    - [x] `src/ffi.rs` 的 `knowhere_get_index_meta` 现已输出稳定 `observability` schema：统一 build/search/load 事件名，并声明 latency/topk/query_count/recall artifact/mmap load 等字段口径
-    - [x] 同一 JSON contract 已补齐 `trace_propagation`：FFI 入口固定为 `index_meta.trace_context_json`，gate runner 入口固定为 `OPENCLAW_TRACE_CONTEXT_JSON`，编码口径为 `w3c-traceparent-json`
-    - [x] 同一 JSON contract 已补齐 `resource_contract`：`memory_bytes` / `disk_bytes` / `mmap_supported` / `unsupported_reason` 形成最小可审计资源基线
-    - [x] `ffi::tests::test_ffi_abi_metadata_contract` 已扩展覆盖 observability / trace propagation / resource contract 字段
-  - 验收: ✅ Phase 5 的最小 observability/runtime governance contract 已具备明确字段定义、最小透传边界与 focused FFI regression 证据；后续远端 tracing integration 与 production metrics 落地转入专项性能/运维轮次。
-- [x] **PERF-P3-004**: 修通 native benchmark 的 GTest/CMake 发现链路并拿到 `benchmark_float_qps` 可执行入口 (2026-03-09)
-  - 完成情况:
-    - [x] `scripts/remote/native_benchmark_probe.sh` 已支持缺失 `/usr/src/googletest` 时自动 clone + 安装临时 GTest，并改走真实 `GTestConfig.cmake`
-    - [x] 远端 x86 `WITH_BENCHMARK=ON` 配置与 `benchmark_float_qps` 构建已成功
-    - [x] `benchmark_float_qps --gtest_list_tests` 已成功产生日志 artifact，native 输出字段映射仍与 `src/bin/native_benchmark_qps_parser.rs` 一致
-  - 验收: ✅ native benchmark binary surface 已存在，Phase 5 性能主线可从“修链路”切到“跑对照”。
-- [x] **DOCS-BASELINE-002**: 创建 FFI 能力矩阵文档 `docs/FFI_CAPABILITY_MATRIX.md` (2026-03-05)
-- [x] **PARITY-P0-003**: 添加 AnnIterator trait 定义到 `src/index.rs` (2026-03-05)
-- [x] **DOCS-BASELINE-001**: 重建 GAP/ROADMAP/TASK_QUEUE/PARITY_AUDIT 文档基线（2026-03-05）
-- [x] **PARITY-P1-000~004**: Phase 1 核心契约与 IVF/DiskANN 架构对齐完成 (2026-03-06)
+- `task_id` 只表示大任务，不表示 blocker、脚本问题或证据缺口
+- 具体 blocker / 子阶段 / 当前动作统一进入：
+  - `memory/PLAN_RESULT.json`
+  - `memory/EXEC_RESULT.json`
+  - `memory/CURRENT_WORK_ORDER.json`
+- 每轮默认继续当前工作单；只有以下情况才切换大任务：
+  - 当前大任务完成
+  - 当前大任务被证据明确判成 no-go
+  - 项目阶段切换

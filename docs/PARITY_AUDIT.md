@@ -4,6 +4,20 @@ Last updated: 2026-03-09 21:03
 Sync baseline: 4f60908fc9ad7438b4b8ff64210481ab281009b0 from origin/main
 
 ## 轮次记录
+- 2026-03-12 02:00: **builder-loop：收口 `HNSW-P3-002`，将 HNSW family 归档为 functional-but-not-leading（plan+exec）**
+  1. 复核输入：`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`feature-list.json`、`benchmark_results/baseline_p3_001_same_schema_hnsw_hdf5.json`、`benchmark_results/baseline_p3_001_stop_go_verdict.json`、`tests/test_baseline_methodology_lock.py`、`tests/bench_hnsw_cpp_compare.rs`。
+  2. 阶段结论：layer-0 repair、same-schema HDF5 refresh、以及 HNSW FFI / persistence contract 已全部形成 authority-backed 证据链；HNSW 不再缺 recall 或 production contract 事实。
+  3. 本轮执行：新增 `benchmark_results/hnsw_p3_002_final_verdict.json`，把 HNSW family 级最终分类固化为 `functional-but-not-leading`，同时保留 baseline artifact 的 narrower `no_go_for_performance_leadership` 结论；并将 `tests/bench_hnsw_cpp_compare.rs` 改为默认 lane 的 verdict regression，而不是 `0 tests` 空壳。
+  4. 治理同步：`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`task-progress.md`、`feature-list.json`、`memory/CURRENT_WORK_ORDER.json` 已统一写回 HNSW 收口状态，下一条工作切到 IVF-PQ production contract。
+  5. 后续主缺口：不再围绕 HNSW 继续做无边界性能调参；下一阶段应推进 IVF-PQ 的 FFI / persistence / metadata contract closure，并把最终生产验收保留到 family verdict 全部完成之后。
+  状态：Phase 5 Active（HNSW archived as functional-but-not-leading；IVF-PQ contract closure promoted）。
+- 2026-03-10 00:01: **builder-loop：收口 `DISKANN-P1-003`，将 Rust DiskANN 明确降级为受限实现（plan+exec）**
+  1. 复核输入：`TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`src/faiss/diskann.rs`、`docs/FFI_CAPABILITY_MATRIX.md`。
+  2. 代码结论：`src/faiss/diskann.rs` 中 `l2_sqr` 已稳定走 `simd::l2_distance_sq`；新增单测将 `PQCode` 锁定为“按子段均值量化的 placeholder”，证明它不是 native-comparable PQ/SSD pipeline。
+  3. 阶段决策：`DISKANN-P1-003` 验收达成并从 active queue 关闭；Rust DiskANN 维持“简化 Vamana + placeholder PQCode”的受限结论，不进入性能主线，也不作为 native DiskANN 的公平对照对象。
+  4. 治理同步：`TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`docs/PARITY_AUDIT.md`、`docs/FFI_CAPABILITY_MATRIX.md` 已统一写回该 constrained verdict，避免后续再次把 API 入口误读为性能/实现 parity。
+  5. 后续主缺口：Phase 5 的活跃任务回到 `PERF-P3-005`，但仍受 recall-credible 进入条件约束；在新的可信主线路径出现前，不生成虚假 leadership claim。
+  状态：Phase 5 Active（DiskANN archived as constrained/no-go implementation evidence；PERF-P3-005 remains gated）。
 - 2026-03-09 21:30: **builder-loop：关闭 `IVFPQ-P1-002` 并推进 `DISKANN-P1-003` 的最小真实修复（plan+exec）**
   1. 复核输入：`TASK_QUEUE.md`、`DEV_ROADMAP.md`、`GAP_ANALYSIS.md`、`memory/PLAN_RESULT.json`、`memory/EXEC_RESULT.json`、`benchmark_results/ivfpq_p1_002_focused.json`、`src/faiss/diskann.rs`。
   2. 阶段结论：`IVFPQ-P1-002` 已具备 focused artifact 与 required checks 证据，且结论明确为“真实运行路径，但 recall 不达可信阈值”，因此不再保留为当前活跃 TODO。
@@ -374,7 +388,7 @@ Risk levels:
 | HNSW | `src/index/hnsw/faiss_hnsw.cc` | `src/faiss/hnsw.rs` | Done | P1 | ✅ AnnIterator (2026-03-05), ✅ get_vector_by_ids (2026-03-05), ✅ serialize/deserialize, ✅ range_search (Unsupported, tested 2026-03-06); all advanced paths tested and aligned |
 | IVF core | `src/index/ivf/ivf.cc`, `src/index/ivf/ivf_config.h` | `src/faiss/ivf.rs`, `src/faiss/ivf_flat.rs`, `src/faiss/ivfpq.rs`, `src/api/index.rs` | Done | P1 | ✅ Index trait implemented for IvfSq8Index and IvfRaBitqIndex (2026-03-06); ✅ AnnIterator; ✅ get_vector_by_ids (IVF-SQ8 only); parameter coverage and edge behavior alignment remaining; SIMD slice fix in ivf_sq_cc (2026-03-05) |
 | RaBitQ | `src/index/ivf/ivfrbq_wrapper.*` | `src/faiss/ivf_rabitq.rs`, `src/faiss/rabitq_ffi.rs` | Done | P1 | ✅ Index trait implemented (2026-03-06); ✅ AnnIterator; ⚠️ get_vector_by_ids (Unsupported for lossy compression); query-bits and config boundary consistency |
-| DiskANN | `src/index/diskann/diskann.cc`, `src/index/diskann/diskann_config.h` | `src/faiss/diskann.rs`, `src/faiss/diskann_complete.rs` | Done | P1 | ✅ Index trait implemented (2026-03-06); ✅ AnnIterator (DiskAnnIteratorWrapper); ✅ get_vector_by_ids（按 metric gate 暴露 raw-data 语义）；⚠️ 当前 `src/faiss/diskann.rs` 仍是“简化 Vamana + placeholder PQCode”，不可直接当作原生 DiskANN 性能可比实现；2026-03-09 已修复 `l2_sqr` 的 sqrt round-trip 反模式 |
+| DiskANN | `src/index/diskann/diskann.cc`, `src/index/diskann/diskann_config.h` | `src/faiss/diskann.rs`, `src/faiss/diskann_complete.rs` | Partial | P1 | ✅ Index trait implemented (2026-03-06); ✅ AnnIterator (DiskAnnIteratorWrapper); ✅ get_vector_by_ids（按 metric gate 暴露 raw-data 语义）；⚠️ 当前 `src/faiss/diskann.rs` 仍是“简化 Vamana + placeholder PQCode”，不可直接当作原生 DiskANN 性能可比实现；2026-03-09 已修复 `l2_sqr` 的 sqrt round-trip 反模式，但压缩/能力口径仍在活跃收敛中 |
 | AISAQ | `src/index/diskann/diskann_aisaq.cc`, `src/index/diskann/aisaq_config.h` | `src/faiss/diskann_aisaq.rs`, `src/faiss/aisaq.rs` | Done | P1 | ✅ Index trait implemented (2026-03-06); ✅ AnnIterator; ✅ get_vector_by_ids; parameter and file-layout behavior alignment |
 | ScaNN | - | `src/faiss/scann.rs` | Done | P1 | ✅ AnnIterator (2026-03-05), ✅ get_vector_by_ids (2026-03-06), ✅ has_raw_data (depends on reorder_k), ✅ Index trait (2026-03-06); tested |
 | HNSW-PQ | - | `src/faiss/hnsw_pq.rs` | Done | P2 | ✅ AnnIterator (2026-03-05); ✅ `has_raw_data=false`（lossy PQ）; ✅ `get_vector_by_ids` 显式稳定返回 Unsupported；✅ `save/load` 当前在 persistence scope 内显式稳定返回 Unsupported |

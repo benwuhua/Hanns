@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! Diagnose HNSW graph structure
 
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};

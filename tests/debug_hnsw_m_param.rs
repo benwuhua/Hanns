@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! Debug HNSW M parameter issue
 //!
 //! Tests different M values (8, 16, 32, 64) with fixed ef_construction and ef_search

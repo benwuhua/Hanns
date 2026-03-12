@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! OPT-030: 自适应 ef 策略优化测试
 //!
 //! 测试自适应 ef_search 策略：ef = max(base_ef, adaptive_k * top_k)
@@ -169,6 +170,7 @@ fn generate_recommendations() {
 }
 
 #[test]
+#[ignore]
 fn test_adaptive_ef_100k() {
     const NUM_BASE: usize = 100_000;
     const NUM_QUERY: usize = 100;
@@ -248,6 +250,7 @@ fn test_adaptive_ef_100k() {
 }
 
 #[test]
+#[ignore]
 fn test_adaptive_ef_different_top_k() {
     const NUM_BASE: usize = 50_000;
     const NUM_QUERY: usize = 50;
@@ -359,6 +362,7 @@ fn test_adaptive_ef_config_api() {
 }
 
 #[test]
+#[ignore]
 fn test_adaptive_ef_full() {
     println!("\n╔═══════════════════════════════════════════════════════════╗");
     println!("║         OPT-030: 自适应 ef 策略完整测试                  ║");

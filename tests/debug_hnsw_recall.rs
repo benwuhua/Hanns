@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! Debug HNSW recall issue
 //!
 //! Print detailed comparison between ground truth and HNSW search results

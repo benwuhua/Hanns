@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! Mini-Batch K-Means Benchmark
 //! 对比标准 K-Means 和 Mini-Batch K-Means 的训练性能
 

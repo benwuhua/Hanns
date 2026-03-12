@@ -20,10 +20,10 @@ impl PqDistance {
         #[cfg(all(feature = "simd", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                return self.distance_avx2(query, codebook, codes);
+                return unsafe { self.distance_avx2(query, codebook, codes) };
             }
-            if std::is_x86_feature_detected!("sse4_2") {
-                return self.distance_sse(query, codebook, codes);
+            if std::is_x86_feature_detected!("sse4.2") {
+                return unsafe { self.distance_sse(query, codebook, codes) };
             }
         }
         #[cfg(all(feature = "simd", target_arch = "aarch64"))]
@@ -92,7 +92,8 @@ impl PqDistance {
     /// SSE 优化的 PQ 距离 (4 elements per iteration)
     #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     #[inline]
-    fn distance_sse(&self, query: &[f32], codebook: &[f32], codes: &[u8]) -> f32 {
+    #[target_feature(enable = "sse3")]
+    unsafe fn distance_sse(&self, query: &[f32], codebook: &[f32], codes: &[u8]) -> f32 {
         use std::arch::x86_64::*;
 
         let mut sum = _mm_setzero_ps();
@@ -111,8 +112,8 @@ impl PqDistance {
             }
 
             let mut i = 0;
-            let q_ptr = &query[q_start];
-            let c_ptr = &codebook[cent_offset];
+            let q_ptr = query.as_ptr().add(q_start);
+            let c_ptr = codebook.as_ptr().add(cent_offset);
 
             while i + 4 <= self.sub_dim {
                 let qv = _mm_loadu_ps(q_ptr.add(i));
@@ -125,7 +126,7 @@ impl PqDistance {
 
             // Handle remainder
             while i < self.sub_dim {
-                let diff = q_ptr[i] - c_ptr[i];
+                let diff = *q_ptr.add(i) - *c_ptr.add(i);
                 sum = _mm_add_ss(sum, _mm_set_ss(diff * diff));
                 i += 1;
             }
@@ -142,7 +143,8 @@ impl PqDistance {
     /// AVX2 优化的 PQ 距离 (8 elements per iteration)
     #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     #[inline]
-    fn distance_avx2(&self, query: &[f32], codebook: &[f32], codes: &[u8]) -> f32 {
+    #[target_feature(enable = "avx2")]
+    unsafe fn distance_avx2(&self, query: &[f32], codebook: &[f32], codes: &[u8]) -> f32 {
         use std::arch::x86_64::*;
 
         let mut sum = _mm256_setzero_ps();
@@ -161,8 +163,8 @@ impl PqDistance {
             }
 
             let mut i = 0;
-            let q_ptr = &query[q_start];
-            let c_ptr = &codebook[cent_offset];
+            let q_ptr = query.as_ptr().add(q_start);
+            let c_ptr = codebook.as_ptr().add(cent_offset);
 
             while i + 8 <= self.sub_dim {
                 let qv = _mm256_loadu_ps(q_ptr.add(i));
@@ -175,7 +177,7 @@ impl PqDistance {
 
             // Handle remainder (up to 7 elements)
             while i < self.sub_dim {
-                let diff = q_ptr[i] - c_ptr[i];
+                let diff = *q_ptr.add(i) - *c_ptr.add(i);
                 sum = _mm256_add_ps(sum, _mm256_set1_ps(diff * diff));
                 i += 1;
             }
@@ -184,7 +186,7 @@ impl PqDistance {
         // Horizontal sum of 256-bit register
         let mut result = _mm256_cvtss_f32(sum);
         let high = _mm256_extractf128_ps(sum, 1);
-        result += _mm_cvtss_f32(_mm_add_ps(high, _mm256_castps256to128(sum)));
+        result += _mm_cvtss_f32(_mm_add_ps(high, _mm256_castps256_ps128(sum)));
 
         result
     }
@@ -273,10 +275,10 @@ impl DistanceTable {
         #[cfg(all(feature = "simd", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                return self.compute_avx2(query, codebook, sub_dim);
+                return unsafe { self.compute_avx2(query, codebook, sub_dim) };
             }
-            if std::is_x86_feature_detected!("sse4_2") {
-                return self.compute_sse(query, codebook, sub_dim);
+            if std::is_x86_feature_detected!("sse4.2") {
+                return unsafe { self.compute_sse(query, codebook, sub_dim) };
             }
         }
         #[cfg(all(feature = "simd", target_arch = "aarch64"))]
@@ -310,16 +312,17 @@ impl DistanceTable {
     /// SSE 优化的预计算
     #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     #[inline]
-    fn compute_sse(&mut self, query: &[f32], codebook: &[f32], sub_dim: usize) {
+    #[target_feature(enable = "sse3")]
+    unsafe fn compute_sse(&mut self, query: &[f32], codebook: &[f32], sub_dim: usize) {
         use std::arch::x86_64::*;
 
         for m_idx in 0..self.m {
             let q_start = m_idx * sub_dim;
-            let q_ptr = &query[q_start];
+            let q_ptr = query.as_ptr().add(q_start);
 
             for k_idx in 0..self.k {
                 let cent_offset = m_idx * self.k * sub_dim + k_idx * sub_dim;
-                let c_ptr = &codebook[cent_offset];
+                let c_ptr = codebook.as_ptr().add(cent_offset);
 
                 let mut sum = _mm_setzero_ps();
                 let mut i = 0;
@@ -342,7 +345,7 @@ impl DistanceTable {
 
                 // Handle remainder
                 while i < sub_dim {
-                    let diff = q_ptr[i] - c_ptr[i];
+                    let diff = *q_ptr.add(i) - *c_ptr.add(i);
                     result += diff * diff;
                     i += 1;
                 }
@@ -355,16 +358,17 @@ impl DistanceTable {
     /// AVX2 优化的预计算
     #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     #[inline]
-    fn compute_avx2(&mut self, query: &[f32], codebook: &[f32], sub_dim: usize) {
+    #[target_feature(enable = "avx2")]
+    unsafe fn compute_avx2(&mut self, query: &[f32], codebook: &[f32], sub_dim: usize) {
         use std::arch::x86_64::*;
 
         for m_idx in 0..self.m {
             let q_start = m_idx * sub_dim;
-            let q_ptr = &query[q_start];
+            let q_ptr = query.as_ptr().add(q_start);
 
             for k_idx in 0..self.k {
                 let cent_offset = m_idx * self.k * sub_dim + k_idx * sub_dim;
-                let c_ptr = &codebook[cent_offset];
+                let c_ptr = codebook.as_ptr().add(cent_offset);
 
                 let mut sum = _mm256_setzero_ps();
                 let mut i = 0;
@@ -381,11 +385,11 @@ impl DistanceTable {
                 // Horizontal sum of 256-bit
                 let mut result = _mm256_cvtss_f32(sum);
                 let high = _mm256_extractf128_ps(sum, 1);
-                result += _mm_cvtss_f32(_mm_add_ps(high, _mm256_castps256to128(sum)));
+                result += _mm_cvtss_f32(_mm_add_ps(high, _mm256_castps256_ps128(sum)));
 
                 // Handle remainder
                 while i < sub_dim {
-                    let diff = q_ptr[i] - c_ptr[i];
+                    let diff = *q_ptr.add(i) - *c_ptr.add(i);
                     result += diff * diff;
                     i += 1;
                 }

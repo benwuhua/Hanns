@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! Quick performance test for PQ improvements
 
 use knowhere_rs::quantization::{OPQConfig, OptimizedProductQuantizer, PQConfig, ProductQuantizer};

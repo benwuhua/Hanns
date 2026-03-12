@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! Random100K Benchmark Test
 //!
 //! Benchmark Flat, HNSW, and IVF-Flat indexes on 100K random vectors.
@@ -339,6 +340,7 @@ fn benchmark_ivf_flat(
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_random100k_benchmark() {
     const NUM_BASE: usize = 100_000;
     const NUM_QUERY: usize = 100; // Reduced for faster execution
@@ -383,6 +385,7 @@ fn test_random100k_benchmark() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_random100k_quick() {
     // Quick test with fewer queries
     const NUM_BASE: usize = 100_000;

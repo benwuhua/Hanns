@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! BENCH-029: 大 top_k 场景验证
 //!
 //! 测试 top_k=500/1000 场景，验证 dynamic_ef 价值
@@ -224,6 +225,7 @@ fn generate_recommendations() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_large_topk_performance() {
     println!("\n╔════════════════════════════════════════════════════════════════════════════════════════════════════╗");
     println!("║                    BENCH-029: 大 top_k 场景验证                                                     ║");

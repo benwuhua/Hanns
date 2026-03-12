@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! BENCH-030: 低 base_ef 场景验证
 //!
 //! 测试 base_ef=40/80 时 dynamic_ef 的提升效果
@@ -233,6 +234,7 @@ fn generate_recommendations() {
 }
 
 #[test]
+#[ignore = "performance benchmark; excluded from default regression"]
 fn test_low_base_ef_performance() {
     println!("\n╔════════════════════════════════════════════════════════════════════════════════════════════════════╗");
     println!("║                    BENCH-030: 低 base_ef 场景验证                                                  ║");

@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! Throughput Benchmark Test (QPS Stress Test)
 //!
 //! Benchmark concurrent query throughput for Flat, HNSW, and IVF-Flat indexes.
@@ -450,6 +451,7 @@ fn print_results(index_name: &str, results: &[ThroughputResult]) {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_throughput_benchmark() {
     println!("=== 吞吐量基准测试 ({} 向量，{} 维) ===", NUM_VECTORS, DIM);
 

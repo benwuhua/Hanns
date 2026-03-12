@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! BENCH-035: PQ 参数敏感性分析
 //!
 //! 测试不同 pq_m/pq_k 组合对 PQ 量化器性能的影响，识别最佳配置。
@@ -216,6 +217,7 @@ fn run_pq_benchmark(
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn bench_pq_params() {
     println!("\n╔══════════════════════════════════════════════════════════════╗");
     println!("║  BENCH-035: PQ 参数敏感性分析                                  ║");

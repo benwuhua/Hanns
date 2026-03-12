@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! IVF-PQ Performance Validation (BENCH-046)
 //!
 //! Purpose: Validate IVF-PQ QPS and recall after BUG-005 fix
@@ -15,6 +16,7 @@ fn generate_random_vectors(n: usize, dim: usize) -> Vec<f32> {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_ivf_pq_perf_50k() {
     let dim = 128;
     let nlist = 50; // Reduced from 100
@@ -115,6 +117,7 @@ fn test_ivf_pq_perf_50k() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_ivf_pq_perf_10k() {
     let dim = 128;
     let nlist = 50;

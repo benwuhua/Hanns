@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! Memory Usage Benchmark Test
 //!
 //! Benchmark memory efficiency of Flat, HNSW, and IVF-Flat indexes.
@@ -468,6 +469,7 @@ fn print_analysis(results: &[MemoryBenchmarkResult]) {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_memory_usage_small() {
     println!("\n{}", "=".repeat(80));
     println!("Memory Usage Benchmark Report (Small Dataset)");

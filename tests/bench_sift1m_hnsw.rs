@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! Quick HNSW test on SIFT1M to verify recall on real clustered data
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
 use knowhere_rs::benchmark::average_recall_at_k;
@@ -7,6 +8,7 @@ use knowhere_rs::MetricType;
 use std::env;
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_sift1m_hnsw_quick() {
     let path = env::var("SIFT1M_PATH").unwrap_or_else(|_| "./data/sift1m".to_string());
 

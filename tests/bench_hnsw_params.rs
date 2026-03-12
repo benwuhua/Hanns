@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! HNSW 参数敏感性分析
 //!
 //! 测试不同 M/ef_construction/ef_search 组合对性能 (QPS/构建时间) 和召回率 (R@1/R@10/R@100) 的影响
@@ -595,6 +596,7 @@ fn parse_test_mode() -> BenchmarkConfig {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_hnsw_parameter_sensitivity() {
     println!("\n{}", "=".repeat(100));
     println!("🚀 BENCH-025: HNSW 参数敏感性分析");
@@ -702,6 +704,7 @@ fn test_hnsw_parameter_sensitivity() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_hnsw_params_quick() {
     // Quick test for CI/CD or rapid iteration
     env::set_var("QUICK", "1");

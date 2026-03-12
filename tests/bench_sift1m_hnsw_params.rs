@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! BENCH-024: HNSW 参数空间系统化 Benchmark（SIFT1M 真实数据集）
 //!
 //! 在 SIFT1M 上测试 M/ef_construction/ef_search 组合
@@ -315,6 +316,7 @@ fn generate_report(results: &[ParamResult], dataset_size: usize, num_queries: us
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_sift1m_hnsw_params() {
     println!("╔════════════════════════════════════════════════════════╗");
     println!("║  BENCH-024: HNSW 参数空间（SIFT1M）                    ║");

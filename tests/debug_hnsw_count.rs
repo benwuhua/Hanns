@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 /// Debug test for HNSW search results count
 ///
 /// This test checks if search_layer returns enough candidates.

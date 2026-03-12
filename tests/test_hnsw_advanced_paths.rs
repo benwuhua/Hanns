@@ -15,6 +15,8 @@ use knowhere_rs::dataset::Dataset;
 use knowhere_rs::faiss::HnswIndex;
 use knowhere_rs::index::Index;
 use knowhere_rs::MetricType;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use tempfile::NamedTempFile;
 
 /// Test HNSW get_vector_by_ids functionality
@@ -281,4 +283,77 @@ fn test_hnsw_range_search() {
             println!("✅ Range search correctly returns Unsupported");
         }
     }
+}
+
+#[test]
+fn test_hnsw_build_quality_signals_survive_save_load() {
+    let dim = 64;
+    let num_vectors = 512;
+    let mut rng = StdRng::seed_from_u64(20260311);
+    let vectors: Vec<f32> = (0..num_vectors * dim).map(|_| rng.gen::<f32>()).collect();
+
+    let config = IndexConfig {
+        index_type: IndexType::Hnsw,
+        dim,
+        metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
+        params: IndexParams {
+            m: Some(16),
+            ef_construction: Some(200),
+            ef_search: Some(64),
+            ..Default::default()
+        },
+    };
+
+    let mut index = HnswIndex::new(&config).unwrap();
+    index.train(&vectors).unwrap();
+    index.add(&vectors, None).unwrap();
+    let repaired = index.find_and_repair_unreachable();
+
+    let unreachable = index.find_unreachable_vectors();
+    assert!(
+        unreachable.is_empty(),
+        "repair-backed HNSW build should not leave unreachable vectors after {} repairs: {:?}",
+        repaired,
+        unreachable
+    );
+
+    let (_, max_l0, avg_l0) = index.layer_neighbor_count_stats(0).unwrap();
+    assert!(
+        max_l0 <= 32 + repaired,
+        "layer-0 degree should stay within 2*M plus repair slack, got {} with {} repairs",
+        max_l0,
+        repaired
+    );
+    assert!(
+        avg_l0 >= 8.0,
+        "layer-0 average degree should stay meaningfully populated, got {:.2}",
+        avg_l0
+    );
+    assert!(index.max_level() >= 1, "build should produce a multi-layer graph");
+
+    let temp_file = NamedTempFile::new().unwrap();
+    let path = temp_file.path();
+    index.save(path).unwrap();
+
+    let mut restored = HnswIndex::new(&config).unwrap();
+    restored.load(path).unwrap();
+
+    let restored_unreachable = restored.find_unreachable_vectors();
+    assert!(
+        restored_unreachable.is_empty(),
+        "reloaded HNSW graph should keep all nodes reachable: {:?}",
+        restored_unreachable
+    );
+
+    let restored_stats = restored.layer_neighbor_count_stats(0).unwrap();
+    assert_eq!(
+        max_l0,
+        restored_stats.1,
+        "save/load should preserve layer-0 degree bounds"
+    );
+    assert!(
+        (avg_l0 - restored_stats.2).abs() < 1e-6,
+        "save/load should preserve layer-0 average degree"
+    );
 }

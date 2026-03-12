@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! SIFT1M Benchmark Test
 //!
 //! Benchmark Flat, HNSW, and IVF-Flat indexes on SIFT1M dataset.
@@ -714,6 +715,7 @@ fn benchmark_scann(dataset: &SiftDataset, num_queries: usize) -> BenchmarkResult
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_sift1m_benchmark() {
     // Try to load dataset
     let dataset = match try_load_sift1m() {
@@ -774,6 +776,7 @@ fn test_sift1m_benchmark() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_sift1m_quick() {
     // Quick test with small dataset subset
     let dataset = match try_load_sift1m() {

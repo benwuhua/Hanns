@@ -50,7 +50,7 @@
       "title": "Native benchmark harness smoke on remote x86",
       "description": "Keep the upstream/native benchmark harness reachable on the remote x86 machine so later parity and leadership claims can compare against a live native baseline rather than stale logs.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/native_bootstrap.sh",
         "bash scripts/remote/native_benchmark_probe.sh",
@@ -66,7 +66,7 @@
       "title": "Same-schema native-vs-rs artifact chain",
       "description": "Produce a repeatable artifact chain where native and Rust benchmark rows are emitted in compatible schema so comparisons can be reviewed and replayed later sessions.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"cargo test --bin native_benchmark_qps_parser -- --nocapture\"",
         "bash scripts/remote/native_benchmark_probe.sh",
@@ -83,7 +83,7 @@
       "title": "Recall gate policy and methodology lock",
       "description": "Lock the benchmark methodology so recall@k, search top-k, confidence tags, and ground-truth provenance cannot drift silently between sessions or between native and Rust runs.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"cargo build --features hdf5 --bin generate_hdf5_hnsw_baseline --verbose\"",
         "bash scripts/remote/test.sh --command \"cargo test --bin native_benchmark_qps_parser -- --nocapture\"",
@@ -99,7 +99,7 @@
       "title": "Refresh baseline stop-go verdict from remote evidence",
       "description": "Rebuild the current baseline stop-go verdict from remote x86 evidence only, so later family-level work depends on a fresh and replayable benchmark truth set.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/native_benchmark_probe.sh",
         "bash scripts/remote/test.sh --command \"cargo build --features hdf5 --bin generate_hdf5_hnsw_baseline --verbose\"",
@@ -115,7 +115,7 @@
       "title": "Audit HNSW neighbor selection against FAISS",
       "description": "Pinpoint the concrete differences between the Rust HNSW build path and the FAISS/native neighbor selection heuristic, with the current remote baseline as the authoritative reference.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"cargo test --lib hnsw -- --nocapture\"",
         "bash scripts/remote/test.sh --command \"cargo test --test debug_hnsw_recall -- --nocapture\"",
@@ -131,7 +131,7 @@
       "title": "Add HNSW build-quality regressions",
       "description": "Add remote-verifiable regressions that fail when neighbor selection, graph connectivity, or recall-sensitive build behavior drifts again.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"cargo test --lib hnsw -- --nocapture\"",
         "bash scripts/remote/test.sh --command \"cargo test --test test_hnsw_advanced_paths -- --nocapture\"",
@@ -147,7 +147,7 @@
       "title": "Repair HNSW layer-0 neighbor quality",
       "description": "Implement and prove the specific HNSW construction change that materially improves graph quality on the remote x86 benchmark lane without regressing correctness contracts.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"cargo test --lib hnsw -- --nocapture\"",
         "bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_cpp_compare -q\"",
@@ -163,11 +163,11 @@
       "title": "Remote recall-gated HNSW benchmark refresh",
       "description": "Re-run the HNSW benchmark lane on the remote x86 authority machine and produce an updated recall-gated artifact after any build-path repair.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
-        "bash scripts/remote/test.sh --command \"cargo build --features hdf5 --bin generate_hdf5_hnsw_baseline --verbose\"",
-        "bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_cpp_compare -q\"",
-        "bash scripts/remote/native_hnsw_qps_capture.sh --gtest-filter Benchmark_float_qps.TEST_HNSW"
+        "bash scripts/remote/test.sh --command \"cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95\"",
+        "bash scripts/remote/native_hnsw_qps_capture.sh --gtest-filter Benchmark_float_qps.TEST_HNSW",
+        "python3 -m unittest tests/test_baseline_methodology_lock.py"
       ],
       "dependencies": [
         "hnsw-layer0-neighbor-selection-fix"
@@ -179,11 +179,11 @@
       "title": "HNSW FFI and persistence production contract",
       "description": "Lock the HNSW production-facing contract on the remote authority lane, including file save/load, get-by-id semantics, and metadata surfaces used by external callers.",
       "priority": "medium",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"cargo test --lib ffi -- --nocapture\"",
         "bash scripts/remote/test.sh --command \"cargo test --test test_hnsw_advanced_paths -- --nocapture\"",
-        "bash scripts/remote/test.sh --command \"cargo test --tests -q test_hnsw_high_params\""
+        "bash scripts/remote/test.sh --command \"cargo test --test test_hnsw_high_params -- --nocapture\""
       ],
       "dependencies": [
         "hnsw-remote-recall-benchmark"
@@ -195,11 +195,11 @@
       "title": "HNSW leadership or no-go verdict",
       "description": "End the HNSW lane with a remote-only, recall-gated verdict: production-candidate with leadership evidence, functional-but-not-leading, or no-go.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
-        "bash scripts/remote/native_hnsw_qps_capture.sh --gtest-filter Benchmark_float_qps.TEST_HNSW",
-        "bash scripts/remote/test.sh --command \"cargo build --features hdf5 --bin generate_hdf5_hnsw_baseline --verbose\"",
-        "bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_cpp_compare -q\""
+        "bash scripts/remote/test.sh --command \"python3 -m unittest tests/test_baseline_methodology_lock.py\"",
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_cpp_compare -- --nocapture\"",
+        "python3 scripts/validate_features.py feature-list.json"
       ],
       "dependencies": [
         "hnsw-remote-recall-benchmark",
@@ -212,7 +212,7 @@
       "title": "Audit real IVF-PQ hot path",
       "description": "Separate placeholder IVF scaffolding from the real IVF-PQ hot path and define exactly which code path is eligible for parity and performance evaluation on the remote authority lane.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"cargo test --lib ivf -- --nocapture\"",
         "bash scripts/remote/test.sh --command \"cargo test --lib ivfpq -- --nocapture\"",
@@ -228,7 +228,7 @@
       "title": "Coarse quantizer regressions for IVF-PQ",
       "description": "Add remote-verifiable regressions that catch centroid search and coarse assignment mistakes before they pollute IVF-PQ recall conclusions.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"cargo test --lib ivf -- --nocapture\"",
         "bash scripts/remote/test.sh --command \"cargo test --test diagnose_ivf_cluster -- --nocapture\"",
@@ -244,7 +244,7 @@
       "title": "ADC and residual quality regressions for IVF-PQ",
       "description": "Add remote regressions around PQ training, residual encoding, and ADC quality so the IVF-PQ lane has trustworthy recall diagnostics instead of ad-hoc interpretation.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"cargo test --lib ivfpq -- --nocapture\"",
         "bash scripts/remote/test.sh --command \"cargo test --test pq_perf_test -- --nocapture\"",
@@ -260,11 +260,11 @@
       "title": "Remote recall-gated IVF-PQ benchmark",
       "description": "Run IVF-PQ on the remote x86 authority lane with ground truth and confidence tags, so the family can exit with evidence rather than impressions.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
-        "bash scripts/remote/test.sh --command \"cargo test --test bench_ivf_pq_perf -q\"",
-        "bash scripts/remote/test.sh --command \"cargo test --test bench_recall_gated_baseline -q\"",
-        "bash scripts/remote/test.sh --command \"cargo test --test bench_cross_dataset_sampling -q\""
+        "bash scripts/remote/test.sh --command \"cargo test --features long-tests --test bench_ivf_pq_perf -- --ignored --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --features long-tests --test bench_recall_gated_baseline -- --ignored --nocapture\"",
+        "bash scripts/remote/test.sh --command \"cargo test --features long-tests --test bench_cross_dataset_sampling -- --ignored --nocapture\""
       ],
       "dependencies": [
         "ivfpq-coarse-quantizer-regression",
@@ -310,11 +310,11 @@
       "title": "Audit true DiskANN scope and comparability",
       "description": "Define exactly which parts of the Rust DiskANN implementation are real, which are simplified, and what is allowed to participate in parity and benchmark claims on the remote authority lane.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"cargo test --lib diskann -- --nocapture\"",
         "bash scripts/remote/test.sh --command \"cargo test --test test_diskann_aisaq -- --nocapture\"",
-        "bash scripts/remote/test.sh --command \"cargo test --test bench_diskann_1m -q\""
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_diskann_1m -- --nocapture\""
       ],
       "dependencies": [
         "baseline-stop-go-verdict-refresh"
@@ -326,11 +326,11 @@
       "title": "Lock placeholder PQ and simplified path boundaries",
       "description": "Add remote-verifiable regressions that keep the current DiskANN simplifications honest, especially around placeholder PQ behavior and unsupported native-comparable claims.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"cargo test --lib diskann -- --nocapture\"",
         "bash scripts/remote/test.sh --command \"cargo test --test test_diskann_aisaq -- --nocapture\"",
-        "bash scripts/remote/test.sh --command \"cargo test --test bench_compare -q\""
+        "bash scripts/remote/test.sh --command \"cargo test --test bench_compare -- --nocapture\""
       ],
       "dependencies": [
         "diskann-scope-boundary-audit"
@@ -390,7 +390,7 @@
       "title": "Remote full regression lane",
       "description": "Restore a credible remote x86 full regression lane that can be reused by future worker sessions as the minimum production smoke before and after feature work.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash scripts/remote/test.sh --command \"scripts/gate_profile_runner.sh --profile full_regression\"",
         "bash scripts/remote/test.sh --command \"scripts/gate_profile_runner.sh --profile long_regression\"",

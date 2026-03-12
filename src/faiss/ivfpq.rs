@@ -43,6 +43,18 @@ pub struct IvfPqIndex {
     trained: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct IvfPqHotPathAudit {
+    pub dim: usize,
+    pub coarse_centroid_count: usize,
+    pub pq_subquantizers: usize,
+    pub encoded_vector_count: usize,
+    pub code_size_bytes: usize,
+    pub total_code_bytes: usize,
+    pub list_lengths: Vec<usize>,
+    pub centroids: Vec<f32>,
+}
+
 impl IvfPqIndex {
     pub fn new(config: &IndexConfig) -> Result<Self> {
         if config.dim == 0 {
@@ -381,6 +393,38 @@ impl IvfPqIndex {
 
         tracing::debug!("Added {} vectors to IVF-PQ (parallel)", n);
         Ok(n)
+    }
+
+    pub fn hot_path_audit(&self) -> IvfPqHotPathAudit {
+        IvfPqHotPathAudit {
+            dim: self.dim,
+            coarse_centroid_count: self.centroids.len() / self.dim,
+            pq_subquantizers: self.pq.config().m,
+            encoded_vector_count: self.ids.len(),
+            code_size_bytes: self.pq.code_size(),
+            total_code_bytes: self.invlist_codes.iter().map(Vec::len).sum(),
+            list_lengths: self.invlist_ids.iter().map(Vec::len).collect(),
+            centroids: self.centroids.clone(),
+        }
+    }
+
+    pub fn coarse_probe_order(&self, query: &[f32], nprobe: usize) -> Vec<usize> {
+        if query.len() != self.dim || self.centroids.is_empty() || nprobe == 0 {
+            return Vec::new();
+        }
+
+        let mut cluster_dists: Vec<(usize, f32)> = (0..self.nlist)
+            .map(|c| {
+                let dist = l2_distance_sq(query, &self.centroids[c * self.dim..(c + 1) * self.dim]);
+                (c, dist)
+            })
+            .collect();
+        cluster_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        cluster_dists
+            .into_iter()
+            .take(nprobe.min(self.nlist))
+            .map(|(cluster, _)| cluster)
+            .collect()
     }
 
     /// Precompute distance table for a query residual.
@@ -859,6 +903,7 @@ impl IvfPqIndex {
 mod tests {
     use super::*;
     use crate::api::{IndexType, MetricType};
+    use crate::faiss::ivf::IvfIndex;
 
     #[test]
     fn test_ivfpq_basic() {
@@ -987,6 +1032,55 @@ mod tests {
             "R@{} = {:.1}% (expected > 80%)",
             k,
             avg_recall * 100.0
+        );
+    }
+
+    #[test]
+    fn ivfpq_hot_path_audit_exposes_residual_pq_state() {
+        let config = IndexConfig {
+            index_type: IndexType::IvfPq,
+            metric_type: MetricType::L2,
+            dim: 16,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                nlist: Some(4),
+                nprobe: Some(2),
+                m: Some(4),
+                nbits_per_idx: Some(8),
+                ..Default::default()
+            },
+        };
+
+        let mut ivfpq = IvfPqIndex::new(&config).unwrap();
+        let mut ivf = IvfIndex::new(16, 4);
+
+        let n = 64;
+        let dim = 16;
+        let mut vectors = Vec::with_capacity(n * dim);
+        for i in 0..n {
+            for j in 0..dim {
+                vectors.push(((i * 11 + j * 17) % 97) as f32 / 97.0);
+            }
+        }
+
+        ivfpq.train(&vectors).unwrap();
+        ivfpq.add(&vectors, None).unwrap();
+
+        ivf.train(&vectors);
+        ivf.add(&vectors);
+
+        let audit = ivfpq.hot_path_audit();
+
+        assert_eq!(audit.coarse_centroid_count, 4);
+        assert_eq!(audit.pq_subquantizers, 4);
+        assert_eq!(audit.encoded_vector_count, n);
+        assert!(
+            audit.total_code_bytes >= n * audit.code_size_bytes,
+            "real IVF-PQ hot path must store PQ code bytes for every inserted vector"
+        );
+        assert!(
+            ivf.lists.iter().flatten().count() >= n,
+            "placeholder IVF scaffold still stores raw vector positions in coarse lists"
         );
     }
 }

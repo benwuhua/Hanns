@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType};
 use knowhere_rs::faiss::HnswIndex;
 use knowhere_rs::MetricType;

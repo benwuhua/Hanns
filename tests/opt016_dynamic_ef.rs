@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! OPT-016: HNSW 动态 ef_search 调整
 //!
 //! 功能：根据 top_k 自动设置 ef_search

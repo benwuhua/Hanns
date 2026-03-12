@@ -1,6 +1,6 @@
 use crate::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 use crate::benchmark::{confidence_from_recall, CONFIDENCE_TRUSTED};
-use crate::faiss::{HnswIndex, IvfFlatIndex};
+use crate::faiss::{HnswIndex, IvfFlatIndex, IvfPqIndex};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::Serialize;
@@ -252,11 +252,71 @@ fn bench_ivf(dataset: &str, base: &[f32], queries: &[f32], gt: &[Vec<i32>]) -> C
     }
 }
 
+fn bench_ivfpq(
+    dataset: &str,
+    base: &[f32],
+    queries: &[f32],
+    gt: &[Vec<i32>],
+) -> CrossDatasetRow {
+    let config = IndexConfig {
+        index_type: IndexType::IvfPq,
+        dim: DIM,
+        metric_type: MetricType::L2,
+        data_type: DataType::Float,
+        params: IndexParams {
+            nlist: Some(128),
+            nprobe: Some(16),
+            m: Some(16),
+            nbits_per_idx: Some(8),
+            ..Default::default()
+        },
+    };
+
+    let mut index = IvfPqIndex::new(&config).expect("create ivfpq");
+    index.train(base).expect("train ivfpq");
+    index.add(base, None).expect("add ivfpq");
+
+    let mut all_results = Vec::with_capacity(QUERY_SIZE);
+    let start = Instant::now();
+    for i in 0..QUERY_SIZE {
+        let q = &queries[i * DIM..(i + 1) * DIM];
+        let result = index
+            .search(
+                q,
+                &SearchRequest {
+                    top_k: TOP_K,
+                    nprobe: 16,
+                    ..Default::default()
+                },
+            )
+            .expect("search ivfpq");
+        all_results.push(result.ids.into_iter().map(|id| id as i32).collect());
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    let qps = QUERY_SIZE as f64 / elapsed;
+    let recall = average_recall_at_k(&all_results, gt, TOP_K);
+
+    CrossDatasetRow {
+        dataset: dataset.to_string(),
+        index: "IVF-PQ".to_string(),
+        base_size: BASE_SIZE,
+        query_size: QUERY_SIZE,
+        dim: DIM,
+        params: "nlist=128,nprobe=16,m=16,nbits=8".to_string(),
+        ground_truth_source: "flat_exact_l2_bruteforce".to_string(),
+        recall_at_10: recall,
+        qps,
+        confidence: confidence_from_recall(recall, CROSS_DATASET_RECALL_GATE).to_string(),
+        runtime_seconds: elapsed,
+    }
+}
+
 fn build_rows(dataset: &str, base: Vec<f32>, queries: Vec<f32>) -> Vec<CrossDatasetRow> {
     let gt = compute_ground_truth(&base, &queries, DIM, TOP_K);
     vec![
         bench_hnsw(dataset, &base, &queries, &gt),
         bench_ivf(dataset, &base, &queries, &gt),
+        bench_ivfpq(dataset, &base, &queries, &gt),
     ]
 }
 
@@ -281,8 +341,8 @@ pub fn build_cross_dataset_artifact() -> CrossDatasetArtifact {
 }
 
 pub fn validate_artifact(artifact: &CrossDatasetArtifact) -> Result<(), String> {
-    if artifact.rows.len() < 6 {
-        return Err("rows must include at least 3 datasets x 2 indexes".to_string());
+    if artifact.rows.len() < 9 {
+        return Err("rows must include at least 3 datasets x 3 indexes".to_string());
     }
     for row in &artifact.rows {
         if row.dataset.trim().is_empty() {
@@ -341,5 +401,12 @@ mod tests {
             .map(|r| r.dataset.as_str())
             .collect::<std::collections::BTreeSet<_>>();
         assert!(datasets.len() >= 3);
+
+        let indexes = artifact
+            .rows
+            .iter()
+            .map(|r| r.index.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(indexes.contains("IVF-PQ"));
     }
 }

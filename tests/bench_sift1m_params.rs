@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! BENCH-038: SIFT1M 参数扫描基准测试
 //!
 //! 测试所有索引类型的不同参数组合
@@ -658,6 +659,7 @@ fn generate_report(results: &[ParamResult], nq: usize, dataset: &SiftDataset) {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_sift1m_param_scan() {
     println!("╔════════════════════════════════════════════════════════╗");
     println!("║  BENCH-038: SIFT1M 参数扫描基准测试                    ║");

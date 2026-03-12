@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! BENCH-048: IVF-Flat Performance Regression Validation
 //! Config:
 //! - base vectors: 10K, 50K, 100K
@@ -107,6 +108,7 @@ fn run_once(nbase: usize, seed: u64) -> RunResult {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn bench_048_ivf_flat_perf_regression() {
     let scales = [10_000usize, 50_000usize, 100_000usize];
     let mut summaries = Vec::new();

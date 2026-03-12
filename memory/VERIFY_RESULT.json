@@ -1,0 +1,33 @@
+{
+  "task_id": "BENCH-P2-003",
+  "job": "builder-verify",
+  "status": "verify_passed",
+  "summary": "benchmark_only 门禁通过：required checks 全部成功，cross-dataset 抽样回归验证通过。",
+  "gate_profile": "benchmark_only",
+  "required_checks": [
+    "cargo test --test bench_recall_gated_baseline --features long-tests -- --ignored -q",
+    "cargo test --test opt_p2_stable_regression_matrix -q"
+  ],
+  "targeted_regression_source": "task_defined_regression_plan",
+  "resolved_targeted_regressions": [
+    "tests/bench_recall_gated_baseline.rs::bench_recall_gated_baseline_long",
+    "tests/opt_p2_stable_regression_matrix.rs (32 tests passed)",
+    "tests/bench_cross_dataset_sampling.rs::bench_cross_dataset_sampling_long"
+  ],
+  "deferred_checks": [
+    "cargo test --tests -q",
+    "cargo test -q",
+    "cross-dataset large-scale benchmark sweeps"
+  ],
+  "checks": [
+    "cargo test --test bench_recall_gated_baseline --features long-tests -- --ignored -q",
+    "cargo test --test opt_p2_stable_regression_matrix -q",
+    "cargo test --test bench_cross_dataset_sampling --features long-tests -- --ignored -q"
+  ],
+  "artifacts": [
+    "benchmark_results/cross_dataset_sampling.json"
+  ],
+  "next_action": "plan",
+  "failed_stage": "",
+  "updated_at": "2026-03-08T10:28:02Z"
+}

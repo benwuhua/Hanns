@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! HDF5 Dataset Benchmark Test
 //!
 //! Benchmark Flat, HNSW, and IVF indexes on HDF5 datasets from ann-benchmarks.
@@ -342,6 +343,7 @@ fn print_summary(results: &[BenchmarkResult]) {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_hdf5_loader() {
     println!("\n{}", "=".repeat(80));
     println!("HDF5 Dataset Loader Test");
@@ -395,6 +397,7 @@ fn test_hdf5_loader() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_hdf5_dataset_structure() {
     // Test that Hdf5Dataset struct works correctly
     use knowhere_rs::dataset::Dataset;

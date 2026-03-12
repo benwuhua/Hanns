@@ -650,6 +650,11 @@ impl Index for AisaqIndex {
     }
 
     fn get_vector_by_ids(&self, ids: &[i64]) -> std::result::Result<Vec<f32>, IndexError> {
+        if !self.has_raw_data() {
+            return Err(IndexError::Unsupported(
+                "get_vector_by_ids not supported for AISAQ without raw-data metric semantics".into(),
+            ));
+        }
         let vectors = self.get_vector_by_ids(ids)
             .map_err(|e| IndexError::Unsupported(e.to_string()))?;
         // Flatten results (Vec<Vec<f32>> -> flat Vec<f32>)
@@ -661,7 +666,7 @@ impl Index for AisaqIndex {
     }
 
     fn has_raw_data(&self) -> bool {
-        true
+        matches!(self.metric_type, MetricType::L2 | MetricType::Cosine)
     }
 
     fn save(&self, path: &str) -> std::result::Result<(), IndexError> {
@@ -1070,5 +1075,17 @@ mod tests_index_trait {
             count += 1;
         }
         assert!(count > 0);
+    }
+
+    #[test]
+    fn test_aisaq_raw_data_semantics_follow_metric_type() {
+        let l2_index = AisaqIndex::new(AisaqConfig::default(), MetricType::L2, 4);
+        let cosine_index = AisaqIndex::new(AisaqConfig::default(), MetricType::Cosine, 4);
+        let ip_index = AisaqIndex::new(AisaqConfig::default(), MetricType::Ip, 4);
+
+        assert!(Index::has_raw_data(&l2_index));
+        assert!(Index::has_raw_data(&cosine_index));
+        assert!(!Index::has_raw_data(&ip_index));
+        assert!(Index::get_vector_by_ids(&ip_index, &[0]).is_err());
     }
 }

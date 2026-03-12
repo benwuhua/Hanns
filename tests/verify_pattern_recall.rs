@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! 验证 Pattern 数据 vs Random 数据的召回率
 //!
 //! 目的：确认 Pattern 数据是否因向量重复导致虚假的高性能

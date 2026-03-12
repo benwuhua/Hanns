@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! BENCH-027: 真实数据集参数验证
 //!
 //! 在 SIFT1M/Deep1M 真实数据集上验证 HNSW 参数敏感性分析结论
@@ -446,6 +447,7 @@ fn test_deep1m_param_validation() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_param_validation_summary() {
     println!("\n📊 BENCH-027: 参数验证总结");
     println!("==================================================");

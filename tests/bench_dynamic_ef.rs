@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! BENCH-023: 动态 ef_search 效果验证
 //!
 //! 验证动态 ef_search (ef = max(ef_search, 2*top_k)) 对召回率的提升效果
@@ -213,6 +214,7 @@ fn generate_recommendations() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_dynamic_ef_100k() {
     const NUM_BASE: usize = 100_000;
     const NUM_QUERY: usize = 100;
@@ -319,6 +321,7 @@ fn test_dynamic_ef_100k() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_dynamic_ef_1m() {
     const NUM_BASE: usize = 1_000_000;
     const NUM_QUERY: usize = 100;
@@ -425,6 +428,7 @@ fn test_dynamic_ef_1m() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_dynamic_ef_full() {
     println!("\n╔═══════════════════════════════════════════════════════════╗");
     println!("║         BENCH-023: 动态 ef_search 完整测试               ║");

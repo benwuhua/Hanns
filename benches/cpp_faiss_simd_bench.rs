@@ -30,22 +30,23 @@ fn bench_l2_distance(c: &mut Criterion) {
     for dim in [128, 960] {
         let a = generate_vector(dim, 42);
         let b = generate_vector(dim, 123);
+        let input = (&a[..], &b[..]);
 
         group.bench_with_input(
             BenchmarkId::new("L2_SIMD", dim),
-            &(a, b),
+            &input,
             |bencher, (a, b)| bencher.iter(|| simd::l2_distance(black_box(a), black_box(b))),
         );
 
         group.bench_with_input(
             BenchmarkId::new("L2_Scalar", dim),
-            &(a, b),
+            &input,
             |bencher, (a, b)| bencher.iter(|| simd::l2_scalar(black_box(a), black_box(b))),
         );
 
         group.bench_with_input(
             BenchmarkId::new("L2_SQ_SIMD", dim),
-            &(a, b),
+            &input,
             |bencher, (a, b)| bencher.iter(|| simd::l2_distance_sq(black_box(a), black_box(b))),
         );
     }
@@ -60,16 +61,17 @@ fn bench_inner_product(c: &mut Criterion) {
     for dim in [128, 960] {
         let a = generate_vector(dim, 42);
         let b_vec = generate_vector(dim, 123);
+        let input = (&a[..], &b_vec[..]);
 
         group.bench_with_input(
             BenchmarkId::new("IP_SIMD", dim),
-            &(a, b_vec),
+            &input,
             |bencher, (a, b)| bencher.iter(|| simd::inner_product(black_box(a), black_box(b))),
         );
 
         group.bench_with_input(
             BenchmarkId::new("IP_Scalar", dim),
-            &(a, b_vec),
+            &input,
             |bencher, (a, b)| bencher.iter(|| simd::ip_scalar(black_box(a), black_box(b))),
         );
     }
@@ -87,10 +89,11 @@ fn bench_batch_l2(c: &mut Criterion) {
         let db1 = generate_vector(dim, 456);
         let db2 = generate_vector(dim, 789);
         let db3 = generate_vector(dim, 101112);
+        let input = (&query[..], &db0[..], &db1[..], &db2[..], &db3[..]);
 
         group.bench_with_input(
             BenchmarkId::new("L2_Batch4_SIMD", dim),
-            &(query, db0, db1, db2, db3),
+            &input,
             |bencher, (q, d0, d1, d2, d3)| {
                 bencher.iter(|| {
                     simd::l2_batch_4(
@@ -106,7 +109,7 @@ fn bench_batch_l2(c: &mut Criterion) {
 
         group.bench_with_input(
             BenchmarkId::new("L2_Batch4_Scalar", dim),
-            &(query, db0, db1, db2, db3),
+            &input,
             |bencher, (q, d0, d1, d2, d3)| {
                 bencher.iter(|| {
                     simd::l2_batch_4_scalar(
@@ -134,10 +137,11 @@ fn bench_batch_ip(c: &mut Criterion) {
         let db1 = generate_vector(dim, 456);
         let db2 = generate_vector(dim, 789);
         let db3 = generate_vector(dim, 101112);
+        let input = (&query[..], &db0[..], &db1[..], &db2[..], &db3[..]);
 
         group.bench_with_input(
             BenchmarkId::new("IP_Batch4_SIMD", dim),
-            &(query, db0, db1, db2, db3),
+            &input,
             |bencher, (q, d0, d1, d2, d3)| {
                 bencher.iter(|| {
                     simd::ip_batch_4(
@@ -153,7 +157,7 @@ fn bench_batch_ip(c: &mut Criterion) {
 
         group.bench_with_input(
             BenchmarkId::new("IP_Batch4_Scalar", dim),
-            &(query, db0, db1, db2, db3),
+            &input,
             |bencher, (q, d0, d1, d2, d3)| {
                 bencher.iter(|| {
                     simd::ip_batch_4_scalar(

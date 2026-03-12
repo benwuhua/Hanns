@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! OPT-015: HNSW 构建性能优化测试
 //!
 //! 问题分析：
@@ -21,6 +22,7 @@ fn generate_vectors(n: usize, dim: usize) -> Vec<f32> {
 }
 
 #[test]
+#[ignore = "performance benchmark; excluded from default regression"]
 fn test_hnsw_build_performance() {
     println!("\n=== OPT-015: HNSW 构建性能测试 ===\n");
     println!("数据集：100K 向量，128 维");

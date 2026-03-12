@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! 诊断 IVF-Flat 召回率问题
 
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};

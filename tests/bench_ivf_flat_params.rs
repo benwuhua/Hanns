@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! OPT-018: IVF-Flat 参数调优 Benchmark
 //!
 //! 问题：IVF-Flat Fast 版本召回率下降严重：R@100 从 1.0 降至 0.347
@@ -207,6 +208,7 @@ fn benchmark_ivf_flat_config(
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_ivf_flat_fast_vs_standard() {
     println!("\n🔬 OPT-018: IVF-Flat Fast vs Standard 召回率对比");
     println!("==================================================\n");
@@ -345,6 +347,7 @@ fn test_ivf_flat_fast_vs_standard() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_kmeans_algorithms_comparison() {
     println!("\n🔬 OPT-018: K-Means 算法对比");
     println!("==================================================\n");
@@ -457,6 +460,7 @@ fn test_kmeans_algorithms_comparison() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_opt018_summary() {
     println!("\n📊 OPT-018: IVF-Flat 参数调优总结");
     println!("==================================================\n");

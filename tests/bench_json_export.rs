@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! Benchmark JSON Export Test
 //!
 //! Test and validate JSON export functionality for benchmark results.
@@ -355,6 +356,7 @@ fn parse_test_mode() -> TestConfig {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_json_export() {
     println!("\n{}", "=".repeat(60));
     println!("🚀 Benchmark JSON Export Test");

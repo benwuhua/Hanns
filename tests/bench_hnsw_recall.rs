@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! HNSW 大规模召回率测试
 //!
 //! 测试 HNSW 在 100K/1M 数据集上的召回率表现
@@ -210,6 +211,7 @@ fn check_acceptance_criteria(results: &[HnswRecallResult], dataset_size: &str) {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_hnsw_recall_100k() {
     // Quick test mode: use smaller dataset for CI/CD
     // Full test: NUM_BASE=100_000, NUM_QUERY=100
@@ -287,6 +289,7 @@ fn test_hnsw_recall_100k() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_hnsw_recall_1m() {
     const NUM_BASE: usize = 1_000_000;
     const NUM_QUERY: usize = 100;
@@ -338,6 +341,7 @@ fn test_hnsw_recall_1m() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_hnsw_recall_summary() {
     // Combined test that runs both 100K and 1M and prints a summary
     println!("\n╔═══════════════════════════════════════════════════════════╗");

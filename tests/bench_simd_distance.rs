@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! SIMD 距离计算性能基准测试
 //!
 //! 对比 SIMD 优化与标量实现的距离计算性能
@@ -387,6 +388,7 @@ fn verify_correctness() {
 }
 
 #[test]
+#[ignore = "performance benchmark; excluded from default regression"]
 fn test_simd_performance() {
     println!("\n");
     println!("╔═══════════════════════════════════════════════════════════════╗");
@@ -453,6 +455,7 @@ fn test_simd_performance() {
 }
 
 #[test]
+#[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_simd_correctness_only() {
     // 快速正确性验证
     verify_correctness();

@@ -1,3 +1,4 @@
+#![cfg(feature = "long-tests")]
 //! OPT-003 Phase 3: IVF 内存布局优化性能基准测试
 //!
 //! 验证 HashMap → Vec 优化后的 QPS 提升
@@ -58,6 +59,7 @@ fn compute_ground_truth(base: &[f32], queries: &[f32], dim: usize, k: usize) -> 
 
 /// IVF-Flat 性能测试
 #[test]
+#[ignore = "performance benchmark; excluded from default regression"]
 fn test_ivf_flat_performance() {
     println!("\n🚀 OPT-003 Phase 3: IVF-Flat 性能基准测试");
     println!("==============================================");
@@ -181,6 +183,7 @@ fn test_ivf_flat_performance() {
 
 /// IVF-PQ 性能测试
 #[test]
+#[ignore = "performance benchmark; excluded from default regression"]
 fn test_ivf_pq_performance() {
     println!("\n🚀 OPT-003 Phase 3: IVF-PQ 性能基准测试");
     println!("============================================");

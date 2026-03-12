@@ -738,7 +738,12 @@ impl HnswIndex {
 
             let candidates = self.search_layer_idx(vec, curr_ep_idx, level, self.ef_construction);
             let m = if level == 0 { self.m_max0 } else { self.m };
-            let selected = self.select_neighbors_heuristic_idx(vec, &candidates, m);
+            let selected = self.select_neighbors_heuristic_idx_layer_aware(
+                vec,
+                &candidates,
+                m,
+                level == 0,
+            );
             neighbors_per_layer.push(selected);
         }
         neighbors_per_layer
@@ -918,7 +923,8 @@ impl HnswIndex {
 
             // Select best M neighbors using heuristic
             let m = if level == 0 { self.m_max0 } else { self.m };
-            let selected = self.select_neighbors_heuristic(new_vec, &candidates, m);
+            let selected =
+                self.select_neighbors_heuristic_layer_aware(new_vec, &candidates, m, level == 0);
 
             // Add bidirectional connections
             self.add_bidirectional_connections(new_idx, new_id, level, &selected);
@@ -964,7 +970,12 @@ impl HnswIndex {
             // Layer 0 must use the denser base-layer degree (m_max0), otherwise bulk-build
             // under-connects the main search layer and recall collapses on larger datasets.
             let m = if level == 0 { self.m_max0 } else { self.m };
-            let selected = self.select_neighbors_heuristic_idx(new_vec, &candidates, m);
+            let selected = self.select_neighbors_heuristic_idx_layer_aware(
+                new_vec,
+                &candidates,
+                m,
+                level == 0,
+            );
 
             // Add bidirectional connections (uses indices directly)
             self.add_bidirectional_connections_idx(new_idx, new_id, level, &selected);
@@ -1116,8 +1127,12 @@ impl HnswIndex {
             .collect()
     }
 
-    /// Select neighbors using heuristic algorithm (aligned with C++ getNeighborsByHeuristic2)
-    /// BUG-006: Implemented proper heuristic to improve recall
+    /// Select neighbors using the hnswlib-style diversification heuristic.
+    /// BUG-006: Implemented proper heuristic to improve recall.
+    ///
+    /// Audit note: this path intentionally does not perform the FAISS layer-0
+    /// `keep_max_size_level0` outsider backfill, so it can return fewer than `m`
+    /// neighbors when diversification prunes near-duplicate candidates.
     ///
     /// Algorithm: For each candidate (sorted by distance to query), check if it's "good":
     /// - A candidate is good if dist(candidate, already_selected) >= dist(candidate, query)
@@ -1130,6 +1145,16 @@ impl HnswIndex {
         _query: &[f32],
         candidates: &[(usize, f32)],
         m: usize,
+    ) -> Vec<(usize, f32)> {
+        self.select_neighbors_heuristic_idx_layer_aware(_query, candidates, m, false)
+    }
+
+    fn select_neighbors_heuristic_idx_layer_aware(
+        &self,
+        _query: &[f32],
+        candidates: &[(usize, f32)],
+        m: usize,
+        keep_pruned: bool,
     ) -> Vec<(usize, f32)> {
         if candidates.len() <= m {
             // Not enough candidates, return all
@@ -1164,23 +1189,42 @@ impl HnswIndex {
 
             if good {
                 selected.push((cand_idx, cand_dist));
+                if selected.len() >= m {
+                    break;
+                }
+            } else if keep_pruned {
+                pruned.push((cand_idx, cand_dist));
             }
-            // OPT-037: REMOVED backfill mechanism - hnswlib does NOT backfill pruned candidates
-            // Backfill was adding redundant (too similar) neighbors back, reducing graph diversity
         }
 
-        // NOTE: We do NOT backfill from pruned - hnswlib allows fewer than M neighbors
-        // when heuristic rejects candidates. This preserves graph diversity.
+        if keep_pruned {
+            let mut idx = 0;
+            while selected.len() < m && idx < pruned.len() {
+                selected.push(pruned[idx]);
+                idx += 1;
+            }
+        }
+
         selected
     }
 
-    /// Select neighbors using heuristic algorithm (aligned with C++ getNeighborsByHeuristic2)
-    /// BUG-006: Implemented proper heuristic to improve recall
+    /// Select neighbors using the hnswlib-style diversification heuristic.
+    /// BUG-006: Implemented proper heuristic to improve recall.
     fn select_neighbors_heuristic(
         &self,
         _query: &[f32],
         candidates: &[(i64, f32)],
         m: usize,
+    ) -> Vec<(i64, f32)> {
+        self.select_neighbors_heuristic_layer_aware(_query, candidates, m, false)
+    }
+
+    fn select_neighbors_heuristic_layer_aware(
+        &self,
+        _query: &[f32],
+        candidates: &[(i64, f32)],
+        m: usize,
+        keep_pruned: bool,
     ) -> Vec<(i64, f32)> {
         if candidates.len() <= m {
             // Not enough candidates, return all
@@ -1214,11 +1258,22 @@ impl HnswIndex {
 
             if good {
                 selected.push((cand_id, cand_dist));
+                if selected.len() >= m {
+                    break;
+                }
+            } else if keep_pruned {
+                pruned.push((cand_id, cand_dist));
             }
-            // OPT-037: REMOVED backfill - see select_neighbors_heuristic_idx for rationale
         }
 
-        // NOTE: No backfill - match hnswlib behavior
+        if keep_pruned {
+            let mut idx = 0;
+            while selected.len() < m && idx < pruned.len() {
+                selected.push(pruned[idx]);
+                idx += 1;
+            }
+        }
+
         selected
     }
 
@@ -1258,7 +1313,6 @@ impl HnswIndex {
 
         // Apply diversification heuristic from THIS node's perspective
         let mut selected: Vec<(usize, f32)> = Vec::with_capacity(m_max);
-        let mut pruned: Vec<(usize, f32)> = Vec::new();
 
         for (cand_idx, cand_dist) in sorted {
             if selected.len() >= m_max {
@@ -1279,10 +1333,11 @@ impl HnswIndex {
             if good {
                 selected.push((cand_idx, cand_dist));
             }
-            // OPT-037: REMOVED backfill - match hnswlib behavior for better diversity
+            // OPT-037: keep the hnswlib-style no-backfill behavior here.
         }
 
-        // NOTE: No backfill - this is correct hnswlib behavior
+        // NOTE: no backfill here; FAISS can optionally refill pruned layer-0
+        // candidates through `keep_max_size_level0`.
 
         // Pre-compute IDs before mutable borrow
         let new_neighbors: Vec<(i64, f32)> = selected
@@ -2096,6 +2151,30 @@ impl HnswIndex {
         (max_layer, layer_counts, avg_neighbors_l0)
     }
 
+    /// Get min/max/average neighbor counts for nodes that exist at a layer.
+    pub fn layer_neighbor_count_stats(&self, level: usize) -> Option<(usize, usize, f32)> {
+        let mut counts = self
+            .node_info
+            .iter()
+            .filter(|node_info| level <= node_info.max_layer)
+            .map(|node_info| node_info.layer_neighbors[level].len());
+
+        let first = counts.next()?;
+        let mut min_count = first;
+        let mut max_count = first;
+        let mut total = first;
+        let mut seen = 1usize;
+
+        for count in counts {
+            min_count = min_count.min(count);
+            max_count = max_count.max(count);
+            total += count;
+            seen += 1;
+        }
+
+        Some((min_count, max_count, total as f32 / seen as f32))
+    }
+
     pub fn save(&self, path: &std::path::Path) -> Result<()> {
         use std::fs::File;
         use std::io::Write;
@@ -2906,6 +2985,42 @@ pub fn random_level(_m: usize, rng: &mut impl Rng) -> usize {
 mod tests {
     use super::*;
     use crate::api::IndexType;
+
+    fn faiss_layer0_backfill_model(
+        index: &HnswIndex,
+        candidates: &[(usize, f32)],
+        m: usize,
+    ) -> Vec<(usize, f32)> {
+        let mut selected: Vec<(usize, f32)> = Vec::with_capacity(m);
+        let mut outsiders: Vec<(usize, f32)> = Vec::new();
+
+        for &(cand_idx, cand_dist) in candidates {
+            let mut good = true;
+            for &(sel_idx, _) in &selected {
+                let dist_between = index.distance_between_nodes_idx(cand_idx, sel_idx);
+                if dist_between < cand_dist {
+                    good = false;
+                    break;
+                }
+            }
+
+            if good {
+                selected.push((cand_idx, cand_dist));
+                if selected.len() >= m {
+                    return selected;
+                }
+            } else {
+                outsiders.push((cand_idx, cand_dist));
+            }
+        }
+
+        let mut outsider_idx = 0;
+        while selected.len() < m && outsider_idx < outsiders.len() {
+            selected.push(outsiders[outsider_idx]);
+            outsider_idx += 1;
+        }
+        selected
+    }
 
     #[test]
     fn test_hnsw() {
@@ -3965,5 +4080,99 @@ mod tests {
             "heuristic should always select at least the nearest candidate"
         );
         assert_eq!(selected[0].0, 0, "nearest good candidate should stay selected");
+    }
+
+    #[test]
+    fn test_layer0_neighbor_selection_audit_differs_from_faiss_backfill() {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(2),
+                ef_construction: Some(8),
+                ..Default::default()
+            },
+        };
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0, 0.0, // candidate 0
+            0.1, 0.0, // candidate 1, pruned by diversification
+            0.2, 0.0, // candidate 2, also pruned
+        ];
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        let candidates = vec![(0usize, 0.1f32), (1usize, 0.2f32), (2usize, 5.0f32)];
+
+        let rust_selected = index.select_neighbors_heuristic_idx(&[0.0, 0.0], &candidates, 2);
+        let faiss_selected = faiss_layer0_backfill_model(&index, &candidates, 2);
+
+        assert_eq!(
+            rust_selected,
+            vec![(0usize, 0.1f32)],
+            "current Rust build path keeps the hnswlib-style no-backfill result"
+        );
+        assert_eq!(
+            faiss_selected,
+            vec![(0usize, 0.1f32), (1usize, 0.2f32)],
+            "FAISS layer-0 keep_max_size_level0 refills pruned outsiders"
+        );
+        assert_ne!(
+            rust_selected, faiss_selected,
+            "audit fixture should capture the concrete FAISS-vs-Rust layer-0 difference"
+        );
+    }
+
+    #[test]
+    fn test_layer0_neighbor_selection_matches_faiss_backfill() {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(2),
+                ef_construction: Some(8),
+                ..Default::default()
+            },
+        };
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0, 0.0, //
+            0.1, 0.0, //
+            0.2, 0.0, //
+        ];
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        let candidates = vec![(0usize, 0.1f32), (1usize, 0.2f32), (2usize, 5.0f32)];
+
+        let layer0_selected = index.select_neighbors_heuristic_idx_layer_aware(
+            &[0.0, 0.0],
+            &candidates,
+            2,
+            true,
+        );
+        let upper_layer_selected = index.select_neighbors_heuristic_idx_layer_aware(
+            &[0.0, 0.0],
+            &candidates,
+            2,
+            false,
+        );
+
+        assert_eq!(
+            layer0_selected,
+            vec![(0usize, 0.1f32), (1usize, 0.2f32)],
+            "layer 0 should refill pruned outsiders up to m_max0 like FAISS"
+        );
+        assert_eq!(
+            upper_layer_selected,
+            vec![(0usize, 0.1f32)],
+            "upper layers should keep the existing no-backfill behavior"
+        );
     }
 }
