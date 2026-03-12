@@ -541,7 +541,7 @@
       "title": "Profile the reopened HNSW build path",
       "description": "Add a reopen-specific profiling surface for HNSW build/search hot paths so future algorithm work is driven by measured layer-descent, candidate-search, shrink, and repair costs rather than by verdict maintenance.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash init.sh",
         "cargo test --test bench_hnsw_reopen_progress -- --nocapture",

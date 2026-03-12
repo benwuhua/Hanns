@@ -4,10 +4,10 @@
 ## 当前大任务面板
 
 - [ ] **HNSW-REOPEN-001**: 重开 HNSW 核心算法攻关线
-  - 当前子阶段: `build_path_profiler` 🔄
+  - 当前子阶段: `build_quality_rework` 🔄
   - 当前结论: 2026-03-12 的 HNSW family verdict 继续保留为历史基线，但不再作为停止优化的理由；当前唯一活动目标是继续优化 `src/faiss/hnsw.rs` 的核心建图路径，并用新的 authority artifact 去挑战 `functional-but-not-leading`
-  - 当前证据: `benchmark_results/hnsw_reopen_baseline.json`
-  - 下一步: 完成 `hnsw-build-path-profiler`，把 layer descent / candidate search / shrink / repair 的 build-path 热点拆清，再决定第一刀算法改动落在哪个热路径
+  - 当前证据: `benchmark_results/hnsw_reopen_baseline.json` + `benchmark_results/hnsw_reopen_profile_round1.json`
+  - 下一步: 执行 `hnsw-build-quality-rework`，优先攻击 round-1 profiler 暴露出来的 `candidate_search` 热点，其次才是 `neighbor_selection` 与 `connection_update`
   - 范围约束: 只重开 HNSW；IVF-PQ、DiskANN、以及项目级 final acceptance 继续保持 archived state，直到 HNSW 真的拿到更强 authority evidence
 
 - [x] **BASELINE-P3-001**: 建立可信的 native-vs-rs recall-gated 基线

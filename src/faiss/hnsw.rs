@@ -9,8 +9,10 @@
 use rand::seq::SliceRandom;
 use rand::Rng;
 use rayon::prelude::*;
+use serde::Serialize;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::api::{
     IndexConfig, MetricType, Predicate, Result, SearchRequest, SearchResult as ApiSearchResult,
@@ -144,6 +146,195 @@ struct SearchScratch {
     visited_epoch: Vec<u32>,
     touched: Vec<usize>,
     epoch: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum HnswBuildProfileStage {
+    LayerDescent,
+    CandidateSearch,
+    NeighborSelection,
+    ConnectionUpdate,
+    Repair,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct HnswBuildProfileStats {
+    layer_descent: Duration,
+    candidate_search: Duration,
+    neighbor_selection: Duration,
+    connection_update: Duration,
+    repair: Duration,
+    layer_descent_calls: u64,
+    candidate_search_calls: u64,
+    neighbor_selection_calls: u64,
+    connection_update_calls: u64,
+    repair_calls: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HnswBuildProfileTimingBuckets {
+    pub layer_descent_ms: f64,
+    pub candidate_search_ms: f64,
+    pub neighbor_selection_ms: f64,
+    pub connection_update_ms: f64,
+    pub repair_ms: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HnswBuildProfileCallCounts {
+    pub layer_descent_calls: u64,
+    pub candidate_search_calls: u64,
+    pub neighbor_selection_calls: u64,
+    pub connection_update_calls: u64,
+    pub repair_calls: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HnswBuildProfileHotspot {
+    pub stage: String,
+    pub milliseconds: f64,
+    pub calls: u64,
+    pub share_of_profiled_time: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HnswBuildProfileReport {
+    pub timing_buckets: HnswBuildProfileTimingBuckets,
+    pub call_counts: HnswBuildProfileCallCounts,
+    pub hotspot_ranking: Vec<HnswBuildProfileHotspot>,
+    pub recommended_first_rework_target: String,
+    pub total_profiled_ms: f64,
+    pub repair_operations: usize,
+    pub vectors_added: usize,
+}
+
+impl HnswBuildProfileStats {
+    fn record(&mut self, stage: HnswBuildProfileStage, elapsed: Duration) {
+        match stage {
+            HnswBuildProfileStage::LayerDescent => {
+                self.layer_descent += elapsed;
+                self.layer_descent_calls += 1;
+            }
+            HnswBuildProfileStage::CandidateSearch => {
+                self.candidate_search += elapsed;
+                self.candidate_search_calls += 1;
+            }
+            HnswBuildProfileStage::NeighborSelection => {
+                self.neighbor_selection += elapsed;
+                self.neighbor_selection_calls += 1;
+            }
+            HnswBuildProfileStage::ConnectionUpdate => {
+                self.connection_update += elapsed;
+                self.connection_update_calls += 1;
+            }
+            HnswBuildProfileStage::Repair => {
+                self.repair += elapsed;
+                self.repair_calls += 1;
+            }
+        }
+    }
+
+    fn timing_buckets(&self) -> HnswBuildProfileTimingBuckets {
+        HnswBuildProfileTimingBuckets {
+            layer_descent_ms: self.layer_descent.as_secs_f64() * 1000.0,
+            candidate_search_ms: self.candidate_search.as_secs_f64() * 1000.0,
+            neighbor_selection_ms: self.neighbor_selection.as_secs_f64() * 1000.0,
+            connection_update_ms: self.connection_update.as_secs_f64() * 1000.0,
+            repair_ms: self.repair.as_secs_f64() * 1000.0,
+        }
+    }
+
+    fn call_counts(&self) -> HnswBuildProfileCallCounts {
+        HnswBuildProfileCallCounts {
+            layer_descent_calls: self.layer_descent_calls,
+            candidate_search_calls: self.candidate_search_calls,
+            neighbor_selection_calls: self.neighbor_selection_calls,
+            connection_update_calls: self.connection_update_calls,
+            repair_calls: self.repair_calls,
+        }
+    }
+
+    fn total_profiled_ms(&self) -> f64 {
+        self.layer_descent.as_secs_f64() * 1000.0
+            + self.candidate_search.as_secs_f64() * 1000.0
+            + self.neighbor_selection.as_secs_f64() * 1000.0
+            + self.connection_update.as_secs_f64() * 1000.0
+            + self.repair.as_secs_f64() * 1000.0
+    }
+
+    fn hotspot_ranking(&self) -> Vec<HnswBuildProfileHotspot> {
+        let total = self.total_profiled_ms();
+        let mut hotspots = vec![
+            (
+                "layer_descent",
+                self.layer_descent.as_secs_f64() * 1000.0,
+                self.layer_descent_calls,
+            ),
+            (
+                "candidate_search",
+                self.candidate_search.as_secs_f64() * 1000.0,
+                self.candidate_search_calls,
+            ),
+            (
+                "neighbor_selection",
+                self.neighbor_selection.as_secs_f64() * 1000.0,
+                self.neighbor_selection_calls,
+            ),
+            (
+                "connection_update",
+                self.connection_update.as_secs_f64() * 1000.0,
+                self.connection_update_calls,
+            ),
+            (
+                "repair",
+                self.repair.as_secs_f64() * 1000.0,
+                self.repair_calls,
+            ),
+        ];
+
+        hotspots.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+
+        hotspots
+            .into_iter()
+            .map(|(stage, milliseconds, calls)| HnswBuildProfileHotspot {
+                stage: stage.to_string(),
+                milliseconds,
+                calls,
+                share_of_profiled_time: if total > 0.0 {
+                    milliseconds / total
+                } else {
+                    0.0
+                },
+            })
+            .collect()
+    }
+
+    fn recommended_first_rework_target(&self) -> String {
+        let hotspots = self.hotspot_ranking();
+        let stage = hotspots
+            .first()
+            .map(|hotspot| hotspot.stage.as_str())
+            .unwrap_or("connection_update");
+        match stage {
+            "candidate_search" => "build_time_candidate_search".to_string(),
+            "layer_descent" => "layer_descent_entrypoint_walk".to_string(),
+            "neighbor_selection" => "neighbor_selection_diversification".to_string(),
+            "repair" => "connectivity_repair_path".to_string(),
+            _ => "bulk_build_connection_update_path".to_string(),
+        }
+    }
+
+    fn into_report(self, vectors_added: usize, repair_operations: usize) -> HnswBuildProfileReport {
+        HnswBuildProfileReport {
+            timing_buckets: self.timing_buckets(),
+            call_counts: self.call_counts(),
+            hotspot_ranking: self.hotspot_ranking(),
+            recommended_first_rework_target: self.recommended_first_rework_target(),
+            total_profiled_ms: self.total_profiled_ms(),
+            repair_operations,
+            vectors_added,
+        }
+    }
 }
 
 impl SearchScratch {
@@ -388,6 +579,78 @@ impl HnswIndex {
                 let vec_start = idx * self.dim;
                 let vec: Vec<f32> = self.vectors[vec_start..vec_start + self.dim].to_vec();
                 self.insert_node(idx, &vec, node_level);
+            }
+        }
+
+        Ok(n)
+    }
+
+    fn add_profiled(
+        &mut self,
+        vectors: &[f32],
+        ids: Option<&[i64]>,
+        stats: &mut HnswBuildProfileStats,
+    ) -> Result<usize> {
+        if !self.trained {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "index must be trained first".to_string(),
+            ));
+        }
+
+        let n = vectors.len() / self.dim;
+        if n == 0 {
+            return Ok(0);
+        }
+
+        let base_count = self.ids.len();
+        let using_sequential = ids.is_none();
+        if base_count == 0 {
+            self.use_sequential_ids = using_sequential;
+        } else {
+            self.use_sequential_ids = self.use_sequential_ids && using_sequential;
+        }
+
+        self.vectors.reserve(n * self.dim);
+        self.ids.reserve(n);
+        self.node_info.reserve(n);
+
+        let first_new_idx = self.ids.len();
+
+        for i in 0..n {
+            let start = i * self.dim;
+            let new_vec = &vectors[start..start + self.dim];
+
+            let id = ids.map(|ids| ids[i]).unwrap_or(self.next_id);
+            self.next_id += 1;
+
+            let node_level = self.random_level();
+            let node_info = NodeInfo::new(node_level, self.m);
+
+            self.ids.push(id);
+            self.vectors.extend_from_slice(new_vec);
+            self.node_info.push(node_info);
+
+            if base_count == 0 && i == 0 {
+                self.entry_point = Some(id);
+                self.max_level = node_level;
+            }
+
+            if node_level > self.max_level {
+                self.max_level = node_level;
+                self.entry_point = Some(id);
+            }
+        }
+
+        let node_levels: Vec<usize> = (first_new_idx..first_new_idx + n)
+            .map(|idx| self.node_info[idx].max_layer)
+            .collect();
+
+        for (i, &node_level) in node_levels.iter().enumerate().take(n) {
+            let idx = first_new_idx + i;
+            if idx > 0 {
+                let vec_start = idx * self.dim;
+                let vec: Vec<f32> = self.vectors[vec_start..vec_start + self.dim].to_vec();
+                self.insert_node_profiled(idx, &vec, node_level, stats);
             }
         }
 
@@ -982,6 +1245,64 @@ impl HnswIndex {
 
             // Add bidirectional connections (uses indices directly)
             self.add_bidirectional_connections_idx(new_idx, new_id, level, &selected);
+        }
+    }
+
+    fn insert_node_profiled(
+        &mut self,
+        new_idx: usize,
+        new_vec: &[f32],
+        node_level: usize,
+        stats: &mut HnswBuildProfileStats,
+    ) {
+        let new_id = self.get_id_from_idx(new_idx);
+        let mut curr_ep_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
+
+        for level in (0..=self.max_level).rev() {
+            if level > node_level {
+                let stage_start = Instant::now();
+                let nearest_results = self.search_layer_idx(new_vec, curr_ep_idx, level, 1);
+                stats.record(HnswBuildProfileStage::LayerDescent, stage_start.elapsed());
+                if !nearest_results.is_empty() {
+                    curr_ep_idx = nearest_results[0].0;
+                }
+                continue;
+            }
+
+            let stage_start = Instant::now();
+            let nearest_results = self.search_layer_idx(new_vec, curr_ep_idx, level, 1);
+            stats.record(HnswBuildProfileStage::LayerDescent, stage_start.elapsed());
+            if !nearest_results.is_empty() {
+                curr_ep_idx = nearest_results[0].0;
+            }
+
+            let stage_start = Instant::now();
+            let candidates =
+                self.search_layer_idx(new_vec, curr_ep_idx, level, self.ef_construction);
+            stats.record(
+                HnswBuildProfileStage::CandidateSearch,
+                stage_start.elapsed(),
+            );
+
+            let m = if level == 0 { self.m_max0 } else { self.m };
+            let stage_start = Instant::now();
+            let selected = self.select_neighbors_heuristic_idx_layer_aware(
+                new_vec,
+                &candidates,
+                m,
+                level == 0,
+            );
+            stats.record(
+                HnswBuildProfileStage::NeighborSelection,
+                stage_start.elapsed(),
+            );
+
+            let stage_start = Instant::now();
+            self.add_bidirectional_connections_idx(new_idx, new_id, level, &selected);
+            stats.record(
+                HnswBuildProfileStage::ConnectionUpdate,
+                stage_start.elapsed(),
+            );
         }
     }
 
@@ -2515,6 +2836,29 @@ impl HnswIndex {
         count
     }
 
+    fn find_and_repair_unreachable_profiled(&mut self, stats: &mut HnswBuildProfileStats) -> usize {
+        let unreachable = self.find_unreachable_vectors();
+        let count = unreachable.len();
+
+        if count > 0 {
+            let repair_tasks: Vec<(usize, usize)> = unreachable
+                .iter()
+                .flat_map(|&idx| {
+                    let node_info = &self.node_info[idx];
+                    (0..=node_info.max_layer).map(move |level| (idx, level))
+                })
+                .collect();
+
+            for (idx, level) in repair_tasks {
+                let stage_start = Instant::now();
+                self.repair_graph_connectivity_internal(idx, level);
+                stats.record(HnswBuildProfileStage::Repair, stage_start.elapsed());
+            }
+        }
+
+        count
+    }
+
     /// Internal method to repair connectivity for a single unreachable vector
     ///
     /// This is called during find_unreachable_vectors for upper levels.
@@ -2757,6 +3101,22 @@ impl HnswIndex {
         }
 
         Ok(self.ids.len())
+    }
+
+    pub fn build_profile_report(
+        &mut self,
+        vectors: &[f32],
+        ids: Option<&[i64]>,
+    ) -> Result<HnswBuildProfileReport> {
+        if !self.trained {
+            self.train(vectors)?;
+        }
+
+        let mut stats = HnswBuildProfileStats::default();
+        let vectors_added = self.add_profiled(vectors, ids, &mut stats)?;
+        let repair_operations = self.find_and_repair_unreachable_profiled(&mut stats);
+
+        Ok(stats.into_report(vectors_added, repair_operations))
     }
 }
 

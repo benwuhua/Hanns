@@ -163,7 +163,7 @@ Objective:
 Active scoped tasks:
 
 - `hnsw-reopen-baseline-freeze`: freeze a new reopen baseline and reactivate durable workflow state
-- `hnsw-build-path-profiler`: profile layer descent, candidate search, shrink, and repair costs on the authority lane
+- `hnsw-build-path-profiler`: closed; round-1 profiling artifact now ranks `candidate_search` first, `neighbor_selection` second, and `connection_update` third on the reopen lane
 - `hnsw-build-quality-rework`: ship the first direct core build-path rework
 - `hnsw-authority-rerun-and-verdict-refresh`: re-run the authority lane and decide whether HNSW still deserves `functional-but-not-leading`
 

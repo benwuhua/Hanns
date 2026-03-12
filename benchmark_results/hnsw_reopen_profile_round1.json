@@ -1,0 +1,75 @@
+{
+  "authority_scope": "remote_x86_only",
+  "baseline_source": "benchmark_results/hnsw_reopen_baseline.json",
+  "benchmark_lane": "hnsw_reopen_build_path_profile_round1",
+  "build_wall_clock_ms": 17006.687167,
+  "call_counts": {
+    "candidate_search_calls": 12804,
+    "connection_update_calls": 12804,
+    "layer_descent_calls": 47996,
+    "neighbor_selection_calls": 12804,
+    "repair_calls": 1
+  },
+  "config": {
+    "ef_construction": 200,
+    "ef_search": 64,
+    "m": 16,
+    "top_k": 10
+  },
+  "dataset": {
+    "base_vectors": 12000,
+    "dim": 128,
+    "query_vectors": 128
+  },
+  "dataset_source": "synthetic_sift_like_128d",
+  "family": "HNSW",
+  "hotspot_ranking": [
+    {
+      "calls": 12804,
+      "milliseconds": 8667.369133999999,
+      "share_of_profiled_time": 0.5108084319390026,
+      "stage": "candidate_search"
+    },
+    {
+      "calls": 12804,
+      "milliseconds": 5231.719192,
+      "share_of_profiled_time": 0.30832957907925024,
+      "stage": "neighbor_selection"
+    },
+    {
+      "calls": 12804,
+      "milliseconds": 1971.4142639999998,
+      "share_of_profiled_time": 0.11618462457607183,
+      "stage": "connection_update"
+    },
+    {
+      "calls": 47996,
+      "milliseconds": 1096.783806,
+      "share_of_profiled_time": 0.06463857803416259,
+      "stage": "layer_descent"
+    },
+    {
+      "calls": 1,
+      "milliseconds": 0.658125,
+      "share_of_profiled_time": 0.00003878637151279498,
+      "stage": "repair"
+    }
+  ],
+  "recommended_first_rework_target": "build_time_candidate_search",
+  "repair_operations": 1,
+  "sample_search": {
+    "qps": 1410.1038213174604,
+    "query_count": 128,
+    "search_wall_clock_ms": 90.773458
+  },
+  "task_id": "HNSW-REOPEN-PROFILE-ROUND1",
+  "timing_buckets": {
+    "candidate_search_ms": 8667.369133999999,
+    "connection_update_ms": 1971.4142639999998,
+    "layer_descent_ms": 1096.783806,
+    "neighbor_selection_ms": 5231.719192,
+    "repair_ms": 0.658125
+  },
+  "total_profiled_ms": 16967.944520999998,
+  "vectors_added": 12000
+}

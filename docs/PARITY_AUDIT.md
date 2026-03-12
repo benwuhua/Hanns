@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-12 06:47
+Last updated: 2026-03-12 07:05
 Sync baseline: f841df2955e06eb8c6d6f5e7cb8316941fb9c550 from origin/main
 
 ## 轮次记录
+- 2026-03-12 07:05: **builder-loop：收口 `hnsw-build-path-profiler`，把 HNSW reopen line 从“只有基线”推进到“有可执行热点分解”的状态（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`docs/superpowers/plans/2026-03-12-hnsw-reopen-algorithm-line.md`、`tests/bench_hnsw_reopen_progress.rs`、`src/faiss/hnsw.rs`、`tests/bench_hnsw_cpp_compare.rs`。
+  2. 阶段结论：HNSW reopen line 不能直接跳进“试着优化一点点”；必须先把 build-path 热点拆成可执行事实，否则下一轮核心算法修改仍然会退回凭感觉调参。默认 lane 因此需要新增一个 profile artifact contract，而 authority lane 需要有可回放的 long-test 生成器。
+  3. 本轮执行：扩展 `tests/bench_hnsw_reopen_progress.rs`，让它要求 `benchmark_results/hnsw_reopen_profile_round1.json`；新增 `tests/bench_hnsw_reopen_profile.rs` 作为 reopen profile 生成器；在 `src/faiss/hnsw.rs` 中加入 `HnswIndex::build_profile_report()` 和最小 build-stage instrumentation，随后生成并跟踪 `benchmark_results/hnsw_reopen_profile_round1.json`。
+  4. 验证结果：本地 `cargo test --test bench_hnsw_reopen_progress -- --nocapture` 先因缺失 profile artifact 失败后转绿；`cargo test --features long-tests --test bench_hnsw_reopen_profile -- --ignored --nocapture` 通过并重写 artifact；authority replay 在重跑 `bash init.sh` 刷新远端同步后成功，日志分别为 `/data/work/knowhere-rs-logs-hnsw-reopen-profiler/test_20260312T070256Z_96556.log` 与 `/data/work/knowhere-rs-logs-hnsw-reopen-profiler/test_20260312T070349Z_96795.log`。
+  5. 后续主缺口：round-1 profiler 现已表明 `candidate_search` 约占 `51%` 的 profiled build time，`neighbor_selection` 约占 `31%`，`connection_update` 约占 `12%`；因此下一条活动 feature 应该直接是 `hnsw-build-quality-rework`，优先切 build-time candidate search。
+  状态：Phase 6 Active（profile surface closed；next feature is `hnsw-build-quality-rework`）。
 - 2026-03-12 06:47: **builder-loop：重开 `hnsw-reopen-baseline-freeze`，把 HNSW 从 archived verdict 重新切回 active algorithm line（plan+exec）**
   1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_p3_002_final_verdict.json`、`benchmark_results/baseline_p3_001_stop_go_verdict.json`、`src/faiss/hnsw.rs`、`tests/bench_hnsw_cpp_compare.rs`。
   2. 阶段结论：当前 repo 的 durable workflow 已经过度偏向“维护 final verdict”，不适合继续做 HNSW 核心算法攻关。重开范围因此被刻意收窄为“只重开 HNSW，不重开全项目 acceptance”，并保留 2026-03-12 的 final artifacts 作为历史基线。

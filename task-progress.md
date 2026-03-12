@@ -12,13 +12,36 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `hnsw-build-path-profiler` (HNSW has been intentionally reopened as the only active algorithm line; the 2026-03-12 final verdict remains historical baseline truth)
-- Next feature: `hnsw-build-quality-rework` (after the profiler closes, the next step is a direct build-path algorithm rework in `src/faiss/hnsw.rs`)
+- Current focus: `hnsw-build-quality-rework` (round-1 reopen profiling is now closed; the next active step is a direct algorithm rework in `src/faiss/hnsw.rs` aimed first at the measured candidate-search hotspot)
+- Next feature: `hnsw-authority-rerun-and-verdict-refresh` (after the first build-path rework lands, re-run the authority lane and decide whether the historical HNSW verdict meaningfully improves)
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 32/35 features passing (91%)
+- Progress: 33/35 features passing (94%)
 
 ## Session Log
+
+### Session 41 - 2026-03-12
+- Focus: `hnsw-build-path-profiler`
+- Completed:
+  - extended `tests/bench_hnsw_reopen_progress.rs` so the default progress lane now also requires `benchmark_results/hnsw_reopen_profile_round1.json`, then used the missing-artifact failure as the TDD red signal for the profiler slice
+  - added `tests/bench_hnsw_reopen_profile.rs` plus a new `HnswIndex::build_profile_report()` instrumentation path in `src/faiss/hnsw.rs`, yielding a tracked reopen profiling artifact with explicit timing buckets, call counts, hotspot ranking, and a recommended first rework target
+  - generated `benchmark_results/hnsw_reopen_profile_round1.json`; the round-1 result ranks `candidate_search` first (~51% of profiled build time), followed by `neighbor_selection` (~31%) and `connection_update` (~12%), so the next HNSW rework should attack build-time candidate search before anything else
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_progress -- --nocapture` -> initial `FAIL` (missing `benchmark_results/hnsw_reopen_profile_round1.json`), then `ok`
+  - `cargo test --features long-tests --test bench_hnsw_reopen_profile -- --ignored --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `bash init.sh` -> `ok`
+  - first authority replay of `bench_hnsw_reopen_profile` failed before re-sync because the remote repo had not yet received the new test target; rerunning `bash init.sh` refreshed the authority workspace
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-profiler KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-profiler bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_profile -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-profiler/test_20260312T070256Z_96556.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-profiler KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-profiler bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_progress -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-profiler/test_20260312T070349Z_96795.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 35 features (33 passing, 2 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-build-path-profiler` is now `passing`
+  - the next active feature is `hnsw-build-quality-rework`
+- Notes:
+  - round-1 profiling currently uses a deterministic `synthetic_sift_like_128d` dataset surface so the authority replay stays self-contained instead of depending on ignored local fixtures
+  - historical project-level verdict artifacts remain unchanged; this feature only adds a measured reopen surface for choosing the next HNSW algorithm cut
+- Git Commits: pending
 
 ### Session 40 - 2026-03-12
 - Focus: `hnsw-reopen-baseline-freeze`
