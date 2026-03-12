@@ -44,7 +44,7 @@
 - Notes:
   - this feature closes distance-dispatch overhead plumbing only; it does not yet claim a same-schema QPS verdict move
   - the next meaningful HNSW step should be a fresh authority same-schema rerun focused on measuring this dispatch cut on the real lane
-- Git Commits: pending
+- Git Commits: `46a3dfc`
 
 ### Session 55 - 2026-03-12
 - Focus: `hnsw-round4-authority-same-schema-rerun`
