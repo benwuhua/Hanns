@@ -1,6 +1,6 @@
 # Knowhere-RS Development Roadmap (Non-GPU)
 
-Last updated: 2026-03-12 09:56 UTC
+Last updated: 2026-03-12 11:22 UTC
 
 ## Goal
 
@@ -153,7 +153,7 @@ Exit criteria:
 - Production-relevant persistence / FFI metadata semantics are stable and auditable.
 - At least one core non-GPU path shows repeatable, recall-gated performance leadership over native knowhere. Not met on the current authority evidence; the final program verdict is therefore archived as `not accepted` in `benchmark_results/final_production_acceptance.json`.
 
-## Phase 6: HNSW Reopen Algorithm Push — ✅ Closed (round 3 soft-stop archived)
+## Phase 6: HNSW Reopen Algorithm Push — 🔄 Active (round 4 layer-0 searcher parity)
 
 Objective:
 
@@ -170,7 +170,11 @@ Active scoped tasks:
 - `hnsw-distance-compute-profiler`: closed; `benchmark_results/hnsw_reopen_distance_compute_profile_round3.json` now shows `layer0_query_distance` as the dominant remaining search-time distance cost while `node_node_distance` stays at zero on this lane
 - `hnsw-distance-l2-fast-path-rework`: closed; the round-3 `L2 + no filter` search path now uses a pointer-backed distance helper inside the upper-layer and layer-0 hot loops, and the refreshed synthetic profile shows `distance_compute` falling from `40.165ms` to `38.528ms` while sample-search qps rises to `2069.930`
 - `hnsw-round3-authority-same-schema-rerun`: closed; `benchmark_results/hnsw_reopen_round3_authority_summary.json` now records the real same-schema result: Rust HNSW improved to `553.060` qps with recall `0.9943`, but native also rose to `10792.646` qps, so round 3 closes as `soft_stop` and does not justify a later verdict-refresh feature
+- `hnsw-reopen-round4-activation`: closed; `benchmark_results/hnsw_reopen_round4_baseline.json` now freezes round 3 as a soft-stop baseline and officially activates the fourth HNSW line around `layer0_searcher_parity`
+- `hnsw-layer0-searcher-audit`: active; the next artifact must pin native `NeighborSetDoublePopList + distances_batch_4` against the Rust `BinaryHeap + one-by-one distance` layer-0 search core so the next rework is driven by a real parity gap rather than another broad hotspot label
+- `hnsw-layer0-searcher-core-rework`: queued; after the audit, replace the current layer-0 `L2 + no-filter` search core with a scratch-owned ordered-pool path and batch distance helpers that more closely match native searcher behavior
+- `hnsw-round4-authority-same-schema-rerun`: queued; once the layer-0 parity rework lands, rerun the same-schema Rust/native authority lane and decide whether round 4 is another stop or the first reopen line strong enough to justify a verdict-refresh discussion
 
 Phase exit criteria:
 
-- HNSW round 3 produces a fresh same-schema authority result after the distance-compute cut, and the repo explicitly records whether that result justifies a follow-on verdict-refresh feature or another stop. ✅
+- HNSW round 4 produces a fresh same-schema authority result after the layer-0 parity cut, and the repo explicitly records whether that result justifies a follow-on verdict-refresh feature or another stop.

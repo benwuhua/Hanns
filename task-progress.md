@@ -12,13 +12,33 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `none`
-- Next feature: `none`
+- Current focus: `hnsw-layer0-searcher-audit`
+- Next feature: `hnsw-layer0-searcher-core-rework`
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 43/43 features passing (100%)
+- Progress: 44/47 features passing (94%)
 
 ## Session Log
+
+### Session 52 - 2026-03-12
+- Focus: `hnsw-reopen-round4-activation`
+- Completed:
+  - added `tests/bench_hnsw_reopen_round4.rs` as the default-lane contract for the fourth HNSW reopen line, then used the missing `benchmark_results/hnsw_reopen_round4_baseline.json` failure as the TDD red signal for reopening HNSW after the round-3 soft stop
+  - created `benchmark_results/hnsw_reopen_round4_baseline.json`, freezing round 3 as the new round-4 baseline: HNSW still inherits the historical `functional-but-not-leading` family verdict, round 3 is now treated as a `soft_stop`, and the next active hypothesis is `layer0_searcher_parity`
+  - reopened the durable workflow state for a fourth HNSW line by adding four new round-4 features and repointing the queue/gap/roadmap/audit docs at native-vs-Rust layer-0 searcher parity as the next explicit authority-backed same-schema QPS hypothesis
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round4 -- --nocapture` -> initial `FAIL` (missing `benchmark_results/hnsw_reopen_round4_baseline.json`), then `ok`
+  - `bash init.sh` -> `ok`
+  - first authority replay was started before `init.sh` finished syncing and failed without becoming final evidence: `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round4 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round4 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round4 -q"` -> `status=failed` (`/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T112127Z_32612.log`)
+  - serialized authority replay passed: `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round4 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round4 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round4 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T112200Z_32809.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 47 features (44 passing, 3 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-reopen-round4-activation` is now `passing`
+  - round 4 is active, and the next tracked feature is `hnsw-layer0-searcher-audit`
+- Notes:
+  - this activation feature does not claim any new HNSW performance win; it only formalizes round 4 around the native-vs-Rust layer-0 searcher parity hypothesis and prevents the repo from drifting back into the round-3 soft-stop terminal narrative while new HNSW work is active
+  - the historical HNSW family verdict remains unchanged until the round-4 same-schema authority rerun says otherwise
+- Git Commits: pending
 
 ### Session 51 - 2026-03-12
 - Focus: `hnsw-round3-authority-same-schema-rerun`

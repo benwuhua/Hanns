@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-12 09:56
-Sync baseline: c87ab4915cca1a0ed68252cbf2701352e8cb6af7 from main
+Last updated: 2026-03-12 11:22
+Sync baseline: 50f474770366f75176c56b602b184ac6635cb28b from main
 
 ## 轮次记录
+- 2026-03-12 11:22: **builder-loop：收口 `hnsw-reopen-round4-activation`，把第四轮 HNSW layer-0 parity 攻关线正式挂回 durable workflow（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round3_authority_summary.json`、`benchmark_results/hnsw_reopen_distance_compute_profile_round3.json`、`tests/bench_hnsw_reopen_round4.rs`、`docs/superpowers/plans/2026-03-12-hnsw-round4-layer0-searcher-parity.md`。
+  2. 阶段结论：round 3 已经诚实结束，但 repo 不能继续停在“43/43 全部关闭”的终态叙事里，否则第四轮 layer-0 parity 攻关会再次变成隐式 work。激活 round 4 的真正目的，不是宣称 HNSW 已经接近 native，而是把新的 native-vs-Rust layer-0 searcher hypothesis、工单边界和 authority acceptance 面固定下来。
+  3. 本轮执行：新增 `tests/bench_hnsw_reopen_round4.rs`，并先用缺失 `benchmark_results/hnsw_reopen_round4_baseline.json` 的失败做 TDD red；随后新增该 baseline artifact，明确把 round 3 的 soft-stop 结果冻结成 round 4 起点：same-schema Rust HNSW 为 `553.060` qps、recall 为 `0.9943`、native 为 `10792.646` qps，而下一条显式假设改成 `layer0_searcher_parity`。然后扩展 `feature-list.json`、`task-progress.md`、`TASK_QUEUE.md`、`GAP_ANALYSIS.md`、`DEV_ROADMAP.md`、`RELEASE_NOTES.md`，把项目从 `43/43 passing` 的结束态切到新的 `47-feature` round-4 reopen line。
+  4. 验证结果：本地 `cargo test --test bench_hnsw_reopen_round4 -- --nocapture` 先红后绿；`bash init.sh` 通过；首条 authority replay 因在同步完成前启动而失败，不作为最终证据（`/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T112127Z_32612.log`）；串行 authority replay `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round4 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round4 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round4 -q"` 返回 `test=ok`，日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T112200Z_32809.log`。
+  5. 后续主缺口：HNSW round 4 现在是活动态，下一条 tracked feature 必须是 `hnsw-layer0-searcher-audit`。在新的 authority HNSW artifact 真正改善之前，IVF-PQ、DiskANN 与项目级 final acceptance 继续保持 archived state。
+  状态：Phase 6 Active（round-4 baseline frozen；layer-0 searcher audit is next）。
 - 2026-03-12 09:56: **builder-loop：收口 `hnsw-round3-authority-same-schema-rerun`，给第三轮 HNSW reopen 做真实 authority same-schema 终判（plan+exec）**
   1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round3_baseline.json`、`benchmark_results/hnsw_reopen_distance_compute_profile_round3.json`、`tests/bench_hnsw_reopen_round3.rs`、`docs/superpowers/plans/2026-03-12-hnsw-reopen-round3-distance-compute.md`。
   2. 阶段结论：round 3 已经拿到 synthetic/profile 改善，剩下唯一值得回答的问题是：这次 distance-compute cut 能不能把 authority same-schema Rust row 真正往前推 enough to justify a later verdict refresh。没有 fresh Rust/native same-schema evidence，就不能把 round 3 记成成功，也不能把它再延长成无穷 reopen line。
