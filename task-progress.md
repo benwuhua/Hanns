@@ -16,9 +16,34 @@
 - Next feature: `none`
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 49/49 features passing (100%)
+- Progress: 50/50 features passing (100%)
 
 ## Session Log
+
+### Session 58 - 2026-03-12
+- Focus: `hnsw-round5-stability-gate`
+- Completed:
+  - added `tests/bench_hnsw_reopen_round5_stability.rs` as a new default-lane stability contract so round-5 now requires `benchmark_results/hnsw_reopen_round5_stability_gate.json` with explicit two-run authority comparison fields
+  - reran round-5 authority same-schema surfaces in a separate stability lane (`/data/work/knowhere-rs-logs-hnsw-reopen-round5-stability`): fresh Rust HDF5 rerun and fresh native HNSW capture (linkfix fallback), then parsed recall-gated native row and compared against the prior round-5 summary
+  - created `benchmark_results/hnsw_reopen_round5_stability_gate.json`; result is `stability_verdict=unstable`: Rust moved modestly (`819.471 -> 828.725`, `+1.13%`) while native swung sharply (`9342.693 -> 12808.33`, `+37.09%`), pushing ratio from `11.40x` to `15.46x`; therefore round-5 ratio movement remains non-attributable to Rust-side optimization and `next_action` stays `continue`
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round5_stability -- --nocapture` -> initial `FAIL` (missing stability artifact), then `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round5-stability KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round5-stability bash scripts/remote/test.sh --command "cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round5-stability/test_20260312T150330Z_68780.log`)
+  - `bash scripts/remote/native_hnsw_qps_capture.sh --log-dir /data/work/knowhere-rs-logs-hnsw-reopen-round5-stability --gtest-filter Benchmark_float_qps.TEST_HNSW` -> `exit_code=0` via linkfix fallback (`/data/work/knowhere-rs-logs-hnsw-reopen-round5-stability/native_hnsw_qps_linkfix_20260312T151909Z.log`)
+  - `cargo test --test bench_hnsw_reopen_round5 -- --nocapture` -> `ok`
+  - `bash scripts/remote/sync.sh --mode rsync` -> `sync_mode=rsync`
+  - first parallel remote replay hit wrapper lock (`status=conflict`, `/data/work/knowhere-rs-logs-hnsw-reopen-round5-stability/test_20260312T152230Z_77692.log`); serialized replays then passed:
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round5-stability KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round5-stability bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round5 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round5-stability/test_20260312T152230Z_77694.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round5-stability KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round5-stability bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round5_stability -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round5-stability/test_20260312T152325Z_78202.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 50 features (50 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-round5-stability-gate` is now `passing`
+  - all tracked features are now `passing` again
+- Notes:
+  - round-5 evidence is now explicitly marked unstable across reruns, preventing accidental use of a single favorable ratio as optimization proof
+  - next HNSW progression should either harden benchmark environment controls or move to larger structural algorithm cuts before expecting reliable same-schema leadership movement
+- Git Commits: pending
 
 ### Session 57 - 2026-03-12
 - Focus: `hnsw-round5-authority-same-schema-rerun`

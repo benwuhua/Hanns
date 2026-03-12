@@ -1,0 +1,39 @@
+{
+  "task_id": "HNSW-REOPEN-ROUND5-STABILITY-GATE",
+  "family": "HNSW",
+  "authority_scope": "remote_x86_only",
+  "round5_summary_source": "benchmark_results/hnsw_reopen_round5_authority_summary.json",
+  "authority_logs": [
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round5/test_20260312T132029Z_52370.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round5/native_hnsw_qps_linkfix_20260312T133650Z.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round5-stability/test_20260312T150330Z_68780.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round5-stability/native_hnsw_qps_linkfix_20260312T151909Z.log"
+  ],
+  "previous_run": {
+    "rust_recall_at_10": 0.9958999999999993,
+    "rust_qps": 819.4711142115274,
+    "native_recall_at_10": 0.95,
+    "native_qps": 9342.693,
+    "native_over_rust_qps_ratio": 11.400881419706028
+  },
+  "rerun_current": {
+    "rust_recall_at_10": 0.9957999999999992,
+    "rust_qps": 828.7250378716154,
+    "native_recall_at_10": 0.95,
+    "native_qps": 12808.33,
+    "native_over_rust_qps_ratio": 15.45546401360718
+  },
+  "rerun_comparison": {
+    "rust_qps_diff_pct": 1.12925562592794,
+    "native_qps_diff_pct": 37.094625714448725,
+    "native_over_rust_qps_ratio_diff_pct": 35.563764279601635
+  },
+  "historical_verdict_band_comparison": {
+    "historical_native_over_rust_qps_ratio": 14.803655169580505,
+    "current_ratio_pct_vs_historical": 4.40302639152291
+  },
+  "stability_verdict": "unstable",
+  "next_action": "continue",
+  "summary": "Round-5 stability gate fails: a second authority rerun moved Rust modestly (+1.13% qps) but native surged (+37.09% qps), pushing the native-over-Rust ratio from 11.40x to 15.46x. This level of cross-run variance means the previous ratio improvement was not stable evidence of Rust-side optimization gain.",
+  "action": "Keep the HNSW family verdict unchanged and require additional repeated authority runs with tighter environment controls before using round-5 ratio movement for any stop-go change."
+}
