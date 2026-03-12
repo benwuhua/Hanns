@@ -1,31 +1,31 @@
 {
   "authority_scope": "remote_x86_only",
   "batch_distance_call_counts": {
-    "layer0_batch4_calls": 0,
-    "layer0_scalar_distance_calls": 27066
+    "layer0_batch4_calls": 3960,
+    "layer0_scalar_distance_calls": 11202
   },
   "batch_distance_mode": {
     "native_layer0_query_distance": "distances_batch_4",
-    "rust_batch_enabled": false,
-    "rust_batch_width": 1,
-    "rust_layer0_query_distance": "scalar_pointer_fast_path"
+    "rust_batch_enabled": true,
+    "rust_batch_width": 4,
+    "rust_layer0_query_distance": "batch4_pointer_fast_path"
   },
   "benchmark_lane": "hnsw_reopen_layer0_searcher_audit_round4",
   "call_counts": {
-    "distance_calls": 33183,
+    "distance_calls": 32689,
     "entry_descent_calls": 384,
-    "frontier_pops": 20341,
-    "frontier_pushes": 24024,
+    "frontier_pops": 20319,
+    "frontier_pushes": 23980,
     "layer0_candidate_search_calls": 128,
-    "pruned_candidates": 15182,
-    "visited_marks": 27066
+    "pruned_candidates": 15180,
+    "visited_marks": 27042
   },
   "candidate_search_breakdown": {
-    "candidate_pruning_ms": 0.7298359999999999,
-    "distance_compute_ms": 38.399417,
-    "entry_descent_ms": 7.183661,
-    "frontier_ops_ms": 7.119243,
-    "visited_ops_ms": 7.380047
+    "candidate_pruning_ms": 0.728545,
+    "distance_compute_ms": 29.716988999999998,
+    "entry_descent_ms": 6.689450000000001,
+    "frontier_ops_ms": 3.137418,
+    "visited_ops_ms": 7.205468
   },
   "config": {
     "ef_construction": 200,
@@ -40,45 +40,45 @@
   },
   "dataset_source": "synthetic_sift_like_128d",
   "distance_compute_breakdown": {
-    "layer0_query_distance_ms": 31.400024,
+    "layer0_query_distance_ms": 23.184724,
     "node_node_distance_ms": 0.0,
-    "upper_layer_query_distance_ms": 6.9993929999999995
+    "upper_layer_query_distance_ms": 6.532265
   },
   "distance_compute_call_counts": {
-    "layer0_query_distance_calls": 27066,
+    "layer0_query_distance_calls": 27042,
     "node_node_distance_calls": 0,
-    "upper_layer_query_distance_calls": 6117
+    "upper_layer_query_distance_calls": 5647
   },
   "family": "HNSW",
   "hotspot_ranking": [
     {
-      "calls": 33183,
-      "milliseconds": 38.399417,
-      "share_of_profiled_time": 0.6314426130649696,
+      "calls": 32689,
+      "milliseconds": 29.716988999999998,
+      "share_of_profiled_time": 0.6259124303596603,
       "stage": "distance_compute"
     },
     {
-      "calls": 27066,
-      "milliseconds": 7.380047,
-      "share_of_profiled_time": 0.12135799255031111,
+      "calls": 27042,
+      "milliseconds": 7.205468,
+      "share_of_profiled_time": 0.15176476956527327,
       "stage": "visited_ops"
     },
     {
       "calls": 384,
-      "milliseconds": 7.183661,
-      "share_of_profiled_time": 0.11812860786956512,
+      "milliseconds": 6.689450000000001,
+      "share_of_profiled_time": 0.14089616909941413,
       "stage": "entry_descent"
     },
     {
-      "calls": 44365,
-      "milliseconds": 7.119243,
-      "share_of_profiled_time": 0.11706931391600278,
+      "calls": 44299,
+      "milliseconds": 3.137418,
+      "share_of_profiled_time": 0.06608169237583741,
       "stage": "frontier_ops"
     },
     {
-      "calls": 15182,
-      "milliseconds": 0.7298359999999999,
-      "share_of_profiled_time": 0.012001472599151315,
+      "calls": 15180,
+      "milliseconds": 0.728545,
+      "share_of_profiled_time": 0.015344938599815032,
       "stage": "candidate_pruning"
     }
   ],
@@ -87,24 +87,24 @@
     "thirdparty/faiss/faiss/cppcontrib/knowhere/impl/Neighbor.h",
     "src/index/hnsw/impl/IndexHNSWWrapper.cc"
   ],
-  "parity_gap_summary": "Native knowhere layer-0 search uses NeighborSetDoublePopList with batch-4 query distance evaluation, while the current Rust path still uses dual BinaryHeap containers and scalar pointer-based query distance calls. Round 4 core rework should therefore focus on ordered-pool parity and batched layer-0 query distance.",
-  "recommended_next_target": "layer0_searcher_core_parity_rework",
+  "parity_gap_summary": "Round 4 core rework has replaced the old dual-BinaryHeap layer-0 search core with an ordered-pool path and enabled batch-4 query distance evaluation. The next step is no longer another search-core audit; it is the real same-schema authority rerun that decides whether this new layer-0 shape actually moves the trusted Rust HNSW row.",
+  "recommended_next_target": "round4_same_schema_authority_rerun",
   "round4_baseline_source": "benchmark_results/hnsw_reopen_round4_baseline.json",
   "rust_reference_files": [
     "src/faiss/hnsw.rs"
   ],
   "sample_search": {
-    "qps": 2070.4394224606285,
+    "qps": 2603.5883916326607,
     "query_count": 128,
-    "search_wall_clock_ms": 61.822625
+    "search_wall_clock_ms": 49.162917
   },
   "search_core_shape": {
     "native_layer0_candidate_container": "NeighborSetDoublePopList",
-    "rust_frontier_container": "BinaryHeap<QueryCandidate>",
-    "rust_layer0_candidate_container": "dual_binary_heap",
-    "rust_result_container": "BinaryHeap<ResultCandidate>",
-    "rust_scratch_reuse_scope": "visited_epoch_only"
+    "rust_frontier_container": "Vec<Layer0PoolEntry>::descending",
+    "rust_layer0_candidate_container": "ordered_pool",
+    "rust_result_container": "Vec<Layer0PoolEntry>::ascending",
+    "rust_scratch_reuse_scope": "visited_epoch_and_layer0_pools"
   },
   "task_id": "HNSW-REOPEN-LAYER0-SEARCHER-AUDIT-ROUND4",
-  "total_profiled_ms": 60.812204
+  "total_profiled_ms": 47.477869999999996
 }

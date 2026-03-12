@@ -4,10 +4,10 @@
 ## 当前大任务面板
 
 - [x] **HNSW-REOPEN-001**: 重开 HNSW 核心算法攻关线
-  - 当前子阶段: `round4_layer0_searcher_parity_active` 🔄
-  - 当前结论: 第三轮 HNSW 的 distance-compute 假设拿到了真实 authority gain，但幅度不足以改写 family verdict，因此 `benchmark_results/hnsw_reopen_round3_authority_summary.json` 继续把 round 3 诚实归档为 `soft_stop`。第四轮现已正式激活，并已经把同一条 authority lane 上的 search-core 结构差异锁成新的 audit artifact：native layer-0 用 `NeighborSetDoublePopList + distances_batch_4`，而当前 Rust 仍是 `dual_binary_heap + scalar_pointer_fast_path`，历史 HNSW family verdict 继续保持 `functional-but-not-leading`
+  - 当前子阶段: `round4_authority_same_schema_rerun_pending` 🔄
+  - 当前结论: 第三轮 HNSW 的 distance-compute 假设拿到了真实 authority gain，但幅度不足以改写 family verdict，因此 `benchmark_results/hnsw_reopen_round3_authority_summary.json` 继续把 round 3 诚实归档为 `soft_stop`。第四轮现在已经完成了第一刀真正的 layer-0 parity rework：Rust layer-0 search core 不再是 `dual_binary_heap + scalar_pointer_fast_path`，而是 `ordered_pool + batch4_pointer_fast_path`，新的 audit artifact 记录了 `layer0_batch4_calls=3960`、`layer0_query_distance≈23.185ms`、`sample_search.qps≈2603.588`；历史 HNSW family verdict 仍保持 `functional-but-not-leading`
   - 当前证据: `benchmark_results/hnsw_reopen_round4_baseline.json` + `benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json` + `benchmark_results/hnsw_reopen_round3_authority_summary.json`
-  - 下一步: 完成 `hnsw-layer0-searcher-core-rework`，把当前 `BinaryHeap` layer-0 core 改成更接近 native 的 ordered-pool + batch-distance 形状，然后再重跑 same-schema authority lane
+  - 下一步: 执行 `hnsw-round4-authority-same-schema-rerun`，重跑 same-schema Rust/native authority lane，判断这次 layer-0 parity cut 是否足以把 round 4 从 synthetic 改善推进到真实 benchmark 改善
   - 范围约束: 当前 reopen line 只重开 HNSW 的 `L2 + no-filter` layer-0 search core；IVF-PQ、DiskANN、以及项目级 final acceptance 继续保持 archived state
 
 - [x] **BASELINE-P3-001**: 建立可信的 native-vs-rs recall-gated 基线

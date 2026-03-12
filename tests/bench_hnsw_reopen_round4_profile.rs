@@ -66,6 +66,16 @@ fn build_round4_audit_artifact(
     } else {
         num_queries as f64
     };
+    let parity_gap_summary = if report.batch_distance_mode.rust_batch_enabled {
+        "Round 4 core rework has replaced the old dual-BinaryHeap layer-0 search core with an ordered-pool path and enabled batch-4 query distance evaluation. The next step is no longer another search-core audit; it is the real same-schema authority rerun that decides whether this new layer-0 shape actually moves the trusted Rust HNSW row."
+    } else {
+        "Native knowhere layer-0 search uses NeighborSetDoublePopList with batch-4 query distance evaluation, while the current Rust path still uses dual BinaryHeap containers and scalar pointer-based query distance calls. Round 4 core rework should therefore focus on ordered-pool parity and batched layer-0 query distance."
+    };
+    let recommended_next_target = if report.batch_distance_mode.rust_batch_enabled {
+        "round4_same_schema_authority_rerun"
+    } else {
+        "layer0_searcher_core_parity_rework"
+    };
 
     json!({
         "task_id": "HNSW-REOPEN-LAYER0-SEARCHER-AUDIT-ROUND4",
@@ -101,8 +111,8 @@ fn build_round4_audit_artifact(
         "distance_compute_breakdown": &report.distance_compute_breakdown,
         "distance_compute_call_counts": &report.distance_compute_call_counts,
         "hotspot_ranking": &report.hotspot_ranking,
-        "recommended_next_target": "layer0_searcher_core_parity_rework",
-        "parity_gap_summary": "Native knowhere layer-0 search uses NeighborSetDoublePopList with batch-4 query distance evaluation, while the current Rust path still uses dual BinaryHeap containers and scalar pointer-based query distance calls. Round 4 core rework should therefore focus on ordered-pool parity and batched layer-0 query distance.",
+        "recommended_next_target": recommended_next_target,
+        "parity_gap_summary": parity_gap_summary,
         "sample_search": {
             "query_count": report.query_count,
             "search_wall_clock_ms": search_wall_clock_ms,
@@ -169,10 +179,12 @@ fn test_generate_hnsw_reopen_round4_layer0_searcher_audit() {
     );
     assert_eq!(
         artifact["search_core_shape"]["rust_layer0_candidate_container"],
-        "dual_binary_heap"
+        "ordered_pool"
     );
-    assert_eq!(
-        artifact["batch_distance_call_counts"]["layer0_batch4_calls"],
-        0
+    assert!(
+        artifact["batch_distance_call_counts"]["layer0_batch4_calls"]
+            .as_u64()
+            .is_some_and(|calls| calls > 0),
+        "generated artifact must show non-zero batch-4 calls after the round-4 core rework"
     );
 }

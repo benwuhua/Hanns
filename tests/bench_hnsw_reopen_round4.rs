@@ -65,7 +65,7 @@ fn hnsw_reopen_round4_requires_layer0_audit_artifact() {
     assert_eq!(audit["rust_reference_files"][0], "src/faiss/hnsw.rs");
     assert_eq!(
         audit["search_core_shape"]["rust_layer0_candidate_container"],
-        "dual_binary_heap"
+        "ordered_pool"
     );
     assert_eq!(
         audit["search_core_shape"]["native_layer0_candidate_container"],
@@ -73,18 +73,18 @@ fn hnsw_reopen_round4_requires_layer0_audit_artifact() {
     );
     assert_eq!(
         audit["batch_distance_mode"]["rust_layer0_query_distance"],
-        "scalar_pointer_fast_path"
+        "batch4_pointer_fast_path"
     );
-    assert_eq!(audit["batch_distance_mode"]["rust_batch_enabled"], false);
-    assert_eq!(audit["batch_distance_mode"]["rust_batch_width"], 1);
+    assert_eq!(audit["batch_distance_mode"]["rust_batch_enabled"], true);
+    assert_eq!(audit["batch_distance_mode"]["rust_batch_width"], 4);
     assert_eq!(
-        audit["batch_distance_call_counts"]["layer0_batch4_calls"],
-        0
+        audit["search_core_shape"]["rust_scratch_reuse_scope"],
+        "visited_epoch_and_layer0_pools"
     );
     assert!(
-        audit["distance_compute_call_counts"]["layer0_query_distance_calls"]
+        audit["batch_distance_call_counts"]["layer0_batch4_calls"]
             .as_u64()
             .is_some_and(|calls| calls > 0),
-        "round 4 audit artifact must preserve measured layer-0 query distance calls"
+        "round 4 audit artifact must record non-zero batch-4 calls after the core rework"
     );
 }

@@ -1103,6 +1103,44 @@ pub unsafe fn l2_batch_4_ptr(
     [d0, d1, d2, d3]
 }
 
+/// 批量 L2 平方距离（4 个任意数据库向量指针版本）
+///
+/// # Safety
+/// - `query` 以及 `db0..db3` 都必须分别指向至少 `dim` 个有效 `f32`
+#[inline]
+pub unsafe fn l2_batch_4_ptrs(
+    query: *const f32,
+    db0: *const f32,
+    db1: *const f32,
+    db2: *const f32,
+    db3: *const f32,
+    dim: usize,
+) -> [f32; 4] {
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    {
+        if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512bw") {
+            return l2_batch_4_avx512(query, db0, db1, db2, db3, dim);
+        }
+        if std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma") {
+            return l2_batch_4_avx2(query, db0, db1, db2, db3, dim);
+        }
+    }
+
+    #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+    {
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            return l2_batch_4_neon(query, db0, db1, db2, db3, dim);
+        }
+    }
+
+    [
+        l2_scalar_sq_ptr(query, db0, dim),
+        l2_scalar_sq_ptr(query, db1, dim),
+        l2_scalar_sq_ptr(query, db2, dim),
+        l2_scalar_sq_ptr(query, db3, dim),
+    ]
+}
+
 /// 标量版本：一次计算 1 个查询向量与 4 个数据库向量的内积
 #[inline]
 pub fn ip_batch_4_scalar(

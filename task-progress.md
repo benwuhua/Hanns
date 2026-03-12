@@ -12,13 +12,39 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `hnsw-layer0-searcher-core-rework`
-- Next feature: `hnsw-round4-authority-same-schema-rerun`
+- Current focus: `hnsw-round4-authority-same-schema-rerun`
+- Next feature: `hnsw-round4-authority-same-schema-rerun` (final remaining round-4 feature)
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 45/47 features passing (96%)
+- Progress: 46/47 features passing (98%)
 
 ## Session Log
+
+### Session 54 - 2026-03-12
+- Focus: `hnsw-layer0-searcher-core-rework`
+- Completed:
+  - added focused round-4 regressions in `src/faiss/hnsw.rs` that first failed on the missing ordered-pool search core and batch-4 helper, then locked the intended parity cut to deterministic behavior: ordered-pool capacity and stop conditions, heap-vs-ordered layer-0 result equivalence, and batch-4 L2 helper correctness
+  - reworked the `L2 + no-filter` layer-0 search path in `src/faiss/hnsw.rs` so level-0 search now uses scratch-owned ordered frontier/result pools instead of dual `BinaryHeap`s, while upper layers keep the existing heap path; `SearchScratch` now reuses both visited epochs and layer-0 pools across searches
+  - added `simd::l2_batch_4_ptrs` in `src/simd.rs` and wired the round-4 layer-0 expansion loop to batch four `query -> node` distances at a time; the refreshed `benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json` now reports `ordered_pool + batch4_pointer_fast_path`, `layer0_batch4_calls=3960`, `layer0_query_distance≈23.185ms`, and `sample_search.qps≈2603.588`
+- Verification:
+  - `cargo test hnsw --lib -- --nocapture` -> initial `FAIL` (missing ordered-pool types/helpers), then `ok`
+  - `cargo test --test bench_hnsw_reopen_round4 -- --nocapture` -> initial `FAIL` (stale audit artifact still said `dual_binary_heap`), then `ok`
+  - `cargo test --test bench_hnsw_cpp_compare -q` -> `ok`
+  - `cargo test --test bench_hnsw_reopen_round3 -q` -> `ok`
+  - `cargo test --features long-tests --test bench_hnsw_reopen_round4_profile -- --ignored --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round4 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round4 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_cpp_compare -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T115024Z_39686.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round4 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round4 bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_round4_profile -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T115054Z_39863.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round4 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round4 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round4 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round4/test_20260312T115136Z_40082.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 47 features (46 passing, 1 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-layer0-searcher-core-rework` is now `passing`
+  - round 4 no longer waits on synthetic parity work; the only remaining tracked feature is `hnsw-round4-authority-same-schema-rerun`
+- Notes:
+  - this feature deliberately does not claim a same-schema HNSW win; it closes because the Rust layer-0 search core now materially matches the native searcher shape more closely and the authority-backed audit artifact proves the structural change is real
+  - the historical HNSW family verdict remains `functional-but-not-leading` until fresh round-4 same-schema Rust/native evidence says otherwise
+- Git Commits: pending
 
 ### Session 53 - 2026-03-12
 - Focus: `hnsw-layer0-searcher-audit`
