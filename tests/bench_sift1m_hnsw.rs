@@ -10,7 +10,7 @@ use std::env;
 #[test]
 #[ignore = "benchmark/integration long-running; excluded from default bugfix gate"]
 fn test_sift1m_hnsw_quick() {
-    let path = env::var("SIFT1M_PATH").unwrap_or_else(|_| "./data/sift1m".to_string());
+    let path = env::var("SIFT1M_PATH").unwrap_or_else(|_| "./data/sift".to_string());
 
     let dataset = match load_sift1m_complete(&path) {
         Ok(ds) => ds,

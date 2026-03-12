@@ -16,7 +16,7 @@
 //! ```
 //!
 //! 环境变量:
-//! - `SIFT1M_PATH`: 数据集路径（默认 `./data/sift1m`）
+//! - `SIFT1M_PATH`: 数据集路径（默认 `./data/sift`）
 //! - `SIFT_NUM_QUERIES`: 查询数量（默认 `100`）
 //! - `SIFT_BASE_SIZE`: base 向量数量（默认 `1000000`）
 
@@ -352,7 +352,7 @@ fn bench_sift1m_all_indexes() {
     println!("║  BENCH-050: SIFT1M 全索引性能基准测试                 ║");
     println!("╚════════════════════════════════════════════════════════╝\n");
 
-    let path = env::var("SIFT1M_PATH").unwrap_or_else(|_| "./data/sift1m".to_string());
+    let path = env::var("SIFT1M_PATH").unwrap_or_else(|_| "./data/sift".to_string());
     let dataset = match load_sift1m_complete(&path) {
         Ok(ds) => ds,
         Err(e) => {

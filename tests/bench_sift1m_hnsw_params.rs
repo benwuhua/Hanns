@@ -10,7 +10,7 @@
 //! ```
 //!
 //! # Environment Variables
-//! - `SIFT1M_PATH`: SIFT1M 数据集路径（默认: ./data/sift1m）
+//! - `SIFT1M_PATH`: SIFT1M 数据集路径（默认: ./data/sift）
 //! - `SIFT_NUM_QUERIES`: 查询数量（默认: 100）
 //! - `SIFT_BASE_SIZE`: base 向量数量（默认: 100000，全部 100 万太慢）
 
@@ -324,7 +324,7 @@ fn test_sift1m_hnsw_params() {
     println!("╚════════════════════════════════════════════════════════╝\n");
 
     // Load SIFT1M
-    let path = env::var("SIFT1M_PATH").unwrap_or_else(|_| "./data/sift1m".to_string());
+    let path = env::var("SIFT1M_PATH").unwrap_or_else(|_| "./data/sift".to_string());
     let dataset = match load_sift1m_complete(&path) {
         Ok(ds) => ds,
         Err(e) => {

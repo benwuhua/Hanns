@@ -6,7 +6,7 @@
 //! ```
 //!
 //! 环境变量:
-//! - `SIFT1M_PATH`: 数据集路径（默认 `./data/sift1m`）
+//! - `SIFT1M_PATH`: 数据集路径（默认 `./data/sift`）
 //! - `SIFT_NUM_QUERIES`: 查询数量（默认 `100`）
 //! - `SIFT_BASE_SIZE`: base 向量数量（默认 `1000000`）
 
@@ -78,12 +78,21 @@ fn compute_ground_truth(base: &[f32], queries: &[f32], dim: usize, top_k: usize)
 
 #[cfg(feature = "long-tests")]
 fn load_sift1m_subset(base_size: usize) -> Option<(Vec<f32>, Vec<f32>, usize)> {
-    let path = env::var("SIFT1M_PATH").unwrap_or_else(|_| "./data/sift1m".to_string());
-    let base_file = format!("{}/sift_base.fvecs", path);
-    let query_file = format!("{}/sift_query.fvecs", path);
+    let path = env::var("SIFT1M_PATH").unwrap_or_else(|_| "./data/sift".to_string());
+    let base_dir = std::path::Path::new(&path);
+    let base_file = ["base.fvecs", "sift_base.fvecs"]
+        .iter()
+        .map(|name| base_dir.join(name))
+        .find(|candidate| candidate.exists())
+        .unwrap_or_else(|| base_dir.join("base.fvecs"));
+    let query_file = ["query.fvecs", "sift_query.fvecs"]
+        .iter()
+        .map(|name| base_dir.join(name))
+        .find(|candidate| candidate.exists())
+        .unwrap_or_else(|| base_dir.join("query.fvecs"));
 
-    if !std::path::Path::new(&base_file).exists() {
-        eprintln!("SIFT1M dataset not found at {}", base_file);
+    if !base_file.exists() {
+        eprintln!("SIFT1M dataset not found at {}", base_file.display());
         return None;
     }
 

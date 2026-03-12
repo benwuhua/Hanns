@@ -36,7 +36,7 @@ struct ParamResult {
 }
 
 fn load_dataset() -> SiftDataset {
-    let path = env::var("SIFT1M_PATH").unwrap_or_else(|_| "./data/sift1m".to_string());
+    let path = env::var("SIFT1M_PATH").unwrap_or_else(|_| "./data/sift".to_string());
     match load_sift1m_complete(&path) {
         Ok(dataset) => {
             println!(

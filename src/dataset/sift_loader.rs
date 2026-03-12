@@ -14,7 +14,7 @@
 use crate::dataset::Dataset;
 use std::fs::File;
 use std::io::{BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Load SIFT1M base dataset from fvecs file
 ///
@@ -142,12 +142,20 @@ fn read_ivecs<R: Read>(reader: &mut R) -> std::io::Result<Vec<Vec<i32>>> {
 /// # Returns
 /// * `Ok(SiftDataset)` - Complete dataset
 /// * `Err` - I/O error
+fn resolve_sift1m_path(base_dir: &Path, candidates: &[&str]) -> PathBuf {
+    candidates
+        .iter()
+        .map(|name| base_dir.join(name))
+        .find(|path| path.exists())
+        .unwrap_or_else(|| base_dir.join(candidates[0]))
+}
+
 pub fn load_sift1m_complete<P: AsRef<Path>>(base_dir: P) -> std::io::Result<SiftDataset> {
     let base_dir = base_dir.as_ref();
 
-    let base_path = base_dir.join("base.fvecs");
-    let query_path = base_dir.join("query.fvecs");
-    let gt_path = base_dir.join("groundtruth.ivecs");
+    let base_path = resolve_sift1m_path(base_dir, &["base.fvecs", "sift_base.fvecs"]);
+    let query_path = resolve_sift1m_path(base_dir, &["query.fvecs", "sift_query.fvecs"]);
+    let gt_path = resolve_sift1m_path(base_dir, &["groundtruth.ivecs", "sift_groundtruth.ivecs"]);
 
     let base = load_sift_base(&base_path)?;
     let query = load_sift_query(&query_path)?;
@@ -190,7 +198,40 @@ impl SiftDataset {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::io::Cursor;
+    use std::path::Path;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn write_test_fvecs(path: &Path, vectors: &[Vec<f32>]) {
+        let mut data = Vec::new();
+        for vector in vectors {
+            data.extend_from_slice(&(vector.len() as u32).to_le_bytes());
+            for value in vector {
+                data.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        fs::write(path, data).unwrap();
+    }
+
+    fn write_test_ivecs(path: &Path, vectors: &[Vec<i32>]) {
+        let mut data = Vec::new();
+        for vector in vectors {
+            data.extend_from_slice(&(vector.len() as u32).to_le_bytes());
+            for value in vector {
+                data.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        fs::write(path, data).unwrap();
+    }
+
+    fn unique_temp_dir() -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("knowhere-rs-sift-loader-{nanos}"))
+    }
 
     #[test]
     fn test_read_fvecs() {
@@ -239,5 +280,25 @@ mod tests {
         assert_eq!(vectors.len(), 2);
         assert_eq!(vectors[0], vec![0, 1, 2]);
         assert_eq!(vectors[1], vec![100, 200, 300]);
+    }
+
+    #[test]
+    fn test_load_sift1m_complete_accepts_prefixed_layout() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+
+        let vector = vec![1.0f32; 128];
+        write_test_fvecs(&dir.join("sift_base.fvecs"), &[vector.clone()]);
+        write_test_fvecs(&dir.join("sift_query.fvecs"), &[vector]);
+        write_test_ivecs(&dir.join("sift_groundtruth.ivecs"), &[vec![7, 8, 9]]);
+
+        let dataset = load_sift1m_complete(&dir).unwrap();
+
+        assert_eq!(dataset.num_base(), 1);
+        assert_eq!(dataset.num_query(), 1);
+        assert_eq!(dataset.dim(), 128);
+        assert_eq!(dataset.ground_truth, vec![vec![7, 8, 9]]);
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

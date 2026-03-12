@@ -20,6 +20,30 @@
 
 ## Session Log
 
+### Session 39 - 2026-03-12
+- Focus: `post-close-sift1m-layout-hygiene`
+- Completed:
+  - added a new `src/dataset/sift_loader.rs` unit regression that proved `load_sift1m_complete()` previously rejected the legacy `sift_base.fvecs` / `sift_query.fvecs` / `sift_groundtruth.ivecs` layout
+  - taught `load_sift1m_complete()` to resolve both the canonical `base.fvecs` / `query.fvecs` / `groundtruth.ivecs` names and the legacy prefixed filenames, then updated the remaining SIFT1M long benchmarks to default to the canonical `./data/sift` path while keeping legacy filename compatibility for `tests/bench_diskann_1m.rs`
+  - verified that the local `data/sift1m` fixture contents were byte-identical to `data/sift`, then replaced the duplicated local-only directory with a compatibility symlink `data/sift1m -> sift` so the preserved ignored fixture state no longer stores two copies of the same SIFT1M payload
+- Verification:
+  - `bash init.sh` -> `ok`
+  - `cargo test test_load_sift1m_complete_accepts_prefixed_layout --lib -- --nocapture` -> initial `FAIL` (legacy prefixed layout unresolved), then `ok`
+  - `cargo test --features long-tests --test bench_diskann_1m -q` -> `ok`
+  - `cargo test --features long-tests --test bench_sift1m_hnsw --test bench_sift1m_all_indexes --test bench_sift1m_params --test bench_sift1m_hnsw_params --no-run` -> `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (rustfmt wanted a single-line call), then `ok`
+  - `cmp -s data/sift/base.fvecs data/sift1m.legacy/sift_base.fvecs` -> `identical`
+  - `cmp -s data/sift/query.fvecs data/sift1m.legacy/sift_query.fvecs` -> `identical`
+  - `cmp -s data/sift/groundtruth.ivecs data/sift1m.legacy/sift_groundtruth.ivecs` -> `identical`
+  - `cmp -s data/sift/sift-128-euclidean.hdf5 data/sift1m.legacy/sift-128-euclidean.hdf5` -> `identical`
+- Result:
+  - SIFT1M loading is now tolerant of both on-disk filename conventions while the repo defaults consistently point at `./data/sift`
+  - the local ignored fixture state is leaner because `data/sift1m` is now just a compatibility symlink to the canonical `data/sift`
+- Notes:
+  - this was a post-close hygiene pass, not a reopened tracked feature; the final project verdict remains `not accepted` on current remote x86 evidence
+  - the `cmp` verification was run before removing the duplicated local directory; the compatibility symlink was created only after all four fixture pairs matched byte-for-byte
+- Git Commits: pending
+
 ### Session 38 - 2026-03-12
 - Focus: `repo-hygiene-push-readiness`
 - Completed:
