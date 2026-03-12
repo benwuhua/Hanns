@@ -627,7 +627,7 @@
       "title": "Rework the shared HNSW candidate-search core",
       "description": "Refactor scratch reuse, visited-state resets, and queue behavior in the shared HNSW candidate-search core so both build and query paths can pursue same-schema QPS gains without recall regression.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash init.sh",
         "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round2 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round2 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_cpp_compare -q\"",

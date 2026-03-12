@@ -12,13 +12,38 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `hnsw-candidate-search-core-rework` (round 2 profiling is now closed with authority-backed evidence; the active task is to cut the shared candidate-search core around the two real hotspots, `entry_descent` and `distance_compute`)
-- Next feature: `hnsw-candidate-search-core-rework` (the profiler slice is now closed; the next honest step is to rework the shared candidate-search core and then rerun the same-schema authority lane)
+- Current focus: `hnsw-round2-authority-same-schema-rerun` (the round-2 core rework is now landed and safety-gated; the active task is to decide whether the new candidate-search path actually moves the authoritative same-schema recall-gated lane)
+- Next feature: `hnsw-round2-authority-same-schema-rerun` (the shared core cut is now closed; the next honest step is to rerun the same-schema authority lane and judge whether the historical HNSW family verdict can move)
 - Last updated: 2026-03-12
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 37/39 features passing (95%)
+- Progress: 38/39 features passing (97%)
 
 ## Session Log
+
+### Session 46 - 2026-03-12
+- Focus: `hnsw-candidate-search-core-rework`
+- Completed:
+  - added focused unit regressions in `src/faiss/hnsw.rs` for a new greedy upper-layer descent helper and for `ef=1` shared layer search reusing that helper on a deterministic multi-hop upper-layer fixture
+  - reworked the shared candidate-search core so `ef<=1` layer search now takes a greedy fast path, the unfiltered query path no longer spends upper-layer descent on the previous broad `ef.max(64).min(ef*2)` search, and `SearchScratch` no longer records the unused `touched` write stream on every visit mark
+  - kept the feature boundary narrow by validating only safety surfaces after the rework: the historical compare lane and the round-2 contract lane both still pass, but no family-level or project-level verdict was changed in this slice
+- Verification:
+  - `cargo test hnsw --lib -- --nocapture` -> initial `FAIL` (new greedy upper-layer tests referenced missing `greedy_upper_layer_descent_idx`), then `ok`
+  - `cargo test --test bench_hnsw_cpp_compare -q` -> `ok`
+  - `cargo test --test bench_hnsw_reopen_round2 -q` -> `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (rustfmt wanted multi-line helper calls), then `ok`
+  - `bash init.sh` -> `ok`
+  - first parallel authority attempt hit the shared wrapper lock for one lane and returned `status=conflict` (`/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T081711Z_8977.log`); final evidence comes from the serialized successful reruns below
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round2 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round2 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_cpp_compare -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T081711Z_8978.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round2 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round2 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round2 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T081736Z_9088.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 39 features (38 passing, 1 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-candidate-search-core-rework` is now `passing`
+  - round 2 has a landed shared-core cut, but it still has no new same-schema authority benchmark evidence, so the historical HNSW family verdict remains unchanged for now
+  - the next tracked feature is `hnsw-round2-authority-same-schema-rerun`
+- Notes:
+  - this feature closes because the candidate-search core change is now real, tested, and authority safety-gated, not because it has already proven a QPS improvement on the authoritative lane
+  - the next feature must answer the performance question with fresh recall-gated authority artifacts instead of with more local-only reasoning
+- Git Commits: pending
 
 ### Session 45 - 2026-03-12
 - Focus: `hnsw-candidate-search-profiler`

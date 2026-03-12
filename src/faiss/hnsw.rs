@@ -144,7 +144,6 @@ impl NodeInfo {
 /// OPT-024: Added num_threads for parallel build configuration.
 struct SearchScratch {
     visited_epoch: Vec<u32>,
-    touched: Vec<usize>,
     epoch: u32,
 }
 
@@ -522,7 +521,6 @@ impl SearchScratch {
     fn new() -> Self {
         Self {
             visited_epoch: Vec::new(),
-            touched: Vec::new(),
             epoch: 1,
         }
     }
@@ -537,7 +535,6 @@ impl SearchScratch {
         } else {
             self.epoch += 1;
         }
-        self.touched.clear();
     }
 
     #[inline]
@@ -546,7 +543,6 @@ impl SearchScratch {
             return false;
         }
         self.visited_epoch[idx] = self.epoch;
-        self.touched.push(idx);
         true
     }
 }
@@ -2307,6 +2303,56 @@ impl HnswIndex {
         all
     }
 
+    fn greedy_upper_layer_descent_idx(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+    ) -> (usize, f32) {
+        let entry_dist = self.distance(query, entry_idx);
+        self.greedy_upper_layer_descent_idx_with_entry_dist(query, entry_idx, level, entry_dist)
+    }
+
+    fn greedy_upper_layer_descent_idx_with_entry_dist(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+        entry_dist: f32,
+    ) -> (usize, f32) {
+        let num_nodes = self.node_info.len();
+        let mut best_idx = entry_idx;
+        let mut best_dist = entry_dist;
+
+        loop {
+            let node_info = &self.node_info[best_idx];
+            if level > node_info.max_layer {
+                break;
+            }
+
+            let mut improved = false;
+            for &nbr_id in &node_info.layer_neighbors[level].ids {
+                let nbr_idx = self.get_idx_from_id_fast(nbr_id);
+                if nbr_idx >= num_nodes || nbr_idx == best_idx {
+                    continue;
+                }
+
+                let nbr_dist = self.distance(query, nbr_idx);
+                if nbr_dist < best_dist {
+                    best_idx = nbr_idx;
+                    best_dist = nbr_dist;
+                    improved = true;
+                }
+            }
+
+            if !improved {
+                break;
+            }
+        }
+
+        (best_idx, best_dist)
+    }
+
     fn search_layer_idx_with_scratch(
         &self,
         query: &[f32],
@@ -2327,6 +2373,12 @@ impl HnswIndex {
         scratch: &mut SearchScratch,
         mut profile: Option<&mut HnswCandidateSearchProfileStats>,
     ) -> Vec<(usize, f32)> {
+        if ef <= 1 {
+            let (best_idx, best_dist) =
+                self.greedy_upper_layer_descent_idx(query, entry_idx, level);
+            return vec![(best_idx, best_dist)];
+        }
+
         use std::collections::BinaryHeap;
 
         // MinDist: smaller distance = higher priority (for candidates)
@@ -2522,39 +2574,24 @@ impl HnswIndex {
         let mut curr_ep_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
 
         let distance_start = Instant::now();
-        let mut best_ep_dist = self.distance(query, curr_ep_idx);
+        let mut curr_ep_dist = self.distance(query, curr_ep_idx);
+        let mut best_ep_dist = curr_ep_dist;
         stats.record_distance_compute(distance_start.elapsed(), 1);
         let mut best_ep_idx = curr_ep_idx;
 
         for level in (1..=self.max_level).rev() {
-            let descent_ef = ef.max(64).min(ef * 2);
             let entry_start = Instant::now();
-            let results = self.search_layer_idx_with_scratch(
+            let (next_idx, next_dist) = self.greedy_upper_layer_descent_idx_with_entry_dist(
                 query,
                 curr_ep_idx,
                 level,
-                descent_ef,
-                &mut scratch,
+                curr_ep_dist,
             );
-
-            let mut best_valid_idx: Option<usize> = None;
-            let mut best_valid_dist = f32::MAX;
-
-            for (idx, dist) in &results {
-                if *dist < best_valid_dist {
-                    best_valid_dist = *dist;
-                    best_valid_idx = Some(*idx);
-                }
-            }
-
-            if let Some(best_idx) = best_valid_idx {
-                curr_ep_idx = best_idx;
-                if best_valid_dist < best_ep_dist {
-                    best_ep_idx = best_idx;
-                    best_ep_dist = best_valid_dist;
-                }
-            } else if let Some((fallback_idx, _)) = results.first() {
-                curr_ep_idx = *fallback_idx;
+            curr_ep_idx = next_idx;
+            curr_ep_dist = next_dist;
+            if next_dist < best_ep_dist {
+                best_ep_idx = next_idx;
+                best_ep_dist = next_dist;
             }
             stats.record_entry_descent(entry_start.elapsed());
         }
@@ -2637,15 +2674,32 @@ impl HnswIndex {
         let mut scratch = SearchScratch::new();
         let mut curr_ep_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
         let mut best_ep_idx = curr_ep_idx;
-        let mut best_ep_dist = self.distance(query, curr_ep_idx);
+        let mut curr_ep_dist = self.distance(query, curr_ep_idx);
+        let mut best_ep_dist = curr_ep_dist;
+        let use_greedy_upper_descent = filter.is_none();
 
         for level in (1..=self.max_level).rev() {
-            let descent_ef = ef.max(64).min(ef * 2);
+            if use_greedy_upper_descent {
+                let (next_idx, next_dist) = self.greedy_upper_layer_descent_idx_with_entry_dist(
+                    query,
+                    curr_ep_idx,
+                    level,
+                    curr_ep_dist,
+                );
+                curr_ep_idx = next_idx;
+                curr_ep_dist = next_dist;
+                if next_dist < best_ep_dist {
+                    best_ep_idx = next_idx;
+                    best_ep_dist = next_dist;
+                }
+                continue;
+            }
+
             let results = self.search_layer_idx_with_scratch(
                 query,
                 curr_ep_idx,
                 level,
-                descent_ef,
+                ef.max(64).min(ef * 2),
                 &mut scratch,
             );
 
@@ -2662,12 +2716,14 @@ impl HnswIndex {
 
             if let Some(best_idx) = best_valid_idx {
                 curr_ep_idx = best_idx;
+                curr_ep_dist = best_valid_dist;
                 if best_valid_dist < best_ep_dist {
                     best_ep_idx = best_idx;
                     best_ep_dist = best_valid_dist;
                 }
-            } else if let Some((fallback_idx, _)) = results.first() {
+            } else if let Some((fallback_idx, fallback_dist)) = results.first() {
                 curr_ep_idx = *fallback_idx;
+                curr_ep_dist = *fallback_dist;
             }
         }
 
@@ -3862,6 +3918,73 @@ mod tests {
             .collect()
     }
 
+    fn deterministic_upper_layer_config() -> IndexConfig {
+        IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(4),
+                ef_construction: Some(32),
+                ef_search: Some(32),
+                ml: Some(0.0),
+                num_threads: Some(1),
+                ..Default::default()
+            },
+        }
+    }
+
+    fn deterministic_upper_layer_index() -> HnswIndex {
+        let config = deterministic_upper_layer_config();
+        let vectors = vec![
+            0.0, 0.0, // node 0
+            4.0, 0.0, // node 1
+            8.0, 0.0, // node 2
+            12.0, 0.0, // node 3
+        ];
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        index.train(&vectors).unwrap();
+        for id in 0..4 {
+            let vector = &vectors[id * 2..(id + 1) * 2];
+            index
+                .add_vector(vector, Some(id as i64), Some(&[0, 1, 2]))
+                .unwrap();
+        }
+
+        index.entry_point = Some(0);
+        index.max_level = 2;
+
+        for node_info in &mut index.node_info {
+            for layer in &mut node_info.layer_neighbors {
+                layer.ids.clear();
+                layer.dists.clear();
+            }
+        }
+
+        let chain = [(0usize, 1usize), (1, 2), (2, 3)];
+        for &(left, right) in &chain {
+            let dist = index.distance_between_nodes_idx(left, right);
+            for level in 1..=2 {
+                index.node_info[left].layer_neighbors[level].push(right as i64, dist);
+                index.node_info[right].layer_neighbors[level].push(left as i64, dist);
+            }
+        }
+
+        for left in 0..4 {
+            for right in 0..4 {
+                if left == right {
+                    continue;
+                }
+                let dist = index.distance_between_nodes_idx(left, right);
+                index.node_info[left].layer_neighbors[0].push(right as i64, dist);
+            }
+        }
+
+        index
+    }
+
     #[test]
     fn test_hnsw() {
         let config = IndexConfig {
@@ -3921,6 +4044,39 @@ mod tests {
         assert_eq!(
             parallel_neighbors, serial_neighbors,
             "bulk add path should maintain the same diversified layer-0 reverse neighbors as repeated single-node insertion"
+        );
+    }
+
+    #[test]
+    fn test_greedy_upper_layer_descent_follows_improving_chain() {
+        let index = deterministic_upper_layer_index();
+        let query = [11.8, 0.0];
+
+        let (best_idx, best_dist) = index.greedy_upper_layer_descent_idx(&query, 0, 2);
+
+        assert_eq!(
+            best_idx, 3,
+            "greedy upper-layer descent should keep hopping toward the improving chain endpoint"
+        );
+        assert!(
+            best_dist < 0.1,
+            "best upper-layer candidate should end near the query endpoint"
+        );
+    }
+
+    #[test]
+    fn test_search_layer_idx_ef1_matches_greedy_upper_layer_descent() {
+        let index = deterministic_upper_layer_index();
+        let query = [11.8, 0.0];
+        let mut scratch = SearchScratch::new();
+
+        let greedy = index.greedy_upper_layer_descent_idx(&query, 0, 2);
+        let with_scratch = index.search_layer_idx_with_scratch(&query, 0, 2, 1, &mut scratch);
+
+        assert_eq!(
+            with_scratch,
+            vec![greedy],
+            "ef=1 shared layer search should reuse the greedy upper-layer descent result"
         );
     }
 

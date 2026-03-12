@@ -1,13 +1,13 @@
 # Builder 任务队列
-> 最后更新: 2026-03-12 08:09 UTC | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
+> 最后更新: 2026-03-12 08:18 UTC | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
 
 ## 当前大任务面板
 
 - [ ] **HNSW-REOPEN-001**: 重开 HNSW 核心算法攻关线
-  - 当前子阶段: `candidate_search_core_rework` 🔄
-  - 当前结论: 第一轮 HNSW reopen 已经用 authority evidence 证明“build path 有局部改善，但 family verdict 未动”；第二轮现已把 `candidate_search` 拆成 round-2 authority hotspots，其中 `entry_descent` 约占 `46.1%`、`distance_compute` 约占 `39.4%`，所以当前最小诚实动作已经从“继续测”切到“改共享 candidate-search core”
-  - 当前证据: `benchmark_results/hnsw_reopen_round2_baseline.json` + `benchmark_results/hnsw_reopen_candidate_search_profile_round2.json`
-  - 下一步: 执行 `hnsw-candidate-search-core-rework`，优先切 `entry_descent_level_hopping` 并避免把 `distance_compute` 成本继续推高，然后再决定是否值得重跑 same-schema authority lane
+  - 当前子阶段: `round2_authority_same_schema_rerun` 🔄
+  - 当前结论: 第一轮 HNSW reopen 已经用 authority evidence 证明“build path 有局部改善，但 family verdict 未动”；第二轮现在已经落下 shared candidate-search core rework，把无过滤 query path 的 upper-layer descent 切回 greedy fast path，并移除了 `SearchScratch` 的无读者 visited write，但这一刀还没有经过新的 same-schema authority benchmark
+  - 当前证据: `benchmark_results/hnsw_reopen_round2_baseline.json` + `benchmark_results/hnsw_reopen_candidate_search_profile_round2.json` + remote safety logs `/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T081711Z_8978.log` / `/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T081736Z_9088.log`
+  - 下一步: 执行 `hnsw-round2-authority-same-schema-rerun`，用 fresh recall-gated same-schema artifact 判断这轮 core rework 是否真的改善 HNSW authority lane
   - 范围约束: 只重开 HNSW；IVF-PQ、DiskANN、以及项目级 final acceptance 继续保持 archived state，直到 HNSW 真的拿到更强 authority evidence
 
 - [x] **BASELINE-P3-001**: 建立可信的 native-vs-rs recall-gated 基线

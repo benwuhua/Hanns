@@ -1,9 +1,16 @@
 # PARITY_AUDIT (Non-GPU)
 
-Last updated: 2026-03-12 08:09
+Last updated: 2026-03-12 08:18
 Sync baseline: d586788295e093c6599d8456c54d8d161b1c6f12 from origin/main
 
 ## 轮次记录
+- 2026-03-12 08:18: **builder-loop：收口 `hnsw-candidate-search-core-rework`，把第二轮 HNSW 的 shared candidate-search core 真正改掉（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round2_baseline.json`、`benchmark_results/hnsw_reopen_candidate_search_profile_round2.json`、`src/faiss/hnsw.rs`、`tests/bench_hnsw_cpp_compare.rs`、`tests/bench_hnsw_reopen_round2.rs`。
+  2. 阶段结论：round-2 profiler 已经把热点缩到 `entry_descent` 与 `distance_compute`，所以下一刀不该再去扩 artifact，而应直接把 shared candidate-search core 的上层 hop 逻辑做轻。最小诚实切口是：让 `ef<=1` 的 shared layer search 走 greedy fast path，并把无过滤 query path 的 upper-layer descent 从之前的宽泛 heap search 拉回标准 greedy 行为。
+  3. 本轮执行：先在 `src/faiss/hnsw.rs` 增加 focused unit regressions，要求一个新的 `greedy_upper_layer_descent_idx` helper 和 `ef=1` shared layer search 与之对齐；随后实现该 helper、让 `search_layer_idx_with_optional_profile()` 在 `ef<=1` 时走 greedy fast path、让无过滤 query path 复用这条更轻的 upper-layer descent，并删除 `SearchScratch` 中没有读者的 `touched` visited 写流量。
+  4. 验证结果：本地 `cargo test hnsw --lib -- --nocapture` 先因缺失 helper 报错再转绿；本地 `cargo test --test bench_hnsw_cpp_compare -q`、`cargo test --test bench_hnsw_reopen_round2 -q` 通过；`cargo fmt --all -- --check` 先红后绿；`bash init.sh` 通过；第一次并行 authority 回放中一条 lane 因 shared wrapper lock 返回 `status=conflict`（`/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T081711Z_8977.log`），最终有效证据来自串行成功 reruns：`bench_hnsw_cpp_compare` 日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T081711Z_8978.log`，`bench_hnsw_reopen_round2` 日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round2/test_20260312T081736Z_9088.log`；`python3 scripts/validate_features.py feature-list.json` 返回 `VALID - 39 features (38 passing, 1 failing); workflow/doc checks passed`。
+  5. 后续主缺口：这轮 core rework 只证明“共享 candidate-search 路径真的变了，而且 safety gates 仍绿”，还没有新的 same-schema authority benchmark 结果。因此下一条活动 feature 必须是 `hnsw-round2-authority-same-schema-rerun`；只有 fresh recall-gated authority artifact 才能回答历史 HNSW verdict 是否该动。
+  状态：Phase 6 Active（shared candidate-search core rework closed；same-schema authority rerun is next）。
 - 2026-03-12 08:09: **builder-loop：收口 `hnsw-candidate-search-profiler`，把第二轮 HNSW 的 `candidate_search` 大桶拆成 authority-backed 热点图（plan+exec）**
   1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round2_baseline.json`、`tests/bench_hnsw_reopen_round2.rs`、`src/faiss/hnsw.rs`、`docs/superpowers/plans/2026-03-12-hnsw-reopen-round2-candidate-search.md`。
   2. 阶段结论：round 2 不再缺“candidate_search 是不是热点”这个结论，缺的是把它拆成下一刀算法改动能直接利用的子成本。只有在 authority surface 上把 `candidate_search` 分解成更小热点，后续 core rework 才不会继续围绕一个过宽的 timing bucket 试错。
