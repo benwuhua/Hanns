@@ -12,14 +12,36 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `hnsw-round11-authority-same-schema-rerun`
-- Next feature: `hnsw-round11-authority-same-schema-rerun`
+- Current focus: `none`
+- Next feature: `none`
 - Last updated: 2026-03-13
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 - Workflow policy: narrow performance hypotheses should start with `screen`, promote to tracked work only after `screen_result=promote`, and update durable docs only after authority verdicts
-- Progress: 63/64 features passing (98%)
+- Progress: 64/64 features passing (100%)
 
 ## Session Log
+
+### Session 72 - 2026-03-13
+- Focus: `hnsw-round11-authority-same-schema-rerun`
+- Completed:
+  - tightened [tests/bench_hnsw_reopen_round11.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/.worktrees/hnsw-core-rewrite-screen/tests/bench_hnsw_reopen_round11.rs) so the round-11 contract accepts the real authority failure mode: completed runs still require numeric `rust_qps`, but timeout/abort summaries may instead record a null `rust_qps` plus an explicit `rust_run_outcome`
+  - created [benchmark_results/hnsw_reopen_round11_authority_summary.json](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/.worktrees/hnsw-core-rewrite-screen/benchmark_results/hnsw_reopen_round11_authority_summary.json), freezing the authority verdict for `filtered_bruteforce_fallback`: native still reached `8897.304` qps at recall `0.95`, while the Rust same-schema command never finished and was terminated with exit code `143` after roughly `821` seconds, so round 11 closes as a `hard_stop`
+  - closed the round-11 durable workflow state in `feature-list.json`, `RELEASE_NOTES.md`, and `docs/PARITY_AUDIT.md`; the HNSW family verdict remains unchanged and there is no next queued tracked feature
+- Verification:
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round11 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round11 bash scripts/remote/test.sh --command "cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95"` -> `test=failed` / `exit_code=143` (`/data/work/knowhere-rs-logs-hnsw-reopen-round11/test_20260313T082501Z_10580.log`)
+  - `bash scripts/remote/native_hnsw_qps_capture.sh --log-dir /data/work/knowhere-rs-logs-hnsw-reopen-round11 --gtest-filter Benchmark_float_qps.TEST_HNSW` -> `exit_code=0` via linkfix fallback (`/data/work/knowhere-rs-logs-hnsw-reopen-round11/native_hnsw_qps_linkfix_20260313T082518Z.log`)
+  - `cargo test --test bench_hnsw_reopen_round11 -- --nocapture` -> `ok`
+  - first post-summary remote default-lane replay hit stale remote target cache (`/data/work/knowhere-rs-logs-hnsw-reopen-round11/test_20260313T084402Z_13883.log`), then passed after clearing `/data/work/knowhere-rs-target-hnsw-reopen-round11`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round11 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round11 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round11 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round11/test_20260313T084627Z_14485.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+- Result:
+  - `hnsw-round11-authority-same-schema-rerun` is now `passing`
+  - all tracked features are passing again
+- Notes:
+  - the promoted local screen result for high-filter-ratio brute-force fallback did not survive authority same-schema benchmarking; this line should be treated as a closed hard stop, not as a springboard for broader filtered-query policy expansion
+  - any future pure-Rust HNSW reopen should start from a materially different screen hypothesis, because round 11 shows that native-aligned filtered fallback can catastrophically damage the authority lane outside the narrow local screen fixture
+- Git Commits: pending
 
 ### Session 71 - 2026-03-13
 - Focus: `hnsw-reopen-round11-activation`

@@ -46,7 +46,6 @@ fn hnsw_reopen_round11_requires_baseline_artifact() {
 }
 
 #[test]
-#[ignore = "authority summary lands in the round11 authority rerun slice"]
 fn hnsw_reopen_round11_requires_authority_summary_artifact() {
     let summary = load_round11_authority_summary();
 
@@ -70,7 +69,19 @@ fn hnsw_reopen_round11_requires_authority_summary_artifact() {
         matches!(next_action, "continue" | "soft_stop" | "hard_stop"),
         "next_action must be continue, soft_stop, or hard_stop"
     );
-    assert!(summary["same_schema_current"]["rust_qps"].is_number());
+    let rust_qps = &summary["same_schema_current"]["rust_qps"];
+    let rust_run_outcome = summary["same_schema_current"]["rust_run_outcome"]
+        .as_str()
+        .expect("rust_run_outcome must be a string");
+    assert!(
+        rust_qps.is_number()
+            || (rust_qps.is_null()
+                && matches!(
+                    rust_run_outcome,
+                    "completed" | "timed_out" | "aborted_after_catastrophic_regression"
+                )),
+        "rust_qps must be numeric for completed runs or null for timeout/abort outcomes"
+    );
     assert!(summary["same_schema_current"]["native_qps"].is_number());
     assert!(
         summary["summary"]

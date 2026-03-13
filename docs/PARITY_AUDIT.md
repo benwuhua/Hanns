@@ -4,6 +4,13 @@ Last updated: 2026-03-13
 Sync baseline: a911f2af70f6f47721ab42cfba7b97ee3fd6f206 from main
 
 ## 轮次记录
+- 2026-03-13: **builder-loop：收口 `hnsw-round11-authority-same-schema-rerun`，给 filtered brute-force fallback 做 authority 终判（exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round11_baseline.json`、`tests/bench_hnsw_reopen_round11.rs`、`src/faiss/hnsw.rs`、以及 round11 authority command / native capture 日志。
+  2. 阶段结论：round 11 已经有 promoted local screen evidence，但 tracked authority 问题只剩一个：native-aligned filtered brute-force fallback 是否能在 same-schema authority lane 上形成正向证据。如果 authority lane 本身出现 catastrophic regression，这条线必须直接 hard-stop，而不是继续外推本地 screen 结论。
+  3. 本轮执行：先把 round-11 default-lane contract 收紧为必须要求 `benchmark_results/hnsw_reopen_round11_authority_summary.json`，同时放宽 contract 以接受真实 authority failure mode（`rust_qps=null` + `rust_run_outcome`）；随后新增该 authority summary artifact，把 native `8897.304` qps / recall `0.95` 与 Rust authority run 在约 `821` 秒后被 `SIGTERM` 终止的结果一并冻结成 durable evidence。
+  4. 验证结果：authority Rust same-schema rerun `/data/work/knowhere-rs-logs-hnsw-reopen-round11/test_20260313T082501Z_10580.log` 失败并以 `exit_code=143` 结束；native capture `/data/work/knowhere-rs-logs-hnsw-reopen-round11/native_hnsw_qps_linkfix_20260313T082518Z.log` 成功并给出 `8897.304` qps；本地 `cargo test --test bench_hnsw_reopen_round11 -- --nocapture` 通过；authority default-lane replay 首次命中 stale remote target cache 失败，清理 `/data/work/knowhere-rs-target-hnsw-reopen-round11` 后重放通过，最终日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round11/test_20260313T084627Z_14485.log`；`python3 scripts/validate_features.py feature-list.json` 通过。
+  5. 后续主缺口：当前不再有排队中的 tracked feature。round 11 证明高过滤比 bitset KNN 的 native-aligned brute-force fallback 虽然在 local screen 上可推广，但在 authority same-schema lane 上会触发灾难性回退，因此这条 filtered-policy hypothesis 应按 `hard_stop` 归档，不应继续默认扩展到更通用的 pure-Rust HNSW 内核路线。
+
 - 2026-03-13: **builder-loop：重开 `hnsw-reopen-round11-activation`，把下一条 HNSW tracked hypothesis 切到 filtered brute-force fallback（screen promote -> tracked activation）**
   1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round10_authority_summary.json`、`src/faiss/hnsw.rs`、以及 session-70 的 local screen evidence。
   2. 阶段结论：round 10 已经把 `layer0_slab_locality` 归档为 `hard_stop`，而新的 local screen 证明高过滤比 bitset KNN 搜索在 native 对齐的 brute-force fallback 下具备明确的本地收益，因此下一条 tracked line 不该再回到泛化 kernel theory，而应直接验证 `filtered_bruteforce_fallback` 能否在 authority same-schema lane 上产出新证据。
