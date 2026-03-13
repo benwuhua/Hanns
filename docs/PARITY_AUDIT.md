@@ -4,6 +4,13 @@ Last updated: 2026-03-13
 Sync baseline: a911f2af70f6f47721ab42cfba7b97ee3fd6f206 from main
 
 ## 轮次记录
+- 2026-03-13: **builder-loop：落地 workflow fast-lane 政策，把 narrow performance hypothesis 的默认入口从 tracked reopen 改成 local screen（doc/policy）**
+  1. 复核输入：`long-task-guide.md`、`AGENTS.md`、`task-progress.md`、`feature-list.json`、`docs/superpowers/specs/2026-03-13-fast-lane-authority-workflow-design.md`、`docs/superpowers/plans/2026-03-13-fast-lane-authority-workflow.md`。
+  2. 阶段结论：当前单轮性能优化耗时过长，瓶颈不在单个 benchmark 命令，而在 narrow hypothesis 过早进入 tracked reopen 流程，先后消耗 activation、audit、authority rerun、summary 和 durable closure。要缩短从想法到 verdict 的总时长，必须把 authority 前移决策、后移 durable 文档。
+  3. 本轮执行：把 worker workflow 改成 `screen -> authority -> durable closure` 三段式；`screen` 允许本地 red/green、local benchmark/profile/audit，但不允许性能 verdict claim，也不立即重开 `feature-list.json`；只有 `screen_result=promote` 才进入 tracked authority-grade work，authority 结束后才统一更新 durable docs。
+  4. 验证结果：`python3 scripts/validate_features.py feature-list.json` 通过，说明 doc/policy 改动没有破坏当前 durable state；本轮没有新增 authority benchmark，因为目标是 workflow 缩短单轮总耗时，而不是重跑现有家族 evidence。
+  5. 后续主缺口：未来若再次重开 HNSW 或其他性能家族，默认先走 `screen`，除非已有 authority-grade tracked feature 正在执行。只有 doc-only rollout 被证明仍有歧义时，才值得继续收紧 validator 规则。
+
 - 2026-03-13: **builder-loop：收口 `hnsw-layer0-slab-audit-round10` 与 `hnsw-round10-authority-same-schema-rerun`，给 round10 locality hypothesis 做 authority 终判（plan+exec）**
   1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round10_baseline.json`、`tests/bench_hnsw_reopen_round10.rs`、`src/faiss/hnsw.rs`、`tests/bench_hnsw_reopen_round10_profile.rs`、`docs/superpowers/plans/2026-03-13-hnsw-round10-layer0-slab-audit.md`。
   2. 阶段结论：round 10 不再缺 layer-0 slab 实现和本地 audit 证据，唯一剩下的问题是这些 locality 变化是否真的把 authority same-schema Rust lane 推到了新的证据带。因此本轮只做 slab audit authority replay、fresh same-schema rerun、以及最终 summary artifact。

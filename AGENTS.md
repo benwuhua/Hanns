@@ -11,6 +11,7 @@
 ## Authority Workflow
 - The existing remote x86 machine is the only authoritative execution surface for long-task production acceptance and benchmark/verdict claims.
 - Local `cargo` commands are for quick iteration and smoke checks only.
+- Narrow performance ideas should start in a local `screen` phase and only become tracked work after `screen_result=promote`.
 - Before marking a feature `passing`, run `bash init.sh` and the feature's recorded remote verification steps.
 
 ## Build, Test, and Development Commands
@@ -49,4 +50,5 @@
 ## Long Task for Codex
 This project uses a multi-session Codex workflow.
 At the start of every session, read `long-task-guide.md`, then `task-progress.md`, `feature-list.json`, and recent git history before making changes.
+For narrow performance hypotheses, start with the `screen -> authority -> durable closure` model from `long-task-guide.md` instead of immediately reopening `feature-list.json`.
 <!-- /long-task-codex -->

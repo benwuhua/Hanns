@@ -16,9 +16,26 @@
 - Next feature: `none`
 - Last updated: 2026-03-13
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
+- Workflow policy: narrow performance hypotheses should start with `screen`, promote to tracked work only after `screen_result=promote`, and update durable docs only after authority verdicts
 - Progress: 62/62 features passing (100%)
 
 ## Session Log
+
+### Session 69 - 2026-03-13
+- Focus: `workflow-fast-lane-rollout`
+- Completed:
+  - adopted a new repository-level fast-lane workflow for narrow performance ideas: `screen -> authority -> durable closure`, with `screen` intended to reject weak hypotheses before they consume a full tracked reopen round
+  - updated `long-task-guide.md` and `AGENTS.md` so future sessions record local screen results in `task-progress.md`, treat remote x86 as the only source of performance truth, and only reopen `feature-list.json` after `screen_result=promote`
+  - aligned `docs/PARITY_AUDIT.md` and `RELEASE_NOTES.md` with the workflow change so future HNSW-style reopen attempts start as local screen work rather than immediately paying activation/audit/closure overhead
+- Verification:
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+- Result:
+  - all tracked features remain `passing`
+  - future narrow performance work should begin in `screen`, not as immediate tracked reopen state
+- Notes:
+  - validator tightening was intentionally deferred in this rollout because the documentation changes are already explicit; add new validator rules only if future sessions still create ambiguity
+  - the current source of truth for the operating workflow is now `long-task-guide.md`
+- Git Commits: pending
 
 ### Session 68 - 2026-03-13
 - Focus: `hnsw-layer0-slab-audit-round10`, `hnsw-round10-authority-same-schema-rerun`
