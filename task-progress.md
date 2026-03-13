@@ -41,7 +41,7 @@
 - Notes:
   - the audit confirms the current bulk-build path still starts directly at `node_level` rather than descending from `max_level`, and upper-layer overflow still truncates to nearest-only neighbors rather than applying the native-style diversity heuristic
   - repair remains the dominant synthetic build-profile bucket in this audit artifact, which is consistent with the graph-quality hypothesis and keeps the next round-8 cut focused on the build path rather than deferred search-side micro-optimizations
-- Git Commits: pending
+- Git Commits: `59b40a1`
 
 ### Session 61 - 2026-03-13
 - Focus: `hnsw-reopen-round8-activation`
