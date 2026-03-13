@@ -10,7 +10,6 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use rayon::prelude::*;
 use serde::Serialize;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -34,6 +33,8 @@ type DistanceToIdxFn = fn(&HnswIndex, &[f32], usize) -> f32;
 
 /// Maximum number of layers in the HNSW graph
 const MAX_LAYERS: usize = 16;
+const HNSW_SEARCH_KNN_BF_FILTER_THRESHOLD: f32 = 0.93;
+const HNSW_SEARCH_BF_TOPK_THRESHOLD: f32 = 0.5;
 
 /// BUG-001 FIX: Reference M value for level multiplier calculation.
 /// Using a fixed reference M ensures consistent level distribution across different M values.
@@ -1085,6 +1086,34 @@ impl HnswIndex {
     #[inline(always)]
     fn distance_to_idx_hamming_dispatch(_index: &HnswIndex, _query: &[f32], _idx: usize) -> f32 {
         panic!("Hamming distance not supported for HNSW - use BinaryHnswIndex");
+    }
+
+    #[inline]
+    fn should_bruteforce_bitset_knn(
+        &self,
+        top_k: usize,
+        bitset: &crate::bitset::BitsetView,
+    ) -> bool {
+        let ntotal = self.ids.len();
+        if ntotal == 0 {
+            return false;
+        }
+
+        if top_k as f32 >= ntotal as f32 * HNSW_SEARCH_BF_TOPK_THRESHOLD {
+            return true;
+        }
+
+        if bitset.is_empty() {
+            return false;
+        }
+
+        let filtered_out_num = bitset.count();
+        if filtered_out_num as f32 >= bitset.len() as f32 * HNSW_SEARCH_KNN_BF_FILTER_THRESHOLD {
+            return true;
+        }
+
+        let survivors = bitset.len().saturating_sub(filtered_out_num);
+        survivors > 0 && top_k as f32 >= survivors as f32 * HNSW_SEARCH_BF_TOPK_THRESHOLD
     }
 
     pub fn new(config: &IndexConfig) -> Result<Self> {
@@ -3227,12 +3256,19 @@ impl HnswIndex {
 
         let mut all_ids = Vec::new();
         let mut all_dists = Vec::new();
+        let should_bruteforce = self.should_bruteforce_bitset_knn(k, bitset);
 
         for q_idx in 0..n_queries {
             let q_start = q_idx * self.dim;
             let query_vec = &query[q_start..q_start + self.dim];
 
-            let results = self.search_single_with_bitset(query_vec, ef, k, bitset);
+            let results = if should_bruteforce {
+                self.brute_force_search(query_vec, k, |_id, idx| {
+                    idx >= bitset.len() || !bitset.get(idx)
+                })
+            } else {
+                self.search_single_with_bitset(query_vec, ef, k, bitset)
+            };
 
             for (id, dist) in results.into_iter().take(k) {
                 all_ids.push(id);
@@ -4705,7 +4741,8 @@ impl HnswIndex {
         }
 
         // Multi-layer search with layer-wise jumping: start from top layer
-        let mut curr_ep = self.entry_point.unwrap();
+        let mut scratch = SearchScratch::new();
+        let mut curr_ep_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
 
         // Enhanced layer descent with bitset filtering
         for level in (1..=self.max_level).rev() {
@@ -4715,58 +4752,237 @@ impl HnswIndex {
                 ef.min(4)
             };
 
-            let results = self.search_layer_with_bitset(query, curr_ep, level, jump_ef, bitset);
+            let results = self.search_layer_idx_with_bitset_scratch(
+                query,
+                curr_ep_idx,
+                level,
+                jump_ef,
+                bitset,
+                &mut scratch,
+            );
 
             // Find the best valid result for jumping
-            let mut best_valid_id = curr_ep;
+            let mut best_valid_idx = curr_ep_idx;
 
-            for (id, _dist) in results {
-                // Check bitset: 0 = kept, 1 = filtered
-                // OPT-015: Use fast indexing
-                let idx = self.get_idx_from_id_fast(id);
-                if idx < bitset.len() && !bitset.get(idx) {
-                    best_valid_id = id;
-                    break;
-                }
+            for (idx, _dist) in results {
+                best_valid_idx = idx;
+                break;
             }
 
-            if best_valid_id != curr_ep {
-                curr_ep = best_valid_id;
+            if best_valid_idx != curr_ep_idx {
+                curr_ep_idx = best_valid_idx;
             }
         }
 
         // Final search at layer 0 with full ef
-        let results = self.search_layer_with_bitset(query, curr_ep, 0, ef, bitset);
+        let results = self.search_layer_idx_with_bitset_scratch(
+            query,
+            curr_ep_idx,
+            0,
+            ef,
+            bitset,
+            &mut scratch,
+        );
 
         // Apply bitset filter and return top k
         let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
-        for (id, dist) in results {
-            // OPT-015: Use fast indexing
-            let idx = self.get_idx_from_id_fast(id);
-            // Check bitset: 0 = kept (include), 1 = filtered (skip)
-            if idx >= bitset.len() || !bitset.get(idx) {
-                final_results.push((id, dist));
-                if final_results.len() >= k {
-                    break;
-                }
+        for (idx, dist) in results {
+            final_results.push((self.get_id_from_idx(idx), dist));
+            if final_results.len() >= k {
+                break;
             }
         }
 
         final_results
     }
 
-    /// Search for nearest neighbors at a specific layer with bitset filtering
-    fn search_layer_with_bitset(
+    /// Search for nearest neighbors at a specific layer with bitset filtering.
+    ///
+    /// This is the first pure-Rust core rewrite slice for filtered HNSW: move
+    /// away from `id + HashSet` traversal toward the same `idx + SearchScratch`
+    /// shape used by the generic search kernel.
+    fn search_layer_idx_with_bitset_scratch(
         &self,
         query: &[f32],
-        entry_id: i64,
+        entry_idx: usize,
         level: usize,
         ef: usize,
         bitset: &crate::bitset::BitsetView,
-    ) -> Vec<(i64, f32)> {
+        scratch: &mut SearchScratch,
+    ) -> Vec<(usize, f32)> {
         use std::collections::BinaryHeap;
 
-        // Wrapper for f32 to implement Ord for BinaryHeap
+        #[derive(Clone, Copy, PartialEq)]
+        struct MinDist(f32);
+
+        impl Eq for MinDist {}
+
+        impl PartialOrd for MinDist {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        impl Ord for MinDist {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                match (self.0.is_nan(), other.0.is_nan()) {
+                    (true, true) => std::cmp::Ordering::Equal,
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    (false, false) => other
+                        .0
+                        .partial_cmp(&self.0)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                }
+            }
+        }
+
+        #[derive(Clone, Copy, PartialEq)]
+        struct MaxDist(f32);
+
+        impl Eq for MaxDist {}
+
+        impl PartialOrd for MaxDist {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        impl Ord for MaxDist {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                match (self.0.is_nan(), other.0.is_nan()) {
+                    (true, true) => std::cmp::Ordering::Equal,
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    (false, false) => self
+                        .0
+                        .partial_cmp(&other.0)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                }
+            }
+        }
+
+        let num_nodes = self.node_info.len();
+        scratch.prepare(num_nodes);
+
+        let mut candidates: BinaryHeap<(MinDist, usize)> = BinaryHeap::with_capacity(ef * 2);
+        let mut results: BinaryHeap<(MaxDist, usize)> = BinaryHeap::with_capacity(ef);
+
+        let entry_is_filtered = entry_idx < bitset.len() && bitset.get(entry_idx);
+
+        let entry_dist = self.distance(query, entry_idx);
+        candidates.push((MinDist(entry_dist), entry_idx));
+        if !entry_is_filtered {
+            results.push((MaxDist(entry_dist), entry_idx));
+        }
+        scratch.mark_visited(entry_idx);
+
+        while let Some((MinDist(cand_dist), cand_idx)) = candidates.pop() {
+            if results.len() >= ef {
+                if let Some(&(MaxDist(worst_dist), _)) = results.peek() {
+                    if cand_dist > worst_dist {
+                        break;
+                    }
+                }
+            }
+
+            let node_info = &self.node_info[cand_idx];
+            if level > node_info.max_layer {
+                continue;
+            }
+
+            for &nbr_id in &node_info.layer_neighbors[level].ids {
+                let nbr_idx = self.get_idx_from_id_fast(nbr_id);
+                if nbr_idx >= num_nodes {
+                    continue;
+                }
+                if !scratch.mark_visited(nbr_idx) {
+                    continue;
+                }
+                if nbr_idx < bitset.len() && bitset.get(nbr_idx) {
+                    continue;
+                }
+
+                let nbr_dist = self.distance(query, nbr_idx);
+
+                if results.len() < ef {
+                    results.push((MaxDist(nbr_dist), nbr_idx));
+                    candidates.push((MinDist(nbr_dist), nbr_idx));
+                } else if let Some(&(MaxDist(worst_dist), _)) = results.peek() {
+                    if nbr_dist < worst_dist {
+                        results.pop();
+                        results.push((MaxDist(nbr_dist), nbr_idx));
+                        candidates.push((MinDist(nbr_dist), nbr_idx));
+                    }
+                }
+            }
+        }
+
+        let mut sorted: Vec<(usize, f32)> = results
+            .into_sorted_vec()
+            .into_iter()
+            .map(|(MaxDist(d), idx)| (idx, d))
+            .collect();
+        sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        sorted
+    }
+
+    #[cfg(test)]
+    fn search_layer_idx_with_bitset_scratch_stats(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+        ef: usize,
+        bitset: &crate::bitset::BitsetView,
+        scratch: &mut SearchScratch,
+    ) -> (Vec<(usize, f32)>, usize) {
+        let before_epoch = scratch.epoch;
+        let before_snapshot = scratch.visited_epoch.clone();
+        let result =
+            self.search_layer_idx_with_bitset_scratch(query, entry_idx, level, ef, bitset, scratch);
+
+        let visited_count = scratch
+            .visited_epoch
+            .iter()
+            .zip(before_snapshot.iter().chain(std::iter::repeat(&0)))
+            .filter(|&(after, before)| *after == scratch.epoch && *before != scratch.epoch)
+            .count();
+
+        if scratch.epoch == before_epoch {
+            (result, visited_count)
+        } else {
+            (result, visited_count)
+        }
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    fn search_layer_idx_with_bitset_legacy_for_screen(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+        ef: usize,
+        bitset: &crate::bitset::BitsetView,
+    ) -> Vec<(usize, f32)> {
+        self.search_layer_idx_with_bitset_legacy_for_screen_stats(
+            query, entry_idx, level, ef, bitset,
+        )
+        .0
+    }
+
+    #[cfg(test)]
+    fn search_layer_idx_with_bitset_legacy_for_screen_stats(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+        ef: usize,
+        bitset: &crate::bitset::BitsetView,
+    ) -> (Vec<(usize, f32)>, usize) {
+        use std::collections::{BinaryHeap, HashSet};
+
         #[derive(Clone, Copy, PartialEq)]
         struct OrderedDist(f32);
 
@@ -4792,18 +5008,12 @@ impl HnswIndex {
             }
         }
 
-        // OPT-015/021: Pre-allocate collections
+        let entry_id = self.get_id_from_idx(entry_idx);
         let mut visited: HashSet<i64> = HashSet::with_capacity(ef * 2);
         let mut candidates: BinaryHeap<(OrderedDist, i64)> = BinaryHeap::with_capacity(ef * 2);
         let mut results: BinaryHeap<(OrderedDist, i64)> = BinaryHeap::with_capacity(ef);
 
-        // OPT-015: Use fast indexing
-        let entry_idx = self.get_idx_from_id_fast(entry_id);
-
-        // Check if entry point is filtered - if so, still use it as starting point
-        // but don't add it to results if it's filtered
         let entry_is_filtered = entry_idx < bitset.len() && bitset.get(entry_idx);
-
         let entry_dist = self.distance(query, entry_idx);
         candidates.push((OrderedDist(entry_dist), entry_id));
         if !entry_is_filtered {
@@ -4820,9 +5030,7 @@ impl HnswIndex {
                 }
             }
 
-            // OPT-015: Use fast indexing
             let cand_idx = self.get_idx_from_id_fast(cand_id);
-
             let node_info = &self.node_info[cand_idx];
             if level > node_info.max_layer {
                 continue;
@@ -4830,17 +5038,12 @@ impl HnswIndex {
 
             for &nbr_id in &node_info.layer_neighbors[level].ids {
                 if visited.insert(nbr_id) {
-                    // Check bitset early to prune filtered nodes
-                    // OPT-015: Use fast indexing
                     let nbr_idx = self.get_idx_from_id_fast(nbr_id);
-
-                    // Skip filtered nodes
                     if nbr_idx < bitset.len() && bitset.get(nbr_idx) {
-                        continue; // This node is filtered out
+                        continue;
                     }
 
                     let nbr_dist = self.distance(query, nbr_idx);
-
                     if results.len() < ef {
                         results.push((OrderedDist(nbr_dist), nbr_id));
                         candidates.push((OrderedDist(nbr_dist), nbr_id));
@@ -4855,13 +5058,13 @@ impl HnswIndex {
             }
         }
 
-        let mut sorted: Vec<(i64, f32)> = results
+        let mut sorted: Vec<(usize, f32)> = results
             .into_sorted_vec()
             .into_iter()
-            .map(|(OrderedDist(d), id)| (id, d))
+            .map(|(OrderedDist(d), id)| (self.get_idx_from_id_fast(id), d))
             .collect();
         sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        sorted
+        (sorted, visited.len())
     }
 
     pub fn ntotal(&self) -> usize {
@@ -5952,6 +6155,37 @@ mod tests {
         index
     }
 
+    fn deterministic_filtered_screen_index(num_vectors: usize, dim: usize) -> HnswIndex {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(16),
+                ef_construction: Some(100),
+                ef_search: Some(138),
+                ml: Some(1.0 / (REFERENCE_M_FOR_LEVEL as f32).ln()),
+                num_threads: Some(1),
+                ..Default::default()
+            },
+        };
+
+        let mut vectors = Vec::with_capacity(num_vectors * dim);
+        for i in 0..num_vectors {
+            for d in 0..dim {
+                let value = ((i * 17 + d * 31) % 997) as f32 / 997.0;
+                vectors.push(value);
+            }
+        }
+        let ids: Vec<i64> = (0..num_vectors as i64).collect();
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors, Some(&ids)).unwrap();
+        index
+    }
+
     fn deterministic_parallel_build_entry_descent_fixture() -> HnswIndex {
         let config = IndexConfig {
             index_type: IndexType::Hnsw,
@@ -6413,6 +6647,178 @@ mod tests {
     }
 
     #[test]
+    fn test_search_layer_idx_with_bitset_scratch_allows_filtered_entry_but_skips_filtered_results()
+    {
+        use crate::bitset::BitsetView;
+
+        let index = deterministic_upper_layer_index();
+        let query = [11.8, 0.0];
+        let mut bitset = BitsetView::new(index.ntotal());
+        bitset.set(0, true);
+        bitset.set(2, true);
+
+        let mut scratch = SearchScratch::new();
+        let results =
+            index.search_layer_idx_with_bitset_scratch(&query, 0, 0, 4, &bitset, &mut scratch);
+        let result_idxs: Vec<usize> = results.iter().map(|(idx, _)| *idx).collect();
+
+        assert_eq!(
+            result_idxs,
+            vec![3, 1],
+            "scratch-based bitset search should keep using a filtered entry as a frontier seed while excluding filtered nodes from the final result set"
+        );
+        assert!(
+            results.windows(2).all(|pair| pair[0].1 <= pair[1].1),
+            "bitset scratch search results must remain sorted from nearest to farthest"
+        );
+    }
+
+    #[test]
+    fn test_search_layer_idx_with_bitset_scratch_reuses_visited_epoch_across_calls() {
+        use crate::bitset::BitsetView;
+
+        let index = deterministic_upper_layer_index();
+        let query = [11.8, 0.0];
+        let mut scratch = SearchScratch::new();
+        let initial_epoch = scratch.epoch;
+
+        let mut first_bitset = BitsetView::new(index.ntotal());
+        first_bitset.set(2, true);
+        let first = index.search_layer_idx_with_bitset_scratch(
+            &query,
+            0,
+            0,
+            4,
+            &first_bitset,
+            &mut scratch,
+        );
+        let epoch_after_first = scratch.epoch;
+
+        let mut second_bitset = BitsetView::new(index.ntotal());
+        second_bitset.set(1, true);
+        let second = index.search_layer_idx_with_bitset_scratch(
+            &query,
+            0,
+            0,
+            4,
+            &second_bitset,
+            &mut scratch,
+        );
+
+        assert!(
+            epoch_after_first > initial_epoch,
+            "first scratch-backed bitset search should advance the visited epoch"
+        );
+        assert!(
+            scratch.epoch > epoch_after_first,
+            "subsequent scratch-backed bitset searches should reuse and advance the same visited epoch buffer"
+        );
+        assert_eq!(
+            first.iter().map(|(idx, _)| *idx).collect::<Vec<_>>(),
+            vec![3, 1, 0],
+            "first filtered call should exclude only the masked node while preserving nearest-first ordering"
+        );
+        assert_eq!(
+            second.iter().map(|(idx, _)| *idx).collect::<Vec<_>>(),
+            vec![3, 2, 0],
+            "second filtered call should not inherit visited state from the first call"
+        );
+    }
+
+    #[test]
+    fn test_search_with_bitset_matches_bruteforce_on_screen_fixture() {
+        use crate::bitset::BitsetView;
+
+        let index = deterministic_filtered_screen_index(512, 32);
+        let query = &index.vectors[index.dim..index.dim * 2];
+        let mut bitset = BitsetView::new(index.ntotal());
+        for idx in (0..index.ntotal()).step_by(3) {
+            bitset.set(idx, true);
+        }
+
+        let req = SearchRequest {
+            top_k: 10,
+            nprobe: 512,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let exact = index.brute_force_search(query, 10, |_id, idx| {
+            idx >= bitset.len() || !bitset.get(idx)
+        });
+        let exact_ids: Vec<i64> = exact.iter().map(|(id, _)| *id).collect();
+
+        let approx = index.search_with_bitset(query, &req, &bitset).unwrap();
+
+        assert_eq!(
+            approx.ids, exact_ids,
+            "rewritten filtered HNSW search should match brute-force ids on the deterministic screen fixture when ef is large"
+        );
+    }
+
+    #[test]
+    fn test_should_bruteforce_bitset_knn_for_high_filter_ratio() {
+        use crate::bitset::BitsetView;
+
+        let index = deterministic_filtered_screen_index(100, 16);
+        let mut bitset = BitsetView::new(index.ntotal());
+        for idx in 0..93 {
+            bitset.set(idx, true);
+        }
+
+        assert!(
+            index.should_bruteforce_bitset_knn(5, &bitset),
+            "native-aligned filtered search policy should switch to brute force when >=93% of candidates are filtered out"
+        );
+    }
+
+    #[test]
+    fn test_should_bruteforce_bitset_knn_for_large_topk_after_filtering() {
+        use crate::bitset::BitsetView;
+
+        let index = deterministic_filtered_screen_index(100, 16);
+        let mut bitset = BitsetView::new(index.ntotal());
+        for idx in 0..40 {
+            bitset.set(idx, true);
+        }
+
+        assert!(
+            index.should_bruteforce_bitset_knn(30, &bitset),
+            "native-aligned filtered search policy should switch to brute force when top-k consumes at least half of the surviving vectors"
+        );
+    }
+
+    #[test]
+    fn test_search_with_bitset_uses_bruteforce_policy_on_high_filter_ratio_fixture() {
+        use crate::bitset::BitsetView;
+
+        let index = deterministic_filtered_screen_index(100, 16);
+        let query = &index.vectors[index.dim..index.dim * 2];
+        let mut bitset = BitsetView::new(index.ntotal());
+        for idx in 0..95 {
+            bitset.set(idx, true);
+        }
+
+        let req = SearchRequest {
+            top_k: 3,
+            nprobe: 1,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+
+        let exact =
+            index.brute_force_search(query, 3, |_id, idx| idx >= bitset.len() || !bitset.get(idx));
+        let exact_ids: Vec<i64> = exact.iter().map(|(id, _)| *id).collect();
+        let result = index.search_with_bitset(query, &req, &bitset).unwrap();
+
+        assert_eq!(
+            result.ids, exact_ids,
+            "high-filter-ratio bitset search should use brute-force fallback and preserve exact nearest-neighbor ids even when ef is tiny"
+        );
+    }
+
+    #[test]
     fn test_layer0_l2_search_modes_distinguish_fast_and_profiled_paths() {
         let index = deterministic_upper_layer_index();
 
@@ -6475,6 +6881,128 @@ mod tests {
             index.profiled_layer0_layout_mode_for_audit(),
             "flat_graph_profiled",
             "round-10 profiled layer-0 path should remain explicitly distinct from the slab-backed production path"
+        );
+    }
+
+    #[test]
+    #[ignore = "screen benchmark; excluded from default regression"]
+    fn test_hnsw_filtered_search_screen_benchmark() {
+        use crate::bitset::BitsetView;
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let index = deterministic_filtered_screen_index(20_000, 64);
+        let ef = 138usize;
+        let entry_idx = index.get_idx_from_id_fast(index.entry_point.unwrap());
+
+        let mut bitset = BitsetView::new(index.ntotal());
+        for idx in (0..index.ntotal()).step_by(3) {
+            bitset.set(idx, true);
+        }
+
+        let query_count = 256usize;
+        let mut queries = Vec::with_capacity(query_count * index.dim);
+        for i in 0..query_count {
+            for d in 0..index.dim {
+                let value = ((i * 43 + d * 19 + 7) % 991) as f32 / 991.0;
+                queries.push(value);
+            }
+        }
+
+        let mut scratch = SearchScratch::new();
+        let mut legacy_total_visited = 0usize;
+        let mut scratch_total_visited = 0usize;
+
+        let legacy_start = Instant::now();
+        for query in queries.chunks_exact(index.dim) {
+            let (result, visited) = index.search_layer_idx_with_bitset_legacy_for_screen_stats(
+                black_box(query),
+                entry_idx,
+                0,
+                ef,
+                &bitset,
+            );
+            legacy_total_visited += visited;
+            black_box(result);
+        }
+        let legacy_elapsed = legacy_start.elapsed();
+
+        let scratch_start = Instant::now();
+        for query in queries.chunks_exact(index.dim) {
+            let (result, visited) = index.search_layer_idx_with_bitset_scratch_stats(
+                black_box(query),
+                entry_idx,
+                0,
+                ef,
+                &bitset,
+                &mut scratch,
+            );
+            scratch_total_visited += visited;
+            black_box(result);
+        }
+        let scratch_elapsed = scratch_start.elapsed();
+
+        let legacy_qps = query_count as f64 / legacy_elapsed.as_secs_f64();
+        let scratch_qps = query_count as f64 / scratch_elapsed.as_secs_f64();
+        let speedup = scratch_qps / legacy_qps;
+
+        println!(
+            "filtered_screen_benchmark legacy_qps={legacy_qps:.3} scratch_qps={scratch_qps:.3} speedup={speedup:.3} legacy_ms={:.3} scratch_ms={:.3} avg_legacy_visited={:.3} avg_scratch_visited={:.3}",
+            legacy_elapsed.as_secs_f64() * 1000.0,
+            scratch_elapsed.as_secs_f64() * 1000.0,
+            legacy_total_visited as f64 / query_count as f64,
+            scratch_total_visited as f64 / query_count as f64,
+        );
+    }
+
+    #[test]
+    #[ignore = "screen benchmark; excluded from default regression"]
+    fn test_hnsw_filtered_bruteforce_fallback_screen_benchmark() {
+        use crate::bitset::BitsetView;
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let index = deterministic_filtered_screen_index(20_000, 64);
+        let ef = 138usize;
+
+        let mut bitset = BitsetView::new(index.ntotal());
+        for idx in 0..19_000 {
+            bitset.set(idx, true);
+        }
+
+        let query_count = 256usize;
+        let mut queries = Vec::with_capacity(query_count * index.dim);
+        for i in 0..query_count {
+            for d in 0..index.dim {
+                let value = ((i * 29 + d * 13 + 5) % 983) as f32 / 983.0;
+                queries.push(value);
+            }
+        }
+
+        let corrected_start = Instant::now();
+        for query in queries.chunks_exact(index.dim) {
+            let result = index.search_single_with_bitset(black_box(query), ef, 10, &bitset);
+            black_box(result);
+        }
+        let corrected_elapsed = corrected_start.elapsed();
+
+        let brute_force_start = Instant::now();
+        for query in queries.chunks_exact(index.dim) {
+            let result = index.brute_force_search(black_box(query), 10, |_id, idx| {
+                idx >= bitset.len() || !bitset.get(idx)
+            });
+            black_box(result);
+        }
+        let brute_force_elapsed = brute_force_start.elapsed();
+
+        let corrected_qps = query_count as f64 / corrected_elapsed.as_secs_f64();
+        let brute_force_qps = query_count as f64 / brute_force_elapsed.as_secs_f64();
+        let speedup = brute_force_qps / corrected_qps;
+
+        println!(
+            "filtered_fallback_screen_benchmark corrected_qps={corrected_qps:.3} brute_force_qps={brute_force_qps:.3} brute_force_speedup={speedup:.3} corrected_ms={:.3} brute_force_ms={:.3}",
+            corrected_elapsed.as_secs_f64() * 1000.0,
+            brute_force_elapsed.as_secs_f64() * 1000.0,
         );
     }
 
