@@ -246,6 +246,52 @@ impl Layer0FlatGraph {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+struct Layer0Slab {
+    stride_words: usize,
+    vector_offset_words: usize,
+    max_neighbors: usize,
+    dim: usize,
+    words: Vec<u32>,
+    enabled: bool,
+}
+
+impl Layer0Slab {
+    fn clear(&mut self) {
+        self.stride_words = 0;
+        self.vector_offset_words = 0;
+        self.max_neighbors = 0;
+        self.dim = 0;
+        self.words.clear();
+        self.enabled = false;
+    }
+
+    fn is_enabled_for(&self, node_count: usize) -> bool {
+        self.enabled
+            && self.stride_words > 0
+            && self.max_neighbors > 0
+            && self.dim > 0
+            && self.words.len() == node_count * self.stride_words
+    }
+
+    fn neighbors_for(&self, node_idx: usize) -> &[u32] {
+        let base = node_idx * self.stride_words;
+        let degree = self.words[base] as usize;
+        &self.words[base + 1..base + 1 + degree]
+    }
+
+    unsafe fn vector_ptr_for(&self, node_idx: usize) -> *const f32 {
+        let base = node_idx * self.stride_words + self.vector_offset_words;
+        self.words.as_ptr().add(base) as *const f32
+    }
+
+    #[cfg(any(test, feature = "long-tests"))]
+    fn vector_for_audit(&self, node_idx: usize) -> &[f32] {
+        let base = node_idx * self.stride_words + self.vector_offset_words;
+        unsafe { std::slice::from_raw_parts(self.words.as_ptr().add(base) as *const f32, self.dim) }
+    }
+}
+
 struct SearchScratch {
     visited_epoch: Vec<u32>,
     epoch: u32,
@@ -979,6 +1025,7 @@ pub struct HnswIndex {
     ids: Vec<i64>,
     node_info: Vec<NodeInfo>,
     layer0_flat_graph: Layer0FlatGraph,
+    layer0_slab: Layer0Slab,
     next_id: i64,
     trained: bool,
     dim: usize,
@@ -1086,6 +1133,7 @@ impl HnswIndex {
             ids: Vec::new(),
             node_info: Vec::new(),
             layer0_flat_graph: Layer0FlatGraph::default(),
+            layer0_slab: Layer0Slab::default(),
             next_id: 0,
             trained: false,
             dim: config.dim,
@@ -1126,6 +1174,7 @@ impl HnswIndex {
 
     fn refresh_layer0_flat_graph(&mut self) {
         self.layer0_flat_graph.clear();
+        self.layer0_slab.clear();
 
         let node_count = self.node_info.len();
         if node_count == 0 || self.m_max0 == 0 || node_count > (u32::MAX as usize) {
@@ -1161,6 +1210,43 @@ impl HnswIndex {
         }
 
         self.layer0_flat_graph.enabled = true;
+        self.refresh_layer0_slab();
+    }
+
+    fn refresh_layer0_slab(&mut self) {
+        self.layer0_slab.clear();
+
+        let node_count = self.node_info.len();
+        if !self.layer0_flat_graph.is_enabled_for(node_count) || self.dim == 0 {
+            return;
+        }
+
+        let max_neighbors = self.layer0_flat_graph.max_neighbors;
+        let vector_offset_words = 1 + max_neighbors;
+        let stride_words = vector_offset_words + self.dim;
+
+        self.layer0_slab.stride_words = stride_words;
+        self.layer0_slab.vector_offset_words = vector_offset_words;
+        self.layer0_slab.max_neighbors = max_neighbors;
+        self.layer0_slab.dim = self.dim;
+        self.layer0_slab.words.resize(node_count * stride_words, 0);
+
+        for node_idx in 0..node_count {
+            let base = node_idx * stride_words;
+            let neighbors = self.layer0_flat_graph.neighbors_for(node_idx);
+            self.layer0_slab.words[base] = neighbors.len() as u32;
+            for (offset, &nbr_idx) in neighbors.iter().enumerate() {
+                self.layer0_slab.words[base + 1 + offset] = nbr_idx;
+            }
+
+            let vector_start = node_idx * self.dim;
+            for offset in 0..self.dim {
+                self.layer0_slab.words[base + vector_offset_words + offset] =
+                    self.vectors[vector_start + offset].to_bits();
+            }
+        }
+
+        self.layer0_slab.enabled = true;
     }
 
     pub fn train(&mut self, vectors: &[f32]) -> Result<()> {
@@ -3388,6 +3474,61 @@ impl HnswIndex {
         true
     }
 
+    #[cfg(any(test, feature = "long-tests"))]
+    pub fn layer0_slab_enabled_for_audit(&self) -> bool {
+        self.layer0_slab.is_enabled_for(self.node_info.len())
+    }
+
+    #[cfg(any(test, feature = "long-tests"))]
+    pub fn layer0_slab_neighbors_for_audit(&self, node_idx: usize) -> &[u32] {
+        self.layer0_slab.neighbors_for(node_idx)
+    }
+
+    #[cfg(any(test, feature = "long-tests"))]
+    pub fn layer0_slab_vector_for_audit(&self, node_idx: usize) -> &[f32] {
+        self.layer0_slab.vector_for_audit(node_idx)
+    }
+
+    #[cfg(any(test, feature = "long-tests"))]
+    pub fn production_layer0_layout_mode_for_audit(&self) -> &'static str {
+        if self.layer0_slab.is_enabled_for(self.node_info.len()) {
+            "layer0_slab"
+        } else if self.layer0_flat_graph.is_enabled_for(self.node_info.len()) {
+            "flat_u32_adjacency"
+        } else {
+            "layer0_heap_fallback"
+        }
+    }
+
+    #[cfg(any(test, feature = "long-tests"))]
+    pub fn profiled_layer0_layout_mode_for_audit(&self) -> &'static str {
+        if self.layer0_flat_graph.is_enabled_for(self.node_info.len()) {
+            "flat_graph_profiled"
+        } else {
+            "heap_profiled"
+        }
+    }
+
+    #[cfg(any(test, feature = "long-tests"))]
+    pub fn layer0_slab_stride_bytes_for_audit(&self) -> usize {
+        self.layer0_slab.stride_words * std::mem::size_of::<u32>()
+    }
+
+    #[cfg(any(test, feature = "long-tests"))]
+    pub fn layer0_slab_vector_offset_bytes_for_audit(&self) -> usize {
+        self.layer0_slab.vector_offset_words * std::mem::size_of::<u32>()
+    }
+
+    #[cfg(any(test, feature = "long-tests"))]
+    pub fn layer0_slab_max_neighbors_for_audit(&self) -> usize {
+        self.layer0_slab.max_neighbors
+    }
+
+    #[cfg(any(test, feature = "long-tests"))]
+    pub fn layer0_slab_rebuild_source_for_audit(&self) -> &'static str {
+        "derived_from_canonical_flat_graph_and_vectors"
+    }
+
     fn search_layer_idx_with_optional_profile(
         &self,
         query: &[f32],
@@ -3839,6 +3980,7 @@ impl HnswIndex {
     ) -> Vec<(usize, f32)> {
         let num_nodes = self.node_info.len();
         let use_flat_graph = level == 0 && self.layer0_flat_graph.is_enabled_for(num_nodes);
+        let use_layer0_slab = use_flat_graph && self.layer0_slab.is_enabled_for(num_nodes);
         let query_ptr = query.as_ptr();
         let base_ptr = self.vectors.as_ptr();
         scratch.prepare(num_nodes);
@@ -3876,7 +4018,40 @@ impl HnswIndex {
             let mut batch_indices = [0usize; 4];
             let mut batch_len = 0usize;
 
-            if use_flat_graph {
+            if use_layer0_slab {
+                let neighbors = self.layer0_slab.neighbors_for(candidate.idx);
+                for (_neighbor_offset, &nbr_u32) in neighbors.iter().enumerate() {
+                    let nbr_idx = nbr_u32 as usize;
+                    if nbr_idx >= num_nodes || !scratch.mark_visited(nbr_idx) {
+                        continue;
+                    }
+
+                    batch_indices[batch_len] = nbr_idx;
+                    batch_len += 1;
+
+                    if batch_len == 4 {
+                        let distances = unsafe {
+                            simd::l2_batch_4_ptrs(
+                                query_ptr,
+                                self.layer0_slab.vector_ptr_for(batch_indices[0]),
+                                self.layer0_slab.vector_ptr_for(batch_indices[1]),
+                                self.layer0_slab.vector_ptr_for(batch_indices[2]),
+                                self.layer0_slab.vector_ptr_for(batch_indices[3]),
+                                self.dim,
+                            )
+                        };
+                        for (offset, nbr_dist) in distances.into_iter().enumerate() {
+                            self.process_layer0_l2_candidate_fast(
+                                batch_indices[offset],
+                                nbr_dist,
+                                ef,
+                                scratch,
+                            );
+                        }
+                        batch_len = 0;
+                    }
+                }
+            } else if use_flat_graph {
                 let neighbors = self.layer0_flat_graph.neighbors_for(candidate.idx);
                 for (neighbor_offset, &nbr_u32) in neighbors.iter().enumerate() {
                     if neighbor_offset + 1 < neighbors.len() {
@@ -3946,7 +4121,17 @@ impl HnswIndex {
             }
 
             for &nbr_idx in &batch_indices[..batch_len] {
-                let nbr_dist = unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) };
+                let nbr_dist = if use_layer0_slab {
+                    unsafe {
+                        (self.l2_distance_sq_ptr_kernel)(
+                            query_ptr,
+                            self.layer0_slab.vector_ptr_for(nbr_idx),
+                            self.dim,
+                        )
+                    }
+                } else {
+                    unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) }
+                };
                 self.process_layer0_l2_candidate_fast(nbr_idx, nbr_dist, ef, scratch);
             }
         }
@@ -6250,6 +6435,46 @@ mod tests {
         assert!(
             index.production_layer0_avoids_profile_timing_for_audit(),
             "round-9 production layer-0 fast path should avoid profiling timing calls"
+        );
+    }
+
+    #[test]
+    fn test_layer0_slab_rebuild_tracks_canonical_state() {
+        let index = deterministic_upper_layer_index();
+
+        assert!(
+            index.layer0_slab_enabled_for_audit(),
+            "round-10 layer-0 slab should be enabled for the deterministic audit index"
+        );
+
+        let canonical_neighbors = index.layer0_flat_graph.neighbors_for(0).to_vec();
+        let slab_neighbors = index.layer0_slab_neighbors_for_audit(0).to_vec();
+        assert_eq!(
+            slab_neighbors, canonical_neighbors,
+            "round-10 slab neighbors must mirror the canonical layer-0 flat-graph neighbors"
+        );
+
+        let canonical_vector = &index.vectors[..index.dim];
+        let slab_vector = index.layer0_slab_vector_for_audit(0);
+        assert_eq!(
+            slab_vector, canonical_vector,
+            "round-10 slab vector payload must mirror the canonical vector storage"
+        );
+    }
+
+    #[test]
+    fn test_layer0_fast_path_reports_slab_layout_when_enabled() {
+        let index = deterministic_upper_layer_index();
+
+        assert_eq!(
+            index.production_layer0_layout_mode_for_audit(),
+            "layer0_slab",
+            "round-10 production layer-0 fast path should report slab-backed layout mode when eligible"
+        );
+        assert_eq!(
+            index.profiled_layer0_layout_mode_for_audit(),
+            "flat_graph_profiled",
+            "round-10 profiled layer-0 path should remain explicitly distinct from the slab-backed production path"
         );
     }
 
