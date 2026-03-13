@@ -3374,6 +3374,20 @@ impl HnswIndex {
         )
     }
 
+    #[cfg(test)]
+    fn layer0_l2_search_mode_for(&self, profiled: bool) -> &'static str {
+        if profiled {
+            "profiled_optional"
+        } else {
+            "fast_unprofiled"
+        }
+    }
+
+    #[cfg(test)]
+    fn production_layer0_avoids_profile_timing(&self) -> bool {
+        true
+    }
+
     fn search_layer_idx_with_optional_profile(
         &self,
         query: &[f32],
@@ -3794,6 +3808,149 @@ impl HnswIndex {
         if let Some(stats) = profile.as_deref_mut() {
             stats.record_frontier_ops(frontier_start.elapsed(), 2, result_pops);
         }
+    }
+
+    fn process_layer0_l2_candidate_fast(
+        &self,
+        nbr_idx: usize,
+        nbr_dist: f32,
+        ef: usize,
+        scratch: &mut SearchScratch,
+    ) {
+        if !scratch.layer0_results.can_insert(nbr_dist, ef) {
+            return;
+        }
+
+        let entry = Layer0PoolEntry {
+            idx: nbr_idx,
+            dist: nbr_dist,
+        };
+        scratch.layer0_results.insert(entry, ef);
+        scratch.layer0_frontier.push(entry);
+    }
+
+    fn search_layer_idx_l2_ordered_pool_fast(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+        ef: usize,
+        scratch: &mut SearchScratch,
+    ) -> Vec<(usize, f32)> {
+        let num_nodes = self.node_info.len();
+        let use_flat_graph = level == 0 && self.layer0_flat_graph.is_enabled_for(num_nodes);
+        let query_ptr = query.as_ptr();
+        let base_ptr = self.vectors.as_ptr();
+        scratch.prepare(num_nodes);
+        scratch.prepare_layer0_pools(ef);
+
+        let entry_dist = unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, entry_idx) };
+
+        let entry = Layer0PoolEntry {
+            idx: entry_idx,
+            dist: entry_dist,
+        };
+        scratch.layer0_frontier.push(entry);
+        scratch.layer0_results.insert(entry, ef);
+        scratch.mark_visited(entry_idx);
+
+        loop {
+            let Some(candidate) = scratch.layer0_frontier.pop_best() else {
+                break;
+            };
+
+            if scratch.layer0_results.len() >= ef
+                && scratch
+                    .layer0_results
+                    .worst_dist()
+                    .is_some_and(|worst_dist| candidate.dist > worst_dist)
+            {
+                break;
+            }
+
+            let node_info = &self.node_info[candidate.idx];
+            if level > node_info.max_layer {
+                continue;
+            }
+
+            let mut batch_indices = [0usize; 4];
+            let mut batch_len = 0usize;
+
+            if use_flat_graph {
+                let neighbors = self.layer0_flat_graph.neighbors_for(candidate.idx);
+                for (neighbor_offset, &nbr_u32) in neighbors.iter().enumerate() {
+                    if neighbor_offset + 1 < neighbors.len() {
+                        let next_nbr_idx = neighbors[neighbor_offset + 1] as usize;
+                        if next_nbr_idx < num_nodes {
+                            unsafe { self.prefetch_l2_vector_idx(base_ptr, next_nbr_idx) };
+                        }
+                    }
+
+                    let nbr_idx = nbr_u32 as usize;
+                    if nbr_idx >= num_nodes || !scratch.mark_visited(nbr_idx) {
+                        continue;
+                    }
+
+                    batch_indices[batch_len] = nbr_idx;
+                    batch_len += 1;
+
+                    if batch_len == 4 {
+                        let distances = unsafe {
+                            self.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, batch_indices)
+                        };
+                        for (offset, nbr_dist) in distances.into_iter().enumerate() {
+                            self.process_layer0_l2_candidate_fast(
+                                batch_indices[offset],
+                                nbr_dist,
+                                ef,
+                                scratch,
+                            );
+                        }
+                        batch_len = 0;
+                    }
+                }
+            } else {
+                let neighbors = &node_info.layer_neighbors[level].ids;
+                for (neighbor_offset, &nbr_id) in neighbors.iter().enumerate() {
+                    if neighbor_offset + 1 < neighbors.len() {
+                        let next_nbr_idx = self.get_idx_from_id_fast(neighbors[neighbor_offset + 1]);
+                        if next_nbr_idx < num_nodes {
+                            unsafe { self.prefetch_l2_vector_idx(base_ptr, next_nbr_idx) };
+                        }
+                    }
+
+                    let nbr_idx = self.get_idx_from_id_fast(nbr_id);
+                    if nbr_idx >= num_nodes || !scratch.mark_visited(nbr_idx) {
+                        continue;
+                    }
+
+                    batch_indices[batch_len] = nbr_idx;
+                    batch_len += 1;
+
+                    if batch_len == 4 {
+                        let distances = unsafe {
+                            self.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, batch_indices)
+                        };
+                        for (offset, nbr_dist) in distances.into_iter().enumerate() {
+                            self.process_layer0_l2_candidate_fast(
+                                batch_indices[offset],
+                                nbr_dist,
+                                ef,
+                                scratch,
+                            );
+                        }
+                        batch_len = 0;
+                    }
+                }
+            }
+
+            for &nbr_idx in &batch_indices[..batch_len] {
+                let nbr_dist = unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) };
+                self.process_layer0_l2_candidate_fast(nbr_idx, nbr_dist, ef, scratch);
+            }
+        }
+
+        scratch.layer0_results.to_sorted_pairs()
     }
 
     fn search_layer_idx_l2_ordered_pool_with_optional_profile(
@@ -4319,8 +4476,7 @@ impl HnswIndex {
             }
         }
 
-        let results =
-            self.search_layer_idx_l2_with_scratch(query, best_ep_idx, 0, ef, &mut scratch, None);
+        let results = self.search_layer_idx_l2_ordered_pool_fast(query, best_ep_idx, 0, ef, &mut scratch);
 
         let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
         for (idx, dist) in results {
