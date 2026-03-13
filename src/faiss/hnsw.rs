@@ -23,6 +23,13 @@ use crate::index::{Index as IndexTrait, IndexError, SearchResult as IndexSearchR
 use crate::simd;
 
 type BatchNeighborResults = (usize, usize, Vec<Vec<(usize, f32)>>);
+type BatchNeighborResultsProfiled = (
+    usize,
+    usize,
+    Vec<Vec<(usize, f32)>>,
+    HnswBuildProfileStats,
+    HnswParallelBuildGraphQualityStats,
+);
 type DistanceToIdxFn = fn(&HnswIndex, &[f32], usize) -> f32;
 
 /// Maximum number of layers in the HNSW graph
@@ -325,6 +332,38 @@ pub struct HnswBuildProfileReport {
 }
 
 #[derive(Clone, Debug, Default)]
+struct HnswParallelBuildGraphQualityStats {
+    omitted_upper_layer_descent_levels: u64,
+    upper_layer_connection_update_calls: u64,
+    upper_layer_overflow_events: u64,
+    upper_layer_truncate_to_best_events: u64,
+    upper_layer_heuristic_shrink_events: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HnswParallelBuildGraphQualityCallCounts {
+    pub omitted_upper_layer_descent_levels: u64,
+    pub upper_layer_connection_update_calls: u64,
+    pub upper_layer_overflow_events: u64,
+    pub upper_layer_truncate_to_best_events: u64,
+    pub upper_layer_heuristic_shrink_events: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HnswParallelBuildProfileReport {
+    pub timing_buckets: HnswBuildProfileTimingBuckets,
+    pub call_counts: HnswBuildProfileCallCounts,
+    pub hotspot_ranking: Vec<HnswBuildProfileHotspot>,
+    pub recommended_first_rework_target: String,
+    pub total_profiled_ms: f64,
+    pub repair_operations: usize,
+    pub vectors_added: usize,
+    pub parallel_insert_entry_descent_mode: String,
+    pub upper_layer_overflow_shrink_mode: String,
+    pub graph_quality_call_counts: HnswParallelBuildGraphQualityCallCounts,
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct HnswCandidateSearchProfileStats {
     entry_descent: Duration,
     frontier_ops: Duration,
@@ -471,6 +510,19 @@ impl HnswBuildProfileStats {
         }
     }
 
+    fn absorb(&mut self, other: Self) {
+        self.layer_descent += other.layer_descent;
+        self.candidate_search += other.candidate_search;
+        self.neighbor_selection += other.neighbor_selection;
+        self.connection_update += other.connection_update;
+        self.repair += other.repair;
+        self.layer_descent_calls += other.layer_descent_calls;
+        self.candidate_search_calls += other.candidate_search_calls;
+        self.neighbor_selection_calls += other.neighbor_selection_calls;
+        self.connection_update_calls += other.connection_update_calls;
+        self.repair_calls += other.repair_calls;
+    }
+
     fn timing_buckets(&self) -> HnswBuildProfileTimingBuckets {
         HnswBuildProfileTimingBuckets {
             layer_descent_ms: self.layer_descent.as_secs_f64() * 1000.0,
@@ -570,6 +622,61 @@ impl HnswBuildProfileStats {
             total_profiled_ms: self.total_profiled_ms(),
             repair_operations,
             vectors_added,
+        }
+    }
+
+    fn into_parallel_report(
+        self,
+        vectors_added: usize,
+        repair_operations: usize,
+        parallel_insert_entry_descent_mode: &str,
+        upper_layer_overflow_shrink_mode: &str,
+        graph_quality_stats: &HnswParallelBuildGraphQualityStats,
+    ) -> HnswParallelBuildProfileReport {
+        HnswParallelBuildProfileReport {
+            timing_buckets: self.timing_buckets(),
+            call_counts: self.call_counts(),
+            hotspot_ranking: self.hotspot_ranking(),
+            recommended_first_rework_target: self.recommended_first_rework_target(),
+            total_profiled_ms: self.total_profiled_ms(),
+            repair_operations,
+            vectors_added,
+            parallel_insert_entry_descent_mode: parallel_insert_entry_descent_mode.to_string(),
+            upper_layer_overflow_shrink_mode: upper_layer_overflow_shrink_mode.to_string(),
+            graph_quality_call_counts: graph_quality_stats.call_counts(),
+        }
+    }
+}
+
+impl HnswParallelBuildGraphQualityStats {
+    fn absorb(&mut self, other: Self) {
+        self.omitted_upper_layer_descent_levels += other.omitted_upper_layer_descent_levels;
+        self.upper_layer_connection_update_calls += other.upper_layer_connection_update_calls;
+        self.upper_layer_overflow_events += other.upper_layer_overflow_events;
+        self.upper_layer_truncate_to_best_events += other.upper_layer_truncate_to_best_events;
+        self.upper_layer_heuristic_shrink_events += other.upper_layer_heuristic_shrink_events;
+    }
+
+    fn record_omitted_upper_layer_descent_levels(&mut self, levels: usize) {
+        self.omitted_upper_layer_descent_levels += levels as u64;
+    }
+
+    fn record_upper_layer_connection_update(&mut self) {
+        self.upper_layer_connection_update_calls += 1;
+    }
+
+    fn record_upper_layer_overflow_truncate(&mut self) {
+        self.upper_layer_overflow_events += 1;
+        self.upper_layer_truncate_to_best_events += 1;
+    }
+
+    fn call_counts(&self) -> HnswParallelBuildGraphQualityCallCounts {
+        HnswParallelBuildGraphQualityCallCounts {
+            omitted_upper_layer_descent_levels: self.omitted_upper_layer_descent_levels,
+            upper_layer_connection_update_calls: self.upper_layer_connection_update_calls,
+            upper_layer_overflow_events: self.upper_layer_overflow_events,
+            upper_layer_truncate_to_best_events: self.upper_layer_truncate_to_best_events,
+            upper_layer_heuristic_shrink_events: self.upper_layer_heuristic_shrink_events,
         }
     }
 }
@@ -1578,6 +1685,162 @@ impl HnswIndex {
         Ok(n)
     }
 
+    fn add_parallel_profiled(
+        &mut self,
+        vectors: &[f32],
+        ids: Option<&[i64]>,
+        stats: &mut HnswBuildProfileStats,
+        graph_quality_stats: &mut HnswParallelBuildGraphQualityStats,
+    ) -> Result<usize> {
+        if !self.trained {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "index must be trained first".to_string(),
+            ));
+        }
+
+        if vectors.len() % self.dim != 0 {
+            return Err(crate::api::KnowhereError::InvalidArg(format!(
+                "vector dimension mismatch: {} elements not divisible by dim {}",
+                vectors.len(),
+                self.dim
+            )));
+        }
+
+        let n = vectors.len() / self.dim;
+        if n == 0 {
+            return Ok(0);
+        }
+
+        if let Some(id_slice) = ids {
+            if id_slice.len() != n {
+                return Err(crate::api::KnowhereError::InvalidArg(format!(
+                    "ID count ({}) does not match vector count ({})",
+                    id_slice.len(),
+                    n
+                )));
+            }
+        }
+
+        if self.num_threads <= 1 || n < 1000 {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "parallel build profile requires num_threads > 1 and at least 1000 vectors"
+                    .to_string(),
+            ));
+        }
+
+        let base_count = self.ids.len();
+        let using_sequential = ids.is_none();
+        if base_count == 0 {
+            self.use_sequential_ids = using_sequential;
+        } else {
+            self.use_sequential_ids = self.use_sequential_ids && using_sequential;
+        }
+
+        self.vectors.reserve(n * self.dim);
+        self.ids.reserve(n);
+        self.node_info.reserve(n);
+
+        let first_new_idx = self.ids.len();
+        let node_levels: Vec<usize> = (0..n).map(|_| self.random_level()).collect();
+
+        for i in 0..n {
+            let start = i * self.dim;
+            let new_vec = &vectors[start..start + self.dim];
+            let id = ids.map(|ids| ids[i]).unwrap_or(self.next_id);
+            self.next_id += 1;
+
+            let node_info = NodeInfo::new(node_levels[i], self.m);
+            self.ids.push(id);
+            self.vectors.extend_from_slice(new_vec);
+            self.node_info.push(node_info);
+
+            if base_count == 0 && i == 0 {
+                self.entry_point = Some(id);
+                self.max_level = node_levels[i];
+            }
+            if node_levels[i] > self.max_level {
+                self.max_level = node_levels[i];
+                self.entry_point = Some(id);
+            }
+        }
+
+        let batch_size = self.calculate_optimal_batch_size(n, self.dim);
+
+        for batch_start in (0..n).step_by(batch_size) {
+            let batch_end = (batch_start + batch_size).min(n);
+            let batch_results: Vec<BatchNeighborResultsProfiled> = (batch_start..batch_end)
+                .into_par_iter()
+                .map(|idx| {
+                    let vec_start = idx * self.dim;
+                    let vec = &self.vectors[vec_start..vec_start + self.dim];
+                    let node_level = node_levels[idx];
+                    let mut local_stats = HnswBuildProfileStats::default();
+                    let mut local_graph_quality_stats =
+                        HnswParallelBuildGraphQualityStats::default();
+                    let neighbors = self.find_neighbors_for_insertion_profiled(
+                        vec,
+                        node_level,
+                        &mut local_stats,
+                        &mut local_graph_quality_stats,
+                    );
+                    (
+                        idx,
+                        node_level,
+                        neighbors,
+                        local_stats,
+                        local_graph_quality_stats,
+                    )
+                })
+                .collect();
+
+            let mut layer0_nodes_to_shrink: Vec<usize> = Vec::new();
+
+            for (idx, node_level, neighbors_per_layer, local_stats, local_graph_quality_stats) in
+                batch_results
+            {
+                stats.absorb(local_stats);
+                graph_quality_stats.absorb(local_graph_quality_stats);
+
+                if base_count == 0 && idx == first_new_idx {
+                    continue;
+                }
+
+                let new_id = self.ids[idx];
+                for (level, neighbors) in
+                    neighbors_per_layer.iter().enumerate().take(node_level + 1)
+                {
+                    let stage_start = Instant::now();
+                    let connection_graph_quality_stats = self.add_connections_for_node_profiled(
+                        idx,
+                        new_id,
+                        level,
+                        neighbors,
+                        &mut layer0_nodes_to_shrink,
+                    );
+                    stats.record(
+                        HnswBuildProfileStage::ConnectionUpdate,
+                        stage_start.elapsed(),
+                    );
+                    graph_quality_stats.absorb(connection_graph_quality_stats);
+                }
+            }
+
+            layer0_nodes_to_shrink.sort_unstable();
+            layer0_nodes_to_shrink.dedup();
+            for node_idx in layer0_nodes_to_shrink {
+                let stage_start = Instant::now();
+                self.shrink_layer_neighbors_heuristic_idx(node_idx, 0, self.m_max0);
+                stats.record(
+                    HnswBuildProfileStage::ConnectionUpdate,
+                    stage_start.elapsed(),
+                );
+            }
+        }
+
+        self.refresh_layer0_flat_graph();
+        Ok(n)
+    }
+
     /// OPT-031: Calculate optimal batch size for parallel HNSW construction
     ///
     /// Dynamic batch size strategy based on:
@@ -1614,6 +1877,14 @@ impl HnswIndex {
         );
 
         batch_size
+    }
+
+    fn parallel_insert_entry_descent_mode(&self) -> &'static str {
+        "direct_entry_at_node_level"
+    }
+
+    fn parallel_upper_layer_overflow_shrink_mode(&self) -> &'static str {
+        "truncate_to_best"
     }
 
     /// Find neighbors for node insertion (read-only, parallelizable)
@@ -1653,6 +1924,74 @@ impl HnswIndex {
             neighbors_per_layer[level] =
                 self.select_neighbors_heuristic_idx_layer_aware(vec, &candidates, m, level == 0);
         }
+        neighbors_per_layer
+    }
+
+    fn find_neighbors_for_insertion_profiled(
+        &self,
+        vec: &[f32],
+        node_level: usize,
+        stats: &mut HnswBuildProfileStats,
+        graph_quality_stats: &mut HnswParallelBuildGraphQualityStats,
+    ) -> Vec<Vec<(usize, f32)>> {
+        let mut scratch = SearchScratch::new();
+        self.find_neighbors_for_insertion_with_scratch_profiled(
+            vec,
+            node_level,
+            stats,
+            graph_quality_stats,
+            &mut scratch,
+        )
+    }
+
+    fn find_neighbors_for_insertion_with_scratch_profiled(
+        &self,
+        vec: &[f32],
+        node_level: usize,
+        stats: &mut HnswBuildProfileStats,
+        graph_quality_stats: &mut HnswParallelBuildGraphQualityStats,
+        scratch: &mut SearchScratch,
+    ) -> Vec<Vec<(usize, f32)>> {
+        let mut neighbors_per_layer = vec![Vec::new(); node_level + 1];
+        let entry_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
+        let mut curr_ep_idx = entry_idx;
+
+        if self.max_level > node_level {
+            graph_quality_stats
+                .record_omitted_upper_layer_descent_levels(self.max_level - node_level);
+        }
+
+        for level in (0..=node_level).rev() {
+            let stage_start = Instant::now();
+            let nearest = self.search_layer_idx_with_scratch(vec, curr_ep_idx, level, 1, scratch);
+            stats.record(HnswBuildProfileStage::LayerDescent, stage_start.elapsed());
+            if !nearest.is_empty() {
+                curr_ep_idx = nearest[0].0;
+            }
+
+            let stage_start = Instant::now();
+            let candidates = self.search_layer_idx_with_scratch(
+                vec,
+                curr_ep_idx,
+                level,
+                self.ef_construction,
+                scratch,
+            );
+            stats.record(
+                HnswBuildProfileStage::CandidateSearch,
+                stage_start.elapsed(),
+            );
+
+            let m = if level == 0 { self.m_max0 } else { self.m };
+            let stage_start = Instant::now();
+            neighbors_per_layer[level] =
+                self.select_neighbors_heuristic_idx_layer_aware(vec, &candidates, m, level == 0);
+            stats.record(
+                HnswBuildProfileStage::NeighborSelection,
+                stage_start.elapsed(),
+            );
+        }
+
         neighbors_per_layer
     }
 
@@ -1712,6 +2051,74 @@ impl HnswIndex {
                 }
             }
         }
+    }
+
+    fn add_connections_for_node_profiled(
+        &mut self,
+        new_idx: usize,
+        new_id: i64,
+        level: usize,
+        neighbors: &[(usize, f32)],
+        layer0_nodes_to_shrink: &mut Vec<usize>,
+    ) -> HnswParallelBuildGraphQualityStats {
+        let mut graph_quality_stats = HnswParallelBuildGraphQualityStats::default();
+        let m_max = self.max_connections_for_layer(level);
+        let filtered_neighbors: Vec<(usize, f32)> = neighbors
+            .iter()
+            .copied()
+            .filter(|(nbr_idx, _)| *nbr_idx != new_idx)
+            .collect();
+
+        if filtered_neighbors.is_empty() {
+            return graph_quality_stats;
+        }
+
+        let nbr_ids: Vec<i64> = filtered_neighbors
+            .iter()
+            .map(|&(nbr_idx, _)| self.get_id_from_idx(nbr_idx))
+            .collect();
+
+        {
+            let node_info = &mut self.node_info[new_idx];
+            let layer_nbrs = &mut node_info.layer_neighbors[level];
+            for (i, &(_, dist)) in filtered_neighbors.iter().enumerate() {
+                layer_nbrs.push(nbr_ids[i], dist);
+            }
+            if level > 0 {
+                graph_quality_stats.record_upper_layer_connection_update();
+            }
+            if layer_nbrs.ids.len() > m_max {
+                if level == 0 {
+                    layer0_nodes_to_shrink.push(new_idx);
+                } else {
+                    graph_quality_stats.record_upper_layer_overflow_truncate();
+                    layer_nbrs.truncate_to_best(m_max);
+                }
+            }
+        }
+
+        for &(nbr_idx, dist) in &filtered_neighbors {
+            let nbr_node_info = &mut self.node_info[nbr_idx];
+            if level > nbr_node_info.max_layer {
+                continue;
+            }
+
+            let nbr_layer_nbrs = &mut nbr_node_info.layer_neighbors[level];
+            nbr_layer_nbrs.push(new_id, dist);
+            if level > 0 {
+                graph_quality_stats.record_upper_layer_connection_update();
+            }
+            if nbr_layer_nbrs.ids.len() > m_max {
+                if level == 0 {
+                    layer0_nodes_to_shrink.push(nbr_idx);
+                } else {
+                    graph_quality_stats.record_upper_layer_overflow_truncate();
+                    nbr_layer_nbrs.truncate_to_best(m_max);
+                }
+            }
+        }
+
+        graph_quality_stats
     }
 
     /// Add a single vector to the index with optional explicit layer specification
@@ -4777,6 +5184,30 @@ impl HnswIndex {
         let repair_operations = self.find_and_repair_unreachable_profiled(&mut stats);
 
         Ok(stats.into_report(vectors_added, repair_operations))
+    }
+
+    pub fn parallel_build_profile_report(
+        &mut self,
+        vectors: &[f32],
+        ids: Option<&[i64]>,
+    ) -> Result<HnswParallelBuildProfileReport> {
+        if !self.trained {
+            self.train(vectors)?;
+        }
+
+        let mut stats = HnswBuildProfileStats::default();
+        let mut graph_quality_stats = HnswParallelBuildGraphQualityStats::default();
+        let vectors_added =
+            self.add_parallel_profiled(vectors, ids, &mut stats, &mut graph_quality_stats)?;
+        let repair_operations = self.find_and_repair_unreachable_profiled(&mut stats);
+
+        Ok(stats.into_parallel_report(
+            vectors_added,
+            repair_operations,
+            self.parallel_insert_entry_descent_mode(),
+            self.parallel_upper_layer_overflow_shrink_mode(),
+            &graph_quality_stats,
+        ))
     }
 }
 

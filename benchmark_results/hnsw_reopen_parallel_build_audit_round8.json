@@ -1,0 +1,85 @@
+{
+  "authority_scope": "remote_x86_only",
+  "benchmark_lane": "hnsw_reopen_parallel_build_audit_round8",
+  "build_graph_quality_notes": "Round 8 audit confirms the current parallel build still skips upper-layer greedy descent before searching node_level, and upper-layer overflow still uses truncate_to_best instead of the native diversity heuristic.",
+  "build_profile_fields": {
+    "omitted_upper_layer_descent_levels": 47202,
+    "upper_layer_connection_update_calls": 2497,
+    "upper_layer_heuristic_shrink_events": 0,
+    "upper_layer_overflow_events": 826,
+    "upper_layer_truncate_to_best_events": 826
+  },
+  "build_wall_clock_ms": 8316.372167000001,
+  "call_counts": {
+    "candidate_search_calls": 12798,
+    "connection_update_calls": 13085,
+    "layer_descent_calls": 12798,
+    "neighbor_selection_calls": 12798,
+    "repair_calls": 12131
+  },
+  "config": {
+    "ef_construction": 200,
+    "ef_search": 64,
+    "m": 8,
+    "num_threads": 4
+  },
+  "dataset": {
+    "base_vectors": 12000,
+    "dim": 128
+  },
+  "dataset_source": "synthetic_sift_like_128d",
+  "family": "HNSW",
+  "hotspot_ranking": [
+    {
+      "calls": 12131,
+      "milliseconds": 7367.96504,
+      "share_of_profiled_time": 0.5350467584714911,
+      "stage": "repair"
+    },
+    {
+      "calls": 12798,
+      "milliseconds": 3506.550748,
+      "share_of_profiled_time": 0.2546386418702636,
+      "stage": "candidate_search"
+    },
+    {
+      "calls": 12798,
+      "milliseconds": 2093.81234,
+      "share_of_profiled_time": 0.15204842847145317,
+      "stage": "neighbor_selection"
+    },
+    {
+      "calls": 12798,
+      "milliseconds": 503.47667799999994,
+      "share_of_profiled_time": 0.03656146073813274,
+      "stage": "layer_descent"
+    },
+    {
+      "calls": 13085,
+      "milliseconds": 298.88892,
+      "share_of_profiled_time": 0.02170471044865935,
+      "stage": "connection_update"
+    }
+  ],
+  "native_reference_files": [
+    "thirdparty/hnswlib/hnswlib/hnswalg.h"
+  ],
+  "parallel_insert_entry_descent_mode": "direct_entry_at_node_level",
+  "recommended_first_rework_target": "connectivity_repair_path",
+  "repair_operations": 11403,
+  "round8_baseline_source": "benchmark_results/hnsw_reopen_round8_baseline.json",
+  "rust_reference_files": [
+    "src/faiss/hnsw.rs"
+  ],
+  "task_id": "HNSW-REOPEN-PARALLEL-BUILD-AUDIT-ROUND8",
+  "timing_buckets": {
+    "candidate_search_ms": 3506.550748,
+    "connection_update_ms": 298.88892,
+    "layer_descent_ms": 503.47667799999994,
+    "neighbor_selection_ms": 2093.81234,
+    "repair_ms": 7367.96504
+  },
+  "total_profiled_ms": 13770.693726000001,
+  "upper_layer_overflow_shrink_mode": "truncate_to_best",
+  "vectors_added": 12000
+}

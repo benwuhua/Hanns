@@ -1,6 +1,6 @@
 # Knowhere-RS Development Roadmap (Non-GPU)
 
-Last updated: 2026-03-12 11:35 UTC
+Last updated: 2026-03-13
 
 ## Goal
 
@@ -153,7 +153,7 @@ Exit criteria:
 - Production-relevant persistence / FFI metadata semantics are stable and auditable.
 - At least one core non-GPU path shows repeatable, recall-gated performance leadership over native knowhere. Not met on the current authority evidence; the final program verdict is therefore archived as `not accepted` in `benchmark_results/final_production_acceptance.json`.
 
-## Phase 6: HNSW Reopen Algorithm Push — ✅ Closed (round 4 soft-stop archived)
+## Phase 6: HNSW Reopen Algorithm Push — Active (round 8 graph-quality hypothesis queued)
 
 Objective:
 
@@ -174,7 +174,16 @@ Active scoped tasks:
 - `hnsw-layer0-searcher-audit`: closed; `benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json` started by pinning native `NeighborSetDoublePopList + distances_batch_4` against the Rust `dual_binary_heap + scalar_pointer_fast_path` layer-0 search core, and is now refreshed to show the post-rework ordered-pool shape (`layer0_query_distance≈23.185ms`, `layer0_batch4_calls=3960`, `sample-search qps≈2603.588`)
 - `hnsw-layer0-searcher-core-rework`: closed; the Rust `L2 + no-filter` layer-0 search core now uses scratch-owned ordered frontier/result pools plus a batch-4 query-distance helper, while upper layers and filter-bearing paths keep their historical contracts
 - `hnsw-round4-authority-same-schema-rerun`: closed; `benchmark_results/hnsw_reopen_round4_authority_summary.json` now records the final round-4 same-schema result: Rust HNSW improved to `819.471` qps with recall `0.9959`, native rose to `12487.076` qps, and the gap narrowed from `19.5x` to `15.2x`, but that still remains slightly worse than the already archived historical `functional-but-not-leading` evidence band, so round 4 also closes as `soft_stop`
+- `hnsw-distance-dispatch-cache-rework`: closed; `src/faiss/hnsw.rs` now caches metric dispatch and `src/simd.rs` now caches the single-vector L2 pointer kernel, but the round-5 authority rerun showed no attributable Rust-side same-schema gain from this cut alone
+- `hnsw-round5-authority-same-schema-rerun`: closed; `benchmark_results/hnsw_reopen_round5_authority_summary.json` records that Rust stayed at `819.471` qps while native drifted down, so verdict refresh remained disallowed and the next action moved to stability gating
+- `hnsw-round5-stability-gate`: closed; `benchmark_results/hnsw_reopen_round5_stability_gate.json` marks the round-5 ratio shift as unstable because native swung sharply on the repeat rerun while Rust only moved modestly to `828.725` qps
+- `hnsw-layer0-prefetch-audit-round6`: closed; `benchmark_results/hnsw_reopen_layer0_prefetch_audit_round6.json` now records active layer-0 vector prefetch telemetry and confirms the prefetch path is wired, but this round intentionally stopped short of a new same-schema authority verdict
+- `hnsw-layer0-flat-graph-audit-round7`: closed; `benchmark_results/hnsw_reopen_layer0_flat_graph_audit_round7.json` now records a flat `u32` layer-0 adjacency layout and non-zero flat-graph reads in the ordered-pool L2 loop, again without claiming a fresh authority verdict move
+- `hnsw-reopen-round8-activation`: closed; `benchmark_results/hnsw_reopen_round8_baseline.json` now freezes the round-5 stability plus round-6/round-7 audit state into a new round-8 baseline and reopens the queue around `parallel_build_graph_quality_parity`
+- `hnsw-parallel-build-graph-audit-round8`: queued; add a round-8 build artifact that records bulk-build upper-layer descent mode and upper-layer overflow shrink mode
+- `hnsw-parallel-build-graph-rework-round8`: queued; align the bulk-build path with serial/native insertion semantics by adding upper-layer greedy descent and heuristic upper-layer overflow shrink
+- `hnsw-round8-authority-same-schema-rerun`: queued; refresh the same-schema remote lane and determine whether the graph-quality fix actually changes trusted authority evidence
 
 Phase exit criteria:
 
-- HNSW round 4 produces a fresh same-schema authority result after the layer-0 parity cut, and the repo explicitly records whether that result justifies a follow-on verdict-refresh feature or another stop. Met; the recorded result is another `soft_stop`, and future HNSW work now requires a new tracked hypothesis.
+- HNSW round 8 produces a fresh same-schema authority result after the bulk-build graph-quality parity cut, and the repo explicitly records whether that result justifies a follow-on verdict-refresh feature, another HNSW hypothesis, or a renewed stop.

@@ -1,14 +1,14 @@
 # Builder 任务队列
-> 最后更新: 2026-03-12 11:35 UTC | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
+> 最后更新: 2026-03-13 | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
 
 ## 当前大任务面板
 
-- [x] **HNSW-REOPEN-001**: 重开 HNSW 核心算法攻关线
-  - 当前子阶段: `round4_soft_stop_archived` ✅
-  - 当前结论: 第三轮 HNSW 的 distance-compute 假设拿到了真实 authority gain，但幅度不足以改写 family verdict，因此 `benchmark_results/hnsw_reopen_round3_authority_summary.json` 把 round 3 诚实归档为 `soft_stop`。第四轮随后完成了 `ordered_pool + batch4_pointer_fast_path` 的 layer-0 parity cut，并把 Rust same-schema HNSW 从 `553.060` 推到 `819.471` qps，gap 从 `19.5x` 缩到 `15.2x`；但这仍然略差于已经归档的历史 `functional-but-not-leading` 证据带（约 `14.8x`），因此 `benchmark_results/hnsw_reopen_round4_authority_summary.json` 也将 round 4 归档为 `soft_stop`
-  - 当前证据: `benchmark_results/hnsw_reopen_round4_baseline.json` + `benchmark_results/hnsw_reopen_layer0_searcher_audit_round4.json` + `benchmark_results/hnsw_reopen_round4_authority_summary.json`
-  - 下一步: 无。若未来继续 HNSW，必须新开 tracked hypothesis，目标要超出当前 `functional-but-not-leading` 证据带，而不是默认续写 round 4
-  - 范围约束: 当前 reopen line 只重开 HNSW 的 `L2 + no-filter` layer-0 search core；IVF-PQ、DiskANN、以及项目级 final acceptance 继续保持 archived state
+- [ ] **HNSW-REOPEN-001**: 重开 HNSW 核心算法攻关线
+  - 当前子阶段: `round8_parallel_build_graph_quality_baseline_frozen`
+  - 当前结论: round 4 的 layer-0 parity cut 把 Rust same-schema HNSW 推到 `819.471` qps，但仍未改写历史 `functional-but-not-leading` 证据带；round 5 的 dispatch-cache rerun 与 stability gate 又表明后续比例变化仍受 native 波动影响，round 6/7 只完成了 prefetch 与 flat-graph 搜索路径审计，没有新的 authority verdict move。现在 `benchmark_results/hnsw_reopen_round8_baseline.json` 已经把这些 search-side 线索冻结成新的起点，下一条显式 hypothesis 转向并行构建图质量：当前 bulk-build 路径仍缺少 upper-layer greedy descent，并且 upper-layer overflow 仍在用 `truncate_to_best`，这比现有 serial/native 插入语义更弱。
+  - 当前证据: `benchmark_results/hnsw_reopen_round8_baseline.json` + `benchmark_results/hnsw_reopen_round5_stability_gate.json` + `benchmark_results/hnsw_reopen_layer0_flat_graph_audit_round7.json`
+  - 下一步: `hnsw-parallel-build-graph-audit-round8`。先把 bulk-build upper-layer descent / overflow shrink 差异锁成 round-8 audit artifact，再进入真正的 graph-quality rework 与 authority rerun。
+  - 范围约束: 当前 reopen line 聚焦 `src/faiss/hnsw.rs` 的 bulk-build graph-quality parity；搜索侧 batch-4 dispatch caching 与 AVX2/FMA specialization 明确延后，不与首个 graph-quality rerun 混做归因。IVF-PQ、DiskANN、以及项目级 final acceptance 继续保持 archived state
 
 - [x] **BASELINE-P3-001**: 建立可信的 native-vs-rs recall-gated 基线
   - 子阶段: `stop_go_verdict_formed` ✅

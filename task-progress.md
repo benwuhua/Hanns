@@ -12,13 +12,57 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `none`
-- Next feature: `none`
+- Current focus: `hnsw-parallel-build-graph-rework-round8`
+- Next feature: `hnsw-parallel-build-graph-rework-round8`
 - Last updated: 2026-03-13
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 52/52 features passing (100%)
+- Progress: 54/56 features passing (96%)
 
 ## Session Log
+
+### Session 62 - 2026-03-13
+- Focus: `hnsw-parallel-build-graph-audit-round8`
+- Completed:
+  - tightened `tests/bench_hnsw_reopen_round8.rs` so round 8 now requires `benchmark_results/hnsw_reopen_parallel_build_audit_round8.json` and explicit build-parity evidence fields for `parallel_insert_entry_descent_mode`, `upper_layer_overflow_shrink_mode`, `build_profile_fields`, and `build_graph_quality_notes`
+  - extended `src/faiss/hnsw.rs` with a real parallel-build profiling path via `parallel_build_profile_report()`, recording the current bulk-build entry-descent mode, upper-layer overflow shrink mode, omitted upper-layer descent levels, and upper-layer connection-update/overflow counters without changing the production bulk-build semantics yet
+  - added `tests/bench_hnsw_reopen_round8_profile.rs`, generated `benchmark_results/hnsw_reopen_parallel_build_audit_round8.json`, and unignored both round-8 benchmark artifacts in `.gitignore` so the new audit state is durable; the generated artifact currently records `parallel_insert_entry_descent_mode=direct_entry_at_node_level`, `upper_layer_overflow_shrink_mode=truncate_to_best`, `omitted_upper_layer_descent_levels=35200`, and `upper_layer_connection_update_calls=2526`
+- Verification:
+  - `cargo test --features long-tests --test bench_hnsw_reopen_round8_profile -- --ignored --nocapture` -> initial `FAIL` (missing `HnswParallelBuildProfileReport` / `parallel_build_profile_report`), then `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (rustfmt diffs), then `ok` after `cargo fmt --all`
+  - `cargo test --features long-tests --test bench_hnsw_reopen_round8_profile -- --ignored --nocapture` -> `ok`
+  - `cargo test --test bench_hnsw_reopen_round8 -- --nocapture` -> `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round8 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round8 bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_round8_profile -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T012954Z_47513.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round8 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round8 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round8 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T013023Z_47680.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 56 features (54 passing, 2 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-parallel-build-graph-audit-round8` is now `passing`
+  - round 8 now has an authority-backed audit artifact for the current bulk-build graph-quality gaps, and the next queued feature is `hnsw-parallel-build-graph-rework-round8`
+- Notes:
+  - the audit confirms the current bulk-build path still starts directly at `node_level` rather than descending from `max_level`, and upper-layer overflow still truncates to nearest-only neighbors rather than applying the native-style diversity heuristic
+  - repair remains the dominant synthetic build-profile bucket in this audit artifact, which is consistent with the graph-quality hypothesis and keeps the next round-8 cut focused on the build path rather than deferred search-side micro-optimizations
+- Git Commits: pending
+
+### Session 61 - 2026-03-13
+- Focus: `hnsw-reopen-round8-activation`
+- Completed:
+  - reviewed the latest HNSW reopen line against the current Rust/native source surfaces and concluded that the next explicit hypothesis should move from search-path-only micro-optimizations to `parallel_build_graph_quality_parity`
+  - wrote `docs/superpowers/specs/2026-03-13-hnsw-round8-parallel-build-graph-quality-design.md` and `docs/superpowers/plans/2026-03-13-hnsw-round8-parallel-build-graph-quality.md`, explicitly deferring batch-4 dispatch caching and AVX2/FMA specialization until after an isolated graph-quality rerun
+  - added `tests/bench_hnsw_reopen_round8.rs` as the new default-lane contract for round 8, then used the missing `benchmark_results/hnsw_reopen_round8_baseline.json` failure as the TDD red signal for reopening HNSW around bulk-build graph quality
+  - created `benchmark_results/hnsw_reopen_round8_baseline.json`, freezing round-5 stability plus round-6/round-7 search audits into the new round-8 baseline context and explicitly scoping the hypothesis to `parallel_build_graph_quality_parity`
+  - reopened durable workflow state with four round-8 features, then closed `hnsw-reopen-round8-activation` after the local contract, remote replay, and validator all passed; the next queued feature is now `hnsw-parallel-build-graph-audit-round8`
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round8 -- --nocapture` -> initial `FAIL` (missing round-8 baseline artifact), then `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round8 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round8 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round8 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T011357Z_43949.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 56 features (53 passing, 3 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-reopen-round8-activation` is now `passing`
+  - round 8 remains the active tracked HNSW hypothesis, and `hnsw-parallel-build-graph-audit-round8` is the next execution feature
+- Notes:
+  - round-5 stability remains the latest same-schema variability check; round-6 prefetch and round-7 flat-graph work stay recorded as search-path audits rather than verdict-refresh evidence
+  - the new round-8 line isolates the build-path fixes most likely to affect recall efficiency: greedy upper-layer descent during bulk build and heuristic upper-layer overflow shrink
+- Git Commits: pending
 
 ### Session 60 - 2026-03-13
 - Focus: `hnsw-layer0-flat-graph-audit-round7`
