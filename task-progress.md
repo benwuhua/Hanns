@@ -44,7 +44,7 @@
 - Notes:
   - the refreshed round-8 audit artifact no longer records any omitted upper-layer descent levels or truncate-to-best events, so the tracked gap has genuinely moved from structure mismatch to authority-lane outcome
   - repair is still the dominant synthetic build-profile bucket after the rework, which makes the same-schema authority rerun the decisive next step rather than another synthetic-only micro-optimization pass
-- Git Commits: pending
+- Git Commits: `f5c758d`
 
 ### Session 62 - 2026-03-13
 - Focus: `hnsw-parallel-build-graph-audit-round8`
