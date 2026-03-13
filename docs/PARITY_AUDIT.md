@@ -4,6 +4,13 @@ Last updated: 2026-03-13
 Sync baseline: a911f2af70f6f47721ab42cfba7b97ee3fd6f206 from main
 
 ## 轮次记录
+- 2026-03-13: **builder-loop：重开 `hnsw-reopen-round9-activation` 规划/执行线，把下一个 HNSW hypothesis 切到 production search fast-path cleanup（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round8_authority_summary.json`、`src/faiss/hnsw.rs`、`src/simd.rs`、`docs/superpowers/specs/2026-03-13-hnsw-round9-search-fastpath-audit-design.md`、`docs/superpowers/plans/2026-03-13-hnsw-round9-search-fastpath-audit.md`。
+  2. 阶段结论：round 8 已经用 authority evidence 否定了“graph-quality parity 会直接把 real lane 推上去”的说法，所以新的 reopen line 必须更小、更可归因。最小可信切口不是再动 build path，而是验证生产 `layer0 + L2 + no-filter` 搜索是否仍被 profiling 代码污染，并顺手去掉 batch-4 每次调用的 feature detection。
+  3. 本轮执行：新增 `tests/bench_hnsw_reopen_round9.rs`，并先用缺失 `benchmark_results/hnsw_reopen_round9_baseline.json` / audit / summary artifacts 的失败做 TDD red；随后新增 `benchmark_results/hnsw_reopen_round9_baseline.json`，明确把 round-8 hard-stop authority evidence 冻结成 round 9 起点，并在 `feature-list.json`、`task-progress.md`、`RELEASE_NOTES.md` 与 `.gitignore` 中重开 durable workflow state。
+  4. 验证结果：本地 `cargo test --test bench_hnsw_reopen_round9 -- --nocapture` 按预期先因缺失 round-9 artifacts 失败；随后通过 activation 基线更新，把失败面缩到后续 audit/authority artifacts；workflow validator 需要在 docs/state 一并切到 round 9 后恢复为可接受状态。
+  5. 后续主缺口：当前不再缺 round-9 activation。下一条 tracked feature 必须是 `hnsw-search-fastpath-audit-round9`，用新的 audit artifact 把 production fast path 与 profiled path 的结构分离锁成 authority-backed 证据，再决定是否值得跑新的 same-schema rerun。
+
 - 2026-03-13: **builder-loop：收口 `hnsw-round8-authority-same-schema-rerun`，用 fresh authority same-schema evidence 给 round 8 graph-quality hypothesis 终判（plan+exec）**
   1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round8_baseline.json`、`benchmark_results/hnsw_reopen_parallel_build_audit_round8.json`、`tests/bench_hnsw_reopen_round8.rs`、`benchmark_results/hnsw_p3_002_final_verdict.json`。
   2. 阶段结论：round 8 不再缺 synthetic build audit，也不再缺 bulk-build 结构对齐；唯一剩下的问题是这些改动是否真的把 authority same-schema lane 推到了新的证据带。因此本轮只做最终 authority rerun，并把结论冻结成新的 summary artifact。

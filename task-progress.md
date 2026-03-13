@@ -12,13 +12,30 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `none`
-- Next feature: `none`
+- Current focus: `hnsw-reopen-round9-activation`
+- Next feature: `hnsw-reopen-round9-activation`
 - Last updated: 2026-03-13
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 56/56 features passing (100%)
+- Progress: 56/59 features passing (95%)
 
 ## Session Log
+
+### Session 65 - 2026-03-13
+- Focus: `hnsw-reopen-round9-activation`
+- Completed:
+  - reopened durable workflow state around a new narrow HNSW hypothesis, `search_fastpath_cleanup`, after round 8 closed as a hard stop on the graph-quality theory
+  - added `tests/bench_hnsw_reopen_round9.rs` as the new default-lane contract for round 9, then used the missing `benchmark_results/hnsw_reopen_round9_baseline.json` failure as the TDD red signal for reopening HNSW around production fast-path cleanup
+  - created `benchmark_results/hnsw_reopen_round9_baseline.json`, freezing the round-8 hard-stop authority evidence into the new round-9 baseline context and explicitly scoping the hypothesis to `search_fastpath_cleanup`
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round9 -- --nocapture` -> initial `FAIL` (missing round-9 baseline/audit/summary artifacts), then baseline test expected to pass once activation lands while audit/summary remain pending
+  - `python3 scripts/validate_features.py feature-list.json` -> initial `FAIL` before durable docs were reopened, then expected to return workflow-valid state after the round-9 activation docs are aligned
+- Result:
+  - `hnsw-reopen-round9-activation` is now the active tracked feature
+  - round 9 is explicitly limited to search fast-path cleanup rather than another broad HNSW performance theory
+- Notes:
+  - round 8 remains archived as a hard stop; round 9 does not inherit any claim that graph-quality alignment was performance-positive on the authority lane
+  - the next executable feature after activation is `hnsw-search-fastpath-audit-round9`
+- Git Commits: pending
 
 ### Session 64 - 2026-03-13
 - Focus: `hnsw-round8-authority-same-schema-rerun`
