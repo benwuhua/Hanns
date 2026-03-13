@@ -2287,6 +2287,17 @@ mod tests {
     }
 
     #[test]
+    fn test_l2_batch_4_ptrs_kernel_is_cached() {
+        let k1 = l2_batch_4_ptrs_kernel();
+        let k2 = l2_batch_4_ptrs_kernel();
+
+        assert_eq!(
+            k1 as usize, k2 as usize,
+            "round-9 batch-4 L2 dispatch should resolve once and return a stable cached kernel"
+        );
+    }
+
+    #[test]
     fn test_ip_batch_4_scalar() {
         let query = vec![1.0, 2.0, 3.0, 4.0];
         let db0 = vec![1.0, 0.0, 0.0, 0.0];

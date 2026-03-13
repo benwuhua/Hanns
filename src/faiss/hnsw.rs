@@ -6070,6 +6070,32 @@ mod tests {
     }
 
     #[test]
+    fn test_layer0_l2_search_modes_distinguish_fast_and_profiled_paths() {
+        let index = deterministic_upper_layer_index();
+
+        assert_eq!(
+            index.layer0_l2_search_mode_for(false),
+            "fast_unprofiled",
+            "round-9 production L2 layer-0 path should expose a dedicated fast-path mode"
+        );
+        assert_eq!(
+            index.layer0_l2_search_mode_for(true),
+            "profiled_optional",
+            "round-9 profiled L2 layer-0 path should remain distinct from the production fast path"
+        );
+    }
+
+    #[test]
+    fn test_layer0_l2_fast_path_avoids_profile_timing() {
+        let index = deterministic_upper_layer_index();
+
+        assert!(
+            index.production_layer0_avoids_profile_timing(),
+            "round-9 production layer-0 fast path should avoid profiling timing calls"
+        );
+    }
+
+    #[test]
     fn test_hnsw_ip_metric() {
         let config = IndexConfig {
             index_type: IndexType::Hnsw,
