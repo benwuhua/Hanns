@@ -285,6 +285,7 @@ impl Layer0Slab {
         self.words.as_ptr().add(base) as *const f32
     }
 
+    #[cfg(any(test, feature = "long-tests"))]
     fn vector_for_audit(&self, node_idx: usize) -> &[f32] {
         let base = node_idx * self.stride_words + self.vector_offset_words;
         unsafe { std::slice::from_raw_parts(self.words.as_ptr().add(base) as *const f32, self.dim) }
@@ -3506,6 +3507,26 @@ impl HnswIndex {
         } else {
             "heap_profiled"
         }
+    }
+
+    #[cfg(any(test, feature = "long-tests"))]
+    pub fn layer0_slab_stride_bytes_for_audit(&self) -> usize {
+        self.layer0_slab.stride_words * std::mem::size_of::<u32>()
+    }
+
+    #[cfg(any(test, feature = "long-tests"))]
+    pub fn layer0_slab_vector_offset_bytes_for_audit(&self) -> usize {
+        self.layer0_slab.vector_offset_words * std::mem::size_of::<u32>()
+    }
+
+    #[cfg(any(test, feature = "long-tests"))]
+    pub fn layer0_slab_max_neighbors_for_audit(&self) -> usize {
+        self.layer0_slab.max_neighbors
+    }
+
+    #[cfg(any(test, feature = "long-tests"))]
+    pub fn layer0_slab_rebuild_source_for_audit(&self) -> &'static str {
+        "derived_from_canonical_flat_graph_and_vectors"
     }
 
     fn search_layer_idx_with_optional_profile(
