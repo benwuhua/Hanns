@@ -80,24 +80,6 @@ impl LayerNeighbors {
         self.dists.push(dist);
     }
 
-    fn truncate_to_best(&mut self, keep: usize) {
-        if self.ids.len() <= keep {
-            return;
-        }
-        let mut order: Vec<usize> = (0..self.ids.len()).collect();
-        order.sort_by(|&a, &b| self.dists[a].partial_cmp(&self.dists[b]).unwrap());
-        order.truncate(keep);
-
-        let mut new_ids = Vec::with_capacity(keep);
-        let mut new_dists = Vec::with_capacity(keep);
-        for idx in order {
-            new_ids.push(self.ids[idx]);
-            new_dists.push(self.dists[idx]);
-        }
-        self.ids = new_ids;
-        self.dists = new_dists;
-    }
-
     /// Get neighbors as (id, dist) pairs for heuristic processing
     #[allow(dead_code)]
     fn as_pairs(&self) -> Vec<(i64, f32)> {
@@ -657,17 +639,13 @@ impl HnswParallelBuildGraphQualityStats {
         self.upper_layer_heuristic_shrink_events += other.upper_layer_heuristic_shrink_events;
     }
 
-    fn record_omitted_upper_layer_descent_levels(&mut self, levels: usize) {
-        self.omitted_upper_layer_descent_levels += levels as u64;
-    }
-
     fn record_upper_layer_connection_update(&mut self) {
         self.upper_layer_connection_update_calls += 1;
     }
 
-    fn record_upper_layer_overflow_truncate(&mut self) {
+    fn record_upper_layer_overflow_heuristic_shrink(&mut self) {
         self.upper_layer_overflow_events += 1;
-        self.upper_layer_truncate_to_best_events += 1;
+        self.upper_layer_heuristic_shrink_events += 1;
     }
 
     fn call_counts(&self) -> HnswParallelBuildGraphQualityCallCounts {
@@ -1880,11 +1858,11 @@ impl HnswIndex {
     }
 
     fn parallel_insert_entry_descent_mode(&self) -> &'static str {
-        "direct_entry_at_node_level"
+        "greedy_from_max_level"
     }
 
     fn parallel_upper_layer_overflow_shrink_mode(&self) -> &'static str {
-        "truncate_to_best"
+        "heuristic_shrink"
     }
 
     /// Find neighbors for node insertion (read-only, parallelizable)
@@ -1906,6 +1884,16 @@ impl HnswIndex {
         let mut neighbors_per_layer = vec![Vec::new(); node_level + 1];
         let entry_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
         let mut curr_ep_idx = entry_idx;
+
+        if node_level < self.max_level {
+            for level in ((node_level + 1)..=self.max_level).rev() {
+                let nearest =
+                    self.search_layer_idx_with_scratch(vec, curr_ep_idx, level, 1, scratch);
+                if !nearest.is_empty() {
+                    curr_ep_idx = nearest[0].0;
+                }
+            }
+        }
 
         for level in (0..=node_level).rev() {
             let nearest = self.search_layer_idx_with_scratch(vec, curr_ep_idx, level, 1, scratch);
@@ -1949,16 +1937,23 @@ impl HnswIndex {
         vec: &[f32],
         node_level: usize,
         stats: &mut HnswBuildProfileStats,
-        graph_quality_stats: &mut HnswParallelBuildGraphQualityStats,
+        _graph_quality_stats: &mut HnswParallelBuildGraphQualityStats,
         scratch: &mut SearchScratch,
     ) -> Vec<Vec<(usize, f32)>> {
         let mut neighbors_per_layer = vec![Vec::new(); node_level + 1];
         let entry_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
         let mut curr_ep_idx = entry_idx;
 
-        if self.max_level > node_level {
-            graph_quality_stats
-                .record_omitted_upper_layer_descent_levels(self.max_level - node_level);
+        if node_level < self.max_level {
+            for level in ((node_level + 1)..=self.max_level).rev() {
+                let stage_start = Instant::now();
+                let nearest =
+                    self.search_layer_idx_with_scratch(vec, curr_ep_idx, level, 1, scratch);
+                stats.record(HnswBuildProfileStage::LayerDescent, stage_start.elapsed());
+                if !nearest.is_empty() {
+                    curr_ep_idx = nearest[0].0;
+                }
+            }
         }
 
         for level in (0..=node_level).rev() {
@@ -2020,6 +2015,7 @@ impl HnswIndex {
             .map(|&(nbr_idx, _)| self.get_id_from_idx(nbr_idx))
             .collect();
 
+        let mut shrink_new_upper_layer = false;
         {
             let node_info = &mut self.node_info[new_idx];
             let layer_nbrs = &mut node_info.layer_neighbors[level];
@@ -2030,25 +2026,34 @@ impl HnswIndex {
                 if level == 0 {
                     layer0_nodes_to_shrink.push(new_idx);
                 } else {
-                    layer_nbrs.truncate_to_best(m_max);
+                    shrink_new_upper_layer = true;
                 }
             }
         }
+        if shrink_new_upper_layer {
+            self.shrink_layer_neighbors_heuristic_idx(new_idx, level, m_max);
+        }
 
         for &(nbr_idx, dist) in &filtered_neighbors {
-            let nbr_node_info = &mut self.node_info[nbr_idx];
-            if level > nbr_node_info.max_layer {
-                continue;
-            }
-
-            let nbr_layer_nbrs = &mut nbr_node_info.layer_neighbors[level];
-            nbr_layer_nbrs.push(new_id, dist);
-            if nbr_layer_nbrs.ids.len() > m_max {
-                if level == 0 {
-                    layer0_nodes_to_shrink.push(nbr_idx);
-                } else {
-                    nbr_layer_nbrs.truncate_to_best(m_max);
+            let mut shrink_neighbor_upper_layer = false;
+            {
+                let nbr_node_info = &mut self.node_info[nbr_idx];
+                if level > nbr_node_info.max_layer {
+                    continue;
                 }
+
+                let nbr_layer_nbrs = &mut nbr_node_info.layer_neighbors[level];
+                nbr_layer_nbrs.push(new_id, dist);
+                if nbr_layer_nbrs.ids.len() > m_max {
+                    if level == 0 {
+                        layer0_nodes_to_shrink.push(nbr_idx);
+                    } else {
+                        shrink_neighbor_upper_layer = true;
+                    }
+                }
+            }
+            if shrink_neighbor_upper_layer {
+                self.shrink_layer_neighbors_heuristic_idx(nbr_idx, level, m_max);
             }
         }
     }
@@ -2078,6 +2083,7 @@ impl HnswIndex {
             .map(|&(nbr_idx, _)| self.get_id_from_idx(nbr_idx))
             .collect();
 
+        let mut shrink_new_upper_layer = false;
         {
             let node_info = &mut self.node_info[new_idx];
             let layer_nbrs = &mut node_info.layer_neighbors[level];
@@ -2091,30 +2097,39 @@ impl HnswIndex {
                 if level == 0 {
                     layer0_nodes_to_shrink.push(new_idx);
                 } else {
-                    graph_quality_stats.record_upper_layer_overflow_truncate();
-                    layer_nbrs.truncate_to_best(m_max);
+                    graph_quality_stats.record_upper_layer_overflow_heuristic_shrink();
+                    shrink_new_upper_layer = true;
                 }
             }
         }
+        if shrink_new_upper_layer {
+            self.shrink_layer_neighbors_heuristic_idx(new_idx, level, m_max);
+        }
 
         for &(nbr_idx, dist) in &filtered_neighbors {
-            let nbr_node_info = &mut self.node_info[nbr_idx];
-            if level > nbr_node_info.max_layer {
-                continue;
-            }
-
-            let nbr_layer_nbrs = &mut nbr_node_info.layer_neighbors[level];
-            nbr_layer_nbrs.push(new_id, dist);
-            if level > 0 {
-                graph_quality_stats.record_upper_layer_connection_update();
-            }
-            if nbr_layer_nbrs.ids.len() > m_max {
-                if level == 0 {
-                    layer0_nodes_to_shrink.push(nbr_idx);
-                } else {
-                    graph_quality_stats.record_upper_layer_overflow_truncate();
-                    nbr_layer_nbrs.truncate_to_best(m_max);
+            let mut shrink_neighbor_upper_layer = false;
+            {
+                let nbr_node_info = &mut self.node_info[nbr_idx];
+                if level > nbr_node_info.max_layer {
+                    continue;
                 }
+
+                let nbr_layer_nbrs = &mut nbr_node_info.layer_neighbors[level];
+                nbr_layer_nbrs.push(new_id, dist);
+                if level > 0 {
+                    graph_quality_stats.record_upper_layer_connection_update();
+                }
+                if nbr_layer_nbrs.ids.len() > m_max {
+                    if level == 0 {
+                        layer0_nodes_to_shrink.push(nbr_idx);
+                    } else {
+                        graph_quality_stats.record_upper_layer_overflow_heuristic_shrink();
+                        shrink_neighbor_upper_layer = true;
+                    }
+                }
+            }
+            if shrink_neighbor_upper_layer {
+                self.shrink_layer_neighbors_heuristic_idx(nbr_idx, level, m_max);
             }
         }
 
@@ -5514,12 +5529,16 @@ mod tests {
         ]
     }
 
-    fn layer0_neighbor_ids(index: &HnswIndex, node_idx: usize) -> BTreeSet<i64> {
-        index.node_info[node_idx].layer_neighbors[0]
+    fn layer_neighbor_ids(index: &HnswIndex, node_idx: usize, level: usize) -> BTreeSet<i64> {
+        index.node_info[node_idx].layer_neighbors[level]
             .ids
             .iter()
             .copied()
             .collect()
+    }
+
+    fn layer0_neighbor_ids(index: &HnswIndex, node_idx: usize) -> BTreeSet<i64> {
+        layer_neighbor_ids(index, node_idx, 0)
     }
 
     fn deterministic_upper_layer_config() -> IndexConfig {
@@ -5590,6 +5609,73 @@ mod tests {
         index
     }
 
+    fn deterministic_parallel_build_entry_descent_fixture() -> HnswIndex {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(2),
+                ef_construction: Some(8),
+                ef_search: Some(8),
+                ml: Some(0.0),
+                num_threads: Some(4),
+                ..Default::default()
+            },
+        };
+
+        let vectors = vec![
+            0.0, 0.0, // node 0: global entry, far from query
+            100.0, 0.0, // node 1: upper-layer bridge
+            101.0, 0.0, // node 2: lower-layer bridge
+            102.0, 0.0, // node 3: closest layer-0 neighbor to the query
+        ];
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        index.train(&vectors).unwrap();
+        index.vectors = vectors;
+        index.ids = vec![0, 1, 2, 3];
+        index.node_info = vec![
+            NodeInfo::new(2, index.m),
+            NodeInfo::new(2, index.m),
+            NodeInfo::new(1, index.m),
+            NodeInfo::new(0, index.m),
+        ];
+        index.entry_point = Some(0);
+        index.max_level = 2;
+        index.next_id = 4;
+        index.use_sequential_ids = true;
+
+        let dist01 = index.distance_between_nodes_idx(0, 1);
+        index.node_info[0].layer_neighbors[2].push(1, dist01);
+        index.node_info[1].layer_neighbors[2].push(0, dist01);
+
+        let dist12 = index.distance_between_nodes_idx(1, 2);
+        index.node_info[1].layer_neighbors[1].push(2, dist12);
+        index.node_info[2].layer_neighbors[1].push(1, dist12);
+
+        let dist23 = index.distance_between_nodes_idx(2, 3);
+        index.node_info[2].layer_neighbors[0].push(3, dist23);
+        index.node_info[3].layer_neighbors[0].push(2, dist23);
+
+        index.refresh_layer0_flat_graph();
+        index
+    }
+
+    fn deterministic_parallel_profile_vectors(num_vectors: usize, dim: usize) -> Vec<f32> {
+        let mut vectors = Vec::with_capacity(num_vectors * dim);
+        for i in 0..num_vectors {
+            let cluster = (i % 32) as f32 * 0.05;
+            let band = ((i / 32) % 16) as f32 * 0.005;
+            for d in 0..dim {
+                let raw = ((i * 73 + d * 19 + (i % 11) * (d % 5)) % 1024) as f32 / 1024.0;
+                vectors.push(raw + cluster + band + (d % 7) as f32 * 0.0005);
+            }
+        }
+        vectors
+    }
+
     #[test]
     fn test_hnsw() {
         let config = IndexConfig {
@@ -5649,6 +5735,126 @@ mod tests {
         assert_eq!(
             parallel_neighbors, serial_neighbors,
             "bulk add path should maintain the same diversified layer-0 reverse neighbors as repeated single-node insertion"
+        );
+    }
+
+    #[test]
+    fn test_parallel_bulk_neighbor_search_descends_upper_layers_before_layer0() {
+        let index = deterministic_parallel_build_entry_descent_fixture();
+        let mut scratch = SearchScratch::new();
+
+        let neighbors =
+            index.find_neighbors_for_insertion_with_scratch(&[102.1, 0.0], 0, &mut scratch);
+
+        assert_eq!(
+            neighbors.len(),
+            1,
+            "level-0 bulk build should return one layer"
+        );
+        assert_eq!(
+            neighbors[0].first().map(|(idx, _)| *idx),
+            Some(3),
+            "bulk build should descend through upper layers before searching layer 0"
+        );
+    }
+
+    #[test]
+    fn test_parallel_bulk_upper_layer_overflow_uses_heuristic_diversification() {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(2),
+                ef_construction: Some(16),
+                ef_search: Some(16),
+                ml: Some(0.0),
+                num_threads: Some(4),
+                ..Default::default()
+            },
+        };
+
+        let vectors = vec![
+            0.0, 0.0, // node 0
+            1.0, 0.0, // node 1
+            1.01, 0.0, // node 2
+            0.0, 2.0, // node 3
+        ];
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        index.train(&vectors).unwrap();
+        index.vectors = vectors;
+        index.ids = vec![0, 1, 2, 3];
+        index.node_info = (0..4).map(|_| NodeInfo::new(1, index.m)).collect();
+        index.entry_point = Some(0);
+        index.max_level = 1;
+        index.next_id = 4;
+        index.use_sequential_ids = true;
+
+        let neighbors = vec![
+            (1usize, index.distance_between_nodes_idx(0, 1)),
+            (2usize, index.distance_between_nodes_idx(0, 2)),
+            (3usize, index.distance_between_nodes_idx(0, 3)),
+        ];
+        let mut layer0_nodes_to_shrink = Vec::new();
+
+        index.add_connections_for_node(0, 0, 1, &neighbors, &mut layer0_nodes_to_shrink);
+
+        assert!(
+            layer0_nodes_to_shrink.is_empty(),
+            "upper-layer overflow should not spill into layer-0 deferred shrink bookkeeping"
+        );
+        assert_eq!(
+            layer_neighbor_ids(&index, 0, 1),
+            BTreeSet::from([1, 3]),
+            "upper-layer overflow should keep diverse neighbors instead of truncating to the two closest"
+        );
+    }
+
+    #[test]
+    fn test_parallel_build_profile_report_tracks_reworked_graph_quality_modes() {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 16,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(2),
+                ef_construction: Some(64),
+                ef_search: Some(32),
+                ml: Some(2.0),
+                num_threads: Some(4),
+                ..Default::default()
+            },
+        };
+        let vectors = deterministic_parallel_profile_vectors(1_200, 16);
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        let report = index.parallel_build_profile_report(&vectors, None).unwrap();
+
+        assert_eq!(
+            report.parallel_insert_entry_descent_mode,
+            "greedy_from_max_level",
+            "round-8 profile should report that bulk build descends from max_level before node-level search"
+        );
+        assert_eq!(
+            report.upper_layer_overflow_shrink_mode, "heuristic_shrink",
+            "round-8 profile should report heuristic upper-layer overflow shrink after the rework"
+        );
+        assert_eq!(
+            report
+                .graph_quality_call_counts
+                .omitted_upper_layer_descent_levels,
+            0,
+            "reworked bulk build should not omit any upper-layer descent levels"
+        );
+        assert_eq!(
+            report
+                .graph_quality_call_counts
+                .upper_layer_truncate_to_best_events,
+            0,
+            "reworked bulk build should stop recording truncate-to-best upper-layer overflows"
         );
     }
 

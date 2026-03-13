@@ -12,20 +12,67 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `hnsw-parallel-build-graph-rework-round8`
-- Next feature: `hnsw-parallel-build-graph-rework-round8`
+- Current focus: `none`
+- Next feature: `none`
 - Last updated: 2026-03-13
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 54/56 features passing (96%)
+- Progress: 56/56 features passing (100%)
 
 ## Session Log
+
+### Session 64 - 2026-03-13
+- Focus: `hnsw-round8-authority-same-schema-rerun`
+- Completed:
+  - tightened `tests/bench_hnsw_reopen_round8.rs` again so round 8 now requires `benchmark_results/hnsw_reopen_round8_authority_summary.json`, then used the missing summary artifact as the TDD red signal for the final authority rerun slice
+  - reran the authoritative round-8 same-schema lane: refreshed the Rust HDF5 row into `benchmark_results/rs_hnsw_sift128.full_k100.json`, captured a fresh native HNSW log, and replayed both the round-8 profile and default contract on the remote x86 lane
+  - created `benchmark_results/hnsw_reopen_round8_authority_summary.json`, which records the hard-stop outcome for the `parallel_build_graph_quality_parity` hypothesis: Rust same-schema HNSW fell to `750.732` qps at recall `0.9945`, native also fell to `8703.289` qps at recall `0.95`, and the superficially better `11.59x` ratio is drift-driven rather than attributable to a Rust-side gain
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round8 -- --nocapture` -> initial `FAIL` (missing `benchmark_results/hnsw_reopen_round8_authority_summary.json`), then `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round8 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round8 bash scripts/remote/test.sh --command "cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T015649Z_53053.log`)
+  - `bash scripts/remote/native_hnsw_qps_capture.sh --log-dir /data/work/knowhere-rs-logs-hnsw-reopen-round8 --gtest-filter Benchmark_float_qps.TEST_HNSW` -> `exit_code=0` via linkfix fallback (`/data/work/knowhere-rs-logs-hnsw-reopen-round8/native_hnsw_qps_linkfix_20260313T015830Z.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round8 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round8 bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_round8_profile -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T021527Z_55615.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round8 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round8 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round8 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T021527Z_55616.log`)
+- Result:
+  - `hnsw-round8-authority-same-schema-rerun` is now `passing`
+  - all tracked features are now `passing`, and round 8 closes as a `hard_stop` on the `parallel_build_graph_quality_parity` hypothesis rather than as a verdict-refresh trigger
+- Notes:
+  - the reworked bulk-build path stayed structurally aligned on the synthetic audit surface, but that alignment did not translate into an authority-lane gain; Rust qps and recall both moved down on the real same-schema benchmark
+  - native also moved down sharply on this run, so the improved ratio cannot be used as optimization evidence; the historical HNSW family verdict therefore remains unchanged
+- Git Commits: pending
+
+### Session 63 - 2026-03-13
+- Focus: `hnsw-parallel-build-graph-rework-round8`
+- Completed:
+  - added focused round-8 regressions in `src/faiss/hnsw.rs` that first failed on three concrete gaps: bulk-build neighbor search skipping upper-layer descent, upper-layer overflow keeping nearest-only neighbors, and round-8 profile surfaces still reporting the pre-rework modes
+  - reworked the bulk-build path in `src/faiss/hnsw.rs` so `find_neighbors_for_insertion_with_scratch()` now descends from `max_level` to `node_level + 1` before candidate search, and upper-layer overflow in both the production and profiled parallel-build connection update paths now uses `shrink_layer_neighbors_heuristic_idx()` instead of `truncate_to_best`
+  - refreshed `tests/bench_hnsw_reopen_round8.rs`, `tests/bench_hnsw_reopen_round8_profile.rs`, and `benchmark_results/hnsw_reopen_parallel_build_audit_round8.json`; the refreshed audit artifact now records `parallel_insert_entry_descent_mode=greedy_from_max_level`, `upper_layer_overflow_shrink_mode=heuristic_shrink`, `omitted_upper_layer_descent_levels=0`, `upper_layer_connection_update_calls=3077`, and `upper_layer_heuristic_shrink_events=304`
+- Verification:
+  - `cargo test hnsw --lib -- --nocapture` -> initial `FAIL` (three new round-8 regressions), then `ok`
+  - `cargo test --test bench_hnsw_reopen_round8 -- --nocapture` -> initial `FAIL` (contract tightened to the reworked mode strings while the old audit artifact was still present), then `ok`
+  - `cargo test --features long-tests --test bench_hnsw_reopen_round8_profile -- --ignored --nocapture` -> `ok`
+  - `cargo test --test bench_hnsw_reopen_round7_flat_graph -- --nocapture` -> `ok`
+  - `cargo test --test bench_hnsw_reopen_round6_prefetch -- --nocapture` -> `ok`
+  - `cargo test --test bench_hnsw_reopen_round5 -- --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (rustfmt diffs), then `ok` after `cargo fmt --all`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round8 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round8 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round7_flat_graph -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T014659Z_51291.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round8 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round8 bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_round8_profile -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T014717Z_51389.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round8 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round8 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round8 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T014748Z_51525.log`)
+- Result:
+  - `hnsw-parallel-build-graph-rework-round8` is now `passing`
+  - round 8 has now moved from “build-parity gap audit” to an implemented graph-quality rework, and the next queued feature is `hnsw-round8-authority-same-schema-rerun`
+- Notes:
+  - the refreshed round-8 audit artifact no longer records any omitted upper-layer descent levels or truncate-to-best events, so the tracked gap has genuinely moved from structure mismatch to authority-lane outcome
+  - repair is still the dominant synthetic build-profile bucket after the rework, which makes the same-schema authority rerun the decisive next step rather than another synthetic-only micro-optimization pass
+- Git Commits: `f5c758d`
 
 ### Session 62 - 2026-03-13
 - Focus: `hnsw-parallel-build-graph-audit-round8`
 - Completed:
   - tightened `tests/bench_hnsw_reopen_round8.rs` so round 8 now requires `benchmark_results/hnsw_reopen_parallel_build_audit_round8.json` and explicit build-parity evidence fields for `parallel_insert_entry_descent_mode`, `upper_layer_overflow_shrink_mode`, `build_profile_fields`, and `build_graph_quality_notes`
   - extended `src/faiss/hnsw.rs` with a real parallel-build profiling path via `parallel_build_profile_report()`, recording the current bulk-build entry-descent mode, upper-layer overflow shrink mode, omitted upper-layer descent levels, and upper-layer connection-update/overflow counters without changing the production bulk-build semantics yet
-  - added `tests/bench_hnsw_reopen_round8_profile.rs`, generated `benchmark_results/hnsw_reopen_parallel_build_audit_round8.json`, and unignored both round-8 benchmark artifacts in `.gitignore` so the new audit state is durable; the generated artifact currently records `parallel_insert_entry_descent_mode=direct_entry_at_node_level`, `upper_layer_overflow_shrink_mode=truncate_to_best`, `omitted_upper_layer_descent_levels=35200`, and `upper_layer_connection_update_calls=2526`
+  - added `tests/bench_hnsw_reopen_round8_profile.rs`, generated the initial `benchmark_results/hnsw_reopen_parallel_build_audit_round8.json`, and unignored both round-8 benchmark artifacts in `.gitignore` so the new audit state is durable; that first round-8 audit freeze recorded `parallel_insert_entry_descent_mode=direct_entry_at_node_level`, `upper_layer_overflow_shrink_mode=truncate_to_best`, `omitted_upper_layer_descent_levels=35200`, and `upper_layer_connection_update_calls=2526` before the later rework refreshed the same artifact path
 - Verification:
   - `cargo test --features long-tests --test bench_hnsw_reopen_round8_profile -- --ignored --nocapture` -> initial `FAIL` (missing `HnswParallelBuildProfileReport` / `parallel_build_profile_report`), then `ok`
   - `cargo fmt --all -- --check` -> initial `FAIL` (rustfmt diffs), then `ok` after `cargo fmt --all`

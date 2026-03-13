@@ -79,7 +79,7 @@ fn build_round8_parallel_build_audit_artifact(
         "parallel_insert_entry_descent_mode": &report.parallel_insert_entry_descent_mode,
         "upper_layer_overflow_shrink_mode": &report.upper_layer_overflow_shrink_mode,
         "build_profile_fields": &report.graph_quality_call_counts,
-        "build_graph_quality_notes": "Round 8 audit confirms the current parallel build still skips upper-layer greedy descent before searching node_level, and upper-layer overflow still uses truncate_to_best instead of the native diversity heuristic."
+        "build_graph_quality_notes": "Round 8 audit confirms the reworked parallel build now performs upper-layer greedy descent before searching node_level, and upper-layer overflow now uses the native-style heuristic shrink instead of truncate_to_best."
     })
 }
 
@@ -130,22 +130,31 @@ fn test_generate_hnsw_reopen_round8_parallel_build_audit() {
 
     assert_eq!(
         artifact["parallel_insert_entry_descent_mode"],
-        "direct_entry_at_node_level"
+        "greedy_from_max_level"
     );
     assert_eq!(
         artifact["upper_layer_overflow_shrink_mode"],
-        "truncate_to_best"
+        "heuristic_shrink"
     );
-    assert!(
-        artifact["build_profile_fields"]["omitted_upper_layer_descent_levels"]
-            .as_u64()
-            .is_some_and(|count| count > 0),
-        "generated artifact must record omitted upper-layer descent levels"
+    assert_eq!(
+        artifact["build_profile_fields"]["omitted_upper_layer_descent_levels"], 0,
+        "generated artifact must record zero omitted upper-layer descent levels after the rework"
     );
     assert!(
         artifact["build_profile_fields"]["upper_layer_connection_update_calls"]
             .as_u64()
             .is_some_and(|count| count > 0),
         "generated artifact must record upper-layer connection updates"
+    );
+    assert_eq!(
+        artifact["build_profile_fields"]["upper_layer_truncate_to_best_events"],
+        0,
+        "generated artifact must stop recording upper-layer truncate-to-best events after the rework"
+    );
+    assert!(
+        artifact["build_profile_fields"]["upper_layer_heuristic_shrink_events"]
+            .as_u64()
+            .is_some_and(|count| count > 0),
+        "generated artifact must record heuristic upper-layer shrink events after the rework"
     );
 }

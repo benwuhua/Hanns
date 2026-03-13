@@ -956,7 +956,7 @@
       "title": "Rework the HNSW parallel-build graph quality path",
       "description": "Align the bulk-build insertion path with the serial/native graph-quality semantics by adding greedy upper-layer descent before candidate search and replacing upper-layer truncate-to-best overflow handling with heuristic shrink.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash init.sh",
         "cargo test hnsw --lib -- --nocapture",
@@ -979,7 +979,7 @@
       "title": "Refresh round 8 same-schema authority evidence",
       "description": "Re-run the remote same-schema recall-gated HNSW benchmark after the round-8 graph-quality rework and decide whether the resulting evidence justifies a later verdict-refresh feature or another stop.",
       "priority": "high",
-      "status": "failing",
+      "status": "passing",
       "verification_steps": [
         "bash init.sh",
         "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round8 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round8 bash scripts/remote/test.sh --command \"cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95\"",
