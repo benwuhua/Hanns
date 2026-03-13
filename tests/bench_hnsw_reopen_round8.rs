@@ -4,6 +4,8 @@ use std::fs;
 const HNSW_REOPEN_ROUND8_BASELINE_PATH: &str = "benchmark_results/hnsw_reopen_round8_baseline.json";
 const HNSW_REOPEN_ROUND8_PARALLEL_BUILD_AUDIT_PATH: &str =
     "benchmark_results/hnsw_reopen_parallel_build_audit_round8.json";
+const HNSW_REOPEN_ROUND8_AUTHORITY_SUMMARY_PATH: &str =
+    "benchmark_results/hnsw_reopen_round8_authority_summary.json";
 
 fn load_round8_baseline() -> Value {
     let content = fs::read_to_string(HNSW_REOPEN_ROUND8_BASELINE_PATH)
@@ -17,6 +19,13 @@ fn load_round8_parallel_build_audit() -> Value {
         .expect("HNSW reopen round 8 parallel-build audit artifact must exist");
     serde_json::from_str(&content)
         .expect("HNSW reopen round 8 parallel-build audit artifact must be valid JSON")
+}
+
+fn load_round8_authority_summary() -> Value {
+    let content = fs::read_to_string(HNSW_REOPEN_ROUND8_AUTHORITY_SUMMARY_PATH)
+        .expect("HNSW reopen round 8 authority summary artifact must exist");
+    serde_json::from_str(&content)
+        .expect("HNSW reopen round 8 authority summary artifact must be valid JSON")
 }
 
 #[test]
@@ -105,5 +114,53 @@ fn hnsw_reopen_round8_requires_parallel_build_audit_artifact() {
             .expect("build_graph_quality_notes must be a string")
             .contains("greedy descent"),
         "round 8 audit notes must describe the bulk-build greedy descent behavior"
+    );
+}
+
+#[test]
+fn hnsw_reopen_round8_requires_authority_summary_artifact() {
+    let summary = load_round8_authority_summary();
+
+    assert_eq!(summary["task_id"], "HNSW-REOPEN-ROUND8-AUTHORITY-SUMMARY");
+    assert_eq!(summary["family"], "HNSW");
+    assert_eq!(summary["authority_scope"], "remote_x86_only");
+    assert_eq!(
+        summary["round8_target"],
+        "parallel_build_graph_quality_parity"
+    );
+    assert_eq!(
+        summary["round8_baseline_source"],
+        "benchmark_results/hnsw_reopen_round8_baseline.json"
+    );
+    assert_eq!(
+        summary["round8_parallel_build_audit_source"],
+        "benchmark_results/hnsw_reopen_parallel_build_audit_round8.json"
+    );
+    assert_eq!(
+        summary["same_schema_sources"]["rust"],
+        "benchmark_results/rs_hnsw_sift128.full_k100.json"
+    );
+    assert!(summary["verdict_refresh_allowed"].is_boolean());
+    let next_action = summary["next_action"]
+        .as_str()
+        .expect("next_action must be a string");
+    assert!(
+        matches!(next_action, "continue" | "soft_stop" | "hard_stop"),
+        "next_action must be continue, soft_stop, or hard_stop"
+    );
+    assert!(
+        summary["same_schema_current"]["rust_qps"].is_number(),
+        "authority summary must record the current Rust qps"
+    );
+    assert!(
+        summary["same_schema_current"]["native_qps"].is_number(),
+        "authority summary must record the current native qps"
+    );
+    assert!(
+        summary["summary"]
+            .as_str()
+            .expect("summary must be a string")
+            .contains("qps"),
+        "summary must describe the same-schema qps outcome"
     );
 }

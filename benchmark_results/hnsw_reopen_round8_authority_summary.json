@@ -1,0 +1,48 @@
+{
+  "task_id": "HNSW-REOPEN-ROUND8-AUTHORITY-SUMMARY",
+  "family": "HNSW",
+  "authority_scope": "remote_x86_only",
+  "round8_target": "parallel_build_graph_quality_parity",
+  "historical_verdict_source": "benchmark_results/hnsw_p3_002_final_verdict.json",
+  "round8_baseline_source": "benchmark_results/hnsw_reopen_round8_baseline.json",
+  "round8_parallel_build_audit_source": "benchmark_results/hnsw_reopen_parallel_build_audit_round8.json",
+  "same_schema_sources": {
+    "rust": "benchmark_results/rs_hnsw_sift128.full_k100.json",
+    "native_log": "/data/work/knowhere-rs-logs-hnsw-reopen-round8/native_hnsw_qps_linkfix_20260313T015830Z.log"
+  },
+  "authority_logs": [
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T015649Z_53053.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round8/native_hnsw_qps_linkfix_20260313T015830Z.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T021527Z_55615.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T021527Z_55616.log"
+  ],
+  "same_schema_current": {
+    "rust_recall_at_10": 0.9944999999999993,
+    "rust_qps": 750.7318781854797,
+    "native_recall_at_10": 0.95,
+    "native_qps": 8703.289,
+    "native_over_rust_qps_ratio": 11.593072377632167
+  },
+  "delta_vs_last_attributable_same_schema": {
+    "source": "benchmark_results/hnsw_reopen_round4_authority_summary.json",
+    "rust_recall_at_10_delta": -0.0014000000000000679,
+    "rust_qps_pct": -8.3882439336726,
+    "native_qps_pct": -30.301625456592067,
+    "native_over_rust_qps_ratio_pct": -23.919835689050718
+  },
+  "delta_vs_latest_stability_gate": {
+    "source": "benchmark_results/hnsw_reopen_round5_stability_gate.json",
+    "rust_recall_at_10_delta": -0.0012999999999999678,
+    "rust_qps_pct": -9.41122279670019,
+    "native_qps_pct": -32.04977541959021,
+    "native_over_rust_qps_ratio_pct": -24.990460542462632
+  },
+  "historical_verdict_band_comparison": {
+    "historical_native_over_rust_qps_ratio": 14.803655169580505,
+    "current_ratio_pct_vs_historical": -21.68777072398747
+  },
+  "verdict_refresh_allowed": false,
+  "next_action": "hard_stop",
+  "summary": "Round 8 does not justify a verdict refresh. The same-schema authority rerun after the parallel-build graph-quality rework moved Rust HNSW down from the latest round-5 stability row (828.725 qps, recall 0.9958) to 750.732 qps at recall 0.9945, while native also fell to 8703.289 qps at recall 0.95. The resulting 11.59x ratio looks better than the historical band only because native drifted down by about 32.0%; it is not attributable to a Rust-side gain, and the targeted graph-quality hypothesis failed to improve the real authority lane.",
+  "action": "Archive round 8 as a hard-stop on the parallel-build graph-quality parity hypothesis, keep benchmark_results/hnsw_p3_002_final_verdict.json unchanged, and avoid opening another HNSW performance round unless a new authority-backed hypothesis explains how to improve same-schema Rust qps without relying on native-side drift."
+}
