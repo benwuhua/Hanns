@@ -68,22 +68,20 @@ fn hnsw_reopen_round8_requires_parallel_build_audit_artifact() {
     );
     assert_eq!(
         audit["parallel_insert_entry_descent_mode"],
-        "direct_entry_at_node_level"
+        "greedy_from_max_level"
     );
     assert_eq!(
         audit["upper_layer_overflow_shrink_mode"],
-        "truncate_to_best"
+        "heuristic_shrink"
     );
     assert_eq!(
         audit["native_reference_files"][0],
         "thirdparty/hnswlib/hnswlib/hnswalg.h"
     );
     assert_eq!(audit["rust_reference_files"][0], "src/faiss/hnsw.rs");
-    assert!(
-        audit["build_profile_fields"]["omitted_upper_layer_descent_levels"]
-            .as_u64()
-            .is_some_and(|count| count > 0),
-        "round 8 audit must report omitted upper-layer descent levels"
+    assert_eq!(
+        audit["build_profile_fields"]["omitted_upper_layer_descent_levels"], 0,
+        "round 8 audit should report zero omitted upper-layer descent levels after the rework"
     );
     assert!(
         audit["build_profile_fields"]["upper_layer_connection_update_calls"]
@@ -91,11 +89,21 @@ fn hnsw_reopen_round8_requires_parallel_build_audit_artifact() {
             .is_some_and(|count| count > 0),
         "round 8 audit must exercise upper-layer connection updates"
     );
+    assert_eq!(
+        audit["build_profile_fields"]["upper_layer_truncate_to_best_events"], 0,
+        "round 8 audit should stop recording upper-layer truncate-to-best events after the rework"
+    );
+    assert!(
+        audit["build_profile_fields"]["upper_layer_heuristic_shrink_events"]
+            .as_u64()
+            .is_some_and(|count| count > 0),
+        "round 8 audit must record heuristic upper-layer shrink events after the rework"
+    );
     assert!(
         audit["build_graph_quality_notes"]
             .as_str()
             .expect("build_graph_quality_notes must be a string")
             .contains("greedy descent"),
-        "round 8 audit notes must describe the build-parity gap"
+        "round 8 audit notes must describe the bulk-build greedy descent behavior"
     );
 }

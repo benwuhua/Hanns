@@ -1,21 +1,21 @@
 {
   "authority_scope": "remote_x86_only",
   "benchmark_lane": "hnsw_reopen_parallel_build_audit_round8",
-  "build_graph_quality_notes": "Round 8 audit confirms the current parallel build still skips upper-layer greedy descent before searching node_level, and upper-layer overflow still uses truncate_to_best instead of the native diversity heuristic.",
+  "build_graph_quality_notes": "Round 8 audit confirms the reworked parallel build now performs upper-layer greedy descent before searching node_level, and upper-layer overflow now uses the native-style heuristic shrink instead of truncate_to_best.",
   "build_profile_fields": {
-    "omitted_upper_layer_descent_levels": 47202,
-    "upper_layer_connection_update_calls": 2497,
-    "upper_layer_heuristic_shrink_events": 0,
-    "upper_layer_overflow_events": 826,
-    "upper_layer_truncate_to_best_events": 826
+    "omitted_upper_layer_descent_levels": 0,
+    "upper_layer_connection_update_calls": 3077,
+    "upper_layer_heuristic_shrink_events": 304,
+    "upper_layer_overflow_events": 304,
+    "upper_layer_truncate_to_best_events": 0
   },
-  "build_wall_clock_ms": 8316.372167000001,
+  "build_wall_clock_ms": 8226.592791,
   "call_counts": {
-    "candidate_search_calls": 12798,
-    "connection_update_calls": 13085,
-    "layer_descent_calls": 12798,
-    "neighbor_selection_calls": 12798,
-    "repair_calls": 12131
+    "candidate_search_calls": 12802,
+    "connection_update_calls": 13468,
+    "layer_descent_calls": 48000,
+    "neighbor_selection_calls": 12802,
+    "repair_calls": 11299
   },
   "config": {
     "ef_construction": 200,
@@ -31,55 +31,55 @@
   "family": "HNSW",
   "hotspot_ranking": [
     {
-      "calls": 12131,
-      "milliseconds": 7367.96504,
-      "share_of_profiled_time": 0.5350467584714911,
+      "calls": 11299,
+      "milliseconds": 7106.504285999999,
+      "share_of_profiled_time": 0.4761053253595784,
       "stage": "repair"
     },
     {
-      "calls": 12798,
-      "milliseconds": 3506.550748,
-      "share_of_profiled_time": 0.2546386418702636,
+      "calls": 12802,
+      "milliseconds": 4205.930843,
+      "share_of_profiled_time": 0.2817793378935001,
       "stage": "candidate_search"
     },
     {
-      "calls": 12798,
-      "milliseconds": 2093.81234,
-      "share_of_profiled_time": 0.15204842847145317,
+      "calls": 12802,
+      "milliseconds": 2710.093224,
+      "share_of_profiled_time": 0.18156462928042044,
       "stage": "neighbor_selection"
     },
     {
-      "calls": 12798,
-      "milliseconds": 503.47667799999994,
-      "share_of_profiled_time": 0.03656146073813274,
+      "calls": 48000,
+      "milliseconds": 588.5316889999999,
+      "share_of_profiled_time": 0.03942910044081372,
       "stage": "layer_descent"
     },
     {
-      "calls": 13085,
-      "milliseconds": 298.88892,
-      "share_of_profiled_time": 0.02170471044865935,
+      "calls": 13468,
+      "milliseconds": 315.268036,
+      "share_of_profiled_time": 0.021121607025687408,
       "stage": "connection_update"
     }
   ],
   "native_reference_files": [
     "thirdparty/hnswlib/hnswlib/hnswalg.h"
   ],
-  "parallel_insert_entry_descent_mode": "direct_entry_at_node_level",
+  "parallel_insert_entry_descent_mode": "greedy_from_max_level",
   "recommended_first_rework_target": "connectivity_repair_path",
-  "repair_operations": 11403,
+  "repair_operations": 10575,
   "round8_baseline_source": "benchmark_results/hnsw_reopen_round8_baseline.json",
   "rust_reference_files": [
     "src/faiss/hnsw.rs"
   ],
   "task_id": "HNSW-REOPEN-PARALLEL-BUILD-AUDIT-ROUND8",
   "timing_buckets": {
-    "candidate_search_ms": 3506.550748,
-    "connection_update_ms": 298.88892,
-    "layer_descent_ms": 503.47667799999994,
-    "neighbor_selection_ms": 2093.81234,
-    "repair_ms": 7367.96504
+    "candidate_search_ms": 4205.930843,
+    "connection_update_ms": 315.268036,
+    "layer_descent_ms": 588.5316889999999,
+    "neighbor_selection_ms": 2710.093224,
+    "repair_ms": 7106.504285999999
   },
-  "total_profiled_ms": 13770.693726000001,
-  "upper_layer_overflow_shrink_mode": "truncate_to_best",
+  "total_profiled_ms": 14926.328077999999,
+  "upper_layer_overflow_shrink_mode": "heuristic_shrink",
   "vectors_added": 12000
 }

@@ -12,20 +12,46 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `hnsw-parallel-build-graph-rework-round8`
-- Next feature: `hnsw-parallel-build-graph-rework-round8`
+- Current focus: `hnsw-round8-authority-same-schema-rerun`
+- Next feature: `hnsw-round8-authority-same-schema-rerun`
 - Last updated: 2026-03-13
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 54/56 features passing (96%)
+- Progress: 55/56 features passing (98%)
 
 ## Session Log
+
+### Session 63 - 2026-03-13
+- Focus: `hnsw-parallel-build-graph-rework-round8`
+- Completed:
+  - added focused round-8 regressions in `src/faiss/hnsw.rs` that first failed on three concrete gaps: bulk-build neighbor search skipping upper-layer descent, upper-layer overflow keeping nearest-only neighbors, and round-8 profile surfaces still reporting the pre-rework modes
+  - reworked the bulk-build path in `src/faiss/hnsw.rs` so `find_neighbors_for_insertion_with_scratch()` now descends from `max_level` to `node_level + 1` before candidate search, and upper-layer overflow in both the production and profiled parallel-build connection update paths now uses `shrink_layer_neighbors_heuristic_idx()` instead of `truncate_to_best`
+  - refreshed `tests/bench_hnsw_reopen_round8.rs`, `tests/bench_hnsw_reopen_round8_profile.rs`, and `benchmark_results/hnsw_reopen_parallel_build_audit_round8.json`; the refreshed audit artifact now records `parallel_insert_entry_descent_mode=greedy_from_max_level`, `upper_layer_overflow_shrink_mode=heuristic_shrink`, `omitted_upper_layer_descent_levels=0`, `upper_layer_connection_update_calls=3077`, and `upper_layer_heuristic_shrink_events=304`
+- Verification:
+  - `cargo test hnsw --lib -- --nocapture` -> initial `FAIL` (three new round-8 regressions), then `ok`
+  - `cargo test --test bench_hnsw_reopen_round8 -- --nocapture` -> initial `FAIL` (contract tightened to the reworked mode strings while the old audit artifact was still present), then `ok`
+  - `cargo test --features long-tests --test bench_hnsw_reopen_round8_profile -- --ignored --nocapture` -> `ok`
+  - `cargo test --test bench_hnsw_reopen_round7_flat_graph -- --nocapture` -> `ok`
+  - `cargo test --test bench_hnsw_reopen_round6_prefetch -- --nocapture` -> `ok`
+  - `cargo test --test bench_hnsw_reopen_round5 -- --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (rustfmt diffs), then `ok` after `cargo fmt --all`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round8 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round8 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round7_flat_graph -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T014659Z_51291.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round8 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round8 bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_round8_profile -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T014717Z_51389.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round8 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round8 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round8 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T014748Z_51525.log`)
+- Result:
+  - `hnsw-parallel-build-graph-rework-round8` is now `passing`
+  - round 8 has now moved from “build-parity gap audit” to an implemented graph-quality rework, and the next queued feature is `hnsw-round8-authority-same-schema-rerun`
+- Notes:
+  - the refreshed round-8 audit artifact no longer records any omitted upper-layer descent levels or truncate-to-best events, so the tracked gap has genuinely moved from structure mismatch to authority-lane outcome
+  - repair is still the dominant synthetic build-profile bucket after the rework, which makes the same-schema authority rerun the decisive next step rather than another synthetic-only micro-optimization pass
+- Git Commits: pending
 
 ### Session 62 - 2026-03-13
 - Focus: `hnsw-parallel-build-graph-audit-round8`
 - Completed:
   - tightened `tests/bench_hnsw_reopen_round8.rs` so round 8 now requires `benchmark_results/hnsw_reopen_parallel_build_audit_round8.json` and explicit build-parity evidence fields for `parallel_insert_entry_descent_mode`, `upper_layer_overflow_shrink_mode`, `build_profile_fields`, and `build_graph_quality_notes`
   - extended `src/faiss/hnsw.rs` with a real parallel-build profiling path via `parallel_build_profile_report()`, recording the current bulk-build entry-descent mode, upper-layer overflow shrink mode, omitted upper-layer descent levels, and upper-layer connection-update/overflow counters without changing the production bulk-build semantics yet
-  - added `tests/bench_hnsw_reopen_round8_profile.rs`, generated `benchmark_results/hnsw_reopen_parallel_build_audit_round8.json`, and unignored both round-8 benchmark artifacts in `.gitignore` so the new audit state is durable; the generated artifact currently records `parallel_insert_entry_descent_mode=direct_entry_at_node_level`, `upper_layer_overflow_shrink_mode=truncate_to_best`, `omitted_upper_layer_descent_levels=35200`, and `upper_layer_connection_update_calls=2526`
+  - added `tests/bench_hnsw_reopen_round8_profile.rs`, generated the initial `benchmark_results/hnsw_reopen_parallel_build_audit_round8.json`, and unignored both round-8 benchmark artifacts in `.gitignore` so the new audit state is durable; that first round-8 audit freeze recorded `parallel_insert_entry_descent_mode=direct_entry_at_node_level`, `upper_layer_overflow_shrink_mode=truncate_to_best`, `omitted_upper_layer_descent_levels=35200`, and `upper_layer_connection_update_calls=2526` before the later rework refreshed the same artifact path
 - Verification:
   - `cargo test --features long-tests --test bench_hnsw_reopen_round8_profile -- --ignored --nocapture` -> initial `FAIL` (missing `HnswParallelBuildProfileReport` / `parallel_build_profile_report`), then `ok`
   - `cargo fmt --all -- --check` -> initial `FAIL` (rustfmt diffs), then `ok` after `cargo fmt --all`
