@@ -33,6 +33,8 @@ type DistanceToIdxFn = fn(&HnswIndex, &[f32], usize) -> f32;
 
 /// Maximum number of layers in the HNSW graph
 const MAX_LAYERS: usize = 16;
+const HNSW_SEARCH_KNN_BF_FILTER_THRESHOLD: f32 = 0.93;
+const HNSW_SEARCH_BF_TOPK_THRESHOLD: f32 = 0.5;
 
 /// BUG-001 FIX: Reference M value for level multiplier calculation.
 /// Using a fixed reference M ensures consistent level distribution across different M values.
@@ -1084,6 +1086,34 @@ impl HnswIndex {
     #[inline(always)]
     fn distance_to_idx_hamming_dispatch(_index: &HnswIndex, _query: &[f32], _idx: usize) -> f32 {
         panic!("Hamming distance not supported for HNSW - use BinaryHnswIndex");
+    }
+
+    #[inline]
+    fn should_bruteforce_bitset_knn(
+        &self,
+        top_k: usize,
+        bitset: &crate::bitset::BitsetView,
+    ) -> bool {
+        let ntotal = self.ids.len();
+        if ntotal == 0 {
+            return false;
+        }
+
+        if top_k as f32 >= ntotal as f32 * HNSW_SEARCH_BF_TOPK_THRESHOLD {
+            return true;
+        }
+
+        if bitset.is_empty() {
+            return false;
+        }
+
+        let filtered_out_num = bitset.count();
+        if filtered_out_num as f32 >= bitset.len() as f32 * HNSW_SEARCH_KNN_BF_FILTER_THRESHOLD {
+            return true;
+        }
+
+        let survivors = bitset.len().saturating_sub(filtered_out_num);
+        survivors > 0 && top_k as f32 >= survivors as f32 * HNSW_SEARCH_BF_TOPK_THRESHOLD
     }
 
     pub fn new(config: &IndexConfig) -> Result<Self> {
@@ -3226,12 +3256,19 @@ impl HnswIndex {
 
         let mut all_ids = Vec::new();
         let mut all_dists = Vec::new();
+        let should_bruteforce = self.should_bruteforce_bitset_knn(k, bitset);
 
         for q_idx in 0..n_queries {
             let q_start = q_idx * self.dim;
             let query_vec = &query[q_start..q_start + self.dim];
 
-            let results = self.search_single_with_bitset(query_vec, ef, k, bitset);
+            let results = if should_bruteforce {
+                self.brute_force_search(query_vec, k, |_id, idx| {
+                    idx >= bitset.len() || !bitset.get(idx)
+                })
+            } else {
+                self.search_single_with_bitset(query_vec, ef, k, bitset)
+            };
 
             for (id, dist) in results.into_iter().take(k) {
                 all_ids.push(id);
@@ -6711,6 +6748,68 @@ mod tests {
     }
 
     #[test]
+    fn test_should_bruteforce_bitset_knn_for_high_filter_ratio() {
+        use crate::bitset::BitsetView;
+
+        let index = deterministic_filtered_screen_index(100, 16);
+        let mut bitset = BitsetView::new(index.ntotal());
+        for idx in 0..93 {
+            bitset.set(idx, true);
+        }
+
+        assert!(
+            index.should_bruteforce_bitset_knn(5, &bitset),
+            "native-aligned filtered search policy should switch to brute force when >=93% of candidates are filtered out"
+        );
+    }
+
+    #[test]
+    fn test_should_bruteforce_bitset_knn_for_large_topk_after_filtering() {
+        use crate::bitset::BitsetView;
+
+        let index = deterministic_filtered_screen_index(100, 16);
+        let mut bitset = BitsetView::new(index.ntotal());
+        for idx in 0..40 {
+            bitset.set(idx, true);
+        }
+
+        assert!(
+            index.should_bruteforce_bitset_knn(30, &bitset),
+            "native-aligned filtered search policy should switch to brute force when top-k consumes at least half of the surviving vectors"
+        );
+    }
+
+    #[test]
+    fn test_search_with_bitset_uses_bruteforce_policy_on_high_filter_ratio_fixture() {
+        use crate::bitset::BitsetView;
+
+        let index = deterministic_filtered_screen_index(100, 16);
+        let query = &index.vectors[index.dim..index.dim * 2];
+        let mut bitset = BitsetView::new(index.ntotal());
+        for idx in 0..95 {
+            bitset.set(idx, true);
+        }
+
+        let req = SearchRequest {
+            top_k: 3,
+            nprobe: 1,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+
+        let exact =
+            index.brute_force_search(query, 3, |_id, idx| idx >= bitset.len() || !bitset.get(idx));
+        let exact_ids: Vec<i64> = exact.iter().map(|(id, _)| *id).collect();
+        let result = index.search_with_bitset(query, &req, &bitset).unwrap();
+
+        assert_eq!(
+            result.ids, exact_ids,
+            "high-filter-ratio bitset search should use brute-force fallback and preserve exact nearest-neighbor ids even when ef is tiny"
+        );
+    }
+
+    #[test]
     fn test_layer0_l2_search_modes_distinguish_fast_and_profiled_paths() {
         let index = deterministic_upper_layer_index();
 
@@ -6844,6 +6943,57 @@ mod tests {
             scratch_elapsed.as_secs_f64() * 1000.0,
             legacy_total_visited as f64 / query_count as f64,
             scratch_total_visited as f64 / query_count as f64,
+        );
+    }
+
+    #[test]
+    #[ignore = "screen benchmark; excluded from default regression"]
+    fn test_hnsw_filtered_bruteforce_fallback_screen_benchmark() {
+        use crate::bitset::BitsetView;
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let index = deterministic_filtered_screen_index(20_000, 64);
+        let ef = 138usize;
+
+        let mut bitset = BitsetView::new(index.ntotal());
+        for idx in 0..19_000 {
+            bitset.set(idx, true);
+        }
+
+        let query_count = 256usize;
+        let mut queries = Vec::with_capacity(query_count * index.dim);
+        for i in 0..query_count {
+            for d in 0..index.dim {
+                let value = ((i * 29 + d * 13 + 5) % 983) as f32 / 983.0;
+                queries.push(value);
+            }
+        }
+
+        let corrected_start = Instant::now();
+        for query in queries.chunks_exact(index.dim) {
+            let result = index.search_single_with_bitset(black_box(query), ef, 10, &bitset);
+            black_box(result);
+        }
+        let corrected_elapsed = corrected_start.elapsed();
+
+        let brute_force_start = Instant::now();
+        for query in queries.chunks_exact(index.dim) {
+            let result = index.brute_force_search(black_box(query), 10, |_id, idx| {
+                idx >= bitset.len() || !bitset.get(idx)
+            });
+            black_box(result);
+        }
+        let brute_force_elapsed = brute_force_start.elapsed();
+
+        let corrected_qps = query_count as f64 / corrected_elapsed.as_secs_f64();
+        let brute_force_qps = query_count as f64 / brute_force_elapsed.as_secs_f64();
+        let speedup = brute_force_qps / corrected_qps;
+
+        println!(
+            "filtered_fallback_screen_benchmark corrected_qps={corrected_qps:.3} brute_force_qps={brute_force_qps:.3} brute_force_speedup={speedup:.3} corrected_ms={:.3} brute_force_ms={:.3}",
+            corrected_elapsed.as_secs_f64() * 1000.0,
+            brute_force_elapsed.as_secs_f64() * 1000.0,
         );
     }
 

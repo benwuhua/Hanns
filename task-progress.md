@@ -45,19 +45,23 @@
   - rewired `search_single_with_bitset()` to use the new scratch-backed helper across upper-layer jumps and the final layer-0 search, then added focused regression tests covering filtered-entry semantics, cross-call visited-epoch reuse, and brute-force parity on a deterministic filtered fixture
   - added a local ignored `screen` benchmark that compares the rewritten filtered kernel against the legacy helper and found a large local qps regression (`legacy_qps=930.433`, `scratch_qps=74.432`, `speedup=0.080`)
   - debugged that regression and found the legacy helper is not a trustworthy performance baseline: it uses the wrong heap polarity for the result threshold, so it over-prunes and explores far fewer nodes (`avg_legacy_visited=296.816` vs `avg_scratch_visited=712.387`) while producing different search results
+  - implemented native-aligned filtered brute-force fallback policy for bitset KNN search, matching the upstream `0.93` filter-ratio threshold and `0.5` survivor/top-k threshold, then added a high-filter-ratio local screen benchmark that showed the fallback path is materially faster than the corrected filtered HNSW kernel (`corrected_qps=8691.249`, `brute_force_qps=32593.644`, `speedup=3.750`)
 - Verification:
   - `cargo test test_search_layer_idx_with_bitset_scratch --lib -- --nocapture` -> initial `FAIL` (missing `search_layer_idx_with_bitset_scratch`), then `ok`
   - `cargo test test_hnsw_search_with_bitset --lib -- --nocapture` -> `ok`
   - `cargo test test_search_with_bitset_matches_bruteforce_on_screen_fixture --lib -- --nocapture` -> `ok`
+  - `cargo test should_bruteforce_bitset_knn --lib -- --nocapture` -> `ok`
+  - `cargo test test_search_with_bitset_uses_bruteforce_policy_on_high_filter_ratio_fixture --lib -- --nocapture` -> `ok`
   - `cargo test hnsw --lib -- --nocapture` -> `ok`
   - `cargo test --release test_hnsw_filtered_search_screen_benchmark --lib -- --ignored --nocapture` -> `ok`
+  - `cargo test --release test_hnsw_filtered_bruteforce_fallback_screen_benchmark --lib -- --ignored --nocapture` -> `ok`
   - `cargo fmt --all -- --check` -> initial `FAIL` (formatting diff), then `ok` after `cargo fmt --all`
   - `python3 scripts/validate_features.py feature-list.json` -> `ok`
 - Result:
-  - `screen_result=needs_more_local`
+  - `screen_result=promote`
 - Notes:
-  - this screen slice closed an architectural gap in the filtered search path and exposed a correctness bug in the old bitset kernel, but it did not establish a promotable local performance win
-  - the next local step should target performance of the corrected filtered kernel itself, most likely by unifying frontier/result structures or adding native-like filtered brute-force fallback policy, not by trying to recover the legacy helper's misleading qps
+  - this screen slice closed an architectural gap in the filtered search path, exposed a correctness bug in the old bitset kernel, and produced a locally promotable optimization direction: native-like brute-force fallback for high-filter-ratio KNN search
+  - the next step should promote this line into tracked authority work focused on `hnsw-filtered-bruteforce-fallback`, not reopen another generic bitset-kernel microbenchmark against the legacy helper
 - Git Commits: pending
 
 ### Session 68 - 2026-03-13
