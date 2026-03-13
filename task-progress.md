@@ -21,6 +21,23 @@
 
 ## Session Log
 
+### Session 70 - 2026-03-13
+- Focus: `hnsw-core-rewrite-screen`
+- Completed:
+  - started a fast-lane `screen` for the pure-Rust HNSW core rewrite line, explicitly targeting the generic filtered/bitset search kernel rather than reopening another layer-0-only micro-optimization
+  - replaced the old filtered layer search shape in [src/faiss/hnsw.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/.worktrees/hnsw-core-rewrite-screen/src/faiss/hnsw.rs) from `id + HashSet + BinaryHeap` traversal to a new `search_layer_idx_with_bitset_scratch(...)` helper that reuses `SearchScratch.visited_epoch` and keeps the traversal index-based
+  - rewired `search_single_with_bitset()` to use the new scratch-backed helper across upper-layer jumps and the final layer-0 search, then added focused regression tests covering filtered-entry semantics and cross-call visited-epoch reuse
+- Verification:
+  - `cargo test test_search_layer_idx_with_bitset_scratch --lib -- --nocapture` -> initial `FAIL` (missing `search_layer_idx_with_bitset_scratch`), then `ok`
+  - `cargo test hnsw --lib -- --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (formatting diff), then `ok` after `cargo fmt --all`
+- Result:
+  - `screen_result=needs_more_local`
+- Notes:
+  - this screen slice closes the most obvious architectural gap in the current filtered search path by removing per-query `HashSet` visited tracking, but it does not yet establish a local filtered-search speedup threshold strong enough to justify a tracked authority reopen
+  - the next local step should be a small filtered-search benchmark or audit that compares the rewritten scratch-based path against the pre-rewrite shape on a stable local fixture before deciding whether to promote this line
+- Git Commits: pending
+
 ### Session 69 - 2026-03-13
 - Focus: `workflow-fast-lane-rollout`
 - Completed:

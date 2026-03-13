@@ -10,7 +10,6 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use rayon::prelude::*;
 use serde::Serialize;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -4705,7 +4704,8 @@ impl HnswIndex {
         }
 
         // Multi-layer search with layer-wise jumping: start from top layer
-        let mut curr_ep = self.entry_point.unwrap();
+        let mut scratch = SearchScratch::new();
+        let mut curr_ep_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
 
         // Enhanced layer descent with bitset filtering
         for level in (1..=self.max_level).rev() {
@@ -4715,70 +4715,78 @@ impl HnswIndex {
                 ef.min(4)
             };
 
-            let results = self.search_layer_with_bitset(query, curr_ep, level, jump_ef, bitset);
+            let results = self.search_layer_idx_with_bitset_scratch(
+                query,
+                curr_ep_idx,
+                level,
+                jump_ef,
+                bitset,
+                &mut scratch,
+            );
 
             // Find the best valid result for jumping
-            let mut best_valid_id = curr_ep;
+            let mut best_valid_idx = curr_ep_idx;
 
-            for (id, _dist) in results {
-                // Check bitset: 0 = kept, 1 = filtered
-                // OPT-015: Use fast indexing
-                let idx = self.get_idx_from_id_fast(id);
-                if idx < bitset.len() && !bitset.get(idx) {
-                    best_valid_id = id;
-                    break;
-                }
+            for (idx, _dist) in results {
+                best_valid_idx = idx;
+                break;
             }
 
-            if best_valid_id != curr_ep {
-                curr_ep = best_valid_id;
+            if best_valid_idx != curr_ep_idx {
+                curr_ep_idx = best_valid_idx;
             }
         }
 
         // Final search at layer 0 with full ef
-        let results = self.search_layer_with_bitset(query, curr_ep, 0, ef, bitset);
+        let results = self.search_layer_idx_with_bitset_scratch(
+            query,
+            curr_ep_idx,
+            0,
+            ef,
+            bitset,
+            &mut scratch,
+        );
 
         // Apply bitset filter and return top k
         let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
-        for (id, dist) in results {
-            // OPT-015: Use fast indexing
-            let idx = self.get_idx_from_id_fast(id);
-            // Check bitset: 0 = kept (include), 1 = filtered (skip)
-            if idx >= bitset.len() || !bitset.get(idx) {
-                final_results.push((id, dist));
-                if final_results.len() >= k {
-                    break;
-                }
+        for (idx, dist) in results {
+            final_results.push((self.get_id_from_idx(idx), dist));
+            if final_results.len() >= k {
+                break;
             }
         }
 
         final_results
     }
 
-    /// Search for nearest neighbors at a specific layer with bitset filtering
-    fn search_layer_with_bitset(
+    /// Search for nearest neighbors at a specific layer with bitset filtering.
+    ///
+    /// This is the first pure-Rust core rewrite slice for filtered HNSW: move
+    /// away from `id + HashSet` traversal toward the same `idx + SearchScratch`
+    /// shape used by the generic search kernel.
+    fn search_layer_idx_with_bitset_scratch(
         &self,
         query: &[f32],
-        entry_id: i64,
+        entry_idx: usize,
         level: usize,
         ef: usize,
         bitset: &crate::bitset::BitsetView,
-    ) -> Vec<(i64, f32)> {
+        scratch: &mut SearchScratch,
+    ) -> Vec<(usize, f32)> {
         use std::collections::BinaryHeap;
 
-        // Wrapper for f32 to implement Ord for BinaryHeap
         #[derive(Clone, Copy, PartialEq)]
-        struct OrderedDist(f32);
+        struct MinDist(f32);
 
-        impl Eq for OrderedDist {}
+        impl Eq for MinDist {}
 
-        impl PartialOrd for OrderedDist {
+        impl PartialOrd for MinDist {
             fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
                 Some(self.cmp(other))
             }
         }
 
-        impl Ord for OrderedDist {
+        impl Ord for MinDist {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
                 match (self.0.is_nan(), other.0.is_nan()) {
                     (true, true) => std::cmp::Ordering::Equal,
@@ -4792,36 +4800,54 @@ impl HnswIndex {
             }
         }
 
-        // OPT-015/021: Pre-allocate collections
-        let mut visited: HashSet<i64> = HashSet::with_capacity(ef * 2);
-        let mut candidates: BinaryHeap<(OrderedDist, i64)> = BinaryHeap::with_capacity(ef * 2);
-        let mut results: BinaryHeap<(OrderedDist, i64)> = BinaryHeap::with_capacity(ef);
+        #[derive(Clone, Copy, PartialEq)]
+        struct MaxDist(f32);
 
-        // OPT-015: Use fast indexing
-        let entry_idx = self.get_idx_from_id_fast(entry_id);
+        impl Eq for MaxDist {}
 
-        // Check if entry point is filtered - if so, still use it as starting point
-        // but don't add it to results if it's filtered
+        impl PartialOrd for MaxDist {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        impl Ord for MaxDist {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                match (self.0.is_nan(), other.0.is_nan()) {
+                    (true, true) => std::cmp::Ordering::Equal,
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    (false, false) => self
+                        .0
+                        .partial_cmp(&other.0)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                }
+            }
+        }
+
+        let num_nodes = self.node_info.len();
+        scratch.prepare(num_nodes);
+
+        let mut candidates: BinaryHeap<(MinDist, usize)> = BinaryHeap::with_capacity(ef * 2);
+        let mut results: BinaryHeap<(MaxDist, usize)> = BinaryHeap::with_capacity(ef);
+
         let entry_is_filtered = entry_idx < bitset.len() && bitset.get(entry_idx);
 
         let entry_dist = self.distance(query, entry_idx);
-        candidates.push((OrderedDist(entry_dist), entry_id));
+        candidates.push((MinDist(entry_dist), entry_idx));
         if !entry_is_filtered {
-            results.push((OrderedDist(entry_dist), entry_id));
+            results.push((MaxDist(entry_dist), entry_idx));
         }
-        visited.insert(entry_id);
+        scratch.mark_visited(entry_idx);
 
-        while let Some((OrderedDist(cand_dist), cand_id)) = candidates.pop() {
+        while let Some((MinDist(cand_dist), cand_idx)) = candidates.pop() {
             if results.len() >= ef {
-                if let Some(&(OrderedDist(worst_dist), _)) = results.peek() {
+                if let Some(&(MaxDist(worst_dist), _)) = results.peek() {
                     if cand_dist > worst_dist {
                         break;
                     }
                 }
             }
-
-            // OPT-015: Use fast indexing
-            let cand_idx = self.get_idx_from_id_fast(cand_id);
 
             let node_info = &self.node_info[cand_idx];
             if level > node_info.max_layer {
@@ -4829,36 +4855,33 @@ impl HnswIndex {
             }
 
             for &nbr_id in &node_info.layer_neighbors[level].ids {
-                if visited.insert(nbr_id) {
-                    // Check bitset early to prune filtered nodes
-                    // OPT-015: Use fast indexing
-                    let nbr_idx = self.get_idx_from_id_fast(nbr_id);
+                let nbr_idx = self.get_idx_from_id_fast(nbr_id);
+                if nbr_idx >= num_nodes || !scratch.mark_visited(nbr_idx) {
+                    continue;
+                }
+                if nbr_idx < bitset.len() && bitset.get(nbr_idx) {
+                    continue;
+                }
 
-                    // Skip filtered nodes
-                    if nbr_idx < bitset.len() && bitset.get(nbr_idx) {
-                        continue; // This node is filtered out
-                    }
+                let nbr_dist = self.distance(query, nbr_idx);
 
-                    let nbr_dist = self.distance(query, nbr_idx);
-
-                    if results.len() < ef {
-                        results.push((OrderedDist(nbr_dist), nbr_id));
-                        candidates.push((OrderedDist(nbr_dist), nbr_id));
-                    } else if let Some(&(OrderedDist(worst_dist), _)) = results.peek() {
-                        if nbr_dist < worst_dist {
-                            results.pop();
-                            results.push((OrderedDist(nbr_dist), nbr_id));
-                            candidates.push((OrderedDist(nbr_dist), nbr_id));
-                        }
+                if results.len() < ef {
+                    results.push((MaxDist(nbr_dist), nbr_idx));
+                    candidates.push((MinDist(nbr_dist), nbr_idx));
+                } else if let Some(&(MaxDist(worst_dist), _)) = results.peek() {
+                    if nbr_dist < worst_dist {
+                        results.pop();
+                        results.push((MaxDist(nbr_dist), nbr_idx));
+                        candidates.push((MinDist(nbr_dist), nbr_idx));
                     }
                 }
             }
         }
 
-        let mut sorted: Vec<(i64, f32)> = results
+        let mut sorted: Vec<(usize, f32)> = results
             .into_sorted_vec()
             .into_iter()
-            .map(|(OrderedDist(d), id)| (id, d))
+            .map(|(MaxDist(d), idx)| (idx, d))
             .collect();
         sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         sorted
@@ -6409,6 +6432,85 @@ mod tests {
         assert!(
             filtered_ids.iter().all(|id| matches!(id, 0 | 2)),
             "filtered searches must keep using the generic path and never leak filtered-out ids"
+        );
+    }
+
+    #[test]
+    fn test_search_layer_idx_with_bitset_scratch_allows_filtered_entry_but_skips_filtered_results()
+    {
+        use crate::bitset::BitsetView;
+
+        let index = deterministic_upper_layer_index();
+        let query = [11.8, 0.0];
+        let mut bitset = BitsetView::new(index.ntotal());
+        bitset.set(0, true);
+        bitset.set(2, true);
+
+        let mut scratch = SearchScratch::new();
+        let results =
+            index.search_layer_idx_with_bitset_scratch(&query, 0, 0, 4, &bitset, &mut scratch);
+        let result_idxs: Vec<usize> = results.iter().map(|(idx, _)| *idx).collect();
+
+        assert_eq!(
+            result_idxs,
+            vec![3, 1],
+            "scratch-based bitset search should keep using a filtered entry as a frontier seed while excluding filtered nodes from the final result set"
+        );
+        assert!(
+            results.windows(2).all(|pair| pair[0].1 <= pair[1].1),
+            "bitset scratch search results must remain sorted from nearest to farthest"
+        );
+    }
+
+    #[test]
+    fn test_search_layer_idx_with_bitset_scratch_reuses_visited_epoch_across_calls() {
+        use crate::bitset::BitsetView;
+
+        let index = deterministic_upper_layer_index();
+        let query = [11.8, 0.0];
+        let mut scratch = SearchScratch::new();
+        let initial_epoch = scratch.epoch;
+
+        let mut first_bitset = BitsetView::new(index.ntotal());
+        first_bitset.set(2, true);
+        let first = index.search_layer_idx_with_bitset_scratch(
+            &query,
+            0,
+            0,
+            4,
+            &first_bitset,
+            &mut scratch,
+        );
+        let epoch_after_first = scratch.epoch;
+
+        let mut second_bitset = BitsetView::new(index.ntotal());
+        second_bitset.set(1, true);
+        let second = index.search_layer_idx_with_bitset_scratch(
+            &query,
+            0,
+            0,
+            4,
+            &second_bitset,
+            &mut scratch,
+        );
+
+        assert!(
+            epoch_after_first > initial_epoch,
+            "first scratch-backed bitset search should advance the visited epoch"
+        );
+        assert!(
+            scratch.epoch > epoch_after_first,
+            "subsequent scratch-backed bitset searches should reuse and advance the same visited epoch buffer"
+        );
+        assert_eq!(
+            first.iter().map(|(idx, _)| *idx).collect::<Vec<_>>(),
+            vec![3, 1, 0],
+            "first filtered call should exclude only the masked node while preserving nearest-first ordering"
+        );
+        assert_eq!(
+            second.iter().map(|(idx, _)| *idx).collect::<Vec<_>>(),
+            vec![3, 2, 0],
+            "second filtered call should not inherit visited state from the first call"
         );
     }
 
