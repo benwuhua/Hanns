@@ -4,6 +4,13 @@ Last updated: 2026-03-13
 Sync baseline: a911f2af70f6f47721ab42cfba7b97ee3fd6f206 from main
 
 ## 轮次记录
+- 2026-03-13: **builder-loop：收口 `hnsw-round8-authority-same-schema-rerun`，用 fresh authority same-schema evidence 给 round 8 graph-quality hypothesis 终判（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round8_baseline.json`、`benchmark_results/hnsw_reopen_parallel_build_audit_round8.json`、`tests/bench_hnsw_reopen_round8.rs`、`benchmark_results/hnsw_p3_002_final_verdict.json`。
+  2. 阶段结论：round 8 不再缺 synthetic build audit，也不再缺 bulk-build 结构对齐；唯一剩下的问题是这些改动是否真的把 authority same-schema lane 推到了新的证据带。因此本轮只做最终 authority rerun，并把结论冻结成新的 summary artifact。
+  3. 本轮执行：先把 `tests/bench_hnsw_reopen_round8.rs` 升级成要求 `benchmark_results/hnsw_reopen_round8_authority_summary.json` 的默认-lane contract，并用缺失 artifact 的失败做 TDD red；随后重跑 authority Rust HDF5 same-schema command、fresh native HNSW capture、authority `bench_hnsw_reopen_round8_profile` 和 authority `bench_hnsw_reopen_round8`；最后新增 `benchmark_results/hnsw_reopen_round8_authority_summary.json`，明确记录 `parallel_build_graph_quality_parity` 的 real-lane 结果是 `hard_stop`，因为 Rust qps 与 recall 都没有随 bulk-build graph-quality rework 改善。
+  4. 验证结果：本地 `cargo test --test bench_hnsw_reopen_round8 -- --nocapture` 先因缺失 round-8 summary artifact 失败再转绿；`bash init.sh` 通过；authority Rust same-schema HDF5 日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T015649Z_53053.log` 通过并回传新的 `benchmark_results/rs_hnsw_sift128.full_k100.json`；fresh native capture 日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round8/native_hnsw_qps_linkfix_20260313T015830Z.log` 通过；authority profile replay 日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T021527Z_55615.log` 通过；authority default-lane replay 日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T021527Z_55616.log` 通过。
+  5. 后续主缺口：当前不再存在下一条活动 HNSW reopen feature。round 8 已经用 authority evidence 把 `parallel_build_graph_quality_parity` 归档为 `hard_stop`，后续若还要重开 HNSW performance line，必须提出新的 authority-backed hypothesis，而不是继续默认延长这条已经被终判否定的 graph-quality 线。
+
 - 2026-03-13: **builder-loop：收口 `hnsw-parallel-build-graph-rework-round8`，把 round8 bulk-build graph-quality 语义真正对齐到可验证实现（plan+exec）**
   1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_parallel_build_audit_round8.json`、`tests/bench_hnsw_reopen_round8.rs`、`tests/bench_hnsw_reopen_round8_profile.rs`、`src/faiss/hnsw.rs`、`docs/superpowers/plans/2026-03-13-hnsw-round8-parallel-build-graph-quality.md`。
   2. 阶段结论：round 8 已经不缺“bulk-build 路径和 serial/native 语义不一致”的证据，真正该回答的是能不能把这两条差异用最小代码改动闭掉，而且不破坏 round-6/round-7 的搜索侧 surfaces。继续停留在 audit artifact 不会再提供新增信息。

@@ -12,13 +12,34 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `hnsw-round8-authority-same-schema-rerun`
-- Next feature: `hnsw-round8-authority-same-schema-rerun`
+- Current focus: `none`
+- Next feature: `none`
 - Last updated: 2026-03-13
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 55/56 features passing (98%)
+- Progress: 56/56 features passing (100%)
 
 ## Session Log
+
+### Session 64 - 2026-03-13
+- Focus: `hnsw-round8-authority-same-schema-rerun`
+- Completed:
+  - tightened `tests/bench_hnsw_reopen_round8.rs` again so round 8 now requires `benchmark_results/hnsw_reopen_round8_authority_summary.json`, then used the missing summary artifact as the TDD red signal for the final authority rerun slice
+  - reran the authoritative round-8 same-schema lane: refreshed the Rust HDF5 row into `benchmark_results/rs_hnsw_sift128.full_k100.json`, captured a fresh native HNSW log, and replayed both the round-8 profile and default contract on the remote x86 lane
+  - created `benchmark_results/hnsw_reopen_round8_authority_summary.json`, which records the hard-stop outcome for the `parallel_build_graph_quality_parity` hypothesis: Rust same-schema HNSW fell to `750.732` qps at recall `0.9945`, native also fell to `8703.289` qps at recall `0.95`, and the superficially better `11.59x` ratio is drift-driven rather than attributable to a Rust-side gain
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round8 -- --nocapture` -> initial `FAIL` (missing `benchmark_results/hnsw_reopen_round8_authority_summary.json`), then `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round8 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round8 bash scripts/remote/test.sh --command "cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T015649Z_53053.log`)
+  - `bash scripts/remote/native_hnsw_qps_capture.sh --log-dir /data/work/knowhere-rs-logs-hnsw-reopen-round8 --gtest-filter Benchmark_float_qps.TEST_HNSW` -> `exit_code=0` via linkfix fallback (`/data/work/knowhere-rs-logs-hnsw-reopen-round8/native_hnsw_qps_linkfix_20260313T015830Z.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round8 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round8 bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_round8_profile -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T021527Z_55615.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round8 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round8 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round8 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round8/test_20260313T021527Z_55616.log`)
+- Result:
+  - `hnsw-round8-authority-same-schema-rerun` is now `passing`
+  - all tracked features are now `passing`, and round 8 closes as a `hard_stop` on the `parallel_build_graph_quality_parity` hypothesis rather than as a verdict-refresh trigger
+- Notes:
+  - the reworked bulk-build path stayed structurally aligned on the synthetic audit surface, but that alignment did not translate into an authority-lane gain; Rust qps and recall both moved down on the real same-schema benchmark
+  - native also moved down sharply on this run, so the improved ratio cannot be used as optimization evidence; the historical HNSW family verdict therefore remains unchanged
+- Git Commits: pending
 
 ### Session 63 - 2026-03-13
 - Focus: `hnsw-parallel-build-graph-rework-round8`
