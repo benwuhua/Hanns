@@ -4773,6 +4773,22 @@ impl HnswIndex {
         bitset: &crate::bitset::BitsetView,
         scratch: &mut SearchScratch,
     ) -> Vec<(usize, f32)> {
+        self.search_layer_idx_with_bitset_scratch_stats(
+            query, entry_idx, level, ef, bitset, scratch,
+        )
+        .0
+    }
+
+    #[cfg(test)]
+    fn search_layer_idx_with_bitset_scratch_stats(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+        ef: usize,
+        bitset: &crate::bitset::BitsetView,
+        scratch: &mut SearchScratch,
+    ) -> (Vec<(usize, f32)>, usize) {
         use std::collections::BinaryHeap;
 
         #[derive(Clone, Copy, PartialEq)]
@@ -4827,6 +4843,7 @@ impl HnswIndex {
 
         let num_nodes = self.node_info.len();
         scratch.prepare(num_nodes);
+        let mut visited_count = 0usize;
 
         let mut candidates: BinaryHeap<(MinDist, usize)> = BinaryHeap::with_capacity(ef * 2);
         let mut results: BinaryHeap<(MaxDist, usize)> = BinaryHeap::with_capacity(ef);
@@ -4838,7 +4855,9 @@ impl HnswIndex {
         if !entry_is_filtered {
             results.push((MaxDist(entry_dist), entry_idx));
         }
-        scratch.mark_visited(entry_idx);
+        if scratch.mark_visited(entry_idx) {
+            visited_count += 1;
+        }
 
         while let Some((MinDist(cand_dist), cand_idx)) = candidates.pop() {
             if results.len() >= ef {
@@ -4856,9 +4875,13 @@ impl HnswIndex {
 
             for &nbr_id in &node_info.layer_neighbors[level].ids {
                 let nbr_idx = self.get_idx_from_id_fast(nbr_id);
-                if nbr_idx >= num_nodes || !scratch.mark_visited(nbr_idx) {
+                if nbr_idx >= num_nodes {
                     continue;
                 }
+                if !scratch.mark_visited(nbr_idx) {
+                    continue;
+                }
+                visited_count += 1;
                 if nbr_idx < bitset.len() && bitset.get(nbr_idx) {
                     continue;
                 }
@@ -4884,7 +4907,118 @@ impl HnswIndex {
             .map(|(MaxDist(d), idx)| (idx, d))
             .collect();
         sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        sorted
+        (sorted, visited_count)
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    fn search_layer_idx_with_bitset_legacy_for_screen(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+        ef: usize,
+        bitset: &crate::bitset::BitsetView,
+    ) -> Vec<(usize, f32)> {
+        self.search_layer_idx_with_bitset_legacy_for_screen_stats(
+            query, entry_idx, level, ef, bitset,
+        )
+        .0
+    }
+
+    #[cfg(test)]
+    fn search_layer_idx_with_bitset_legacy_for_screen_stats(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+        ef: usize,
+        bitset: &crate::bitset::BitsetView,
+    ) -> (Vec<(usize, f32)>, usize) {
+        use std::collections::{BinaryHeap, HashSet};
+
+        #[derive(Clone, Copy, PartialEq)]
+        struct OrderedDist(f32);
+
+        impl Eq for OrderedDist {}
+
+        impl PartialOrd for OrderedDist {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        impl Ord for OrderedDist {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                match (self.0.is_nan(), other.0.is_nan()) {
+                    (true, true) => std::cmp::Ordering::Equal,
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    (false, false) => other
+                        .0
+                        .partial_cmp(&self.0)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                }
+            }
+        }
+
+        let entry_id = self.get_id_from_idx(entry_idx);
+        let mut visited: HashSet<i64> = HashSet::with_capacity(ef * 2);
+        let mut candidates: BinaryHeap<(OrderedDist, i64)> = BinaryHeap::with_capacity(ef * 2);
+        let mut results: BinaryHeap<(OrderedDist, i64)> = BinaryHeap::with_capacity(ef);
+
+        let entry_is_filtered = entry_idx < bitset.len() && bitset.get(entry_idx);
+        let entry_dist = self.distance(query, entry_idx);
+        candidates.push((OrderedDist(entry_dist), entry_id));
+        if !entry_is_filtered {
+            results.push((OrderedDist(entry_dist), entry_id));
+        }
+        visited.insert(entry_id);
+
+        while let Some((OrderedDist(cand_dist), cand_id)) = candidates.pop() {
+            if results.len() >= ef {
+                if let Some(&(OrderedDist(worst_dist), _)) = results.peek() {
+                    if cand_dist > worst_dist {
+                        break;
+                    }
+                }
+            }
+
+            let cand_idx = self.get_idx_from_id_fast(cand_id);
+            let node_info = &self.node_info[cand_idx];
+            if level > node_info.max_layer {
+                continue;
+            }
+
+            for &nbr_id in &node_info.layer_neighbors[level].ids {
+                if visited.insert(nbr_id) {
+                    let nbr_idx = self.get_idx_from_id_fast(nbr_id);
+                    if nbr_idx < bitset.len() && bitset.get(nbr_idx) {
+                        continue;
+                    }
+
+                    let nbr_dist = self.distance(query, nbr_idx);
+                    if results.len() < ef {
+                        results.push((OrderedDist(nbr_dist), nbr_id));
+                        candidates.push((OrderedDist(nbr_dist), nbr_id));
+                    } else if let Some(&(OrderedDist(worst_dist), _)) = results.peek() {
+                        if nbr_dist < worst_dist {
+                            results.pop();
+                            results.push((OrderedDist(nbr_dist), nbr_id));
+                            candidates.push((OrderedDist(nbr_dist), nbr_id));
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut sorted: Vec<(usize, f32)> = results
+            .into_sorted_vec()
+            .into_iter()
+            .map(|(OrderedDist(d), id)| (self.get_idx_from_id_fast(id), d))
+            .collect();
+        sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        (sorted, visited.len())
     }
 
     pub fn ntotal(&self) -> usize {
@@ -5975,6 +6109,37 @@ mod tests {
         index
     }
 
+    fn deterministic_filtered_screen_index(num_vectors: usize, dim: usize) -> HnswIndex {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(16),
+                ef_construction: Some(100),
+                ef_search: Some(138),
+                ml: Some(1.0 / (REFERENCE_M_FOR_LEVEL as f32).ln()),
+                num_threads: Some(1),
+                ..Default::default()
+            },
+        };
+
+        let mut vectors = Vec::with_capacity(num_vectors * dim);
+        for i in 0..num_vectors {
+            for d in 0..dim {
+                let value = ((i * 17 + d * 31) % 997) as f32 / 997.0;
+                vectors.push(value);
+            }
+        }
+        let ids: Vec<i64> = (0..num_vectors as i64).collect();
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors, Some(&ids)).unwrap();
+        index
+    }
+
     fn deterministic_parallel_build_entry_descent_fixture() -> HnswIndex {
         let config = IndexConfig {
             index_type: IndexType::Hnsw,
@@ -6515,6 +6680,37 @@ mod tests {
     }
 
     #[test]
+    fn test_search_with_bitset_matches_bruteforce_on_screen_fixture() {
+        use crate::bitset::BitsetView;
+
+        let index = deterministic_filtered_screen_index(512, 32);
+        let query = &index.vectors[index.dim..index.dim * 2];
+        let mut bitset = BitsetView::new(index.ntotal());
+        for idx in (0..index.ntotal()).step_by(3) {
+            bitset.set(idx, true);
+        }
+
+        let req = SearchRequest {
+            top_k: 10,
+            nprobe: 512,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let exact = index.brute_force_search(query, 10, |_id, idx| {
+            idx >= bitset.len() || !bitset.get(idx)
+        });
+        let exact_ids: Vec<i64> = exact.iter().map(|(id, _)| *id).collect();
+
+        let approx = index.search_with_bitset(query, &req, &bitset).unwrap();
+
+        assert_eq!(
+            approx.ids, exact_ids,
+            "rewritten filtered HNSW search should match brute-force ids on the deterministic screen fixture when ef is large"
+        );
+    }
+
+    #[test]
     fn test_layer0_l2_search_modes_distinguish_fast_and_profiled_paths() {
         let index = deterministic_upper_layer_index();
 
@@ -6577,6 +6773,77 @@ mod tests {
             index.profiled_layer0_layout_mode_for_audit(),
             "flat_graph_profiled",
             "round-10 profiled layer-0 path should remain explicitly distinct from the slab-backed production path"
+        );
+    }
+
+    #[test]
+    #[ignore = "screen benchmark; excluded from default regression"]
+    fn test_hnsw_filtered_search_screen_benchmark() {
+        use crate::bitset::BitsetView;
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let index = deterministic_filtered_screen_index(20_000, 64);
+        let ef = 138usize;
+        let entry_idx = index.get_idx_from_id_fast(index.entry_point.unwrap());
+
+        let mut bitset = BitsetView::new(index.ntotal());
+        for idx in (0..index.ntotal()).step_by(3) {
+            bitset.set(idx, true);
+        }
+
+        let query_count = 256usize;
+        let mut queries = Vec::with_capacity(query_count * index.dim);
+        for i in 0..query_count {
+            for d in 0..index.dim {
+                let value = ((i * 43 + d * 19 + 7) % 991) as f32 / 991.0;
+                queries.push(value);
+            }
+        }
+
+        let mut scratch = SearchScratch::new();
+        let mut legacy_total_visited = 0usize;
+        let mut scratch_total_visited = 0usize;
+
+        let legacy_start = Instant::now();
+        for query in queries.chunks_exact(index.dim) {
+            let (result, visited) = index.search_layer_idx_with_bitset_legacy_for_screen_stats(
+                black_box(query),
+                entry_idx,
+                0,
+                ef,
+                &bitset,
+            );
+            legacy_total_visited += visited;
+            black_box(result);
+        }
+        let legacy_elapsed = legacy_start.elapsed();
+
+        let scratch_start = Instant::now();
+        for query in queries.chunks_exact(index.dim) {
+            let (result, visited) = index.search_layer_idx_with_bitset_scratch_stats(
+                black_box(query),
+                entry_idx,
+                0,
+                ef,
+                &bitset,
+                &mut scratch,
+            );
+            scratch_total_visited += visited;
+            black_box(result);
+        }
+        let scratch_elapsed = scratch_start.elapsed();
+
+        let legacy_qps = query_count as f64 / legacy_elapsed.as_secs_f64();
+        let scratch_qps = query_count as f64 / scratch_elapsed.as_secs_f64();
+        let speedup = scratch_qps / legacy_qps;
+
+        println!(
+            "filtered_screen_benchmark legacy_qps={legacy_qps:.3} scratch_qps={scratch_qps:.3} speedup={speedup:.3} legacy_ms={:.3} scratch_ms={:.3} avg_legacy_visited={:.3} avg_scratch_visited={:.3}",
+            legacy_elapsed.as_secs_f64() * 1000.0,
+            scratch_elapsed.as_secs_f64() * 1000.0,
+            legacy_total_visited as f64 / query_count as f64,
+            scratch_total_visited as f64 / query_count as f64,
         );
     }
 

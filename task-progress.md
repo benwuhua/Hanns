@@ -21,23 +21,6 @@
 
 ## Session Log
 
-### Session 70 - 2026-03-13
-- Focus: `hnsw-core-rewrite-screen`
-- Completed:
-  - started a fast-lane `screen` for the pure-Rust HNSW core rewrite line, explicitly targeting the generic filtered/bitset search kernel rather than reopening another layer-0-only micro-optimization
-  - replaced the old filtered layer search shape in [src/faiss/hnsw.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/.worktrees/hnsw-core-rewrite-screen/src/faiss/hnsw.rs) from `id + HashSet + BinaryHeap` traversal to a new `search_layer_idx_with_bitset_scratch(...)` helper that reuses `SearchScratch.visited_epoch` and keeps the traversal index-based
-  - rewired `search_single_with_bitset()` to use the new scratch-backed helper across upper-layer jumps and the final layer-0 search, then added focused regression tests covering filtered-entry semantics and cross-call visited-epoch reuse
-- Verification:
-  - `cargo test test_search_layer_idx_with_bitset_scratch --lib -- --nocapture` -> initial `FAIL` (missing `search_layer_idx_with_bitset_scratch`), then `ok`
-  - `cargo test hnsw --lib -- --nocapture` -> `ok`
-  - `cargo fmt --all -- --check` -> initial `FAIL` (formatting diff), then `ok` after `cargo fmt --all`
-- Result:
-  - `screen_result=needs_more_local`
-- Notes:
-  - this screen slice closes the most obvious architectural gap in the current filtered search path by removing per-query `HashSet` visited tracking, but it does not yet establish a local filtered-search speedup threshold strong enough to justify a tracked authority reopen
-  - the next local step should be a small filtered-search benchmark or audit that compares the rewritten scratch-based path against the pre-rewrite shape on a stable local fixture before deciding whether to promote this line
-- Git Commits: pending
-
 ### Session 69 - 2026-03-13
 - Focus: `workflow-fast-lane-rollout`
 - Completed:
@@ -52,6 +35,29 @@
 - Notes:
   - validator tightening was intentionally deferred in this rollout because the documentation changes are already explicit; add new validator rules only if future sessions still create ambiguity
   - the current source of truth for the operating workflow is now `long-task-guide.md`
+- Git Commits: pending
+
+### Session 70 - 2026-03-13
+- Focus: `hnsw-core-rewrite-screen`
+- Completed:
+  - started a fast-lane `screen` for the pure-Rust HNSW core rewrite line, explicitly targeting the generic filtered/bitset search kernel rather than reopening another layer-0-only micro-optimization
+  - replaced the old filtered layer search shape in `src/faiss/hnsw.rs` from `id + HashSet + BinaryHeap` traversal to a new `search_layer_idx_with_bitset_scratch(...)` helper that reuses `SearchScratch.visited_epoch` and keeps the traversal index-based
+  - rewired `search_single_with_bitset()` to use the new scratch-backed helper across upper-layer jumps and the final layer-0 search, then added focused regression tests covering filtered-entry semantics, cross-call visited-epoch reuse, and brute-force parity on a deterministic filtered fixture
+  - added a local ignored `screen` benchmark that compares the rewritten filtered kernel against the legacy helper and found a large local qps regression (`legacy_qps=930.433`, `scratch_qps=74.432`, `speedup=0.080`)
+  - debugged that regression and found the legacy helper is not a trustworthy performance baseline: it uses the wrong heap polarity for the result threshold, so it over-prunes and explores far fewer nodes (`avg_legacy_visited=296.816` vs `avg_scratch_visited=712.387`) while producing different search results
+- Verification:
+  - `cargo test test_search_layer_idx_with_bitset_scratch --lib -- --nocapture` -> initial `FAIL` (missing `search_layer_idx_with_bitset_scratch`), then `ok`
+  - `cargo test test_hnsw_search_with_bitset --lib -- --nocapture` -> `ok`
+  - `cargo test test_search_with_bitset_matches_bruteforce_on_screen_fixture --lib -- --nocapture` -> `ok`
+  - `cargo test hnsw --lib -- --nocapture` -> `ok`
+  - `cargo test --release test_hnsw_filtered_search_screen_benchmark --lib -- --ignored --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (formatting diff), then `ok` after `cargo fmt --all`
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+- Result:
+  - `screen_result=needs_more_local`
+- Notes:
+  - this screen slice closed an architectural gap in the filtered search path and exposed a correctness bug in the old bitset kernel, but it did not establish a promotable local performance win
+  - the next local step should target performance of the corrected filtered kernel itself, most likely by unifying frontier/result structures or adding native-like filtered brute-force fallback policy, not by trying to recover the legacy helper's misleading qps
 - Git Commits: pending
 
 ### Session 68 - 2026-03-13
