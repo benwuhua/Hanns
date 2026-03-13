@@ -4810,22 +4810,6 @@ impl HnswIndex {
         bitset: &crate::bitset::BitsetView,
         scratch: &mut SearchScratch,
     ) -> Vec<(usize, f32)> {
-        self.search_layer_idx_with_bitset_scratch_stats(
-            query, entry_idx, level, ef, bitset, scratch,
-        )
-        .0
-    }
-
-    #[cfg(test)]
-    fn search_layer_idx_with_bitset_scratch_stats(
-        &self,
-        query: &[f32],
-        entry_idx: usize,
-        level: usize,
-        ef: usize,
-        bitset: &crate::bitset::BitsetView,
-        scratch: &mut SearchScratch,
-    ) -> (Vec<(usize, f32)>, usize) {
         use std::collections::BinaryHeap;
 
         #[derive(Clone, Copy, PartialEq)]
@@ -4880,7 +4864,6 @@ impl HnswIndex {
 
         let num_nodes = self.node_info.len();
         scratch.prepare(num_nodes);
-        let mut visited_count = 0usize;
 
         let mut candidates: BinaryHeap<(MinDist, usize)> = BinaryHeap::with_capacity(ef * 2);
         let mut results: BinaryHeap<(MaxDist, usize)> = BinaryHeap::with_capacity(ef);
@@ -4892,9 +4875,7 @@ impl HnswIndex {
         if !entry_is_filtered {
             results.push((MaxDist(entry_dist), entry_idx));
         }
-        if scratch.mark_visited(entry_idx) {
-            visited_count += 1;
-        }
+        scratch.mark_visited(entry_idx);
 
         while let Some((MinDist(cand_dist), cand_idx)) = candidates.pop() {
             if results.len() >= ef {
@@ -4918,7 +4899,6 @@ impl HnswIndex {
                 if !scratch.mark_visited(nbr_idx) {
                     continue;
                 }
-                visited_count += 1;
                 if nbr_idx < bitset.len() && bitset.get(nbr_idx) {
                     continue;
                 }
@@ -4944,7 +4924,36 @@ impl HnswIndex {
             .map(|(MaxDist(d), idx)| (idx, d))
             .collect();
         sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        (sorted, visited_count)
+        sorted
+    }
+
+    #[cfg(test)]
+    fn search_layer_idx_with_bitset_scratch_stats(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+        ef: usize,
+        bitset: &crate::bitset::BitsetView,
+        scratch: &mut SearchScratch,
+    ) -> (Vec<(usize, f32)>, usize) {
+        let before_epoch = scratch.epoch;
+        let before_snapshot = scratch.visited_epoch.clone();
+        let result =
+            self.search_layer_idx_with_bitset_scratch(query, entry_idx, level, ef, bitset, scratch);
+
+        let visited_count = scratch
+            .visited_epoch
+            .iter()
+            .zip(before_snapshot.iter().chain(std::iter::repeat(&0)))
+            .filter(|&(after, before)| *after == scratch.epoch && *before != scratch.epoch)
+            .count();
+
+        if scratch.epoch == before_epoch {
+            (result, visited_count)
+        } else {
+            (result, visited_count)
+        }
     }
 
     #[cfg(test)]

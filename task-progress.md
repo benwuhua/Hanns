@@ -12,14 +12,34 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `none`
-- Next feature: `none`
+- Current focus: `hnsw-round11-authority-same-schema-rerun`
+- Next feature: `hnsw-round11-authority-same-schema-rerun`
 - Last updated: 2026-03-13
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 - Workflow policy: narrow performance hypotheses should start with `screen`, promote to tracked work only after `screen_result=promote`, and update durable docs only after authority verdicts
-- Progress: 62/62 features passing (100%)
+- Progress: 63/64 features passing (98%)
 
 ## Session Log
+
+### Session 71 - 2026-03-13
+- Focus: `hnsw-reopen-round11-activation`
+- Completed:
+  - promoted the `filtered_bruteforce_fallback` HNSW screen line into tracked authority-grade work after the local screen ended with `screen_result=promote`
+  - added [tests/bench_hnsw_reopen_round11.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/.worktrees/hnsw-core-rewrite-screen/tests/bench_hnsw_reopen_round11.rs) as the default-lane contract for round 11, then used the missing `benchmark_results/hnsw_reopen_round11_baseline.json` failure as the TDD red signal for reopening HNSW around filtered brute-force fallback
+  - created [benchmark_results/hnsw_reopen_round11_baseline.json](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/.worktrees/hnsw-core-rewrite-screen/benchmark_results/hnsw_reopen_round11_baseline.json), freezing the round-10 authority hard stop plus the promoted filtered-fallback screen evidence into a new round-11 baseline context and explicitly scoping the next hypothesis to `filtered_bruteforce_fallback`
+  - reopened durable workflow state with two round-11 features: `hnsw-reopen-round11-activation` and `hnsw-round11-authority-same-schema-rerun`
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round11 -- --nocapture` -> initial `FAIL` (missing round-11 baseline artifact), then `ok` with the authority-summary check intentionally ignored until the next slice
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round11 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round11 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round11 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round11/test_20260313T082058Z_9460.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+- Result:
+  - `hnsw-reopen-round11-activation` is now `passing`
+  - `hnsw-round11-authority-same-schema-rerun` is now the next tracked feature
+- Notes:
+  - round 11 is intentionally narrower than round 9 or round 10: there is no separate round-11 audit feature because the promoted screen work already established the mechanism and local threshold; the next tracked question is directly whether authority same-schema evidence moves after native-like filtered brute-force fallback
+  - the next executable feature after activation is `hnsw-round11-authority-same-schema-rerun`
+- Git Commits: pending
 
 ### Session 69 - 2026-03-13
 - Focus: `workflow-fast-lane-rollout`

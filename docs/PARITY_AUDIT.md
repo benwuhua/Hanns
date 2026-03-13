@@ -4,6 +4,13 @@ Last updated: 2026-03-13
 Sync baseline: a911f2af70f6f47721ab42cfba7b97ee3fd6f206 from main
 
 ## 轮次记录
+- 2026-03-13: **builder-loop：重开 `hnsw-reopen-round11-activation`，把下一条 HNSW tracked hypothesis 切到 filtered brute-force fallback（screen promote -> tracked activation）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round10_authority_summary.json`、`src/faiss/hnsw.rs`、以及 session-70 的 local screen evidence。
+  2. 阶段结论：round 10 已经把 `layer0_slab_locality` 归档为 `hard_stop`，而新的 local screen 证明高过滤比 bitset KNN 搜索在 native 对齐的 brute-force fallback 下具备明确的本地收益，因此下一条 tracked line 不该再回到泛化 kernel theory，而应直接验证 `filtered_bruteforce_fallback` 能否在 authority same-schema lane 上产出新证据。
+  3. 本轮执行：新增 `tests/bench_hnsw_reopen_round11.rs`，并先用缺失 `benchmark_results/hnsw_reopen_round11_baseline.json` 的失败做 TDD red；随后新增该 baseline artifact，把 round-10 authority hard stop 和 promoted screen evidence 冻结成 round 11 起点，并在 `feature-list.json`、`task-progress.md`、`RELEASE_NOTES.md` 中重开 durable workflow state。
+  4. 验证结果：本地 `cargo test --test bench_hnsw_reopen_round11 -- --nocapture` 按预期先因缺失 baseline artifact 失败，随后通过 activation baseline 更新恢复为默认-lane可接受状态；`bash init.sh` 通过；authority default-lane replay `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round11 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round11 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round11 -q"` 返回 `test=ok`，日志 `/data/work/knowhere-rs-logs-hnsw-reopen-round11/test_20260313T082058Z_9460.log`；`python3 scripts/validate_features.py feature-list.json` 返回 `VALID - 64 features (63 passing, 1 failing); workflow/doc checks passed`。
+  5. 后续主缺口：当前不再缺 round-11 activation。下一条 tracked feature 必须是 `hnsw-round11-authority-same-schema-rerun`，用 fresh authority Rust/native evidence 判断 native-aligned filtered fallback 是否值得继续扩大到更通用的 filtered query policy。
+
 - 2026-03-13: **builder-loop：落地 workflow fast-lane 政策，把 narrow performance hypothesis 的默认入口从 tracked reopen 改成 local screen（doc/policy）**
   1. 复核输入：`long-task-guide.md`、`AGENTS.md`、`task-progress.md`、`feature-list.json`、`docs/superpowers/specs/2026-03-13-fast-lane-authority-workflow-design.md`、`docs/superpowers/plans/2026-03-13-fast-lane-authority-workflow.md`。
   2. 阶段结论：当前单轮性能优化耗时过长，瓶颈不在单个 benchmark 命令，而在 narrow hypothesis 过早进入 tracked reopen 流程，先后消耗 activation、audit、authority rerun、summary 和 durable closure。要缩短从想法到 verdict 的总时长，必须把 authority 前移决策、后移 durable 文档。

@@ -1101,6 +1101,41 @@
       "dependencies": [
         "hnsw-layer0-slab-audit-round10"
       ]
+    },
+    {
+      "id": "hnsw-reopen-round11-activation",
+      "category": "hnsw-reopen",
+      "title": "Activate HNSW reopen round 11",
+      "description": "Freeze the round-10 authority hard stop plus the promoted filtered-fallback screen evidence as the new baseline and reopen HNSW around a narrowly-scoped filtered brute-force fallback hypothesis.",
+      "priority": "high",
+      "status": "passing",
+      "verification_steps": [
+        "bash init.sh",
+        "cargo test --test bench_hnsw_reopen_round11 -- --nocapture",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round11 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round11 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_round11 -q\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "hnsw-round10-authority-same-schema-rerun"
+      ]
+    },
+    {
+      "id": "hnsw-round11-authority-same-schema-rerun",
+      "category": "hnsw-reopen",
+      "title": "Refresh round 11 same-schema authority evidence",
+      "description": "Re-run the remote same-schema recall-gated HNSW benchmark after the round-11 filtered brute-force fallback change and decide whether the resulting evidence justifies any further reopen work.",
+      "priority": "high",
+      "status": "failing",
+      "verification_steps": [
+        "bash init.sh",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round11 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round11 bash scripts/remote/test.sh --command \"cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95\"",
+        "bash scripts/remote/native_hnsw_qps_capture.sh --log-dir /data/work/knowhere-rs-logs-hnsw-reopen-round11 --gtest-filter Benchmark_float_qps.TEST_HNSW",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round11 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round11 bash scripts/remote/test.sh --command \"cargo test --test bench_hnsw_reopen_round11 -q\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "hnsw-reopen-round11-activation"
+      ]
     }
   ]
 }
