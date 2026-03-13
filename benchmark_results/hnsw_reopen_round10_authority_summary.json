@@ -1,0 +1,41 @@
+{
+  "task_id": "HNSW-REOPEN-ROUND10-AUTHORITY-SUMMARY",
+  "family": "HNSW",
+  "authority_scope": "remote_x86_only",
+  "round10_target": "layer0_slab_locality",
+  "historical_verdict_source": "benchmark_results/hnsw_p3_002_final_verdict.json",
+  "round10_baseline_source": "benchmark_results/hnsw_reopen_round10_baseline.json",
+  "round10_layer0_slab_audit_source": "benchmark_results/hnsw_reopen_layer0_slab_audit_round10.json",
+  "same_schema_sources": {
+    "rust": "benchmark_results/rs_hnsw_sift128.full_k100.json",
+    "native_log": "/data/work/knowhere-rs-logs-hnsw-reopen-round10/native_hnsw_qps_linkfix_20260313T061934Z.log"
+  },
+  "authority_logs": [
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round10/test_20260313T061915Z_87617.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round10/native_hnsw_qps_linkfix_20260313T061934Z.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round10/test_20260313T063647Z_92534.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round10/test_20260313T063939Z_93275.log"
+  ],
+  "same_schema_current": {
+    "rust_recall_at_10": 0.9956999999999994,
+    "rust_qps": 1831.5038441434183,
+    "native_recall_at_10": 0.95,
+    "native_qps": 8900.882,
+    "native_over_rust_qps_ratio": 4.859876231470801
+  },
+  "delta_vs_round9_authority_baseline": {
+    "source": "benchmark_results/hnsw_reopen_round9_authority_summary.json",
+    "rust_recall_at_10_delta": 0.0048000000000003595,
+    "rust_qps_pct": -0.7642237335791946,
+    "native_qps_pct": -13.990669395501287,
+    "native_over_rust_qps_ratio_pct": -13.328303722251045
+  },
+  "historical_verdict_band_comparison": {
+    "historical_native_over_rust_qps_ratio": 14.803655169580505,
+    "current_ratio_pct_vs_historical": -67.17110621802928
+  },
+  "verdict_refresh_allowed": false,
+  "next_action": "hard_stop",
+  "summary": "Round 10 closes as a hard stop on the layer0_slab_locality hypothesis. On the authority rerun after adding the slab-backed production layer-0 layout, Rust HNSW measured 1831.504 qps at recall 0.9957 versus 1845.608 qps at recall 0.9909 in round 9, while native measured 8900.882 qps at recall 0.95. The gap improved from 5.61x to 4.86x only because native fell more than Rust; there is no attributable Rust-side qps gain from the slab locality rework.",
+  "action": "Keep benchmark_results/hnsw_p3_002_final_verdict.json unchanged, archive round 10 as a hard stop on layer-0 slab locality, and do not reopen HNSW again without a materially different authority-backed hypothesis."
+}

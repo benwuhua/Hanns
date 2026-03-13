@@ -12,13 +12,40 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `hnsw-reopen-round10-activation`
-- Next feature: `hnsw-reopen-round10-activation`
+- Current focus: `none`
+- Next feature: `none`
 - Last updated: 2026-03-13
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 59/62 features passing (95%)
+- Progress: 62/62 features passing (100%)
 
 ## Session Log
+
+### Session 68 - 2026-03-13
+- Focus: `hnsw-layer0-slab-audit-round10`, `hnsw-round10-authority-same-schema-rerun`
+- Completed:
+  - finished the round-10 slab locality implementation and audit chain in `src/faiss/hnsw.rs` plus `tests/bench_hnsw_reopen_round10_profile.rs`, then generated `benchmark_results/hnsw_reopen_layer0_slab_audit_round10.json`, freezing `production_layer0_layout_mode=layer0_slab`, `profiled_layer0_layout_mode=flat_graph_profiled`, `layer0_slab_stride_bytes=644`, and `layer0_slab_vector_offset_bytes=132`
+  - refreshed `benchmark_results/rs_hnsw_sift128.full_k100.json` from the authority same-schema rerun and archived the outcome in `benchmark_results/hnsw_reopen_round10_authority_summary.json`: Rust HNSW measured `1831.504` qps at recall `0.9957`, native measured `8900.882` qps at recall `0.95`, and the apparent gap improvement to `4.86x` comes from native drift while Rust qps itself regressed slightly versus round 9
+  - closed all round-10 durable workflow state in `feature-list.json`, `task-progress.md`, `RELEASE_NOTES.md`, and `docs/PARITY_AUDIT.md`; round 10 ends as a `hard_stop` on `layer0_slab_locality`, with no further queued feature
+- Verification:
+  - `bash init.sh` -> `ok` (resynced twice during authority closure)
+  - `cargo test hnsw --lib -- --nocapture` -> `ok`
+  - `cargo test --features long-tests --test bench_hnsw_reopen_round10_profile -- --ignored --nocapture` -> `ok`
+  - `cargo test --test bench_hnsw_reopen_round10 -- --nocapture` -> initial `FAIL` (missing authority summary), then `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round10 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round10 bash scripts/remote/test.sh --command "cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round10/test_20260313T061915Z_87617.log`)
+  - `bash scripts/remote/native_hnsw_qps_capture.sh --log-dir /data/work/knowhere-rs-logs-hnsw-reopen-round10 --gtest-filter Benchmark_float_qps.TEST_HNSW` -> `exit_code=0` via linkfix fallback (`/data/work/knowhere-rs-logs-hnsw-reopen-round10/native_hnsw_qps_linkfix_20260313T061934Z.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round10 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round10 bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_round10_profile -- --ignored --nocapture"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round10/test_20260313T063647Z_92534.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round10 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round10 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round10 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round10/test_20260313T063939Z_93275.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+- Result:
+  - `hnsw-reopen-round10-activation` is now `passing`
+  - `hnsw-layer0-slab-audit-round10` is now `passing`
+  - `hnsw-round10-authority-same-schema-rerun` is now `passing`
+  - all tracked features are passing again, and the queue is empty
+- Notes:
+  - round 10 successfully proved that the production lane can switch to a slab-backed layer-0 layout without disturbing the profiled path, but it did not produce a Rust-side same-schema qps gain on the authority lane
+  - the HNSW family verdict remains unchanged; round 10 should be treated as a closed hard stop rather than a springboard for more locality micro-iterations without a new materially different hypothesis
+- Git Commits: pending
 
 ### Session 67 - 2026-03-13
 - Focus: `hnsw-reopen-round10-activation`
