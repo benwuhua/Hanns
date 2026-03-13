@@ -16,9 +16,53 @@
 - Next feature: `none`
 - Last updated: 2026-03-13
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 56/56 features passing (100%)
+- Progress: 59/59 features passing (100%)
 
 ## Session Log
+
+### Session 66 - 2026-03-13
+- Focus: `hnsw-search-fastpath-audit-round9`, `hnsw-round9-authority-same-schema-rerun`
+- Completed:
+  - landed the round-9 audit generator in `tests/bench_hnsw_reopen_round9_profile.rs`, exposed audit-visible mode helpers from `src/faiss/hnsw.rs`, and generated `benchmark_results/hnsw_reopen_search_fastpath_audit_round9.json`, freezing the production `fast_unprofiled` layer-0 path plus `cached_once_lock` batch-4 dispatch as durable evidence
+  - refreshed `benchmark_results/rs_hnsw_sift128.full_k100.json` from the authority same-schema rerun and archived the outcome in `benchmark_results/hnsw_reopen_round9_authority_summary.json`: Rust HNSW improved from `750.732` to `1845.608` qps at recall `0.9909`, native measured `10348.740` qps at recall `0.95`, and the gap shrank from `11.59x` to `5.61x`
+  - closed all round-9 durable workflow state in `feature-list.json`, `task-progress.md`, `RELEASE_NOTES.md`, and `docs/PARITY_AUDIT.md`; round 9 ends as a successful narrow reopen with `verdict_refresh_allowed=false` but `next_action=continue`, and no further feature is currently queued
+- Verification:
+  - `bash init.sh` -> `ok` (pre-change bootstrap), then `ok` again before final remote contract replay
+  - `cargo test hnsw --lib -- --nocapture` -> `ok`
+  - `cargo test --features long-tests --test bench_hnsw_reopen_round9_profile -- --ignored --nocapture` -> `ok`
+  - `cargo test --test bench_hnsw_reopen_round9 -- --nocapture` -> initial `FAIL` (missing authority summary), then `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (rustfmt diffs), then `ok` after `cargo fmt --all`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round9 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round9 bash scripts/remote/test.sh --command "cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round9/test_20260313T034306Z_66062.log`)
+  - `bash scripts/remote/native_hnsw_qps_capture.sh --log-dir /data/work/knowhere-rs-logs-hnsw-reopen-round9 --gtest-filter Benchmark_float_qps.TEST_HNSW` -> `exit_code=0` via linkfix fallback (`/data/work/knowhere-rs-logs-hnsw-reopen-round9/native_hnsw_qps_linkfix_20260313T034322Z.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round9 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round9 bash scripts/remote/test.sh --command "cargo test --features long-tests --test bench_hnsw_reopen_round9_profile -- --ignored --nocapture"` -> first `FAILED` before resync (missing remote target), then `test=ok` after sync (`/data/work/knowhere-rs-logs-hnsw-reopen-round9/test_20260313T040153Z_74459.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round9 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round9 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round9 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round9/test_20260313T040406Z_75601.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+- Result:
+  - `hnsw-reopen-round9-activation` is now `passing`
+  - `hnsw-search-fastpath-audit-round9` is now `passing`
+  - `hnsw-round9-authority-same-schema-rerun` is now `passing`
+  - all tracked features are passing again, and the queue is empty
+- Notes:
+  - round 9 is the first reopen slice since round 4 to show a clearly attributable same-schema Rust-side gain on the authority lane
+  - despite the gain, the historical HNSW family verdict remains unchanged because native still leads by about `5.61x`
+- Git Commits: pending
+
+### Session 65 - 2026-03-13
+- Focus: `hnsw-reopen-round9-activation`
+- Completed:
+  - reopened durable workflow state around a new narrow HNSW hypothesis, `search_fastpath_cleanup`, after round 8 closed as a hard stop on the graph-quality theory
+  - added `tests/bench_hnsw_reopen_round9.rs` as the new default-lane contract for round 9, then used the missing `benchmark_results/hnsw_reopen_round9_baseline.json` failure as the TDD red signal for reopening HNSW around production fast-path cleanup
+  - created `benchmark_results/hnsw_reopen_round9_baseline.json`, freezing the round-8 hard-stop authority evidence into the new round-9 baseline context and explicitly scoping the hypothesis to `search_fastpath_cleanup`
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round9 -- --nocapture` -> initial `FAIL` (missing round-9 baseline/audit/summary artifacts), then baseline test expected to pass once activation lands while audit/summary remain pending
+  - `python3 scripts/validate_features.py feature-list.json` -> initial `FAIL` before durable docs were reopened, then expected to return workflow-valid state after the round-9 activation docs are aligned
+- Result:
+  - `hnsw-reopen-round9-activation` is now the active tracked feature
+  - round 9 is explicitly limited to search fast-path cleanup rather than another broad HNSW performance theory
+- Notes:
+  - round 8 remains archived as a hard stop; round 9 does not inherit any claim that graph-quality alignment was performance-positive on the authority lane
+  - the next executable feature after activation is `hnsw-search-fastpath-audit-round9`
+- Git Commits: pending
 
 ### Session 64 - 2026-03-13
 - Focus: `hnsw-round8-authority-same-schema-rerun`

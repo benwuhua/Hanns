@@ -1,0 +1,20 @@
+{
+  "task_id": "HNSW-REOPEN-ROUND9-BASELINE",
+  "family": "HNSW",
+  "authority_scope": "remote_x86_only",
+  "historical_verdict_source": "benchmark_results/hnsw_p3_002_final_verdict.json",
+  "round8_authority_summary_source": "benchmark_results/hnsw_reopen_round8_authority_summary.json",
+  "round9_target": "search_fastpath_cleanup",
+  "historical_classification": "functional-but-not-leading",
+  "round8_hard_stop_context": {
+    "source": "benchmark_results/hnsw_reopen_round8_authority_summary.json",
+    "rust_recall_at_10": 0.9944999999999993,
+    "rust_qps": 750.7318781854797,
+    "native_recall_at_10": 0.95,
+    "native_qps": 8703.289,
+    "native_over_rust_qps_ratio": 11.593072377632167,
+    "next_action": "hard_stop"
+  },
+  "summary": "Round 9 reopens HNSW from the round-8 hard stop rather than from a success state. The graph-quality line closed with a real authority-lane regression for Rust HNSW, so the next explicit hypothesis is search_fastpath_cleanup: remove profiling-oriented overhead from the production layer-0 L2 hot path and cache batch-4 dispatch before deciding whether any lightweight search-side code-quality gain still exists.",
+  "action": "Keep the historical HNSW family verdict unchanged, freeze the round-8 hard-stop evidence as the round-9 baseline, and require a fresh search-fastpath audit plus another same-schema authority rerun before reopening any broader HNSW performance narrative."
+}

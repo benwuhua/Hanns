@@ -142,6 +142,11 @@ pub type L2DistanceSqPtrKernel = unsafe fn(*const f32, *const f32, usize) -> f32
 
 static L2_DISTANCE_SQ_PTR_KERNEL: OnceLock<L2DistanceSqPtrKernel> = OnceLock::new();
 
+pub type L2Batch4PtrsKernel =
+    unsafe fn(*const f32, *const f32, *const f32, *const f32, *const f32, usize) -> [f32; 4];
+
+static L2_BATCH_4_PTRS_KERNEL: OnceLock<L2Batch4PtrsKernel> = OnceLock::new();
+
 #[inline]
 fn select_l2_distance_sq_ptr_kernel() -> L2DistanceSqPtrKernel {
     #[cfg(all(feature = "simd", target_arch = "x86_64"))]
@@ -174,6 +179,33 @@ pub fn l2_distance_sq_ptr_kernel() -> L2DistanceSqPtrKernel {
 pub unsafe fn l2_distance_sq_ptr(a: *const f32, b: *const f32, dim: usize) -> f32 {
     let kernel = l2_distance_sq_ptr_kernel();
     kernel(a, b, dim)
+}
+
+#[inline]
+fn select_l2_batch_4_ptrs_kernel() -> L2Batch4PtrsKernel {
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    {
+        if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512bw") {
+            return l2_batch_4_avx512;
+        }
+        if std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma") {
+            return l2_batch_4_avx2;
+        }
+    }
+
+    #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+    {
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            return l2_batch_4_neon;
+        }
+    }
+
+    l2_batch_4_scalar_ptr
+}
+
+#[inline]
+pub fn l2_batch_4_ptrs_kernel() -> L2Batch4PtrsKernel {
+    *L2_BATCH_4_PTRS_KERNEL.get_or_init(select_l2_batch_4_ptrs_kernel)
 }
 
 #[inline]
@@ -1119,6 +1151,23 @@ pub unsafe fn l2_batch_4_ptr(
     [d0, d1, d2, d3]
 }
 
+#[inline]
+unsafe fn l2_batch_4_scalar_ptr(
+    query: *const f32,
+    db0: *const f32,
+    db1: *const f32,
+    db2: *const f32,
+    db3: *const f32,
+    dim: usize,
+) -> [f32; 4] {
+    [
+        l2_scalar_sq_ptr(query, db0, dim),
+        l2_scalar_sq_ptr(query, db1, dim),
+        l2_scalar_sq_ptr(query, db2, dim),
+        l2_scalar_sq_ptr(query, db3, dim),
+    ]
+}
+
 /// 批量 L2 平方距离（4 个任意数据库向量指针版本）
 ///
 /// # Safety
@@ -1132,29 +1181,8 @@ pub unsafe fn l2_batch_4_ptrs(
     db3: *const f32,
     dim: usize,
 ) -> [f32; 4] {
-    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
-    {
-        if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512bw") {
-            return l2_batch_4_avx512(query, db0, db1, db2, db3, dim);
-        }
-        if std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma") {
-            return l2_batch_4_avx2(query, db0, db1, db2, db3, dim);
-        }
-    }
-
-    #[cfg(all(feature = "simd", target_arch = "aarch64"))]
-    {
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            return l2_batch_4_neon(query, db0, db1, db2, db3, dim);
-        }
-    }
-
-    [
-        l2_scalar_sq_ptr(query, db0, dim),
-        l2_scalar_sq_ptr(query, db1, dim),
-        l2_scalar_sq_ptr(query, db2, dim),
-        l2_scalar_sq_ptr(query, db3, dim),
-    ]
+    let kernel = l2_batch_4_ptrs_kernel();
+    kernel(query, db0, db1, db2, db3, dim)
 }
 
 /// 标量版本：一次计算 1 个查询向量与 4 个数据库向量的内积
@@ -2284,6 +2312,17 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_l2_batch_4_ptrs_kernel_is_cached() {
+        let k1 = l2_batch_4_ptrs_kernel();
+        let k2 = l2_batch_4_ptrs_kernel();
+
+        assert_eq!(
+            k1 as usize, k2 as usize,
+            "round-9 batch-4 L2 dispatch should resolve once and return a stable cached kernel"
+        );
     }
 
     #[test]
