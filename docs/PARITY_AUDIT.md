@@ -4,6 +4,13 @@ Last updated: 2026-03-13
 Sync baseline: a911f2af70f6f47721ab42cfba7b97ee3fd6f206 from main
 
 ## 轮次记录
+- 2026-03-13: **builder-loop：重开 `hnsw-reopen-round10-activation` 规划/执行线，把下一个 HNSW hypothesis 切到 layer-0 slab locality（plan+exec）**
+  1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round9_authority_summary.json`、`src/faiss/hnsw.rs`、`docs/superpowers/specs/2026-03-13-hnsw-round10-layer0-slab-audit-design.md`、`docs/superpowers/plans/2026-03-13-hnsw-round10-layer0-slab-audit.md`。
+  2. 阶段结论：round 9 已经用 authority evidence 证明 search fast-path cleanup 能显著提高 Rust same-schema qps，因此下一条 reopen line 不该再回到零散 branch-level 微优化，而应直接验证最可信的剩余结构差异：layer-0 邻接表与向量分离存储带来的 locality 损失。
+  3. 本轮执行：新增 `tests/bench_hnsw_reopen_round10.rs`，并先用缺失 `benchmark_results/hnsw_reopen_round10_baseline.json` / audit / summary artifacts 的失败做 TDD red；随后新增 round-10 baseline artifact，明确把 round-9 authority gain 冻结成 round 10 起点，并在 `feature-list.json`、`task-progress.md`、`RELEASE_NOTES.md` 与 `.gitignore` 中重开 durable workflow state。
+  4. 验证结果：本地 `cargo test --test bench_hnsw_reopen_round10 -- --nocapture` 应按预期先因缺失 round-10 artifacts 失败，随后通过 activation 基线更新，把失败面缩到后续 slab audit / authority summary artifacts；workflow validator 需要在 docs/state 一并切到 round 10 后恢复为可接受状态。
+  5. 后续主缺口：当前不再缺 round-10 activation。下一条 tracked feature 必须是 `hnsw-layer0-slab-audit-round10`，用新的 audit artifact 把 slab-backed layer-0 layout 锁成 authority-backed 证据，再决定是否值得跑新的 same-schema rerun。
+
 - 2026-03-13: **builder-loop：收口 `hnsw-search-fastpath-audit-round9` 与 `hnsw-round9-authority-same-schema-rerun`，把 round9 production fast-path hypothesis 跑到 authority 终局（plan+exec）**
   1. 复核输入：`feature-list.json`、`task-progress.md`、`benchmark_results/hnsw_reopen_round9_baseline.json`、`tests/bench_hnsw_reopen_round9.rs`、`src/faiss/hnsw.rs`、`src/simd.rs`、`docs/superpowers/plans/2026-03-13-hnsw-round9-search-fastpath-audit.md`。
   2. 阶段结论：round 9 不再缺快路径实现本身，真正需要回答的是 production `layer0 + L2 + no-filter` fast path 与 cached batch-4 dispatch 是否已经被 durable artifact 锁住，以及这些更改是否真的把 authority same-schema lane 推到了新的 evidence band。round 8 的 hard-stop 不允许再靠推测推进，必须把 audit 与 same-schema rerun 一起收口。

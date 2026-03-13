@@ -12,13 +12,30 @@
 ## Current State
 
 - Phase: worker-active
-- Current focus: `none`
-- Next feature: `none`
+- Current focus: `hnsw-reopen-round10-activation`
+- Next feature: `hnsw-reopen-round10-activation`
 - Last updated: 2026-03-13
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Progress: 59/59 features passing (100%)
+- Progress: 59/62 features passing (95%)
 
 ## Session Log
+
+### Session 67 - 2026-03-13
+- Focus: `hnsw-reopen-round10-activation`
+- Completed:
+  - reopened durable workflow state around a new narrow HNSW hypothesis, `layer0_slab_locality`, after round 9 proved fast-path cleanup can materially improve same-schema Rust qps but still left a `5.61x` native gap
+  - added `tests/bench_hnsw_reopen_round10.rs` as the new default-lane contract for round 10, then used the missing `benchmark_results/hnsw_reopen_round10_baseline.json` / audit / summary artifacts as the TDD red signal for reopening HNSW around co-located layer-0 slab locality
+  - created `benchmark_results/hnsw_reopen_round10_baseline.json`, freezing the round-9 authority evidence into the new round-10 baseline context and explicitly scoping the next hypothesis to `layer0_slab_locality`
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round10 -- --nocapture` -> initial `FAIL` expected before the round-10 baseline lands, then baseline test should pass while audit/summary remain pending
+  - `python3 scripts/validate_features.py feature-list.json` -> expected to return workflow-valid state once round-10 docs and feature inventory are aligned
+- Result:
+  - `hnsw-reopen-round10-activation` is now the active tracked feature
+  - round 10 is explicitly limited to production layer-0 slab locality rather than another mixed micro-optimization bundle
+- Notes:
+  - round 9 stays archived as a successful narrow reopen with `next_action=continue`; round 10 does not reopen the old graph-quality line
+  - the next executable feature after activation is `hnsw-layer0-slab-audit-round10`
+- Git Commits: pending
 
 ### Session 66 - 2026-03-13
 - Focus: `hnsw-search-fastpath-audit-round9`, `hnsw-round9-authority-same-schema-rerun`
