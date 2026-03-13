@@ -3374,8 +3374,8 @@ impl HnswIndex {
         )
     }
 
-    #[cfg(test)]
-    fn layer0_l2_search_mode_for(&self, profiled: bool) -> &'static str {
+    #[cfg(any(test, feature = "long-tests"))]
+    pub fn layer0_l2_search_mode_for_audit(&self, profiled: bool) -> &'static str {
         if profiled {
             "profiled_optional"
         } else {
@@ -3383,8 +3383,8 @@ impl HnswIndex {
         }
     }
 
-    #[cfg(test)]
-    fn production_layer0_avoids_profile_timing(&self) -> bool {
+    #[cfg(any(test, feature = "long-tests"))]
+    pub fn production_layer0_avoids_profile_timing_for_audit(&self) -> bool {
         true
     }
 
@@ -3913,7 +3913,8 @@ impl HnswIndex {
                 let neighbors = &node_info.layer_neighbors[level].ids;
                 for (neighbor_offset, &nbr_id) in neighbors.iter().enumerate() {
                     if neighbor_offset + 1 < neighbors.len() {
-                        let next_nbr_idx = self.get_idx_from_id_fast(neighbors[neighbor_offset + 1]);
+                        let next_nbr_idx =
+                            self.get_idx_from_id_fast(neighbors[neighbor_offset + 1]);
                         if next_nbr_idx < num_nodes {
                             unsafe { self.prefetch_l2_vector_idx(base_ptr, next_nbr_idx) };
                         }
@@ -4476,7 +4477,8 @@ impl HnswIndex {
             }
         }
 
-        let results = self.search_layer_idx_l2_ordered_pool_fast(query, best_ep_idx, 0, ef, &mut scratch);
+        let results =
+            self.search_layer_idx_l2_ordered_pool_fast(query, best_ep_idx, 0, ef, &mut scratch);
 
         let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
         for (idx, dist) in results {
@@ -6230,12 +6232,12 @@ mod tests {
         let index = deterministic_upper_layer_index();
 
         assert_eq!(
-            index.layer0_l2_search_mode_for(false),
+            index.layer0_l2_search_mode_for_audit(false),
             "fast_unprofiled",
             "round-9 production L2 layer-0 path should expose a dedicated fast-path mode"
         );
         assert_eq!(
-            index.layer0_l2_search_mode_for(true),
+            index.layer0_l2_search_mode_for_audit(true),
             "profiled_optional",
             "round-9 profiled L2 layer-0 path should remain distinct from the production fast path"
         );
@@ -6246,7 +6248,7 @@ mod tests {
         let index = deterministic_upper_layer_index();
 
         assert!(
-            index.production_layer0_avoids_profile_timing(),
+            index.production_layer0_avoids_profile_timing_for_audit(),
             "round-9 production layer-0 fast path should avoid profiling timing calls"
         );
     }

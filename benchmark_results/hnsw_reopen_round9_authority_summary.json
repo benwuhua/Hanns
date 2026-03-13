@@ -1,0 +1,41 @@
+{
+  "task_id": "HNSW-REOPEN-ROUND9-AUTHORITY-SUMMARY",
+  "family": "HNSW",
+  "authority_scope": "remote_x86_only",
+  "round9_target": "search_fastpath_cleanup",
+  "historical_verdict_source": "benchmark_results/hnsw_p3_002_final_verdict.json",
+  "round9_baseline_source": "benchmark_results/hnsw_reopen_round9_baseline.json",
+  "round9_search_fastpath_audit_source": "benchmark_results/hnsw_reopen_search_fastpath_audit_round9.json",
+  "same_schema_sources": {
+    "rust": "benchmark_results/rs_hnsw_sift128.full_k100.json",
+    "native_log": "/data/work/knowhere-rs-logs-hnsw-reopen-round9/native_hnsw_qps_linkfix_20260313T034322Z.log"
+  },
+  "authority_logs": [
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round9/test_20260313T034306Z_66062.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round9/native_hnsw_qps_linkfix_20260313T034322Z.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round9/test_20260313T040153Z_74459.log",
+    "/data/work/knowhere-rs-logs-hnsw-reopen-round9/test_20260313T040406Z_75601.log"
+  ],
+  "same_schema_current": {
+    "rust_recall_at_10": 0.990899999999999,
+    "rust_qps": 1845.6084217312248,
+    "native_recall_at_10": 0.95,
+    "native_qps": 10348.74,
+    "native_over_rust_qps_ratio": 5.60722408835382
+  },
+  "delta_vs_round8_authority_baseline": {
+    "source": "benchmark_results/hnsw_reopen_round8_authority_summary.json",
+    "rust_recall_at_10_delta": -0.0036000000000002697,
+    "rust_qps_pct": 145.8412217943993,
+    "native_qps_pct": 18.906082516621005,
+    "native_over_rust_qps_ratio_pct": -51.63210300022631
+  },
+  "historical_verdict_band_comparison": {
+    "historical_native_over_rust_qps_ratio": 14.803655169580505,
+    "current_ratio_pct_vs_historical": -62.12283454906482
+  },
+  "verdict_refresh_allowed": false,
+  "next_action": "continue",
+  "summary": "Round 9 materially improves the real same-schema Rust lane but does not yet justify a family verdict refresh. On the authority rerun after splitting the unprofiled layer-0 fast path and caching batch-4 dispatch, Rust HNSW rose from 750.732 qps to 1845.608 qps at recall 0.9909, while native measured 10348.740 qps at recall 0.95. The gap shrank from 11.59x to 5.61x and the gain is attributable to Rust-side search-path cleanup, but native still leads by a wide margin and Rust recall moved down by about 0.0036.",
+  "action": "Keep benchmark_results/hnsw_p3_002_final_verdict.json unchanged, archive round 9 as a successful narrow reopen, and only continue HNSW if the next hypothesis stays equally small and authority-backed around residual memory-locality and hot-loop costs."
+}

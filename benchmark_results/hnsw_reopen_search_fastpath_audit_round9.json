@@ -1,0 +1,127 @@
+{
+  "authority_scope": "remote_x86_only",
+  "batch4_dispatch_mode": "cached_once_lock",
+  "batch_distance_call_counts": {
+    "layer0_batch4_calls": 3977,
+    "layer0_scalar_distance_calls": 11210
+  },
+  "batch_distance_mode": {
+    "native_layer0_query_distance": "distances_batch_4",
+    "rust_batch_enabled": true,
+    "rust_batch_width": 4,
+    "rust_layer0_query_distance": "batch4_pointer_fast_path"
+  },
+  "benchmark_lane": "hnsw_reopen_search_fastpath_audit_round9",
+  "call_counts": {
+    "distance_calls": 33615,
+    "entry_descent_calls": 384,
+    "frontier_pops": 20437,
+    "frontier_pushes": 24200,
+    "layer0_candidate_search_calls": 128,
+    "pruned_candidates": 15146,
+    "visited_marks": 27118
+  },
+  "candidate_search_breakdown": {
+    "candidate_pruning_ms": 0.763943,
+    "distance_compute_ms": 30.877235,
+    "entry_descent_ms": 7.780996,
+    "frontier_ops_ms": 3.1730389999999997,
+    "visited_ops_ms": 7.372017
+  },
+  "config": {
+    "ef_construction": 200,
+    "ef_search": 64,
+    "m": 16,
+    "top_k": 10
+  },
+  "dataset": {
+    "base_vectors": 12000,
+    "dim": 128,
+    "query_vectors": 128
+  },
+  "dataset_source": "synthetic_sift_like_128d",
+  "distance_compute_breakdown": {
+    "layer0_query_distance_ms": 23.305605,
+    "node_node_distance_ms": 0.0,
+    "upper_layer_query_distance_ms": 7.57163
+  },
+  "distance_compute_call_counts": {
+    "layer0_query_distance_calls": 27118,
+    "node_node_distance_calls": 0,
+    "upper_layer_query_distance_calls": 6497
+  },
+  "family": "HNSW",
+  "fastpath_summary": "Round 9 splits production layer-0 L2 search from the optional-profile audit path and caches the batch-4 pointer kernel selector via OnceLock.",
+  "hotspot_ranking": [
+    {
+      "calls": 33615,
+      "milliseconds": 30.877235,
+      "share_of_profiled_time": 0.6179497042361565,
+      "stage": "distance_compute"
+    },
+    {
+      "calls": 384,
+      "milliseconds": 7.780996,
+      "share_of_profiled_time": 0.1557219801858138,
+      "stage": "entry_descent"
+    },
+    {
+      "calls": 27118,
+      "milliseconds": 7.372017,
+      "share_of_profiled_time": 0.14753703577324578,
+      "stage": "visited_ops"
+    },
+    {
+      "calls": 44637,
+      "milliseconds": 3.1730389999999997,
+      "share_of_profiled_time": 0.06350239947261435,
+      "stage": "frontier_ops"
+    },
+    {
+      "calls": 15146,
+      "milliseconds": 0.763943,
+      "share_of_profiled_time": 0.015288880332169706,
+      "stage": "candidate_pruning"
+    }
+  ],
+  "layer0_neighbor_access_call_counts": {
+    "layer0_flat_graph_neighbor_reads": 136164
+  },
+  "native_reference_files": [
+    "thirdparty/faiss/faiss/cppcontrib/knowhere/impl/HnswSearcher.h",
+    "thirdparty/faiss/faiss/cppcontrib/knowhere/thirdparty/hnswlib/hnswalg.h"
+  ],
+  "prefetch_call_counts": {
+    "layer0_vector_prefetches": 127955
+  },
+  "prefetch_mode": {
+    "native_layer0_vector_prefetch": "next_neighbor_vector_l1",
+    "rust_layer0_vector_prefetch": "next_neighbor_vector_l1",
+    "rust_prefetch_enabled": true
+  },
+  "production_avoids_profile_timing": true,
+  "production_layer0_fastpath_mode": "fast_unprofiled",
+  "profiled_layer0_mode": "profiled_optional",
+  "recommended_next_target": "distance_compute_inner_loop",
+  "round9_baseline_source": "benchmark_results/hnsw_reopen_round9_baseline.json",
+  "rust_reference_files": [
+    "src/faiss/hnsw.rs",
+    "src/simd.rs"
+  ],
+  "sample_search": {
+    "qps": 2470.390678968929,
+    "query_count": 128,
+    "search_wall_clock_ms": 51.813667
+  },
+  "search_core_shape": {
+    "native_layer0_candidate_container": "NeighborSetDoublePopList",
+    "rust_frontier_container": "Vec<Layer0PoolEntry>::descending",
+    "rust_layer0_candidate_container": "ordered_pool",
+    "rust_layer0_neighbor_id_type": "u32",
+    "rust_layer0_neighbor_layout": "flat_u32_adjacency",
+    "rust_result_container": "Vec<Layer0PoolEntry>::ascending",
+    "rust_scratch_reuse_scope": "visited_epoch_and_layer0_pools"
+  },
+  "task_id": "HNSW-REOPEN-SEARCH-FASTPATH-AUDIT-ROUND9",
+  "total_profiled_ms": 49.967229999999994
+}
