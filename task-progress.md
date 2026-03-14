@@ -22,6 +22,29 @@
 
 ## Session Log
 
+### Session 94 - 2026-03-14
+- Focus: `hnsw-fair-lane-throughput-screen-query-quantization-removal`
+- Completed:
+  - started a local-only throughput screen on the new BF16-aligned fair lane to test whether removing per-distance `f32 -> bf16 -> f32` query conversion inside the BF16 L2 path could close part of the post-fairness throughput gap
+  - followed TDD red first with a new unit contract requiring BF16 distance to keep f32 query precision (the new test initially failed on the old per-distance query quantization path), then implemented a minimal hot-path change in `src/faiss/hnsw.rs`:
+    - BF16 scalar distance stopped quantizing the query per dimension
+    - BF16 batch-4 distance switched to a single-loop accumulation helper
+  - ran the local fair-lane BF16 benchmark before/after with identical parameters (`base_limit=100000`, `query_limit=1000`, `ef=138`, `adaptive_k=0`, parallel query dispatch batch=32) plus one post-change rerun to bound noise
+  - after confirming stable negative signal, reverted all code changes from this screen and kept the repository clean
+- Verification:
+  - `cargo test --lib test_bfloat16_distance_path_keeps_f32_query_precision -- --nocapture` -> initial `FAIL`, then `ok` on experiment branch
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_l2_distance_to_4_idxs_matches_scalar_distances -- --nocapture` -> `ok` on experiment branch
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt_local_rerun.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42` -> `ok`
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - local BF16 fair-lane qps moved from `31013.962` (pre) to `29200.242` and `29350.043` (post/post-rerun), i.e. about `-5.85%` and `-5.37%`, while recall stayed flat at `0.9953`
+  - this hypothesis does not improve fair-lane throughput and has been fully rolled back
+  - next recommended screen should target lower-overhead BF16 distance kernels directly (for example pre-quantized-query scratch + `bf16_l2_batch_4`/SIMD path) instead of changing query precision semantics inside every distance call
+
 ### Session 93 - 2026-03-14
 - Focus: `hnsw-fairness-gate-datatype-authority-rerun`
 - Completed:
