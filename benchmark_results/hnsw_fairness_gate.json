@@ -26,11 +26,11 @@
       "pass": false
     },
     "query_dispatch_alignment": {
-      "rust_query_dispatch_model": "serial_per_query_index_search",
-      "rust_query_batch_size": 1,
-      "pass": false
+      "rust_query_dispatch_model": "rayon_query_batch_parallel_search",
+      "rust_query_batch_size": 32,
+      "pass": true
     }
   },
-  "summary": "The current HNSW same-schema lane still is not fair enough for leadership claims: requested ef and effective ef are now aligned, but Rust still compares Float32 against native BF16 and still measures throughput through serial per-query dispatch.",
-  "next_action": "Keep leadership benchmarking blocked until the Rust authority lane records matching datatype and a non-serial query-dispatch surface."
+  "summary": "The current HNSW same-schema lane still is not fair enough for leadership claims: requested ef, effective ef, and query dispatch are now aligned on the authority surface, but Rust still compares Float32 against native BF16 and native still holds about a 1.2x throughput lead on that still-unfair lane.",
+  "next_action": "Keep leadership benchmarking blocked until the Rust authority lane records matching datatype; once datatype is aligned, re-read the remaining gap on the same authority surface."
 }

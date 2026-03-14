@@ -29,8 +29,8 @@ class HnswFairnessGateTests(unittest.TestCase):
         self.assertEqual(rust_row["adaptive_k"], 0.0)
         self.assertEqual(rust_row["effective_ef_search"], requested_ef)
         self.assertEqual(rust_row["vector_datatype"], "Float32")
-        self.assertEqual(rust_row["query_dispatch_model"], "serial_per_query_index_search")
-        self.assertEqual(rust_row["query_batch_size"], 1)
+        self.assertEqual(rust_row["query_dispatch_model"], "rayon_query_batch_parallel_search")
+        self.assertEqual(rust_row["query_batch_size"], 32)
 
     def test_hnsw_fairness_gate_tracks_current_sources(self) -> None:
         fairness = load_json("hnsw_fairness_gate.json")
@@ -71,7 +71,7 @@ class HnswFairnessGateTests(unittest.TestCase):
         self.assertEqual(datatype["rust_datatype"], rust_row["vector_datatype"])
         self.assertEqual(datatype["native_datatype"], "BF16")
 
-        self.assertFalse(dispatch["pass"])
+        self.assertTrue(dispatch["pass"])
         self.assertEqual(dispatch["rust_query_dispatch_model"], rust_row["query_dispatch_model"])
         self.assertEqual(dispatch["rust_query_batch_size"], rust_row["query_batch_size"])
 

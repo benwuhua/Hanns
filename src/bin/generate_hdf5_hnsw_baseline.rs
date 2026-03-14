@@ -11,6 +11,8 @@ use knowhere_rs::faiss::HnswIndex;
 #[cfg(feature = "hdf5")]
 use knowhere_rs::MetricType;
 #[cfg(feature = "hdf5")]
+use rayon::prelude::*;
+#[cfg(feature = "hdf5")]
 use serde::Serialize;
 #[cfg(feature = "hdf5")]
 use std::env;
@@ -31,6 +33,8 @@ const DEFAULT_RECALL_AT: usize = 10;
 const DEFAULT_EF_SEARCH: usize = 138;
 #[cfg(feature = "hdf5")]
 const DEFAULT_HNSW_ADAPTIVE_K: f64 = 2.0;
+#[cfg(feature = "hdf5")]
+const DEFAULT_QUERY_BATCH_SIZE: usize = 32;
 #[cfg(feature = "hdf5")]
 const DEFAULT_M: usize = 16;
 #[cfg(feature = "hdf5")]
@@ -114,6 +118,83 @@ struct RsBitsetSearchCostDiagnosisReport {
 }
 
 #[cfg(feature = "hdf5")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueryDispatchMode {
+    Serial,
+    Parallel,
+}
+
+#[cfg(feature = "hdf5")]
+impl QueryDispatchMode {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "serial" => Ok(Self::Serial),
+            "parallel" => Ok(Self::Parallel),
+            _ => Err(format!(
+                "unsupported query dispatch mode `{value}`; expected `serial` or `parallel`"
+            )),
+        }
+    }
+}
+
+#[cfg(feature = "hdf5")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct QueryDispatchConfig {
+    mode: QueryDispatchMode,
+    requested_batch_size: usize,
+}
+
+#[cfg(feature = "hdf5")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct QueryDispatchMetadata {
+    model: &'static str,
+    batch_size: usize,
+}
+
+#[cfg(feature = "hdf5")]
+impl QueryDispatchConfig {
+    fn serial() -> Self {
+        Self {
+            mode: QueryDispatchMode::Serial,
+            requested_batch_size: 1,
+        }
+    }
+
+    fn parallel(batch_size: usize) -> Self {
+        Self {
+            mode: QueryDispatchMode::Parallel,
+            requested_batch_size: batch_size.max(2),
+        }
+    }
+
+    fn metadata_for_query_count(&self, query_count: usize) -> QueryDispatchMetadata {
+        match self.mode {
+            QueryDispatchMode::Serial => QueryDispatchMetadata {
+                model: "serial_per_query_index_search",
+                batch_size: 1,
+            },
+            QueryDispatchMode::Parallel => QueryDispatchMetadata {
+                model: "rayon_query_batch_parallel_search",
+                batch_size: self.effective_batch_size(query_count),
+            },
+        }
+    }
+
+    fn effective_batch_size(&self, query_count: usize) -> usize {
+        match self.mode {
+            QueryDispatchMode::Serial => 1,
+            QueryDispatchMode::Parallel => {
+                if query_count <= 1 {
+                    1
+                } else {
+                    self.requested_batch_size.min(query_count).max(2)
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "hdf5")]
 fn arg_value(args: &[String], name: &str) -> Option<String> {
     args.windows(2).find(|w| w[0] == name).map(|w| w[1].clone())
 }
@@ -152,7 +233,7 @@ fn parse_usize_list_arg(args: &[String], name: &str) -> Vec<usize> {
 #[cfg(feature = "hdf5")]
 fn print_usage(program: &str) {
     eprintln!(
-        "Usage: {program} --input <path> [--output <path>] [--base-limit <n>] [--query-limit <n>] [--top-k <n>] [--recall-at <n>] [--m <n>] [--ef-construction <n>] [--ef-search <n>] [--hnsw-adaptive-k <f>] [--recall-gate <f>] [--with-repair]"
+        "Usage: {program} --input <path> [--output <path>] [--base-limit <n>] [--query-limit <n>] [--top-k <n>] [--recall-at <n>] [--m <n>] [--ef-construction <n>] [--ef-search <n>] [--hnsw-adaptive-k <f>] [--query-dispatch-mode <serial|parallel>] [--query-batch-size <n>] [--recall-gate <f>] [--with-repair]"
     );
     eprintln!("  --top-k      number of results to retrieve per query (default: {DEFAULT_TOP_K})");
     eprintln!("  --recall-at  k for recall@k measurement, independent of top-k (default: {DEFAULT_RECALL_AT})");
@@ -162,6 +243,12 @@ fn print_usage(program: &str) {
     eprintln!("  --random-seed <u64>        optional deterministic HNSW build seed");
     eprintln!(
         "  --hnsw-adaptive-k <f>     HNSW adaptive ef multiplier (0 disables the adaptive floor)"
+    );
+    eprintln!(
+        "  --query-dispatch-mode <serial|parallel>  query execution mode for the benchmark lane"
+    );
+    eprintln!(
+        "  --query-batch-size <n>    query chunk size used when --query-dispatch-mode parallel"
     );
     eprintln!("  --repeat <n>               repeat each query batch and report median qps");
     eprintln!("  --diagnosis-output <path>  optional JSON output for search-cost diagnosis");
@@ -217,19 +304,43 @@ fn run_query_batch(
     dim: usize,
     top_k: usize,
     ef_search: usize,
+    dispatch: &QueryDispatchConfig,
 ) -> (Vec<Vec<i64>>, f64) {
-    let mut all_results: Vec<Vec<i64>> = Vec::with_capacity(query_count);
     let start = Instant::now();
-    for i in 0..query_count {
-        let query = &query_vectors[i * dim..(i + 1) * dim];
-        let request = SearchRequest {
-            top_k,
-            nprobe: ef_search,
-            ..Default::default()
-        };
-        let result = index.search(query, &request).expect("search hnsw");
-        all_results.push(result.ids);
-    }
+    let all_results: Vec<Vec<i64>> = match dispatch.mode {
+        QueryDispatchMode::Serial => (0..query_count)
+            .map(|i| {
+                let query = &query_vectors[i * dim..(i + 1) * dim];
+                let request = SearchRequest {
+                    top_k,
+                    nprobe: ef_search,
+                    ..Default::default()
+                };
+                index.search(query, &request).expect("search hnsw").ids
+            })
+            .collect(),
+        QueryDispatchMode::Parallel => {
+            let batch_len = dispatch.effective_batch_size(query_count) * dim;
+            let chunked_results: Vec<Vec<Vec<i64>>> = query_vectors
+                .par_chunks(batch_len)
+                .map(|query_chunk| {
+                    query_chunk
+                        .chunks_exact(dim)
+                        .map(|query| {
+                            let request = SearchRequest {
+                                top_k,
+                                nprobe: ef_search,
+                                ..Default::default()
+                            };
+                            index.search(query, &request).expect("search hnsw").ids
+                        })
+                        .collect::<Vec<Vec<i64>>>()
+                })
+                .collect();
+
+            chunked_results.into_iter().flatten().collect()
+        }
+    };
 
     (all_results, start.elapsed().as_secs_f64())
 }
@@ -243,13 +354,21 @@ fn run_query_batch_repeated(
     top_k: usize,
     ef_search: usize,
     repeat: usize,
+    dispatch: &QueryDispatchConfig,
 ) -> (Vec<Vec<i64>>, Vec<f64>) {
     let mut qps_runs = Vec::with_capacity(repeat);
     let mut first_results = Vec::new();
 
     for run_idx in 0..repeat {
-        let (results, runtime_seconds) =
-            run_query_batch(index, query_vectors, query_count, dim, top_k, ef_search);
+        let (results, runtime_seconds) = run_query_batch(
+            index,
+            query_vectors,
+            query_count,
+            dim,
+            top_k,
+            ef_search,
+            dispatch,
+        );
         if run_idx == 0 {
             first_results = results;
         }
@@ -268,21 +387,49 @@ fn run_query_batch_with_bitset(
     top_k: usize,
     ef_search: usize,
     bitset: &BitsetView,
+    dispatch: &QueryDispatchConfig,
 ) -> (Vec<Vec<i64>>, f64) {
-    let mut all_results: Vec<Vec<i64>> = Vec::with_capacity(query_count);
     let start = Instant::now();
-    for i in 0..query_count {
-        let query = &query_vectors[i * dim..(i + 1) * dim];
-        let request = SearchRequest {
-            top_k,
-            nprobe: ef_search,
-            ..Default::default()
-        };
-        let result = index
-            .search_with_bitset(query, &request, bitset)
-            .expect("bitset search hnsw");
-        all_results.push(result.ids);
-    }
+    let all_results: Vec<Vec<i64>> = match dispatch.mode {
+        QueryDispatchMode::Serial => (0..query_count)
+            .map(|i| {
+                let query = &query_vectors[i * dim..(i + 1) * dim];
+                let request = SearchRequest {
+                    top_k,
+                    nprobe: ef_search,
+                    ..Default::default()
+                };
+                index
+                    .search_with_bitset(query, &request, bitset)
+                    .expect("bitset search hnsw")
+                    .ids
+            })
+            .collect(),
+        QueryDispatchMode::Parallel => {
+            let batch_len = dispatch.effective_batch_size(query_count) * dim;
+            let chunked_results: Vec<Vec<Vec<i64>>> = query_vectors
+                .par_chunks(batch_len)
+                .map(|query_chunk| {
+                    query_chunk
+                        .chunks_exact(dim)
+                        .map(|query| {
+                            let request = SearchRequest {
+                                top_k,
+                                nprobe: ef_search,
+                                ..Default::default()
+                            };
+                            index
+                                .search_with_bitset(query, &request, bitset)
+                                .expect("bitset search hnsw")
+                                .ids
+                        })
+                        .collect::<Vec<Vec<i64>>>()
+                })
+                .collect();
+
+            chunked_results.into_iter().flatten().collect()
+        }
+    };
 
     (all_results, start.elapsed().as_secs_f64())
 }
@@ -298,6 +445,7 @@ fn run_query_batch_with_bitset_repeated(
     ef_search: usize,
     bitset: &BitsetView,
     repeat: usize,
+    dispatch: &QueryDispatchConfig,
 ) -> (Vec<Vec<i64>>, Vec<f64>) {
     let mut qps_runs = Vec::with_capacity(repeat);
     let mut first_results = Vec::new();
@@ -311,6 +459,7 @@ fn run_query_batch_with_bitset_repeated(
             top_k,
             ef_search,
             bitset,
+            dispatch,
         );
         if run_idx == 0 {
             first_results = results;
@@ -404,6 +553,15 @@ fn run() {
     let ef_construction = parse_usize_arg(&args, "--ef-construction", DEFAULT_EF_CONSTRUCTION);
     let ef_search = parse_usize_arg(&args, "--ef-search", DEFAULT_EF_SEARCH);
     let hnsw_adaptive_k = parse_f64_arg(&args, "--hnsw-adaptive-k", DEFAULT_HNSW_ADAPTIVE_K);
+    let query_dispatch_mode = arg_value(&args, "--query-dispatch-mode")
+        .map(|value| {
+            QueryDispatchMode::parse(&value).unwrap_or_else(|message| {
+                eprintln!("{message}");
+                std::process::exit(2);
+            })
+        })
+        .unwrap_or(QueryDispatchMode::Serial);
+    let query_batch_size = parse_usize_arg(&args, "--query-batch-size", DEFAULT_QUERY_BATCH_SIZE);
     let recall_gate = parse_f64_arg(&args, "--recall-gate", DEFAULT_RECALL_GATE);
     let random_seed = parse_u64_arg(&args, "--random-seed");
     let repeat = parse_usize_arg(&args, "--repeat", 1).max(1);
@@ -458,6 +616,11 @@ fn run() {
     let effective_ef_search = config
         .params
         .effective_hnsw_ef_search(ef_search, ef_search, top_k);
+    let query_dispatch = match query_dispatch_mode {
+        QueryDispatchMode::Serial => QueryDispatchConfig::serial(),
+        QueryDispatchMode::Parallel => QueryDispatchConfig::parallel(query_batch_size),
+    };
+    let query_dispatch_metadata = query_dispatch.metadata_for_query_count(query_count);
 
     let mut index = HnswIndex::new(&config).expect("create hnsw");
     if with_repair {
@@ -477,6 +640,7 @@ fn run() {
         top_k,
         ef_search,
         repeat,
+        &query_dispatch,
     );
     let qps = median_f64(&qps_runs);
     let runtime_seconds = query_count as f64 / qps;
@@ -522,8 +686,8 @@ fn run() {
             effective_ef_search,
             adaptive_k,
             vector_datatype: "Float32".to_string(),
-            query_dispatch_model: "serial_per_query_index_search".to_string(),
-            query_batch_size: 1,
+            query_dispatch_model: query_dispatch_metadata.model.to_string(),
+            query_batch_size: query_dispatch_metadata.batch_size,
             qps,
             qps_runs,
             recall_at_10: recall_value,
@@ -559,6 +723,7 @@ fn run() {
                 top_k,
                 diagnosis_ef,
                 repeat,
+                &query_dispatch,
             );
             let sweep_qps = median_f64(&sweep_qps_runs);
             let sweep_recall = average_recall_at_k(&sweep_results, &ground_truth, recall_at);
@@ -637,6 +802,7 @@ fn run() {
                 diagnosis_ef,
                 &bitset,
                 repeat,
+                &query_dispatch,
             );
             let sweep_qps = median_f64(&sweep_qps_runs);
             let sweep_recall = average_recall_at_k(&sweep_results, &bitset_ground_truth, recall_at);
@@ -703,6 +869,58 @@ fn main() {
 #[cfg(all(test, feature = "hdf5"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parallel_query_dispatch_matches_serial_results_and_reports_batch_metadata() {
+        let dim = 2;
+        let base = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0, 0.0, 0.0, 2.0];
+        let queries = vec![0.1, 0.0, 0.0, 0.9, 1.1, 1.0, 0.0, 1.9];
+        let query_count = queries.len() / dim;
+        let top_k = 2;
+        let ef_search = 8;
+
+        let config = build_hnsw_config(dim, 8, 40, ef_search, 0.0, Some(42));
+        let mut index = HnswIndex::new(&config).expect("create hnsw");
+        index.train(&base).expect("train hnsw");
+        index.add(&base, None).expect("add hnsw");
+
+        let serial_dispatch = QueryDispatchConfig::serial();
+        let parallel_dispatch = QueryDispatchConfig::parallel(2);
+
+        let (serial_results, _) = run_query_batch(
+            &index,
+            &queries,
+            query_count,
+            dim,
+            top_k,
+            ef_search,
+            &serial_dispatch,
+        );
+        let (parallel_results, _) = run_query_batch(
+            &index,
+            &queries,
+            query_count,
+            dim,
+            top_k,
+            ef_search,
+            &parallel_dispatch,
+        );
+
+        assert_eq!(parallel_results, serial_results);
+
+        let metadata = parallel_dispatch.metadata_for_query_count(query_count);
+        assert_eq!(metadata.model, "rayon_query_batch_parallel_search");
+        assert_eq!(metadata.batch_size, 2);
+    }
+
+    #[test]
+    fn parallel_query_dispatch_reports_single_query_batch_size_as_one() {
+        let dispatch = QueryDispatchConfig::parallel(32);
+        let metadata = dispatch.metadata_for_query_count(1);
+
+        assert_eq!(metadata.model, "rayon_query_batch_parallel_search");
+        assert_eq!(metadata.batch_size, 1);
+    }
 
     #[test]
     fn build_hnsw_config_carries_random_seed_and_adaptive_k() {

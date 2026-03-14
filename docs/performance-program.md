@@ -8,7 +8,7 @@
 - Program state: `blocked_on_hnsw_fairness_gate`
 - Next strategic track: `hnsw-fairness-gate`
 - North star lane: `HNSW same-schema remote x86`
-- Blocker summary: the current trusted final proof still ends with `criterion_met=false`; the fair-ef authority rerun has closed the effective-`ef` mismatch, but the HNSW lane still lacks datatype and query-dispatch parity.
+- Blocker summary: the current trusted final proof still ends with `criterion_met=false`; the latest fair-lane authority rerun has now closed both effective-`ef` and query-dispatch parity, but the HNSW lane still lacks datatype parity and native remains about `1.2x` faster on the current unfair lane.
 
 ## Fairness Gate
 
@@ -32,7 +32,6 @@
 
 ## Immediate Next Actions
 
-- Keep `--hnsw-adaptive-k 0` on the Rust same-schema authority lane unless a symmetric native effective-`ef` policy is introduced.
-- Add batch-first Rust authority search so throughput reflects real query parallelism instead of per-query serial dispatch.
-- Match datatype before reading the fair-lane qps gap as leadership evidence.
+- Keep `--hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32` on the Rust same-schema authority lane unless a symmetric native policy is introduced.
+- Match datatype before reading the remaining fair-lane qps gap as leadership evidence.
 - Keep `benchmark_results/hnsw_fairness_gate.json` and the same-schema baseline artifact chain aligned with every future Rust authority rerun.

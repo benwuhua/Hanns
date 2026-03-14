@@ -13,14 +13,14 @@
       "classification": "functional-but-not-leading",
       "leadership_claim_allowed": false,
       "leadership_status": "trusted_but_blocked_by_native_qps_gap",
-      "blocker": "The only trusted fair-ef same-schema remote compare lane still leaves native about 4.5x faster than Rust HNSW, and datatype plus dispatch parity are still open.",
+      "blocker": "The only trusted same-schema remote compare lane now has effective ef and query dispatch aligned, but datatype parity is still open and native remains about 1.2x faster than Rust HNSW.",
       "blocker_source": "benchmark_results/baseline_p3_001_stop_go_verdict.json",
       "evidence": {
-        "rust_recall_at_10": 0.9885999999999988,
+        "rust_recall_at_10": 0.9879999999999989,
         "native_recall_at_10": 0.95,
-        "rust_qps": 2315.890476249884,
+        "rust_qps": 8564.172172815608,
         "native_qps": 10524.841,
-        "native_over_rust_qps_ratio": 4.5446194921285095
+        "native_over_rust_qps_ratio": 1.228938511232638
       }
     },
     {
@@ -40,6 +40,6 @@
       "blocker_source": "benchmark_results/final_core_path_classification.json"
     }
   ],
-  "summary": "The final performance leadership criterion is still not met on the current remote x86 authority surface: no core CPU family can honestly claim leadership, and the only trusted same-schema candidate, HNSW, is still blocked by a roughly 4.5x native throughput advantage plus the remaining datatype and dispatch fairness gaps.",
+  "summary": "The final performance leadership criterion is still not met on the current remote x86 authority surface: no core CPU family can honestly claim leadership, and the only trusted same-schema candidate, HNSW, is still blocked by a roughly 1.2x native throughput advantage plus the remaining datatype fairness gap.",
   "action": "Archive the performance-leadership proof as unmet and keep the project out of final completion claims until a new remote authority artifact shows at least one core CPU path beating native on the same recall-gated lane."
 }

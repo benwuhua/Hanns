@@ -14,22 +14,22 @@
   },
   "rust_same_schema_row": {
     "params": "M=16 | efConstruction=100, ef=138, top_k=100, recall_at=10",
-    "recall_at_10": 0.9885999999999988,
-    "qps": 2315.890476249884,
-    "qps_ratio_native_over_rust": 4.5446194921285095
+    "recall_at_10": 0.9879999999999989,
+    "qps": 8564.172172815608,
+    "qps_ratio_native_over_rust": 1.228938511232638
   },
-  "root_cause": "The fair-ef authority rerun removed the old effective-ef mismatch on the HDF5 same-schema lane and materially narrowed the throughput gap, but native BF16 still remains about 4.5x faster at a slightly lower recall. The blocker is still performance leadership, not recall credibility, and the broader fairness gate remains open on datatype and dispatch.",
+  "root_cause": "The fair-lane parallel-dispatch authority rerun closed the old serial-dispatch mismatch and materially narrowed the throughput gap, but native BF16 still remains about 1.2x faster at a slightly lower recall. The blocker is still performance leadership, not recall credibility, and the broader fairness gate now remains open only on datatype.",
   "gap_summary": {
     "same_schema_hdf5": {
-      "rust_recall10": 0.9885999999999988,
+      "rust_recall10": 0.9879999999999989,
       "native_recall10": 0.95,
-      "recall_gap_native_minus_rust": -0.03859999999999886,
-      "rust_qps": 2315.890476249884,
+      "recall_gap_native_minus_rust": -0.037999999999998924,
+      "rust_qps": 8564.172172815608,
       "native_qps": 10524.841,
-      "qps_ratio_native_over_rust": 4.5446194921285095
+      "qps_ratio_native_over_rust": 1.228938511232638
     }
   },
-  "action": "archive the fair-ef authority refresh as passing evidence for the effective-ef blocker, keep HNSW out of leadership claims, and continue on datatype / dispatch parity rather than treating recall quality as the active blocker.",
+  "action": "archive the fair-lane parallel-dispatch authority refresh as passing evidence for the dispatch blocker, keep HNSW out of leadership claims, and continue on datatype parity rather than reopening query-dispatch work.",
   "artifacts": [
     "benchmark_results/rs_hnsw_sift128.full_k100.json",
     "benchmark_results/native_hnsw_sift128.remote.json",

@@ -22,6 +22,48 @@
 
 ## Session Log
 
+### Session 90 - 2026-03-14
+- Focus: `hnsw-fairness-gate-batch-dispatch-authority-rerun`
+- Completed:
+  - tightened the fairness gate and compare-lane verdict contracts first, confirming TDD red against the stale serial-dispatch authority artifacts and the stale `4.5x` HNSW gap summaries before touching any JSON evidence
+  - re-synced the workspace to the remote x86 host, replayed a remote `cargo test --lib -q` smoke in the isolated authority directories `/data/work/knowhere-rs-target-hnsw-fairness-batch-dispatch` and `/data/work/knowhere-rs-logs-hnsw-fairness-batch-dispatch`, and confirmed the remote library lane stayed green on the current worktree
+  - ran the fair-lane same-schema Rust HDF5 baseline on the authority host with `--hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32`, pulled the refreshed `benchmark_results/rs_hnsw_sift128.full_k100.json` back into the local worktree, and captured a new authoritative Rust row at `8564.172` qps / `0.9880` recall with `requested_ef_search=138`, `effective_ef_search=138`, `adaptive_k=0.0`, and query dispatch `rayon_query_batch_parallel_search / 32`
+  - rebuilt the current-source same-schema, stop/go, family-verdict, final-proof, methodology-gap, and fairness-gate artifacts around that authority row; the query-dispatch blocker is now closed mechanically, but `hnsw_fairness_gate.json` remains `fair_for_leadership_claim=false` because datatype still does not match native
+  - fixed a harness metadata edge case during final review so parallel mode now reports `query_batch_size=1` when only one query is present, with a dedicated bin-level regression guarding the single-query path
+- Verification:
+  - `python3 -m unittest tests/test_hnsw_fairness_gate.py` -> initial `FAIL` (`query_dispatch_alignment.pass=false`)
+  - `cargo test --test bench_hnsw_cpp_compare -- --nocapture` -> initial `FAIL` (stale `0.9886` / `2315.890` / `4.5x` HNSW verdict/proof artifacts)
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-fairness-batch-dispatch KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-fairness-batch-dispatch bash scripts/remote/test.sh --command "cargo test --lib -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-fairness-batch-dispatch/test_20260314T111827Z_5011.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-fairness-batch-dispatch KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-fairness-batch-dispatch bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --recall-gate 0.95 --random-seed 42"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-fairness-batch-dispatch/test_20260314T112148Z_7168.log`)
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline parallel_query_dispatch_reports_single_query_batch_size_as_one -- --nocapture` -> initial `FAIL` (`query_batch_size=2` for `query_count=1`), then `ok`
+- Result:
+  - `authority_result=query_dispatch_blocker_closed`
+- Notes:
+  - this authority rerun materially improved the Rust same-schema row versus the previous fair-ef serial-dispatch lane (`8564.172` qps vs `2315.890`) while preserving trusted recall above the native row (`0.9880` vs `0.95`)
+  - the fairness gate still blocks leadership claims because the lane remains `Float32` on Rust and `BF16` on native
+  - the next strategic step should stay on the same fairness track and target datatype parity; effective `ef` and query dispatch should not be reopened unless the authority lane regresses
+
+### Session 89 - 2026-03-14
+- Focus: `hnsw-fairness-gate-batch-dispatch-screen`
+- Completed:
+  - wrote a dedicated design/spec and execution plan for the fairness-gate batch-dispatch slice, explicitly constraining the work to the Rust HDF5 baseline harness instead of reopening HNSW search internals or datatype work
+  - tightened the HDF5 baseline binary with a TDD red contract first: the new unit test required an explicit query-dispatch abstraction, non-serial batch metadata, and serial-vs-parallel result equivalence on a deterministic small HNSW fixture
+  - implemented an opt-in harness-level dispatch mode in `src/bin/generate_hdf5_hnsw_baseline.rs`, keeping the default lane serial while adding `--query-dispatch-mode parallel --query-batch-size <n>` backed by ordered `rayon` query chunks and metadata `rayon_query_batch_parallel_search`
+  - ran a local HDF5 serial-vs-parallel screen on the same fair-ef lane (`base_limit=100000`, `query_limit=1000`, `top_k=100`, `ef=138`, `adaptive_k=0`): recall stayed exactly flat at `0.9953`, while qps moved from `7063.155` in serial mode to `31240.888` in parallel batch mode, a local gain of about `4.42x`
+- Verification:
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline parallel_query_dispatch_matches_serial_results_and_reports_batch_metadata -- --nocapture` -> initial `FAIL` (missing `QueryDispatchConfig` and extended helper signatures), then `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline -- --nocapture` -> `ok`
+  - `python3 -m unittest tests/test_hnsw_fairness_gate.py` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_dispatch_serial.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_dispatch_parallel.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --recall-gate 0.95 --random-seed 42` -> `ok`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - this is still local-only evidence; it does not yet change the current authority fairness verdict or any committed authority artifact
+  - the screen is strong enough to justify the next authority rerun with `--hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32`
+  - the next strategic blocker after this promoted dispatch slice remains datatype parity (`Float32` vs `BF16`)
+
 ### Session 88 - 2026-03-14
 - Focus: `hnsw-fairness-gate-effective-ef-authority-rerun`
 - Completed:
