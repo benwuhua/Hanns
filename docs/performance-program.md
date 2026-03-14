@@ -5,15 +5,14 @@
 - Final criterion source: `benchmark_results/final_performance_leadership_proof.json`
 - Fairness gate source: `benchmark_results/hnsw_fairness_gate.json`
 - Final criterion status: `unmet`
-- Program state: `blocked_on_hnsw_fairness_gate`
-- Next strategic track: `hnsw-fairness-gate`
+- Program state: `blocked_on_hnsw_leadership_gap`
+- Next strategic track: `hnsw-fair-lane-throughput`
 - North star lane: `HNSW same-schema remote x86`
-- Blocker summary: the current trusted final proof still ends with `criterion_met=false`; the latest fair-lane authority rerun has now closed both effective-`ef` and query-dispatch parity, but the HNSW lane still lacks datatype parity and native remains about `1.2x` faster on the current unfair lane.
+- Blocker summary: the current trusted final proof still ends with `criterion_met=false`; the latest fair-lane authority rerun has now aligned effective-`ef`, query dispatch, and datatype (BF16 on both sides), but native still remains about `2.17x` faster on this fair lane.
 
 ## Fairness Gate
 
 - Match Rust and native on effective `ef`, not just the requested `ef_search` field.
-- Match datatype before reading absolute qps deltas as leadership evidence.
 - Match batching and thread model: Rust authority search must reflect real batch/query parallelism comparable to native `Search()`.
 - Treat any compare run that violates these conditions as screen evidence only, not as leadership evidence.
 
@@ -32,6 +31,6 @@
 
 ## Immediate Next Actions
 
-- Keep `--hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32` on the Rust same-schema authority lane unless a symmetric native policy is introduced.
-- Match datatype before reading the remaining fair-lane qps gap as leadership evidence.
+- Keep `--hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16` on the Rust same-schema authority lane unless a symmetric native policy changes.
+- Treat `benchmark_results/rs_hnsw_sift128.full_k100.json` at `qps=4840.831171680344` as the current fair-lane Rust baseline and require attributable gains over it before reopening broader claims.
 - Keep `benchmark_results/hnsw_fairness_gate.json` and the same-schema baseline artifact chain aligned with every future Rust authority rerun.

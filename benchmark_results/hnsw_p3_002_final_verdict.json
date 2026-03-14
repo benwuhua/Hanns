@@ -17,10 +17,10 @@
   "evidence": {
     "rust_recall_at_10": 0.9879999999999989,
     "native_recall_at_10": 0.95,
-    "rust_qps": 8564.172172815608,
+    "rust_qps": 4840.831171680344,
     "native_qps": 10524.841,
-    "native_over_rust_qps_ratio": 1.228938511232638
+    "native_over_rust_qps_ratio": 2.174180554275895
   },
-  "summary": "HNSW remains functional-but-not-leading on the current remote x86 authority lane: recall and production contract gates are closed, the fair-lane parallel-dispatch rerun now leaves native only about 1.2x faster, and the broader fairness gate is still open on datatype alone.",
-  "action": "Archive HNSW as functional-but-not-leading, allow production-contract usage to rely on the closed FFI/persistence evidence, and keep HNSW out of performance-leadership claims until a datatype-aligned remote authority artifact overturns the remaining native throughput gap."
+  "summary": "HNSW remains functional-but-not-leading on the current remote x86 authority lane: recall and production contract gates are closed, fairness inputs are now aligned (including datatype), but native still holds about a 2.17x throughput lead on the fair lane.",
+  "action": "Archive HNSW as functional-but-not-leading, allow production-contract usage to rely on the closed FFI/persistence evidence, and keep HNSW out of performance-leadership claims until a new fair-lane authority artifact shows attributable Rust throughput gains."
 }

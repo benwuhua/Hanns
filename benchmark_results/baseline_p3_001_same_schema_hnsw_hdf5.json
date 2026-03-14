@@ -14,15 +14,16 @@
       "requested_ef_search": 138,
       "effective_ef_search": 138,
       "adaptive_k": 0.0,
-      "vector_datatype": "Float32",
+      "requested_vector_datatype": "BFloat16",
+      "vector_datatype": "BFloat16",
       "query_dispatch_model": "rayon_query_batch_parallel_search",
       "query_batch_size": 32,
-      "qps": 8564.172172815608,
+      "qps": 4840.831171680344,
       "recall_at_10": 0.9879999999999989,
       "ground_truth_source": "ann_benchmarks_hdf5_neighbors",
       "confidence": "trusted",
       "confidence_explanation": "",
-      "runtime_seconds": 0.116765518,
+      "runtime_seconds": 0.20657609500000002,
       "source": "knowhere_rs_hnsw_hdf5"
     },
     "native_full_k100": {
@@ -40,13 +41,13 @@
     }
   },
   "delta": {
-    "qps_ratio_native_over_rust": 1.228938511232638,
+    "qps_ratio_native_over_rust": 2.174180554275895,
     "recall_gap_native_minus_rust": -0.037999999999998924
   },
   "notes": [
-    "本轮已用 authority 上刷新后的 fair-lane parallel-dispatch Rust HDF5 row 与最新 native linkfix fallback log 形成同 schema / full-dataset / k=100 的 HNSW 可比行。",
-    "新的 same-schema 事实现在同时去掉了 effective-ef 与 query-dispatch 不一致：Rust 在 requested/effective ef=138、query batch=32 下达到 recall@10≈0.9880，仍高于当前 trusted native BF16 row 的 0.95。",
-    "当前 no-go 结论仍然是性能与公平门问题：在相同 HDF5 methodology 下，native BF16 qps 仍约为 Rust 的 1.2x，而且 datatype 仍未对齐。",
+    "本轮已在 authority 上刷新为 real-BF16 fair lane：Rust 行现在与 native 一样使用 BF16 datatype，且 requested/effective ef=138、query dispatch batch=32 继续保持对齐。",
+    "新的 same-schema 事实仍显示 Rust recall@10≈0.9880 高于当前 trusted native BF16 row 的 0.95，但 native throughput 约为 Rust 的 2.17x。",
+    "当前 no-go 结论仍然是性能领导力问题，而不是公平门或 recall 可信度问题。",
     "这份 artifact 只比较 HDF5 methodology 并为 fairness gate 提供同 schema 输入；不替代 clustered_l2 路线，也不单独回答完整生产契约问题。"
   ],
   "sources": {

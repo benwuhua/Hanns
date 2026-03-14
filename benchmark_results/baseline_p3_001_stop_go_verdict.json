@@ -15,21 +15,21 @@
   "rust_same_schema_row": {
     "params": "M=16 | efConstruction=100, ef=138, top_k=100, recall_at=10",
     "recall_at_10": 0.9879999999999989,
-    "qps": 8564.172172815608,
-    "qps_ratio_native_over_rust": 1.228938511232638
+    "qps": 4840.831171680344,
+    "qps_ratio_native_over_rust": 2.174180554275895
   },
-  "root_cause": "The fair-lane parallel-dispatch authority rerun closed the old serial-dispatch mismatch and materially narrowed the throughput gap, but native BF16 still remains about 1.2x faster at a slightly lower recall. The blocker is still performance leadership, not recall credibility, and the broader fairness gate now remains open only on datatype.",
+  "root_cause": "The fair-lane authority rerun is now datatype-aligned (BF16 on both sides) and keeps recall credibility intact, but native still remains about 2.17x faster at a slightly lower recall. The blocker is performance leadership only, not fairness-gate alignment or recall credibility.",
   "gap_summary": {
     "same_schema_hdf5": {
       "rust_recall10": 0.9879999999999989,
       "native_recall10": 0.95,
       "recall_gap_native_minus_rust": -0.037999999999998924,
-      "rust_qps": 8564.172172815608,
+      "rust_qps": 4840.831171680344,
       "native_qps": 10524.841,
-      "qps_ratio_native_over_rust": 1.228938511232638
+      "qps_ratio_native_over_rust": 2.174180554275895
     }
   },
-  "action": "archive the fair-lane parallel-dispatch authority refresh as passing evidence for the dispatch blocker, keep HNSW out of leadership claims, and continue on datatype parity rather than reopening query-dispatch work.",
+  "action": "archive the BF16-aligned fair-lane authority refresh as the new compare baseline, keep HNSW out of leadership claims, and focus future rounds on attributable Rust throughput gains rather than additional fairness metadata changes.",
   "artifacts": [
     "benchmark_results/rs_hnsw_sift128.full_k100.json",
     "benchmark_results/native_hnsw_sift128.remote.json",

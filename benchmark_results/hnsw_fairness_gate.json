@@ -3,7 +3,7 @@
   "verdict_date": "2026-03-14",
   "authority_scope": "remote_x86_only",
   "fairness_criterion": "requested_ef_match_plus_effective_ef_match_plus_datatype_match_plus_non_serial_query_dispatch",
-  "fair_for_leadership_claim": false,
+  "fair_for_leadership_claim": true,
   "same_schema_source": "benchmark_results/baseline_p3_001_same_schema_hnsw_hdf5.json",
   "rust_source": "benchmark_results/rs_hnsw_sift128.full_k100.json",
   "checks": {
@@ -21,9 +21,9 @@
       "pass": true
     },
     "datatype_alignment": {
-      "rust_datatype": "Float32",
+      "rust_datatype": "BFloat16",
       "native_datatype": "BF16",
-      "pass": false
+      "pass": true
     },
     "query_dispatch_alignment": {
       "rust_query_dispatch_model": "rayon_query_batch_parallel_search",
@@ -31,6 +31,6 @@
       "pass": true
     }
   },
-  "summary": "The current HNSW same-schema lane still is not fair enough for leadership claims: requested ef, effective ef, and query dispatch are now aligned on the authority surface, but Rust still compares Float32 against native BF16 and native still holds about a 1.2x throughput lead on that still-unfair lane.",
-  "next_action": "Keep leadership benchmarking blocked until the Rust authority lane records matching datatype; once datatype is aligned, re-read the remaining gap on the same authority surface."
+  "summary": "The current HNSW same-schema authority lane is now fair for leadership reads: requested ef, effective ef, datatype, and query dispatch are all aligned. Leadership remains blocked by a pure throughput gap, with native still about 2.17x faster on this fair lane.",
+  "next_action": "Keep fairness metadata locked and focus subsequent authority rounds on attributable Rust-side throughput gains over this BF16-aligned baseline."
 }

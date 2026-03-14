@@ -28,7 +28,7 @@ class HnswFairnessGateTests(unittest.TestCase):
         self.assertEqual(rust_row["requested_ef_search"], requested_ef)
         self.assertEqual(rust_row["adaptive_k"], 0.0)
         self.assertEqual(rust_row["effective_ef_search"], requested_ef)
-        self.assertEqual(rust_row["vector_datatype"], "Float32")
+        self.assertEqual(rust_row["vector_datatype"], "BFloat16")
         self.assertEqual(rust_row["query_dispatch_model"], "rayon_query_batch_parallel_search")
         self.assertEqual(rust_row["query_batch_size"], 32)
 
@@ -45,9 +45,9 @@ class HnswFairnessGateTests(unittest.TestCase):
             fairness["rust_source"],
             "benchmark_results/rs_hnsw_sift128.full_k100.json",
         )
-        self.assertFalse(fairness["fair_for_leadership_claim"])
+        self.assertTrue(fairness["fair_for_leadership_claim"])
 
-    def test_hnsw_fairness_gate_records_current_blockers(self) -> None:
+    def test_hnsw_fairness_gate_records_current_alignment_state(self) -> None:
         fairness = load_json("hnsw_fairness_gate.json")
         same_schema = load_json("baseline_p3_001_same_schema_hnsw_hdf5.json")
         rust_row = load_json("rs_hnsw_sift128.full_k100.json")["rows"][0]
@@ -67,7 +67,7 @@ class HnswFairnessGateTests(unittest.TestCase):
         self.assertEqual(effective["rust_effective_ef_search"], rust_row["effective_ef_search"])
         self.assertEqual(effective["native_compare_ef_search"], parse_param(native_row["params"], "ef"))
 
-        self.assertFalse(datatype["pass"])
+        self.assertTrue(datatype["pass"])
         self.assertEqual(datatype["rust_datatype"], rust_row["vector_datatype"])
         self.assertEqual(datatype["native_datatype"], "BF16")
 

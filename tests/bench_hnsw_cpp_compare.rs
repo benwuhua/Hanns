@@ -76,16 +76,16 @@ fn hnsw_compare_lane_blocks_leadership_claims_until_native_gap_closes() {
         &verdict["evidence"]["rust_recall_at_10"],
         0.9879999999999989,
     );
-    assert_close(&verdict["evidence"]["rust_qps"], 8564.172172815608);
+    assert_close(&verdict["evidence"]["rust_qps"], 4840.831171680344);
     assert_close(
         &verdict["evidence"]["native_over_rust_qps_ratio"],
-        1.228938511232638,
+        2.174180554275895,
     );
     assert!(
         verdict["summary"]
             .as_str()
             .expect("summary must be a string")
-            .contains("1.2x"),
+            .contains("2.17x"),
         "summary must disclose the current throughput gap that blocks leadership claims"
     );
 }
@@ -116,10 +116,10 @@ fn final_performance_proof_artifact_records_the_unmet_completion_criterion() {
     );
     assert_eq!(hnsw["leadership_claim_allowed"], false);
     assert_close(&hnsw["evidence"]["rust_recall_at_10"], 0.9879999999999989);
-    assert_close(&hnsw["evidence"]["rust_qps"], 8564.172172815608);
+    assert_close(&hnsw["evidence"]["rust_qps"], 4840.831171680344);
     assert_close(
         &hnsw["evidence"]["native_over_rust_qps_ratio"],
-        1.228938511232638,
+        2.174180554275895,
     );
 
     assert_eq!(ivfpq["classification"], "no-go");

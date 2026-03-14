@@ -14,13 +14,33 @@
 - Phase: worker-active
 - Current focus: `none`
 - Next feature: `none`
-- Strategic state: `blocked_on_hnsw_fairness_gate` (see `docs/performance-program.md`)
+- Strategic state: `blocked_on_hnsw_leadership_gap` (see `docs/performance-program.md`)
 - Last updated: 2026-03-14
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 - Workflow policy: narrow performance hypotheses should start with `screen`, promote to tracked work only after `screen_result=promote`, and update durable docs only after authority verdicts
 - Progress: 66/66 features passing (100%)
 
 ## Session Log
+
+### Session 93 - 2026-03-14
+- Focus: `hnsw-fairness-gate-datatype-authority-rerun`
+- Completed:
+  - promoted the prior real-BF16 local screen into authority work by re-running the same fair lane on remote x86 with isolated target/log directories and `--vector-datatype bfloat16` while preserving `--hnsw-adaptive-k 0` and parallel query dispatch (`batch=32`)
+  - pulled the refreshed authority artifact `benchmark_results/rs_hnsw_sift128.full_k100.json` back to the local workspace; the Rust row now records `requested_vector_datatype=BFloat16`, `vector_datatype=BFloat16`, `requested/effective_ef=138/138`, and `query_dispatch_model=rayon_query_batch_parallel_search`
+  - rebuilt the fairness and verdict artifact chain around the new authority row: datatype alignment is now closed in `benchmark_results/hnsw_fairness_gate.json` (`fair_for_leadership_claim=true`), while baseline/family/final proof artifacts continue to classify HNSW as non-leading due to pure throughput gap
+  - updated durable strategy docs to reflect that the active blocker has moved from fairness mismatch to fair-lane throughput leadership gap
+- Verification:
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-fairness-datatype-realbf16 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-fairness-datatype-realbf16 bash scripts/remote/test.sh --command "cargo test --lib -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-fairness-datatype-realbf16/test_20260314T121532Z_36072.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-fairness-datatype-realbf16 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-fairness-datatype-realbf16 bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-fairness-datatype-realbf16/test_20260314T121850Z_37616.log`)
+  - `python3 -m unittest tests/test_hnsw_fairness_gate.py` -> `ok` (after artifact/test expectation refresh)
+  - `cargo test --test bench_hnsw_cpp_compare -- --nocapture` -> `ok` (after verdict evidence refresh)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `authority_result=datatype_alignment_closed`
+- Notes:
+  - refreshed authority Rust fair lane is now `BFloat16/BFloat16`, `qps=4840.831171680344`, `recall_at_10=0.9879999999999989`; against the current native row (`qps=10524.841`, `recall_at_10=0.95`) the ratio is `native_over_rust_qps=2.174180554275895`
+  - fairness gate is now mechanically closed, but leadership is still blocked on fair-lane throughput gap; next rounds should target attributable Rust-side qps improvements over this BF16-aligned authority baseline
 
 ### Session 92 - 2026-03-14
 - Focus: `hnsw-fairness-gate-real-bf16-core-screen`
