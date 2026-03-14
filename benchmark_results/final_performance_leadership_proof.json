@@ -13,14 +13,14 @@
       "classification": "functional-but-not-leading",
       "leadership_claim_allowed": false,
       "leadership_status": "trusted_but_blocked_by_native_qps_gap",
-      "blocker": "The trusted same-schema remote compare lane is now fully fair (effective ef, datatype, and query dispatch aligned), but native remains about 2.17x faster than Rust HNSW.",
+      "blocker": "The trusted same-schema remote compare lane is now fully fair (effective ef, datatype, and query dispatch aligned), and the latest no-sqrt BF16 refresh improves Rust throughput, but native still remains about 1.24x faster than Rust HNSW.",
       "blocker_source": "benchmark_results/baseline_p3_001_stop_go_verdict.json",
       "evidence": {
         "rust_recall_at_10": 0.9879999999999989,
         "native_recall_at_10": 0.95,
-        "rust_qps": 4840.831171680344,
+        "rust_qps": 8502.98026056941,
         "native_qps": 10524.841,
-        "native_over_rust_qps_ratio": 2.174180554275895
+        "native_over_rust_qps_ratio": 1.2377825982739838
       }
     },
     {
@@ -40,6 +40,6 @@
       "blocker_source": "benchmark_results/final_core_path_classification.json"
     }
   ],
-  "summary": "The final performance leadership criterion is still not met on the current remote x86 authority surface: no core CPU family can honestly claim leadership, and the only trusted same-schema candidate, HNSW, is now fair but still blocked by a roughly 2.17x native throughput advantage.",
+  "summary": "The final performance leadership criterion is still not met on the current remote x86 authority surface: no core CPU family can honestly claim leadership, and the only trusted same-schema candidate, HNSW, is now fair and materially improved but still blocked by a roughly 1.24x native throughput advantage.",
   "action": "Archive the performance-leadership proof as unmet and keep the project out of final completion claims until a new remote authority artifact shows at least one core CPU path beating native on the same recall-gated lane."
 }

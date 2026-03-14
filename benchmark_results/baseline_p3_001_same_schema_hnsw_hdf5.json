@@ -18,12 +18,12 @@
       "vector_datatype": "BFloat16",
       "query_dispatch_model": "rayon_query_batch_parallel_search",
       "query_batch_size": 32,
-      "qps": 4840.831171680344,
+      "qps": 8502.98026056941,
       "recall_at_10": 0.9879999999999989,
       "ground_truth_source": "ann_benchmarks_hdf5_neighbors",
       "confidence": "trusted",
       "confidence_explanation": "",
-      "runtime_seconds": 0.20657609500000002,
+      "runtime_seconds": 0.11760582399999998,
       "source": "knowhere_rs_hnsw_hdf5"
     },
     "native_full_k100": {
@@ -41,12 +41,12 @@
     }
   },
   "delta": {
-    "qps_ratio_native_over_rust": 2.174180554275895,
+    "qps_ratio_native_over_rust": 1.2377825982739838,
     "recall_gap_native_minus_rust": -0.037999999999998924
   },
   "notes": [
-    "本轮已在 authority 上刷新为 real-BF16 fair lane：Rust 行现在与 native 一样使用 BF16 datatype，且 requested/effective ef=138、query dispatch batch=32 继续保持对齐。",
-    "新的 same-schema 事实仍显示 Rust recall@10≈0.9880 高于当前 trusted native BF16 row 的 0.95，但 native throughput 约为 Rust 的 2.17x。",
+    "本轮已在 authority 上刷新 no-sqrt BF16 kernel 之后的 fair lane：Rust 行继续与 native 一样使用 BF16 datatype，且 requested/effective ef=138、query dispatch batch=32 保持对齐。",
+    "新的 same-schema 事实仍显示 Rust recall@10≈0.9880 高于当前 trusted native BF16 row 的 0.95，且 native throughput 已收敛到约 Rust 的 1.24x。",
     "当前 no-go 结论仍然是性能领导力问题，而不是公平门或 recall 可信度问题。",
     "这份 artifact 只比较 HDF5 methodology 并为 fairness gate 提供同 schema 输入；不替代 clustered_l2 路线，也不单独回答完整生产契约问题。"
   ],

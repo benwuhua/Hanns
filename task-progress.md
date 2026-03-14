@@ -22,6 +22,28 @@
 
 ## Session Log
 
+### Session 97 - 2026-03-14
+- Focus: `hnsw-fair-lane-throughput-authority-rerun-nosqrt-bf16`
+- Completed:
+  - promoted Session 96 local signal into authority execution: synced workspace to remote x86, replayed remote `cargo test --lib -q` smoke, then reran the same BF16 fair lane with the no-sqrt kernel changes (`adaptive_k=0`, parallel dispatch batch=32, `--vector-datatype bfloat16`)
+  - pulled refreshed authority artifact `benchmark_results/rs_hnsw_sift128.full_k100.json` back into local worktree and confirmed BF16 fairness metadata remains aligned (`requested/effective_ef=138/138`, `requested/effective datatype=BFloat16/BFloat16`, dispatch `rayon_query_batch_parallel_search / 32`)
+  - refreshed fairness + verdict artifact chain and strategy docs around the new authority row: fairness gate stays closed, HNSW/final verdict remain non-leading, and the blocker is now a much smaller pure throughput gap on the fair lane
+  - updated regression expectations in `tests/bench_hnsw_cpp_compare.rs` to the new authority evidence
+- Verification:
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-fairness-nosqrt-bf16 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-fairness-nosqrt-bf16 bash scripts/remote/test.sh --command "cargo test --lib -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-fairness-nosqrt-bf16/test_20260314T125940Z_56759.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-fairness-nosqrt-bf16 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-fairness-nosqrt-bf16 bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-fairness-nosqrt-bf16/test_20260314T130448Z_57407.log`)
+  - `python3 -m unittest tests/test_hnsw_fairness_gate.py` -> `ok`
+  - `cargo test --test bench_hnsw_cpp_compare -- --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `authority_result=bf16_fair_lane_throughput_improved`
+- Notes:
+  - refreshed authority Rust fair lane: `qps=8502.98026056941`, `recall_at_10=0.9879999999999989` (previous BF16 authority row was `qps=4840.831171680344` at same recall)
+  - current fair-lane ratio is now `native_over_rust_qps=1.2377825982739838` with native row `qps=10524.841`, `recall_at_10=0.95`
+  - leadership remains blocked, but the gap is now back near the earlier ~1.2x range while staying fully fair on datatype/ef/dispatch metadata
+
 ### Session 96 - 2026-03-14
 - Focus: `hnsw-fair-lane-throughput-screen-nosqrt-bf16-kernel`
 - Completed:

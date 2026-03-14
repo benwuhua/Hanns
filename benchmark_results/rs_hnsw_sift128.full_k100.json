@@ -15,15 +15,15 @@
       "vector_datatype": "BFloat16",
       "query_dispatch_model": "rayon_query_batch_parallel_search",
       "query_batch_size": 32,
-      "qps": 4840.831171680344,
+      "qps": 8502.98026056941,
       "qps_runs": [
-        4840.831171680344
+        8502.98026056941
       ],
       "recall_at_10": 0.9879999999999989,
       "ground_truth_source": "ann_benchmarks_hdf5_neighbors",
       "confidence": "trusted",
       "confidence_explanation": "",
-      "runtime_seconds": 0.20657609500000002,
+      "runtime_seconds": 0.11760582399999998,
       "source": "knowhere_rs_hnsw_hdf5"
     }
   ]

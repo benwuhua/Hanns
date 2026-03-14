@@ -8,7 +8,7 @@
 - Program state: `blocked_on_hnsw_leadership_gap`
 - Next strategic track: `hnsw-fair-lane-throughput`
 - North star lane: `HNSW same-schema remote x86`
-- Blocker summary: the current trusted final proof still ends with `criterion_met=false`; the latest fair-lane authority rerun has now aligned effective-`ef`, query dispatch, and datatype (BF16 on both sides), but native still remains about `2.17x` faster on this fair lane.
+- Blocker summary: the current trusted final proof still ends with `criterion_met=false`; the latest no-sqrt BF16 fair-lane authority rerun keeps effective-`ef`, query dispatch, and datatype aligned (BF16 on both sides) and improves Rust throughput, but native still remains about `1.24x` faster on this fair lane.
 
 ## Fairness Gate
 
@@ -32,5 +32,5 @@
 ## Immediate Next Actions
 
 - Keep `--hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16` on the Rust same-schema authority lane unless a symmetric native policy changes.
-- Treat `benchmark_results/rs_hnsw_sift128.full_k100.json` at `qps=4840.831171680344` as the current fair-lane Rust baseline and require attributable gains over it before reopening broader claims.
+- Treat `benchmark_results/rs_hnsw_sift128.full_k100.json` at `qps=8502.98026056941` as the current fair-lane Rust baseline and require attributable gains over it before reopening broader claims.
 - Keep `benchmark_results/hnsw_fairness_gate.json` and the same-schema baseline artifact chain aligned with every future Rust authority rerun.
