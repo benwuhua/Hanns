@@ -22,6 +22,30 @@
 
 ## Session Log
 
+### Session 106 - 2026-03-14
+- Focus: `hnsw-fair-lane-throughput-screen-slab-next-neighbor-prefetch`
+- Completed:
+  - ran a low-risk implementation screen on the BF16 fair lane: add next-neighbor prefetch to the `use_layer0_slab` loop in `search_layer_idx_l2_ordered_pool_fast`, matching the existing prefetch pattern already used in flat-graph/regular neighbor loops
+  - verified BF16 fast-path equivalence and filtered-search regressions before benchmarking
+  - measured with the promoted stable harness (`RAYON_NUM_THREADS=8`, `--repeat 5`) using one pre and two post samples under identical fair-lane parameters
+  - after confirming strong negative signal, fully reverted experiment code and kept only durable session notes
+- Verification:
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok` on experiment branch
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt9_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt9_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt9_local_rerun1.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - pre baseline: `qps=28807.651`, `recall_at_10=0.9953`
+  - post sample #1: `qps=15146.247`, `recall_at_10=0.9953` (`-47.42%`)
+  - post sample #2: `qps=14388.127`, `recall_at_10=0.9953` (`-50.05%`)
+  - mean post delta is about `-48.74%`; this hypothesis is decisively negative and has been rolled back
+  - next recommended screen should avoid extra software prefetch in slab path and instead target fewer total distance evaluations (with stable-harness gating)
+
 ### Session 105 - 2026-03-14
 - Focus: `hnsw-fair-lane-throughput-authority-rerun-noslab-confirmation`
 - Completed:
