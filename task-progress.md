@@ -22,6 +22,29 @@
 
 ## Session Log
 
+### Session 92 - 2026-03-14
+- Focus: `hnsw-fairness-gate-real-bf16-core-screen`
+- Completed:
+  - took the recommended post-Session-91 path and implemented a real BF16 HNSW core lane for L2: `HnswIndex` now keeps BF16 side storage when `IndexConfig.data_type=BFloat16`, populates it during add/add_parallel/add_profiled/load, and dispatches L2 distance through BF16-backed scalar computation instead of the f32 pointer kernel for that lane
+  - extended the L2 batch-4 helper so BF16 lane distance grouping stays semantically aligned with scalar BF16 distance evaluation
+  - tightened TDD contracts first, then turned green: added a new HNSW regression proving BF16 distance reads BF16 storage even if the f32 buffer is mutated, and updated the HDF5 baseline datatype test to require effective `BFloat16` when requested
+  - reran the local fairness datatype screen with the same fair lane settings (`adaptive_k=0`, parallel query-dispatch batch=32): the BF16-request lane now reports real `requested/effective=BFloat16/BFloat16` while recall remains flat against float32
+- Verification:
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> initial `FAIL` (before BF16 core-path implementation), then `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline requested_bfloat16_reports_bfloat16_effective_lane_when_supported -- --nocapture` -> initial `FAIL` (`Float32` effective label), then `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline -- --nocapture` -> `ok`
+  - `cargo test --lib test_hnsw -- --nocapture` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_datatype_float32_realcore.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype float32 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_datatype_bfloat16_realcore.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - local screen outputs are now `/tmp/hnsw_fairness_datatype_float32_realcore.json` (`Float32/Float32`, `30507.260 qps`, `0.9953 recall_at_10`) and `/tmp/hnsw_fairness_datatype_bfloat16_realcore.json` (`BFloat16/BFloat16`, `29749.841 qps`, `0.9953 recall_at_10`)
+  - on this local lane BF16 is about `-2.48%` qps vs float32 with recall unchanged; this is still non-authoritative and only decides that datatype parity work is now promotable to the next authority rerun
+  - next step should be a remote-x86 fairness authority rerun on the same compare lane, then refresh `benchmark_results/hnsw_fairness_gate.json` from authority evidence
+
 ### Session 91 - 2026-03-14
 - Focus: `hnsw-fairness-gate-datatype-screen`
 - Completed:

@@ -193,11 +193,10 @@ impl RequestedVectorDatatype {
     }
 
     fn metadata_for_current_hnsw_lane(self) -> VectorDatatypeMetadata {
-        // The current HNSW implementation stores/query-dispatches dense vectors as f32
-        // even if the requested API datatype is BFloat16.
+        // HNSW now supports a real BFloat16 storage + L2 distance lane.
         VectorDatatypeMetadata {
             requested_label: self.requested_label(),
-            effective_label: "Float32",
+            effective_label: self.requested_label(),
         }
     }
 }
@@ -997,13 +996,13 @@ mod tests {
     }
 
     #[test]
-    fn requested_bfloat16_reports_float32_effective_lane_for_current_hnsw() {
+    fn requested_bfloat16_reports_bfloat16_effective_lane_when_supported() {
         let requested = RequestedVectorDatatype::parse("bfloat16").expect("parse datatype");
         let metadata = requested.metadata_for_current_hnsw_lane();
 
         assert_eq!(requested.index_data_type(), DataType::BFloat16);
         assert_eq!(metadata.requested_label, "BFloat16");
-        assert_eq!(metadata.effective_label, "Float32");
+        assert_eq!(metadata.effective_label, "BFloat16");
     }
 
     #[test]

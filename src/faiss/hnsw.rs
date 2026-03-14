@@ -17,10 +17,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::api::{
-    IndexConfig, MetricType, Predicate, Result, SearchRequest, SearchResult as ApiSearchResult,
+    DataType, IndexConfig, MetricType, Predicate, Result, SearchRequest,
+    SearchResult as ApiSearchResult,
 };
 use crate::bitset::BitsetView;
 use crate::dataset::Dataset;
+use crate::half::Bf16;
 use crate::index::{Index as IndexTrait, IndexError, SearchResult as IndexSearchResult};
 use crate::simd;
 
@@ -1159,6 +1161,8 @@ pub struct HnswIndex {
     entry_point: Option<i64>,
     max_level: usize,
     vectors: Vec<f32>,
+    bf16_vectors: Vec<u16>,
+    use_bf16_storage: bool,
     // OPT-015: ids Vec kept only for custom ID support, not used in hot path
     ids: Vec<i64>,
     node_info: Vec<NodeInfo>,
@@ -1183,6 +1187,11 @@ pub struct HnswIndex {
 }
 
 impl HnswIndex {
+    #[inline]
+    fn bf16_storage_enabled_for_config(config: &IndexConfig) -> bool {
+        config.data_type == DataType::BFloat16 && config.metric_type == MetricType::L2
+    }
+
     #[inline]
     fn resolve_distance_to_idx_fn(metric_type: MetricType) -> DistanceToIdxFn {
         match metric_type {
@@ -1298,10 +1307,14 @@ impl HnswIndex {
             .map(StdRng::seed_from_u64)
             .unwrap_or_else(StdRng::from_entropy);
 
+        let use_bf16_storage = Self::bf16_storage_enabled_for_config(config);
+
         Ok(Self {
             config: config.clone(),
             entry_point: None,
             vectors: Vec::new(),
+            bf16_vectors: Vec::new(),
+            use_bf16_storage,
             ids: Vec::new(),
             node_info: Vec::new(),
             layer0_flat_graph: Layer0FlatGraph::default(),
@@ -1322,6 +1335,28 @@ impl HnswIndex {
             num_threads,
             level_rng,
         })
+    }
+
+    #[inline]
+    fn append_dense_vector(&mut self, vector: &[f32]) {
+        self.vectors.extend_from_slice(vector);
+        if self.use_bf16_storage {
+            self.bf16_vectors
+                .extend(vector.iter().map(|&v| Bf16::from_f32(v).to_bits()));
+        }
+    }
+
+    #[inline]
+    fn rebuild_bf16_storage(&mut self) {
+        if self.use_bf16_storage {
+            self.bf16_vectors = self
+                .vectors
+                .iter()
+                .map(|&v| Bf16::from_f32(v).to_bits())
+                .collect();
+        } else {
+            self.bf16_vectors.clear();
+        }
     }
 
     /// Generate a random level for a new node using exponential distribution
@@ -1467,6 +1502,9 @@ impl HnswIndex {
 
         // OPT-022: Phase 1 - Pre-allocate and store all vectors/metadata
         self.vectors.reserve(n * self.dim);
+        if self.use_bf16_storage {
+            self.bf16_vectors.reserve(n * self.dim);
+        }
         self.ids.reserve(n);
         self.node_info.reserve(n);
 
@@ -1497,7 +1535,7 @@ impl HnswIndex {
                 self.ids.push(id);
             }
 
-            self.vectors.extend_from_slice(new_vec);
+            self.append_dense_vector(new_vec);
             self.node_info.push(node_info);
 
             // If this is the first node, set it as entry point
@@ -1561,6 +1599,9 @@ impl HnswIndex {
         }
 
         self.vectors.reserve(n * self.dim);
+        if self.use_bf16_storage {
+            self.bf16_vectors.reserve(n * self.dim);
+        }
         self.ids.reserve(n);
         self.node_info.reserve(n);
 
@@ -1577,7 +1618,7 @@ impl HnswIndex {
             let node_info = NodeInfo::new(node_level, self.m);
 
             self.ids.push(id);
-            self.vectors.extend_from_slice(new_vec);
+            self.append_dense_vector(new_vec);
             self.node_info.push(node_info);
 
             if base_count == 0 && i == 0 {
@@ -1786,6 +1827,9 @@ impl HnswIndex {
         let start_time = std::time::Instant::now();
 
         self.vectors.reserve(n * self.dim);
+        if self.use_bf16_storage {
+            self.bf16_vectors.reserve(n * self.dim);
+        }
         self.ids.reserve(n);
         self.node_info.reserve(n);
 
@@ -1803,7 +1847,7 @@ impl HnswIndex {
 
             let node_info = NodeInfo::new(node_levels[i], self.m);
             self.ids.push(id);
-            self.vectors.extend_from_slice(new_vec);
+            self.append_dense_vector(new_vec);
             self.node_info.push(node_info);
 
             if base_count == 0 && i == 0 {
@@ -1973,6 +2017,9 @@ impl HnswIndex {
         }
 
         self.vectors.reserve(n * self.dim);
+        if self.use_bf16_storage {
+            self.bf16_vectors.reserve(n * self.dim);
+        }
         self.ids.reserve(n);
         self.node_info.reserve(n);
 
@@ -1987,7 +2034,7 @@ impl HnswIndex {
 
             let node_info = NodeInfo::new(node_levels[i], self.m);
             self.ids.push(id);
-            self.vectors.extend_from_slice(new_vec);
+            self.append_dense_vector(new_vec);
             self.node_info.push(node_info);
 
             if base_count == 0 && i == 0 {
@@ -2475,7 +2522,7 @@ impl HnswIndex {
         let idx = self.ids.len();
         self.ids.push(assigned_id);
         // OPT-021: Removed HashMap insert
-        self.vectors.extend_from_slice(vector);
+        self.append_dense_vector(vector);
         self.node_info.push(node_info);
 
         // If this is the first node, set it as entry point
@@ -3239,7 +3286,24 @@ impl HnswIndex {
         idx: usize,
     ) -> f32 {
         debug_assert!(idx < self.vectors.len() / self.dim);
+        if self.use_bf16_storage {
+            return unsafe { self.l2_distance_to_idx_bf16_ptr(query_ptr, idx) };
+        }
         (self.l2_distance_sq_ptr_kernel)(query_ptr, base_ptr.add(idx * self.dim), self.dim)
+    }
+
+    #[inline(always)]
+    unsafe fn l2_distance_to_idx_bf16_ptr(&self, query_ptr: *const f32, idx: usize) -> f32 {
+        debug_assert!(idx < self.bf16_vectors.len() / self.dim);
+        let start = idx * self.dim;
+        let mut sum = 0.0f32;
+        for offset in 0..self.dim {
+            let q = Bf16::from_f32(unsafe { *query_ptr.add(offset) }).to_f32();
+            let v = Bf16::from_bits(self.bf16_vectors[start + offset]).to_f32();
+            let diff = q - v;
+            sum += diff * diff;
+        }
+        sum
     }
 
     #[inline]
@@ -3254,6 +3318,14 @@ impl HnswIndex {
         base_ptr: *const f32,
         idxs: [usize; 4],
     ) -> [f32; 4] {
+        if self.use_bf16_storage {
+            return [
+                unsafe { self.l2_distance_to_idx_bf16_ptr(query_ptr, idxs[0]) },
+                unsafe { self.l2_distance_to_idx_bf16_ptr(query_ptr, idxs[1]) },
+                unsafe { self.l2_distance_to_idx_bf16_ptr(query_ptr, idxs[2]) },
+                unsafe { self.l2_distance_to_idx_bf16_ptr(query_ptr, idxs[3]) },
+            ];
+        }
         simd::l2_batch_4_ptrs(
             query_ptr,
             base_ptr.add(idxs[0] * self.dim),
@@ -5359,6 +5431,7 @@ impl HnswIndex {
             file.read_exact(&mut buf)?;
             self.vectors[i] = f32::from_le_bytes(buf);
         }
+        self.rebuild_bf16_storage();
 
         // IDs
         self.ids = Vec::with_capacity(count);
@@ -5425,9 +5498,10 @@ impl HnswIndex {
         // Estimate: vectors + ids + graph structure
         // OPT-021: Removed HashMap overhead from size calculation
         let vectors_size = self.vectors.len() * std::mem::size_of::<f32>();
+        let bf16_vectors_size = self.bf16_vectors.len() * std::mem::size_of::<u16>();
         let ids_size = self.ids.len() * std::mem::size_of::<i64>();
         let node_info_size = self.node_info.len() * std::mem::size_of::<NodeInfo>();
-        vectors_size + ids_size + node_info_size
+        vectors_size + bf16_vectors_size + ids_size + node_info_size
     }
 
     /// Get metric type
@@ -6905,6 +6979,44 @@ mod tests {
         assert_eq!(
             batched, scalar,
             "batch-4 layer-0 query distance helper must match scalar pointer distances"
+        );
+    }
+
+    #[test]
+    fn test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer() {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::BFloat16,
+            params: crate::api::IndexParams {
+                ef_search: Some(16),
+                ..Default::default()
+            },
+        };
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0, 0.0, // idx 0
+            2.0, 0.0, // idx 1
+        ];
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        // If L2 reads from f32 storage, this mutation will corrupt distance(0).
+        // A real BF16 path should stay stable because it reads from BF16 storage.
+        index.vectors[0] = 1234.0;
+        let query = [0.0, 0.0];
+        let query_ptr = query.as_ptr();
+        let base_ptr = index.vectors.as_ptr();
+
+        let d0 = unsafe { index.l2_distance_to_idx_ptr(query_ptr, base_ptr, 0) };
+        let d1 = unsafe { index.l2_distance_to_idx_ptr(query_ptr, base_ptr, 1) };
+
+        assert!(d0 < 1e-6, "BF16 path should keep idx=0 distance near zero");
+        assert!(
+            (d1 - 4.0).abs() < 1e-3,
+            "BF16 path should preserve idx=1 distance"
         );
     }
 
