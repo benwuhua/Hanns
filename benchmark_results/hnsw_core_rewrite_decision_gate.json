@@ -1,0 +1,25 @@
+{
+  "task_id": "HNSW-CORE-REWRITE-STAGE1-DECISION-GATE",
+  "family": "HNSW",
+  "authority_scope": "local_stage1_screen_with_authority_baseline_lock",
+  "selected_branch": "search_first",
+  "inputs": {
+    "baseline_lock": "benchmark_results/hnsw_core_rewrite_baseline_lock.json",
+    "graph_diagnosis_rust": "benchmark_results/hnsw_graph_diagnosis_rust.json",
+    "search_cost_diagnosis": "benchmark_results/hnsw_search_cost_diagnosis.json"
+  },
+  "evidence": {
+    "fixed_recall_across_sweep": {
+      "ef_64_recall_at_10": 0.9930999999999998,
+      "ef_160_recall_at_10": 0.9930999999999998
+    },
+    "growing_traversal_cost_across_sweep": {
+      "ef_64_average_visited_nodes": 959.491,
+      "ef_160_average_visited_nodes": 1971.418,
+      "ef_64_average_distance_calls": 1035.124,
+      "ef_160_average_distance_calls": 2047.051
+    }
+  },
+  "rationale": "Stage 1 local diagnosis points to a search-first rewrite. On the fixed local HDF5 screen, raising ef from 64 to 160 did not improve recall@10, but it roughly doubled visited nodes and distance calls. That pattern suggests the next major pure-Rust HNSW rewrite should first unify and cheapen the generic search kernel instead of assuming graph quality is the primary limiter.",
+  "next_plan": "Create a search-first implementation plan around one shared idx-based traversal core for unfiltered and filtered HNSW search."
+}

@@ -1,0 +1,43 @@
+{
+  "task_id": "HNSW-REOPEN-ROUND12-BASELINE",
+  "family": "HNSW",
+  "authority_scope": "remote_x86_only",
+  "historical_verdict_source": "benchmark_results/hnsw_p3_002_final_verdict.json",
+  "round11_authority_summary_source": "benchmark_results/hnsw_reopen_round11_authority_summary.json",
+  "round12_target": "shared_bitset_batch4",
+  "historical_classification": "functional-but-not-leading",
+  "round11_hard_stop_context": {
+    "source": "benchmark_results/hnsw_reopen_round11_authority_summary.json",
+    "rust_run_outcome": "aborted_after_catastrophic_regression",
+    "rust_qps": null,
+    "native_qps": 8897.304,
+    "next_action": "hard_stop"
+  },
+  "screen_promote_context": {
+    "source": "benchmark_results/hnsw_bitset_search_cost_diagnosis.json",
+    "task_progress_source": "task-progress.md#session-81-2026-03-14",
+    "ef_search_values": [
+      64,
+      96,
+      128,
+      160
+    ],
+    "qps_gains_vs_task14_baseline_pct": [
+      15.68,
+      17.57,
+      16.5,
+      17.81
+    ],
+    "same_code_rerun_drift_pct": [
+      0.84,
+      1.83,
+      0.6,
+      -0.58
+    ],
+    "recall_at_10": 0.9941999999999992,
+    "counters_preserved": true,
+    "screen_result": "promote"
+  },
+  "summary": "Round 12 reopens HNSW from the round-11 hard stop rather than broadening the rejected filtered fallback line. Task 16 produced a new promoted local signal around shared_bitset_batch4: on the deterministic bitset diagnosis lane, shared grouped batch-4 distance improved qps by about +15.68% to +17.81% versus the preserved Task-14 baseline while recall stayed at 0.9942 and visited/frontier/distance counters remained unchanged. The new tracked hypothesis is shared_bitset_batch4: carry this grouped shared bitset layer-0 batch-4 mechanism onto the authority same-schema lane and verify whether it creates any real remote evidence without changing the archived HNSW family verdict in advance.",
+  "action": "Keep benchmark_results/hnsw_p3_002_final_verdict.json unchanged, freeze the round-11 authority hard stop plus the promoted Task-16 local screen evidence as the round-12 baseline, and require a fresh authority rerun before making any new HNSW performance claim."
+}

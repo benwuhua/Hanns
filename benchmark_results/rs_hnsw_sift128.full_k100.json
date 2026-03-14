@@ -6,7 +6,7 @@
     {
       "dataset": "sift-128-euclidean",
       "index": "HNSW(Rust)",
-      "params": "M=16 | efConstruction=100, ef=138, top_k=100, recall_at=10",
+      "params": "M=16 | efConstruction=100, ef=138, top_k=100, recall_at=10 | repeat=1",
       "thread_num": 8,
       "requested_ef_search": 138,
       "effective_ef_search": 200,
@@ -14,12 +14,15 @@
       "vector_datatype": "Float32",
       "query_dispatch_model": "serial_per_query_index_search",
       "query_batch_size": 1,
-      "qps": 1831.5038441434183,
-      "recall_at_10": 0.9956999999999994,
+      "qps": 1497.6886964123275,
+      "qps_runs": [
+        1497.6886964123275
+      ],
+      "recall_at_10": 0.9941999999999994,
       "ground_truth_source": "ann_benchmarks_hdf5_neighbors",
       "confidence": "trusted",
       "confidence_explanation": "",
-      "runtime_seconds": 0.5459994,
+      "runtime_seconds": 0.667695498,
       "source": "knowhere_rs_hnsw_hdf5"
     }
   ]

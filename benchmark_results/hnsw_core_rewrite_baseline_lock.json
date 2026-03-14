@@ -1,0 +1,14 @@
+{
+  "task_id": "HNSW-CORE-REWRITE-STAGE1-BASELINE-LOCK",
+  "family": "HNSW",
+  "authority_scope": "remote_x86_only",
+  "dataset": "sift-128-euclidean.hdf5",
+  "top_k": 100,
+  "recall_at": 10,
+  "m": 16,
+  "ef_construction": 100,
+  "thread_model": "authority_same_schema_default",
+  "rust_source": "benchmark_results/rs_hnsw_sift128.full_k100.json",
+  "native_source": "benchmark_results/native_hnsw_sift128.remote.json",
+  "summary": "Stage 1 freezes the current same-schema HNSW comparison lane before any unified pure-Rust core rewrite work. Future diagnosis artifacts must stay on the SIFT-128 HDF5, k=100, recall@10, M=16, efConstruction=100 authority surface until the branch decision is recorded."
+}

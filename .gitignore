@@ -64,6 +64,13 @@ benchmark_results/*
 !benchmark_results/hnsw_reopen_round11_baseline.json
 !benchmark_results/hnsw_reopen_round11_authority_summary.json
 !benchmark_results/hnsw_fairness_gate.json
+!benchmark_results/hnsw_reopen_round12_baseline.json
+!benchmark_results/hnsw_reopen_round12_authority_summary.json
+!benchmark_results/hnsw_bitset_search_cost_diagnosis.json
+!benchmark_results/hnsw_core_rewrite_baseline_lock.json
+!benchmark_results/hnsw_core_rewrite_decision_gate.json
+!benchmark_results/hnsw_graph_diagnosis_rust.json
+!benchmark_results/hnsw_search_cost_diagnosis.json
 !benchmark_results/ivfpq_p1_002_focused.json
 !benchmark_results/ivfpq_p3_003_final_verdict.json
 !benchmark_results/native_hnsw_sift128.full.json

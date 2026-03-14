@@ -1,0 +1,66 @@
+{
+  "benchmark": "HNSW-CORE-REWRITE-STAGE1-search-cost-diagnosis",
+  "dataset": "sift-128-euclidean",
+  "methodology": "rust_hdf5_ann_benchmark_search_cost",
+  "build_random_seed": 42,
+  "qps_repeat_count": 3,
+  "selected_recall_gate": 0.95,
+  "ef_sweep": [
+    {
+      "ef_search": 64,
+      "qps": 6019.426181104116,
+      "qps_runs": [
+        6061.657666367877,
+        6017.858005667535,
+        6019.426181104116
+      ],
+      "recall_at_10": 0.9972,
+      "average_visited_nodes": 960.857,
+      "average_frontier_pushes": 362.146,
+      "average_frontier_pops": 246.877,
+      "average_distance_calls": 1036.998
+    },
+    {
+      "ef_search": 96,
+      "qps": 6035.350532766645,
+      "qps_runs": [
+        5986.867805468704,
+        6035.350532766645,
+        6059.357465734334
+      ],
+      "recall_at_10": 0.9972,
+      "average_visited_nodes": 1325.594,
+      "average_frontier_pushes": 504.046,
+      "average_frontier_pops": 349.544,
+      "average_distance_calls": 1401.735
+    },
+    {
+      "ef_search": 128,
+      "qps": 6044.7553565705375,
+      "qps_runs": [
+        6057.55584260832,
+        6044.7553565705375,
+        5994.712687388574
+      ],
+      "recall_at_10": 0.9972,
+      "average_visited_nodes": 1661.993,
+      "average_frontier_pushes": 639.15,
+      "average_frontier_pops": 448.987,
+      "average_distance_calls": 1738.134
+    },
+    {
+      "ef_search": 160,
+      "qps": 5961.001625195561,
+      "qps_runs": [
+        5961.001625195561,
+        6096.778766329132,
+        5799.6945010921545
+      ],
+      "recall_at_10": 0.9972,
+      "average_visited_nodes": 1976.017,
+      "average_frontier_pushes": 770.376,
+      "average_frontier_pops": 546.5,
+      "average_distance_calls": 2052.158
+    }
+  ]
+}

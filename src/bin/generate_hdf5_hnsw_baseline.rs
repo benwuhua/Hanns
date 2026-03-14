@@ -3,6 +3,8 @@ use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, SearchRequ
 #[cfg(feature = "hdf5")]
 use knowhere_rs::benchmark::{average_recall_at_k, confidence_from_recall};
 #[cfg(feature = "hdf5")]
+use knowhere_rs::bitset::BitsetView;
+#[cfg(feature = "hdf5")]
 use knowhere_rs::dataset::load_hdf5_dataset;
 #[cfg(feature = "hdf5")]
 use knowhere_rs::faiss::HnswIndex;
@@ -52,6 +54,7 @@ struct RsBaselineRow {
     query_dispatch_model: String,
     query_batch_size: usize,
     qps: f64,
+    qps_runs: Vec<f64>,
     recall_at_10: f64,
     ground_truth_source: String,
     confidence: String,
@@ -67,6 +70,45 @@ struct RsBaselineReport {
     dataset: String,
     methodology: String,
     rows: Vec<RsBaselineRow>,
+}
+
+#[cfg(feature = "hdf5")]
+#[derive(Debug, Serialize)]
+struct RsSearchCostDiagnosisRow {
+    ef_search: usize,
+    qps: f64,
+    qps_runs: Vec<f64>,
+    recall_at_10: f64,
+    average_visited_nodes: f64,
+    average_frontier_pushes: f64,
+    average_frontier_pops: f64,
+    average_distance_calls: f64,
+}
+
+#[cfg(feature = "hdf5")]
+#[derive(Debug, Serialize)]
+struct RsSearchCostDiagnosisReport {
+    benchmark: String,
+    dataset: String,
+    methodology: String,
+    build_random_seed: Option<u64>,
+    qps_repeat_count: usize,
+    selected_recall_gate: f64,
+    ef_sweep: Vec<RsSearchCostDiagnosisRow>,
+}
+
+#[cfg(feature = "hdf5")]
+#[derive(Debug, Serialize)]
+struct RsBitsetSearchCostDiagnosisReport {
+    benchmark: String,
+    dataset: String,
+    methodology: String,
+    build_random_seed: Option<u64>,
+    qps_repeat_count: usize,
+    bitset_stride: usize,
+    filtered_fraction: f64,
+    selected_recall_gate: f64,
+    ef_sweep: Vec<RsSearchCostDiagnosisRow>,
 }
 
 #[cfg(feature = "hdf5")]
@@ -89,6 +131,23 @@ fn parse_f64_arg(args: &[String], name: &str, default: f64) -> f64 {
 }
 
 #[cfg(feature = "hdf5")]
+fn parse_u64_arg(args: &[String], name: &str) -> Option<u64> {
+    arg_value(args, name).and_then(|v| v.parse::<u64>().ok())
+}
+
+#[cfg(feature = "hdf5")]
+fn parse_usize_list_arg(args: &[String], name: &str) -> Vec<usize> {
+    arg_value(args, name)
+        .map(|value| {
+            value
+                .split(',')
+                .filter_map(|item| item.trim().parse::<usize>().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(feature = "hdf5")]
 fn print_usage(program: &str) {
     eprintln!(
         "Usage: {program} --input <path> [--output <path>] [--base-limit <n>] [--query-limit <n>] [--top-k <n>] [--recall-at <n>] [--m <n>] [--ef-construction <n>] [--ef-search <n>] [--recall-gate <f>] [--with-repair]"
@@ -98,6 +157,177 @@ fn print_usage(program: &str) {
     eprintln!(
         "               Set --recall-at 10 to match native benchmark methodology (recall@10)"
     );
+    eprintln!("  --random-seed <u64>        optional deterministic HNSW build seed");
+    eprintln!("  --repeat <n>               repeat each query batch and report median qps");
+    eprintln!("  --diagnosis-output <path>  optional JSON output for search-cost diagnosis");
+    eprintln!(
+        "  --bitset-diagnosis-output <path>  optional JSON output for bitset search-cost diagnosis"
+    );
+    eprintln!("  --bitset-step <n>          mask every n-th base vector in bitset diagnosis mode");
+    eprintln!("  --ef-sweep <csv>           comma-separated ef values for diagnosis mode");
+}
+
+#[cfg(feature = "hdf5")]
+fn build_hnsw_config(
+    dim: usize,
+    m: usize,
+    ef_construction: usize,
+    ef_search: usize,
+    random_seed: Option<u64>,
+) -> IndexConfig {
+    IndexConfig {
+        index_type: IndexType::Hnsw,
+        metric_type: MetricType::L2,
+        dim,
+        data_type: DataType::Float,
+        params: IndexParams {
+            m: Some(m),
+            ef_construction: Some(ef_construction),
+            ef_search: Some(ef_search),
+            random_seed,
+            ..Default::default()
+        },
+    }
+}
+
+#[cfg(feature = "hdf5")]
+fn median_f64(values: &[f64]) -> f64 {
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let mid = sorted.len() / 2;
+    if sorted.len() % 2 == 0 {
+        (sorted[mid - 1] + sorted[mid]) / 2.0
+    } else {
+        sorted[mid]
+    }
+}
+
+#[cfg(feature = "hdf5")]
+fn run_query_batch(
+    index: &HnswIndex,
+    query_vectors: &[f32],
+    query_count: usize,
+    dim: usize,
+    top_k: usize,
+    ef_search: usize,
+) -> (Vec<Vec<i64>>, f64) {
+    let mut all_results: Vec<Vec<i64>> = Vec::with_capacity(query_count);
+    let start = Instant::now();
+    for i in 0..query_count {
+        let query = &query_vectors[i * dim..(i + 1) * dim];
+        let request = SearchRequest {
+            top_k,
+            nprobe: ef_search,
+            ..Default::default()
+        };
+        let result = index.search(query, &request).expect("search hnsw");
+        all_results.push(result.ids);
+    }
+
+    (all_results, start.elapsed().as_secs_f64())
+}
+
+#[cfg(feature = "hdf5")]
+fn run_query_batch_repeated(
+    index: &HnswIndex,
+    query_vectors: &[f32],
+    query_count: usize,
+    dim: usize,
+    top_k: usize,
+    ef_search: usize,
+    repeat: usize,
+) -> (Vec<Vec<i64>>, Vec<f64>) {
+    let mut qps_runs = Vec::with_capacity(repeat);
+    let mut first_results = Vec::new();
+
+    for run_idx in 0..repeat {
+        let (results, runtime_seconds) =
+            run_query_batch(index, query_vectors, query_count, dim, top_k, ef_search);
+        if run_idx == 0 {
+            first_results = results;
+        }
+        qps_runs.push(query_count as f64 / runtime_seconds);
+    }
+
+    (first_results, qps_runs)
+}
+
+#[cfg(feature = "hdf5")]
+fn run_query_batch_with_bitset(
+    index: &HnswIndex,
+    query_vectors: &[f32],
+    query_count: usize,
+    dim: usize,
+    top_k: usize,
+    ef_search: usize,
+    bitset: &BitsetView,
+) -> (Vec<Vec<i64>>, f64) {
+    let mut all_results: Vec<Vec<i64>> = Vec::with_capacity(query_count);
+    let start = Instant::now();
+    for i in 0..query_count {
+        let query = &query_vectors[i * dim..(i + 1) * dim];
+        let request = SearchRequest {
+            top_k,
+            nprobe: ef_search,
+            ..Default::default()
+        };
+        let result = index
+            .search_with_bitset(query, &request, bitset)
+            .expect("bitset search hnsw");
+        all_results.push(result.ids);
+    }
+
+    (all_results, start.elapsed().as_secs_f64())
+}
+
+#[cfg(feature = "hdf5")]
+fn run_query_batch_with_bitset_repeated(
+    index: &HnswIndex,
+    query_vectors: &[f32],
+    query_count: usize,
+    dim: usize,
+    top_k: usize,
+    ef_search: usize,
+    bitset: &BitsetView,
+    repeat: usize,
+) -> (Vec<Vec<i64>>, Vec<f64>) {
+    let mut qps_runs = Vec::with_capacity(repeat);
+    let mut first_results = Vec::new();
+
+    for run_idx in 0..repeat {
+        let (results, runtime_seconds) = run_query_batch_with_bitset(
+            index,
+            query_vectors,
+            query_count,
+            dim,
+            top_k,
+            ef_search,
+            bitset,
+        );
+        if run_idx == 0 {
+            first_results = results;
+        }
+        qps_runs.push(query_count as f64 / runtime_seconds);
+    }
+
+    (first_results, qps_runs)
+}
+
+#[cfg(feature = "hdf5")]
+fn build_stride_bitset(base_count: usize, bitset_step: usize) -> BitsetView {
+    let mut bitset = BitsetView::new(base_count);
+    for idx in (0..base_count).step_by(bitset_step) {
+        bitset.set(idx, true);
+    }
+    bitset
+}
+
+#[cfg(feature = "hdf5")]
+fn filtered_fraction(bitset: &BitsetView, base_count: usize) -> f64 {
+    let filtered = (0..base_count)
+        .filter(|&idx| idx < bitset.len() && bitset.get(idx))
+        .count();
+    filtered as f64 / base_count.max(1) as f64
 }
 
 #[cfg(feature = "hdf5")]
@@ -106,7 +336,13 @@ fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
 }
 
 #[cfg(feature = "hdf5")]
-fn compute_ground_truth(base: &[f32], queries: &[f32], dim: usize, k: usize) -> Vec<Vec<i32>> {
+fn compute_ground_truth(
+    base: &[f32],
+    queries: &[f32],
+    dim: usize,
+    k: usize,
+    bitset: Option<&BitsetView>,
+) -> Vec<Vec<i32>> {
     let num_base = base.len() / dim;
     let num_queries = queries.len() / dim;
     let mut gt = Vec::with_capacity(num_queries);
@@ -114,6 +350,7 @@ fn compute_ground_truth(base: &[f32], queries: &[f32], dim: usize, k: usize) -> 
     for i in 0..num_queries {
         let query = &queries[i * dim..(i + 1) * dim];
         let mut pairs: Vec<(usize, f32)> = (0..num_base)
+            .filter(|&j| !bitset.is_some_and(|mask| j < mask.len() && mask.get(j)))
             .map(|j| {
                 let base_vec = &base[j * dim..(j + 1) * dim];
                 (j, l2_distance_squared(query, base_vec))
@@ -159,6 +396,12 @@ fn run() {
     let ef_construction = parse_usize_arg(&args, "--ef-construction", DEFAULT_EF_CONSTRUCTION);
     let ef_search = parse_usize_arg(&args, "--ef-search", DEFAULT_EF_SEARCH);
     let recall_gate = parse_f64_arg(&args, "--recall-gate", DEFAULT_RECALL_GATE);
+    let random_seed = parse_u64_arg(&args, "--random-seed");
+    let repeat = parse_usize_arg(&args, "--repeat", 1).max(1);
+    let diagnosis_output = arg_value(&args, "--diagnosis-output");
+    let bitset_diagnosis_output = arg_value(&args, "--bitset-diagnosis-output");
+    let bitset_step = parse_usize_arg(&args, "--bitset-step", 0);
+    let ef_sweep = parse_usize_list_arg(&args, "--ef-sweep");
     let with_repair = args.iter().any(|arg| arg == "--with-repair");
 
     let dataset = match load_hdf5_dataset(&input_path) {
@@ -189,23 +432,12 @@ fn run() {
         )
     } else {
         (
-            compute_ground_truth(base_vectors, query_vectors, dim, recall_at),
+            compute_ground_truth(base_vectors, query_vectors, dim, recall_at, None),
             format!("flat_exact_l2_bruteforce(base_limit={base_count},recall_at={recall_at})"),
         )
     };
 
-    let config = IndexConfig {
-        index_type: IndexType::Hnsw,
-        metric_type: MetricType::L2,
-        dim,
-        data_type: DataType::Float,
-        params: IndexParams {
-            m: Some(m),
-            ef_construction: Some(ef_construction),
-            ef_search: Some(ef_search),
-            ..Default::default()
-        },
-    };
+    let config = build_hnsw_config(dim, m, ef_construction, ef_search, random_seed);
     let adaptive_k = config.params.hnsw_adaptive_k();
     let effective_ef_search = ef_search.max((adaptive_k * top_k as f64) as usize);
 
@@ -219,20 +451,17 @@ fn run() {
         index.add(base_vectors, None).expect("add hnsw");
     }
 
-    let mut all_results: Vec<Vec<i64>> = Vec::with_capacity(query_count);
-    let start = Instant::now();
-    for i in 0..query_count {
-        let query = &query_vectors[i * dim..(i + 1) * dim];
-        let request = SearchRequest {
-            top_k,
-            nprobe: ef_search,
-            ..Default::default()
-        };
-        let result = index.search(query, &request).expect("search hnsw");
-        all_results.push(result.ids);
-    }
-    let runtime_seconds = start.elapsed().as_secs_f64();
-    let qps = query_count as f64 / runtime_seconds;
+    let (all_results, qps_runs) = run_query_batch_repeated(
+        &index,
+        query_vectors,
+        query_count,
+        dim,
+        top_k,
+        ef_search,
+        repeat,
+    );
+    let qps = median_f64(&qps_runs);
+    let runtime_seconds = query_count as f64 / qps;
     // Measure recall at recall_at (default 10), independent of search top_k.
     // Matches native: "are the true recall_at-NN among the returned top_k results?"
     let recall_value = average_recall_at_k(&all_results, &ground_truth, recall_at);
@@ -257,11 +486,18 @@ fn run() {
         dataset: dataset_name.clone(),
         methodology: "rust_hdf5_ann_benchmark".to_string(),
         rows: vec![RsBaselineRow {
-            dataset: dataset_name,
+            dataset: dataset_name.clone(),
             index: "HNSW(Rust)".to_string(),
             params: format!(
-                "M={} | efConstruction={}, ef={}, top_k={}, recall_at={}",
-                m, ef_construction, ef_search, top_k, recall_at
+                "M={} | efConstruction={}, ef={}, top_k={}, recall_at={}{} | repeat={repeat}",
+                m,
+                ef_construction,
+                ef_search,
+                top_k,
+                recall_at,
+                random_seed
+                    .map(|seed| format!(" | seed={seed}"))
+                    .unwrap_or_default()
             ),
             thread_num: rayon::current_num_threads() as u32,
             requested_ef_search: ef_search,
@@ -271,6 +507,7 @@ fn run() {
             query_dispatch_model: "serial_per_query_index_search".to_string(),
             query_batch_size: 1,
             qps,
+            qps_runs,
             recall_at_10: recall_value,
             ground_truth_source,
             confidence,
@@ -286,6 +523,155 @@ fn run() {
     }
     fs::write(&output_path, output).expect("write output");
     println!("wrote {}", output_path);
+
+    if let Some(diagnosis_output) = diagnosis_output {
+        let diagnosis_efs = if ef_sweep.is_empty() {
+            vec![ef_search]
+        } else {
+            ef_sweep.clone()
+        };
+
+        let mut ef_rows = Vec::with_capacity(diagnosis_efs.len());
+        for diagnosis_ef in diagnosis_efs {
+            let (sweep_results, sweep_qps_runs) = run_query_batch_repeated(
+                &index,
+                query_vectors,
+                query_count,
+                dim,
+                top_k,
+                diagnosis_ef,
+                repeat,
+            );
+            let sweep_qps = median_f64(&sweep_qps_runs);
+            let sweep_recall = average_recall_at_k(&sweep_results, &ground_truth, recall_at);
+
+            let mut visited_sum = 0usize;
+            let mut frontier_push_sum = 0usize;
+            let mut frontier_pop_sum = 0usize;
+            let mut distance_call_sum = 0usize;
+
+            for i in 0..query_count {
+                let query = &query_vectors[i * dim..(i + 1) * dim];
+                let diagnosis = index.search_cost_diagnosis(query, diagnosis_ef, top_k);
+                visited_sum += diagnosis.visited_nodes;
+                frontier_push_sum += diagnosis.frontier_pushes;
+                frontier_pop_sum += diagnosis.frontier_pops;
+                distance_call_sum += diagnosis.distance_calls;
+            }
+
+            let denom = query_count.max(1) as f64;
+            ef_rows.push(RsSearchCostDiagnosisRow {
+                ef_search: diagnosis_ef,
+                qps: sweep_qps,
+                qps_runs: sweep_qps_runs,
+                recall_at_10: sweep_recall,
+                average_visited_nodes: visited_sum as f64 / denom,
+                average_frontier_pushes: frontier_push_sum as f64 / denom,
+                average_frontier_pops: frontier_pop_sum as f64 / denom,
+                average_distance_calls: distance_call_sum as f64 / denom,
+            });
+        }
+
+        let diagnosis_report = RsSearchCostDiagnosisReport {
+            benchmark: "HNSW-CORE-REWRITE-STAGE1-search-cost-diagnosis".to_string(),
+            dataset: dataset_name.clone(),
+            methodology: "rust_hdf5_ann_benchmark_search_cost".to_string(),
+            build_random_seed: random_seed,
+            qps_repeat_count: repeat,
+            selected_recall_gate: recall_gate,
+            ef_sweep: ef_rows,
+        };
+
+        let diagnosis_output_json =
+            serde_json::to_string_pretty(&diagnosis_report).expect("serialize diagnosis report");
+        if let Some(parent) = Path::new(&diagnosis_output).parent() {
+            fs::create_dir_all(parent).expect("create diagnosis output dir");
+        }
+        fs::write(&diagnosis_output, diagnosis_output_json).expect("write diagnosis output");
+        println!("wrote {}", diagnosis_output);
+    }
+
+    if let Some(bitset_diagnosis_output) = bitset_diagnosis_output {
+        assert!(
+            bitset_step >= 2,
+            "--bitset-step must be at least 2 when --bitset-diagnosis-output is provided"
+        );
+
+        let diagnosis_efs = if ef_sweep.is_empty() {
+            vec![ef_search]
+        } else {
+            ef_sweep.clone()
+        };
+
+        let bitset = build_stride_bitset(base_count, bitset_step);
+        let filtered_fraction = filtered_fraction(&bitset, base_count);
+        let bitset_ground_truth =
+            compute_ground_truth(base_vectors, query_vectors, dim, recall_at, Some(&bitset));
+
+        let mut ef_rows = Vec::with_capacity(diagnosis_efs.len());
+        for diagnosis_ef in diagnosis_efs {
+            let (sweep_results, sweep_qps_runs) = run_query_batch_with_bitset_repeated(
+                &index,
+                query_vectors,
+                query_count,
+                dim,
+                top_k,
+                diagnosis_ef,
+                &bitset,
+                repeat,
+            );
+            let sweep_qps = median_f64(&sweep_qps_runs);
+            let sweep_recall = average_recall_at_k(&sweep_results, &bitset_ground_truth, recall_at);
+
+            let mut visited_sum = 0usize;
+            let mut frontier_push_sum = 0usize;
+            let mut frontier_pop_sum = 0usize;
+            let mut distance_call_sum = 0usize;
+
+            for i in 0..query_count {
+                let query = &query_vectors[i * dim..(i + 1) * dim];
+                let diagnosis =
+                    index.search_cost_diagnosis_with_bitset(query, diagnosis_ef, top_k, &bitset);
+                visited_sum += diagnosis.visited_nodes;
+                frontier_push_sum += diagnosis.frontier_pushes;
+                frontier_pop_sum += diagnosis.frontier_pops;
+                distance_call_sum += diagnosis.distance_calls;
+            }
+
+            let denom = query_count.max(1) as f64;
+            ef_rows.push(RsSearchCostDiagnosisRow {
+                ef_search: diagnosis_ef,
+                qps: sweep_qps,
+                qps_runs: sweep_qps_runs,
+                recall_at_10: sweep_recall,
+                average_visited_nodes: visited_sum as f64 / denom,
+                average_frontier_pushes: frontier_push_sum as f64 / denom,
+                average_frontier_pops: frontier_pop_sum as f64 / denom,
+                average_distance_calls: distance_call_sum as f64 / denom,
+            });
+        }
+
+        let diagnosis_report = RsBitsetSearchCostDiagnosisReport {
+            benchmark: "HNSW-SEARCH-FIRST-bitset-search-cost-diagnosis".to_string(),
+            dataset: dataset_name.clone(),
+            methodology: "rust_hdf5_ann_benchmark_bitset_search_cost".to_string(),
+            build_random_seed: random_seed,
+            qps_repeat_count: repeat,
+            bitset_stride: bitset_step,
+            filtered_fraction,
+            selected_recall_gate: recall_gate,
+            ef_sweep: ef_rows,
+        };
+
+        let diagnosis_output_json = serde_json::to_string_pretty(&diagnosis_report)
+            .expect("serialize bitset diagnosis report");
+        if let Some(parent) = Path::new(&bitset_diagnosis_output).parent() {
+            fs::create_dir_all(parent).expect("create bitset diagnosis output dir");
+        }
+        fs::write(&bitset_diagnosis_output, diagnosis_output_json)
+            .expect("write bitset diagnosis output");
+        println!("wrote {}", bitset_diagnosis_output);
+    }
 }
 
 fn main() {
@@ -294,4 +680,23 @@ fn main() {
 
     #[cfg(not(feature = "hdf5"))]
     eprintln!("Error: this binary requires the 'hdf5' feature. Rebuild with --features hdf5");
+}
+
+#[cfg(all(test, feature = "hdf5"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_hnsw_config_carries_random_seed() {
+        let config = build_hnsw_config(128, 16, 100, 138, Some(42));
+
+        assert_eq!(config.params.random_seed, Some(42));
+    }
+
+    #[test]
+    fn median_f64_sorts_before_picking_middle_value() {
+        let values = vec![9.0, 3.0, 5.0];
+
+        assert_eq!(median_f64(&values), 5.0);
+    }
 }

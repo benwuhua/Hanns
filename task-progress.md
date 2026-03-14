@@ -18,9 +18,277 @@
 - Last updated: 2026-03-14
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 - Workflow policy: narrow performance hypotheses should start with `screen`, promote to tracked work only after `screen_result=promote`, and update durable docs only after authority verdicts
-- Progress: 64/64 features passing (100%)
+- Progress: 66/66 features passing (100%)
 
 ## Session Log
+
+### Session 85 - 2026-03-14
+- Focus: `hnsw-round12-authority-same-schema-rerun`
+- Completed:
+  - restored raw authority connectivity after the earlier proxy reset, confirmed the previously launched isolated round-12 Rust same-schema benchmark was still running on the remote host, and monitored it through to a clean `status=ok` finish at `2026-03-14T06:19:41Z`
+  - synced the fresh remote `benchmark_results/rs_hnsw_sift128.full_k100.json` back into the local worktree, capturing a completed round-12 Rust row at `1497.689` qps and recall `0.9942`
+  - captured a fresh native HNSW authority row via linkfix fallback from `/data/work/knowhere-rs-logs-hnsw-reopen-round12/native_hnsw_qps_linkfix_20260314T062053Z.log`, yielding `8502.128` qps at recall `0.95`
+  - re-tightened `tests/bench_hnsw_reopen_round12.rs` into the real authority-summary contract, created `benchmark_results/hnsw_reopen_round12_authority_summary.json`, and froze round 12 as a `hard_stop` on `shared_bitset_batch4`: the authority run completed, but Rust qps fell about `18.2%` versus round 10 and the native-over-Rust gap widened from `4.86x` to `5.68x`
+  - replayed the updated round-12 default-lane contract on the authority machine and closed the final tracked feature in durable state
+- Verification:
+  - `bash -lc 'source scripts/remote/common.sh && load_remote_config && run_ssh "echo remote_ok"'` -> `remote_ok`
+  - `cargo test --test bench_hnsw_reopen_round12 -- --nocapture` -> initial `FAIL` (missing `benchmark_results/hnsw_reopen_round12_authority_summary.json`), then `ok`
+  - `bash init.sh` -> `ok` (before rerun and again before final remote replay)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round12 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round12 bash scripts/remote/test.sh --command "cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round12/test_20260314T060359Z_20504.log`)
+  - `bash scripts/remote/native_hnsw_qps_capture.sh --log-dir /data/work/knowhere-rs-logs-hnsw-reopen-round12 --gtest-filter Benchmark_float_qps.TEST_HNSW` -> `exit_code=0` via linkfix fallback (`/data/work/knowhere-rs-logs-hnsw-reopen-round12/native_hnsw_qps_linkfix_20260314T062053Z.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round12 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round12 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round12 -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round12/test_20260314T062505Z_31246.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-round12-authority-same-schema-rerun` is now `passing`
+  - all tracked features are now `passing`
+- Notes:
+  - round 12 is materially better than the round-11 catastrophic abort because the authority lane completes, but it is still a negative authority result: `shared_bitset_batch4` does not survive contact with the remote same-schema lane as a promotable HNSW improvement
+  - with `66/66` features passing again, there is no next queued feature; any future HNSW reopen would need a new local `screen_result=promote` rather than extending this hard-stopped line
+
+### Session 84 - 2026-03-14
+- Focus: `hnsw-round12-authority-same-schema-rerun`
+- Completed:
+  - wrote a focused execution plan in `docs/superpowers/plans/2026-03-14-hnsw-round12-authority-same-schema-rerun.md`, constraining this slice to the round-12 authority same-schema rerun, fresh native capture, artifact sync-back, and durable closure only
+  - temporarily tightened `tests/bench_hnsw_reopen_round12.rs` into a real authority-summary contract and verified the expected TDD red failure on the missing `benchmark_results/hnsw_reopen_round12_authority_summary.json`
+  - re-ran `bash init.sh` successfully, then launched the isolated round-12 remote Rust same-schema benchmark command
+  - reproduced an environment-level remote blocker during authority execution: the long-running remote benchmark lost its SSH/proxy control channel with `socks5 proxy error: [Errno 54] Connection reset by peer`, and subsequent trivial `run_ssh "echo remote_ok"` probes failed with the same reset, which points to the current remote proxy path rather than the HNSW code or test contract
+  - reverted the temporary round-12 contract tightening before handoff so the repository does not remain in a known-red state while authority connectivity is unavailable
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round12 -- --nocapture` -> initial `FAIL` after unignoring the authority-summary contract (`hnsw_reopen_round12_authority_summary.json` missing), then restored to activation-state `ok` after reverting the temporary contract tightening
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round12 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round12 bash scripts/remote/test.sh --command "cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95"` -> local SSH session dropped with `socks5 proxy error: [Errno 54] Connection reset by peer`
+  - `bash -lc 'source scripts/remote/common.sh && load_remote_config && run_ssh "echo remote_ok"'` -> same `socks5 proxy error: [Errno 54] Connection reset by peer`
+- Result:
+  - `hnsw-round12-authority-same-schema-rerun` remains `failing`
+- Notes:
+  - this blocker is currently environmental and occurs below the repo workflow layer; there is no new authority result to archive yet, and `benchmark_results/hnsw_reopen_round12_authority_summary.json` was intentionally not fabricated without real evidence
+  - the next session should first recheck raw remote connectivity with a trivial `run_ssh` probe; once the proxy path is healthy again, re-apply the round-12 contract tightening, rerun the isolated round-12 Rust same-schema benchmark, capture fresh native evidence, sync `benchmark_results/rs_hnsw_sift128.full_k100.json` back locally, then write the authority summary and close the final feature
+
+### Session 83 - 2026-03-14
+- Focus: `hnsw-reopen-round12-activation`
+- Completed:
+  - re-ran the authority bootstrap path successfully with `bash init.sh`, confirming the remote x86 sync and toolchain probe now complete cleanly in the current environment after the prior sandbox-only failure
+  - replayed the round-12 default-lane activation contract on the authority machine with isolated round-12 target/log directories, proving the new baseline artifact and ignored future-summary contract survive the remote workflow exactly as intended
+  - closed the tracked activation slice in durable state by marking `hnsw-reopen-round12-activation` as `passing` and handing off to `hnsw-round12-authority-same-schema-rerun` as the only remaining failing feature
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round12 -- --nocapture` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (64 passing, 2 failing); workflow/doc checks passed`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-reopen-round12 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-reopen-round12 bash scripts/remote/test.sh --command "cargo test --test bench_hnsw_reopen_round12 -q"` -> `ok` (`/data/work/knowhere-rs-logs-hnsw-reopen-round12/test_20260314T055626Z_16735.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (65 passing, 1 failing); workflow/doc checks passed`
+- Result:
+  - `hnsw-reopen-round12-activation` is now `passing`
+  - `hnsw-round12-authority-same-schema-rerun` remains `failing`
+- Notes:
+  - the prior block was environmental rather than algorithmic; no code changes were needed beyond the already-landed round-12 activation artifacts and contract
+  - the next session should stay on the round-12 isolated authority directories and run the same-schema recall-gated rerun plus native capture before deciding whether the Task-16 `shared_bitset_batch4` signal survives contact with the remote benchmark lane
+
+### Session 82 - 2026-03-14
+- Focus: `hnsw-reopen-round12-activation`
+- Completed:
+  - wrote a focused activation plan in `docs/superpowers/plans/2026-03-14-hnsw-reopen-round12-activation.md`, explicitly limiting this turn to reopening tracked authority workflow around the promoted Task-16 `shared_bitset_batch4` mechanism rather than attempting the round-12 same-schema rerun immediately
+  - added `tests/bench_hnsw_reopen_round12.rs` as the new default-lane contract for round 12, using the missing `benchmark_results/hnsw_reopen_round12_baseline.json` failure as the TDD red signal while keeping the future authority-summary check ignored until the next slice
+  - created `benchmark_results/hnsw_reopen_round12_baseline.json`, freezing the round-11 authority hard stop plus the promoted Task-16 local bitset-lane evidence into a new round-12 baseline context and explicitly scoping the next tracked hypothesis to `shared_bitset_batch4`
+  - reopened durable workflow state in `feature-list.json` with two round-12 features: `hnsw-reopen-round12-activation` and `hnsw-round12-authority-same-schema-rerun`
+- Verification:
+  - `cargo test --test bench_hnsw_reopen_round12 -- --nocapture` -> initial `FAIL` (missing round-12 baseline artifact), then `ok` with the authority-summary check intentionally ignored until the next slice
+  - `bash init.sh` -> `blocked` by sandbox/network policy during remote sync (`socks5 proxy error: [Errno 1] Operation not permitted`; `Connection closed by UNKNOWN port 65535`)
+- Result:
+  - `hnsw-reopen-round12-activation` remains `failing`
+  - `hnsw-round12-authority-same-schema-rerun` remains `failing`
+- Notes:
+  - the local activation contract and baseline artifact are ready, but this feature cannot be marked `passing` because the required remote bootstrap and remote default-lane replay did not run successfully
+  - this blocker is environmental rather than code-level: the current sandbox denied the ssh/proxy path used by `bash init.sh`, so the repository now carries a prepared round-12 activation that still needs authority verification
+  - the next session should resume with `hnsw-reopen-round12-activation`, re-run `bash init.sh`, then run the round-12 remote default-lane replay before attempting any round-12 same-schema authority benchmark
+
+### Session 81 - 2026-03-14
+- Focus: `hnsw-search-first-task16`
+- Completed:
+  - wrote a focused execution plan in `docs/superpowers/plans/2026-03-14-hnsw-search-first-task16.md`, narrowing the next `search_first` slice down to one different shared-kernel mechanism after the Task-15 reject: batch valid `level=0 + L2 + bitset/shared` neighbors in groups of four while leaving traversal, filtering, frontier ordering, and result semantics unchanged
+  - extended the public contract in `tests/bench_hnsw_generic_search_kernel.rs` and `src/faiss/hnsw.rs` so the shared kernel now reports `shared_bitset_distance_mode=idx_ptr_batch4_when_grouped`, turning the new shared bitset distance mode into a locked default-lane contract
+  - added a focused deterministic fixture plus `test_search_layer_idx_shared_uses_batch4_distance_when_grouping_layer0_neighbors`, proving the shared bitset layer-0 path actually records `layer0_batch4_calls > 0` once four valid neighbors are available
+  - updated `search_layer_idx_shared(...)` so the `level=0 + L2 + flat_graph + bitset` branch accumulates valid unfiltered neighbors into fixed-size groups of four, routes each full group through `l2_distance_to_4_idxs_ptr(...)`, and keeps the existing accepted-neighbor logic plus scalar tail fallback unchanged
+  - re-ran the deterministic bitset diagnosis lane against the preserved Task-14 canonical baseline: recall stayed fixed at `0.9942`, visited / distance / frontier counters stayed identical, and bitset-lane qps improved by about `+15.68%`, `+17.57%`, `+16.50%`, and `+17.81%` across `ef=64/96/128/160`
+  - validated one same-code `/tmp` rerun on the new code: recall and all traversal counters stayed identical again, while median-qps drift was only about `+0.84%`, `+1.83%`, `+0.60%`, and `-0.58%`, which leaves the measured Task-16 gain well outside the lane noise floor
+- Verification:
+  - `cargo test --test bench_hnsw_generic_search_kernel -- --nocapture` -> initial `FAIL` (missing `shared_bitset_distance_mode`), then `ok`
+  - `cargo test test_search_layer_idx_shared_uses_batch4_distance_when_grouping_layer0_neighbors --lib -- --nocapture` -> initial `FAIL` (`layer0_batch4_calls == 0`), then `ok`
+  - `cargo test test_shared_layer_search_matches_generic_layer0_results --lib -- --nocapture` -> `ok`
+  - `cargo test test_shared_layer_search_matches_bitset_layer0_results --lib -- --nocapture` -> `ok`
+  - `cargo test test_search_layer_idx_shared_cached_worst_threshold_resets_across_calls --lib -- --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (rustfmt diff in `src/faiss/hnsw.rs`), then `ok` after `cargo fmt --all`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.local.json --diagnosis-output benchmark_results/hnsw_search_cost_diagnosis.json --bitset-diagnosis-output benchmark_results/hnsw_bitset_search_cost_diagnosis.json --bitset-step 3 --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95 --random-seed 42 --repeat 3` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/rs_hnsw_sift128.task16.rerun2.json --diagnosis-output /tmp/hnsw_search_cost_diagnosis.task16.rerun2.json --bitset-diagnosis-output /tmp/hnsw_bitset_search_cost_diagnosis.task16.rerun2.json --bitset-step 3 --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95 --random-seed 42 --repeat 3` -> `ok`
+  - `cargo test --test bench_hnsw_generic_search_kernel -- --nocapture` -> `ok`
+  - `cargo test --test bench_hnsw_search_first_bitset_diagnosis -- --nocapture` -> `ok`
+  - `cargo test hnsw --lib -- --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - this is still local-only evidence; it does not change the archived HNSW authority verdict
+  - unlike Task 14 and unlike the rejected Task 15 line, this slice produces a large positive signal on the deterministic bitset lane while preserving recall and all traversal counters, so the current evidence is strong enough to promote the grouped shared bitset batch-4 path as the next authority-worthy `search_first` direction
+  - the unfiltered local diagnosis artifact only moved within a much smaller `-0.97% .. +3.78%` band while keeping counters fixed, which is consistent with Task 16 being a targeted bitset/shared-path optimization rather than a broad generic-kernel rewrite
+  - if the HNSW `search_first` line continues, the next step should be a tracked authority-grade reopen focused on validating this grouped shared bitset batch-4 mechanism on the same-schema remote lane before taking on a broader generic-kernel rewrite
+
+### Session 80 - 2026-03-14
+- Focus: `hnsw-search-first-task15`
+- Completed:
+  - wrote a focused design doc in `docs/superpowers/specs/2026-03-14-hnsw-search-first-task15-result-container-swap-design.md` and a matching execution plan in `docs/superpowers/plans/2026-03-14-hnsw-search-first-task15.md`, narrowing the next `search_first` slice down to one bigger shared-kernel hypothesis: replace the shared generic/bitset bounded result heap with a scratch-owned sorted result container while keeping `generic_frontier` unchanged
+  - extended the public contract in `tests/bench_hnsw_generic_search_kernel.rs` and `src/faiss/hnsw.rs` so the shared kernel temporarily reported `shared_result_container_mode=sorted_scratch_vec`, then implemented a local-only Task-15 prototype in `src/faiss/hnsw.rs` that swapped the shared generic/bitset result container from `BinaryHeap<(SearchMaxDist, usize)>` to a sorted scratch vector
+  - validated the prototype against focused shared-kernel regressions and the existing generic/bitset layer-0 result locks, then re-ran the deterministic bitset diagnosis lane against the Task-14 canonical baseline
+  - observed a stable negative local result: recall stayed flat at `0.9942`, visited / distance / frontier counters matched the Task-14 baseline exactly after tie-order correction, but bitset-lane qps regressed by about `-1.60%`, `-2.85%`, `-2.81%`, and `-2.44%` across `ef=64/96/128/160`
+  - validated one same-code `/tmp` rerun on the rejected code: median-qps drift was about `-1.62%`, `+1.33%`, `+0.56%`, and `-0.44%`, which confirms the Task-15 direction is a real local regression rather than timing noise
+  - reverted the Task-15 code path so the workspace returns to the Task-14 shared-kernel state, then regenerated the canonical local HNSW diagnosis artifacts to match the preserved code
+- Verification:
+  - `cargo test --test bench_hnsw_generic_search_kernel -- --nocapture` -> initial `FAIL` (missing `shared_result_container_mode`), then `ok`
+  - `cargo test test_search_layer_idx_shared_sorted_results_stay_nearest_first_across_calls --lib -- --nocapture` -> initial `FAIL` (missing `SearchScratch.shared_results`), then `ok`
+  - `cargo test test_shared_layer_search_matches_generic_layer0_results --lib -- --nocapture` -> `ok`
+  - `cargo test test_shared_layer_search_matches_bitset_layer0_results --lib -- --nocapture` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.local.json --diagnosis-output benchmark_results/hnsw_search_cost_diagnosis.json --bitset-diagnosis-output benchmark_results/hnsw_bitset_search_cost_diagnosis.json --bitset-step 3 --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95 --random-seed 42 --repeat 3` -> `ok` on the Task-15 prototype, then `ok` again after reverting to restore canonical local artifacts
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/rs_hnsw_sift128.task15.rerun2.json --diagnosis-output /tmp/hnsw_search_cost_diagnosis.task15.rerun2.json --bitset-diagnosis-output /tmp/hnsw_bitset_search_cost_diagnosis.task15.rerun2.json --bitset-step 3 --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95 --random-seed 42 --repeat 3` -> `ok`
+  - `cargo test --test bench_hnsw_generic_search_kernel -- --nocapture` -> `ok` after reverting
+  - `cargo test test_search_layer_idx_shared_cached_worst_threshold_resets_across_calls --lib -- --nocapture` -> `ok` after reverting
+  - `cargo test test_shared_layer_search_matches_bitset_layer0_results --lib -- --nocapture` -> `ok` after reverting
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - this is still local-only evidence; it does not change the archived HNSW authority verdict
+  - unlike Task 14, this line produced a clean negative signal rather than noise: the sorted shared result container made the deterministic bitset lane slower even after preserving recall and traversal counters
+  - the code for this rejected hypothesis was intentionally reverted; only the spec/plan docs and durable screen record remain
+  - the next local step should not revisit `result container swap` in this form; if the `search_first` line continues, it needs a different mechanism than replacing the shared result heap with a sorted vector
+
+### Session 79 - 2026-03-14
+- Focus: `hnsw-search-first-task14`
+- Completed:
+  - wrote a focused design doc in `docs/superpowers/specs/2026-03-14-hnsw-search-first-task14-frontier-result-reuse-design.md` and a matching execution plan in `docs/superpowers/plans/2026-03-14-hnsw-search-first-task14.md`, narrowing the next `search_first` slice down to one measurable shared-kernel cost: cache the current worst accepted result in `SearchScratch` so `search_layer_idx_shared(...)` stops re-reading `generic_results.peek()` throughout the hot loop
+  - extended `tests/bench_hnsw_generic_search_kernel.rs` and `src/faiss/hnsw.rs` so the public `generic_search_kernel_report()` now exposes `shared_result_threshold_mode=scratch_cached_worst`, turning the shared-kernel result-threshold mode into a locked contract
+  - extended `SearchScratch` with `generic_worst_result_distance`, reset it in `prepare_generic_heaps(...)`, synchronized it only when `generic_results` changed, and rewired `search_layer_idx_shared(...)` to use that cached threshold for early-stop and accepted-neighbor checks while leaving the underlying result heap as the source of truth for output ordering
+  - added a focused library regression proving the cached worst-threshold refreshes across repeated shared-kernel calls on the same scratch buffer, while existing generic/bitset layer-0 result locks continued to pass
+  - re-ran the deterministic bitset diagnosis lane against the Task-13 canonical baseline: recall stayed flat at `0.9942`, visited / distance / frontier counters stayed identical, and bitset-lane qps moved by about `+0.31%`, `-0.11%`, `+0.16%`, and `+0.84%` across `ef=64/96/128/160`
+  - validated one same-code `/tmp` rerun on the new code: the bitset diagnosis lane again held recall and all traversal counters exactly constant, while median-qps drift was about `-0.30%`, `+0.78%`, `+0.63%`, and `-0.50%`, so the observed Task-14 delta does not beat the lane’s own noise floor
+- Verification:
+  - `cargo test --test bench_hnsw_generic_search_kernel -- --nocapture` -> initial `FAIL` (missing `shared_result_threshold_mode`), then `ok`
+  - `cargo test test_search_layer_idx_shared_cached_worst_threshold_resets_across_calls --lib -- --nocapture` -> initial `FAIL` (missing `SearchScratch.generic_worst_result_distance`), then `ok`
+  - `cargo test test_shared_layer_search_matches_generic_layer0_results --lib -- --nocapture` -> `ok`
+  - `cargo test test_shared_layer_search_matches_bitset_layer0_results --lib -- --nocapture` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.local.json --diagnosis-output benchmark_results/hnsw_search_cost_diagnosis.json --bitset-diagnosis-output benchmark_results/hnsw_bitset_search_cost_diagnosis.json --bitset-step 3 --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95 --random-seed 42 --repeat 3` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/rs_hnsw_sift128.task14.rerun2.json --diagnosis-output /tmp/hnsw_search_cost_diagnosis.task14.rerun2.json --bitset-diagnosis-output /tmp/hnsw_bitset_search_cost_diagnosis.task14.rerun2.json --bitset-step 3 --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95 --random-seed 42 --repeat 3` -> `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (rustfmt diff in `src/faiss/hnsw.rs`), then `ok` after `cargo fmt --all`
+  - `cargo test --test bench_hnsw_generic_search_kernel -- --nocapture` -> `ok`
+  - `cargo test --test bench_hnsw_search_first_bitset_diagnosis -- --nocapture` -> `ok`
+  - `cargo test hnsw --lib -- --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+- Result:
+  - `screen_result=needs_more_local`
+- Notes:
+  - this is still local-only evidence; it does not change the archived HNSW authority verdict
+  - the cached worst-threshold direction is structurally sound and keeps the shared kernel cleaner, but on the deterministic bitset lane it behaves like a sub-1% micro-optimization rather than another promotable throughput slice
+  - the next local step should stay on the shared generic/bitset kernel and look for a larger lever than worst-threshold caching alone, likely around accepted-neighbor frontier/result mutation or a bigger layer-0 result-management cut that the same deterministic bitset lane can observe
+
+### Session 78 - 2026-03-14
+- Focus: `hnsw-search-first-task13`
+- Completed:
+  - wrote a focused follow-on plan in `docs/superpowers/plans/2026-03-14-hnsw-search-first-task13.md`, narrowing the next `search_first` slice down to one higher-leverage generic/bitset optimization the new bitset lane can actually observe: route the shared L2 layer-0 traversal through `layer0_flat_graph` so the shared kernel stops paying canonical neighbor indirection and `id -> idx` conversion on that path
+  - extended `tests/bench_hnsw_generic_search_kernel.rs` and `src/faiss/hnsw.rs` so the public `generic_search_kernel_report()` now exposes `shared_layer0_neighbor_layout=flat_u32_adjacency_when_enabled`, turning the shared-kernel layer-0 neighbor layout into a locked contract
+  - updated `search_layer_idx_shared(...)` so the shared generic/bitset kernel now uses `layer0_flat_graph.neighbors_for(...)` when the query is on layer 0, the metric is L2, and the flat graph is enabled, while keeping the existing canonical `layer_neighbors[level].ids` path for non-L2 or non-flat-graph cases and preserving bitset semantics, frontier ordering, and profile accounting
+  - re-ran the deterministic bitset diagnosis lane against the new shared layer-0 flat-neighbor path and compared it to the Task-12 canonical baseline: recall stayed flat at `0.9942`, visited and distance counts stayed identical, and bitset-lane qps improved by about `+15.21%`, `+14.86%`, `+13.11%`, and `+13.58%` across `ef=64/96/128/160`
+  - validated one same-code `/tmp` rerun on the new code: the bitset diagnosis lane again held recall / visited / distance-calls exactly constant, while median-qps drift stayed around `-0.20%`, `-0.67%`, `-0.82%`, and `+0.15%`, which is well below the measured Task-13 gain and makes this the first clearly promotable local kernel slice on the dedicated bitset lane
+- Verification:
+  - `cargo test --test bench_hnsw_generic_search_kernel -- --nocapture` -> initial `FAIL` (missing `shared_layer0_neighbor_layout`), then `ok`
+  - `cargo test test_shared_layer_search_matches_generic_layer0_results --lib -- --nocapture` -> `ok`
+  - `cargo test test_shared_layer_search_matches_bitset_layer0_results --lib -- --nocapture` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.local.json --diagnosis-output benchmark_results/hnsw_search_cost_diagnosis.json --bitset-diagnosis-output benchmark_results/hnsw_bitset_search_cost_diagnosis.json --bitset-step 3 --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95 --random-seed 42 --repeat 3` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/rs_hnsw_sift128.task13.rerun2.json --diagnosis-output /tmp/hnsw_search_cost_diagnosis.task13.rerun2.json --bitset-diagnosis-output /tmp/hnsw_bitset_search_cost_diagnosis.task13.rerun2.json --bitset-step 3 --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95 --random-seed 42 --repeat 3` -> `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (rustfmt diff in `src/faiss/hnsw.rs`), then `ok` after `cargo fmt --all`
+  - `cargo test --test bench_hnsw_generic_search_kernel -- --nocapture` -> `ok`
+  - `cargo test --test bench_hnsw_search_first_bitset_diagnosis -- --nocapture` -> `ok`
+  - `cargo test hnsw --lib -- --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - this is still local-only evidence; it does not change the archived HNSW authority verdict
+  - unlike Task 12, this slice produces a throughput gain that is an order of magnitude larger than same-code drift on the dedicated bitset lane, so the local evidence is now strong enough to justify promoting the shared layer-0 flat-neighbor path as the current best `search_first` direction
+  - the next local step should keep working on the shared generic/bitset kernel rather than changing harnesses again, and should target the next largest remaining layer-0 neighbor-access or result-management cost on the same deterministic bitset lane
+
+### Session 77 - 2026-03-14
+- Focus: `hnsw-search-first-task12`
+- Completed:
+  - wrote a focused follow-on plan in `docs/superpowers/plans/2026-03-14-hnsw-search-first-task12.md`, narrowing the first real post-Task-11 kernel slice down to one change the new bitset lane can actually observe: make `search_layer_idx_shared(...)` use the pointer-specialized L2 distance helper instead of the generic `self.distance(...)` dispatch when the metric is L2
+  - extended `tests/bench_hnsw_generic_search_kernel.rs` and `src/faiss/hnsw.rs` so the public `generic_search_kernel_report()` now exposes `shared_l2_distance_dispatch=idx_ptr_kernel`, turning the shared-kernel L2 dispatch mode into a locked contract
+  - specialized `search_layer_idx_shared(...)` for L2 by precomputing `query_ptr` / `base_ptr` and routing entry-point plus neighbor distance evaluation through `l2_distance_to_idx_ptr(...)`, while keeping the shared generic traversal structure, bitset semantics, frontier ordering, and non-L2 fallback unchanged
+  - re-ran the deterministic bitset diagnosis lane against the new shared-kernel L2 path and compared it to the Task-11 canonical baseline: recall stayed flat at `0.9942`, visited and distance counts stayed identical, and bitset-lane qps moved by about `+0.19%`, `+1.28%`, `+1.81%`, and `+0.79%` across `ef=64/96/128/160`
+  - validated one same-code `/tmp` rerun on the new code: the bitset diagnosis lane again held recall / visited / distance-calls exactly constant, but median-qps drift on the new code was still about `+0.14%`, `+1.36%`, `+0.50%`, and `+0.44%`, so the observed gain remains too close to the lane’s own noise floor to treat as promotable evidence
+- Verification:
+  - `cargo test --test bench_hnsw_generic_search_kernel -- --nocapture` -> initial `FAIL` (missing `shared_l2_distance_dispatch`), then `ok`
+  - `cargo test test_shared_layer_search_matches_generic_layer0_results --lib -- --nocapture` -> `ok`
+  - `cargo test test_shared_layer_search_matches_bitset_layer0_results --lib -- --nocapture` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.local.json --diagnosis-output benchmark_results/hnsw_search_cost_diagnosis.json --bitset-diagnosis-output benchmark_results/hnsw_bitset_search_cost_diagnosis.json --bitset-step 3 --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95 --random-seed 42 --repeat 3` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/rs_hnsw_sift128.task12.rerun2.json --diagnosis-output /tmp/hnsw_search_cost_diagnosis.task12.rerun2.json --bitset-diagnosis-output /tmp/hnsw_bitset_search_cost_diagnosis.task12.rerun2.json --bitset-step 3 --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95 --random-seed 42 --repeat 3` -> `ok`
+  - `cargo test --test bench_hnsw_search_first_bitset_diagnosis -- --nocapture` -> `ok`
+  - `cargo test hnsw --lib -- --nocapture` -> `ok`
+  - `cargo fmt --all` -> `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+- Result:
+  - `screen_result=needs_more_local`
+- Notes:
+  - this is the first real kernel slice measured against the new bitset lane, and the sign is encouraging, but the magnitude is still too close to same-code drift to justify a stronger claim
+  - the next local step should target a higher-leverage generic/bitset bottleneck than distance dispatch alone, or accumulate more repeated local evidence before deciding whether the L2 specialization deserves promotion
+
+### Session 76 - 2026-03-14
+- Focus: `hnsw-search-first-task11`
+- Completed:
+  - wrote a focused follow-on plan in `docs/superpowers/plans/2026-03-14-hnsw-search-first-task11.md`, narrowing the next `search_first` slice down to measurement rather than more blind kernel edits: add a dedicated deterministic bitset/generic diagnosis lane because the existing local HDF5 lane is dominated by the layer-0 L2 fast path
+  - added `tests/bench_hnsw_search_first_bitset_diagnosis.rs` as the new outer contract for this branch, first using the missing `benchmark_results/hnsw_bitset_search_cost_diagnosis.json` artifact as the TDD red signal for the new lane
+  - extended `src/faiss/hnsw.rs` with `search_single_candidate_profiled_with_bitset(...)` and public `search_cost_diagnosis_with_bitset(...)`, reusing the existing `HnswCandidateSearchProfileStats` counters so the filtered/generic path can now report visited/frontier/distance counts without changing production search APIs
+  - extended `src/bin/generate_hdf5_hnsw_baseline.rs` with deterministic bitset replay support: `--bitset-diagnosis-output`, `--bitset-step`, filtered exact-ground-truth generation, repeated `search_with_bitset(...)` execution, and a new local artifact `benchmark_results/hnsw_bitset_search_cost_diagnosis.json`
+  - generated the first canonical bitset diagnosis artifact on the local `sift-128-euclidean.hdf5` lane with `bitset_step=3` and `random_seed=42`; the artifact reports `filtered_fraction=0.33334`, flat recall `0.9942` across the `ef` sweep, qps around `3710..3755`, and steadily increasing visited/distance counts from `ef=64` through `ef=160`
+  - validated the new lane with one same-code `/tmp` rerun: recall, visited-node counts, and distance-call counts matched exactly across reruns, and median-qps drift stayed within roughly `-0.47% .. +1.01%`, which is good enough to treat the new bitset lane as a stable local screen surface for future generic/bitset kernel work
+- Verification:
+  - `cargo test --test bench_hnsw_search_first_bitset_diagnosis -- --nocapture` -> initial `FAIL` (missing `benchmark_results/hnsw_bitset_search_cost_diagnosis.json`), then `ok`
+  - `cargo test test_search_cost_diagnosis_with_bitset_reports_visited_nodes --lib -- --nocapture` -> initial `FAIL` (missing `search_cost_diagnosis_with_bitset()`), then `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.local.json --diagnosis-output benchmark_results/hnsw_search_cost_diagnosis.json --bitset-diagnosis-output benchmark_results/hnsw_bitset_search_cost_diagnosis.json --bitset-step 3 --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95 --random-seed 42 --repeat 3` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/rs_hnsw_sift128.task11.rerun2.json --diagnosis-output /tmp/hnsw_search_cost_diagnosis.task11.rerun2.json --bitset-diagnosis-output /tmp/hnsw_bitset_search_cost_diagnosis.task11.rerun2.json --bitset-step 3 --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95 --random-seed 42 --repeat 3` -> `ok`
+  - `cargo test hnsw --lib -- --nocapture` -> `ok`
+  - `cargo fmt --all` -> `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - this is still local-only screen infrastructure work; it does not change the archived HNSW authority verdict
+  - unlike Task 10, this slice produces a positive reusable outcome: the new bitset diagnosis lane is stable enough to guide future `search_first` slices on the generic/bitset path without depending on the layer-0 L2 fast path
+  - the next local step should stop changing harnesses and use `benchmark_results/hnsw_bitset_search_cost_diagnosis.json` as the baseline for a real generic/bitset kernel optimization
+
+### Session 75 - 2026-03-14
+- Focus: `hnsw-search-first-task10`
+- Completed:
+  - wrote a focused follow-on plan in `docs/superpowers/plans/2026-03-14-hnsw-search-first-task10.md`, narrowing the next `search_first` slice down to one concrete kernel change: stop allocating fresh generic frontier/result heaps on every layer-search call, while still leaving the layer-0 ordered-pool fast path untouched
+  - extended `tests/bench_hnsw_generic_search_kernel.rs` and `src/faiss/hnsw.rs` so the public `generic_search_kernel_report()` now records the broader scratch reuse scope: both generic and bitset layer-search still report `shared_idx_binary_heap`, but frontier/results now explicitly report `scratch_binary_heap` and `visited_reuse_scope=visited_epoch_and_generic_heaps`
+  - moved reusable generic frontier/result heaps into `SearchScratch`, added focused preparation/drain helpers, and rewired both `search_layer_idx_shared(...)` and `search_layer_idx_l2_heap_with_optional_profile(...)` to reuse those scratch-owned `BinaryHeap`s instead of allocating fresh heaps per call; sorted nearest-first output, filtered-entry semantics, and existing profile accounting were all kept intact
+  - added focused library tests proving the scratch-backed generic heap capacities survive across repeated calls for both the shared generic kernel and the upper-layer L2 heap kernel, while preserving the previous result sets
+  - re-ran the seeded repeat-3 local HDF5 diagnosis lane and one same-code `/tmp` rerun: recall, visited-node counts, and distance-call counts stayed exactly identical across reruns, but median qps moved only `-0.81% .. +1.42%` versus the prior canonical baseline and then `-0.27% .. +1.01%` between same-code reruns, so this slice still lands inside the established local noise band rather than producing a promotable throughput signal
+- Verification:
+  - `cargo test --test bench_hnsw_generic_search_kernel -- --nocapture` -> initial `FAIL` (missing `frontier_reuse_scope` / `result_reuse_scope`), then `ok`
+  - `cargo test test_search_layer_idx_shared_reuses_generic_heap_capacity_across_calls --lib -- --nocapture` -> initial `FAIL` (missing `SearchScratch.generic_frontier` / `generic_results`), then `ok`
+  - `cargo test test_search_layer_idx_l2_heap_reuses_generic_heap_capacity_across_calls --lib -- --nocapture` -> initial `FAIL` (missing `SearchScratch.generic_frontier` / `generic_results`), then `ok`
+  - `cargo test hnsw --lib -- --nocapture` -> `ok`
+  - `cargo fmt --all` -> `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.local.json --diagnosis-output benchmark_results/hnsw_search_cost_diagnosis.json --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95 --random-seed 42 --repeat 3` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/rs_hnsw_sift128.task10.rerun2.json --diagnosis-output /tmp/hnsw_search_cost_diagnosis.task10.rerun2.json --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95 --random-seed 42 --repeat 3` -> `ok`
+- Result:
+  - `screen_result=needs_more_local`
+- Notes:
+  - this slice is still local-only `search_first` work; it does not change the archived HNSW authority verdict
+  - the code direction is still correct because generic/L2 heap layer-search now truly reuses scratch-owned frontier/result state, but the current local HDF5 diagnosis lane remains dominated by the layer-0 ordered-pool L2 fast path, so this allocation-reuse slice does not create a clean end-to-end throughput signal on its own
+  - the next local step should target a kernel change that materially affects the seeded diagnosis lane, or else add a dedicated generic/bitset diagnosis surface if the goal is to keep iterating on the non-fast-path search core
 
 ### Session 74 - 2026-03-14
 - Focus: `hnsw-fairness-gate`
@@ -42,6 +310,36 @@
   - the Rust baseline binary change should be replayed on the remote authority host once the shared remote test lock is free
 - Git Commits: pending
 
+### Session 74a - 2026-03-14
+- Focus: `hnsw-search-first-task9`
+- Completed:
+  - wrote a focused execution plan in `docs/superpowers/plans/2026-03-14-hnsw-search-first-task9.md`, narrowing the broad unified-core roadmap down to the first `search_first` code slice: unify the generic `idx`-based traversal used by unfiltered and bitset-filtered HNSW layer search without touching the L2 ordered-pool fast path
+  - added `tests/bench_hnsw_generic_search_kernel.rs` as the new outer contract for this branch, first using the missing `generic_search_kernel_report()` API as the TDD red signal, then locking that the public report now declares one shared `shared_idx_binary_heap` core and that the small bitset fixture still returns the same filtered IDs
+  - refactored `src/faiss/hnsw.rs` so `search_layer_idx_with_optional_profile()` and `search_layer_idx_with_bitset_scratch()` now both route through one new `search_layer_idx_shared(...)` helper backed by `idx + SearchScratch + BinaryHeap`, and added focused library tests proving the shared helper preserves the prior unfiltered and bitset layer-0 results on deterministic fixtures
+  - investigated the first post-refactor diagnosis rerun and found that the local HDF5 harness was still polluted by HNSW build drift: `generate_hdf5_hnsw_baseline` rebuilds the index every run, while `HnswIndex::random_level()` had been ignoring the existing `config.params.random_seed` knob and always pulling from `thread_rng()`
+  - fixed that measurement root cause by wiring `config.params.random_seed` into HNSW level generation in `src/faiss/hnsw.rs`, then extending `src/bin/generate_hdf5_hnsw_baseline.rs` with `--random-seed` plus a `build_random_seed` field in the diagnosis artifact; re-generated `benchmark_results/hnsw_search_cost_diagnosis.json` with `--random-seed 42`
+  - validated the seeded local diagnosis lane by running the same HDF5 command twice with `--random-seed 42`: recall, visited-node counts, and distance-call counts matched exactly across reruns, which means future local `search_first` comparisons can now hold graph shape constant even though one-shot qps still shows runtime noise
+  - tightened the remaining timing noise by extending `src/bin/generate_hdf5_hnsw_baseline.rs` with `--repeat` and median-qps aggregation, then re-generated the seeded diagnosis artifact with `--random-seed 42 --repeat 3`; two same-seed repeat-3 reruns kept recall/visited counters identical and held median-qps drift to roughly `-0.64% .. +1.12%` across the `ef` sweep, which is good enough for local `search_first` timing hygiene even though it is still not authority evidence
+- Verification:
+  - `cargo test --test bench_hnsw_generic_search_kernel -- --nocapture` -> initial `FAIL` (missing `generic_search_kernel_report()`), then `ok`
+  - `cargo test test_shared_layer_search_matches_generic_layer0_results --lib -- --nocapture` -> `ok`
+  - `cargo test test_shared_layer_search_matches_bitset_layer0_results --lib -- --nocapture` -> `ok`
+  - `cargo test test_random_level_uses_config_random_seed --lib -- --nocapture` -> initial `FAIL` (HNSW ignored `config.params.random_seed`), then `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline build_hnsw_config_carries_random_seed -- --nocapture` -> initial `FAIL` (missing `build_hnsw_config()`), then `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.local.json --diagnosis-output benchmark_results/hnsw_search_cost_diagnosis.json --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/rs_hnsw_sift128.seed42.rerun2.json --diagnosis-output /tmp/hnsw_search_cost_diagnosis.seed42.rerun2.json --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline median_f64_sorts_before_picking_middle_value -- --nocapture` -> initial `FAIL` (missing `median_f64()`), then `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.local.json --diagnosis-output benchmark_results/hnsw_search_cost_diagnosis.json --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95 --random-seed 42 --repeat 3` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/rs_hnsw_sift128.seed42.repeat3.rerun2.json --diagnosis-output /tmp/hnsw_search_cost_diagnosis.seed42.repeat3.rerun2.json --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95 --random-seed 42 --repeat 3` -> `ok`
+  - `cargo test hnsw --lib -- --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (rustfmt diffs), then `ok` after `cargo fmt --all`
+- Result:
+  - `screen_result=needs_more_local`
+- Notes:
+  - this is the first code-bearing local `search_first` slice after the Stage-1 decision gate; it is not an authority benchmark refresh and does not change the archived HNSW family verdict
+  - the seeded rerun plus `repeat=3` median aggregation now gives a usable local diagnosis baseline: graph-shape counters are deterministic and median qps drift is down to about 1% between same-seed reruns, so future local `search_first` slices can compare against this harness without immediately reopening authority work
+  - the next local step should return to actual kernel work rather than more harness cleanup: use this seeded repeat-3 diagnosis lane as the baseline for the next pure-Rust `search_first` optimization, then decide whether the observed local delta is large enough to promote into tracked authority-grade HNSW work
+  - worktree creation and git commit remain blocked by sandbox restrictions on `.git/*.lock`, so the refactor is preserved only in the current workspace
 ### Session 73 - 2026-03-14
 - Focus: `project-performance-governance`
 - Completed:
@@ -57,6 +355,27 @@
 - Notes:
   - the active project-level blocker is the HNSW fair-compare gate recorded in `docs/performance-program.md`; any future reopen should satisfy that gate before claiming leadership progress
 - Git Commits: pending
+
+### Session 73a - 2026-03-13
+- Focus: `hnsw-unified-core-rewrite-stage1`
+- Completed:
+  - executed the first local `screen` slice for the pure-Rust HNSW unified core rewrite line, replacing another isolated reopen hypothesis with a small diagnosis package: a baseline-lock contract in `tests/bench_hnsw_core_rewrite_stage1.rs`, a frozen baseline artifact in `benchmark_results/hnsw_core_rewrite_baseline_lock.json`, a reusable `graph_diagnosis_report()` surface plus `hnsw_graph_diagnose` CLI, and a local Rust graph artifact in `benchmark_results/hnsw_graph_diagnosis_rust.json`
+  - added a minimal reusable `search_cost_diagnosis()` surface in `src/faiss/hnsw.rs` and extended `src/bin/generate_hdf5_hnsw_baseline.rs` with optional diagnosis output plus `--ef-sweep`; generated `benchmark_results/hnsw_search_cost_diagnosis.json` from the local `data/sift/sift-128-euclidean.hdf5` lane
+  - wrote `benchmark_results/hnsw_core_rewrite_decision_gate.json`, freezing the local Stage-1 conclusion as `selected_branch=search_first`: on the fixed local HDF5 screen, recall stayed flat from `ef=64` through `ef=160`, while visited nodes and distance calls roughly doubled, so the next pure-Rust rewrite should target the generic search kernel before assuming graph quality is the dominant limiter
+- Verification:
+  - `cargo test --test bench_hnsw_core_rewrite_stage1 -- --nocapture` -> red/green sequence completed, final `ok`
+  - `cargo test test_graph_diagnosis_report_counts_nodes --lib -- --nocapture` -> initial `FAIL`, then `ok`
+  - `cargo test test_graph_diagnosis_report_has_layer0_degree_summary --lib -- --nocapture` -> `ok`
+  - `cargo test test_search_cost_diagnosis_reports_visited_nodes --lib -- --nocapture` -> initial `FAIL`, then `ok`
+  - `cargo run --release --bin hnsw_graph_diagnose -- --output benchmark_results/hnsw_graph_diagnosis_rust.json` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.local.json --diagnosis-output benchmark_results/hnsw_search_cost_diagnosis.json --ef-sweep 64,96,128,160 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --recall-gate 0.95` -> `ok`
+  - `cargo test hnsw --lib -- --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> initial `FAIL` (formatting diffs), then `ok` after `cargo fmt --all`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - this Stage-1 conclusion is local screen evidence only; it is not an authority or stop-go claim
+  - worktree creation and git commit steps were blocked by sandbox restrictions on `.git/*.lock`, so the code and artifacts are preserved in the current workspace without intermediate commits
 
 ### Session 72 - 2026-03-13
 - Focus: `hnsw-round11-authority-same-schema-rerun`
