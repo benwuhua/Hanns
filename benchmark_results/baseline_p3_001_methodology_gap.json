@@ -20,8 +20,8 @@
     "rust_full_dataset_probe": {
       "index": "HNSW(Rust)",
       "params": "M=16 | efConstruction=100, ef=138, top_k=100, recall_at=10",
-      "qps": 710.9623183892526,
-      "recall_at_10": 0.9914999999999993,
+      "qps": 2315.890476249884,
+      "recall_at_10": 0.9885999999999988,
       "ground_truth_source": "ann_benchmarks_hdf5_neighbors",
       "confidence": "trusted"
     },
@@ -35,9 +35,9 @@
     }
   },
   "notes": [
-    "release-mode layer-0 fix refresh shows the previous full-dataset recall collapse is no longer present: Rust now reaches recall@10≈0.9915 on the same HDF5 methodology.",
+    "release-mode fair-ef refresh shows the previous full-dataset recall collapse is still gone: Rust now reaches recall@10≈0.9886 on the same HDF5 methodology with requested/effective ef both fixed at 138.",
     "当前 methodology gap 仍未完全消失，因为 slice artifact 与 full-dataset artifact 的 top-k / build params 口径不同，但它已不再主导结论。",
-    "剩余主缺口已经转为同 schema 性能差距：native trusted BF16 row qps≈10524.841，而刷新后的 Rust row qps≈710.962。",
-    "后续 HNSW 结论应围绕性能/生产契约，而不是继续把问题描述为 full-dataset recall 不可信。"
+    "剩余主缺口已经转为同 schema 性能与公平门差距：native trusted BF16 row qps≈10524.841，而刷新后的 Rust fair-ef row qps≈2315.890，且 datatype / dispatch 仍未对齐。",
+    "后续 HNSW 结论应围绕 fair-lane 性能与生产契约，而不是继续把问题描述为 full-dataset recall 不可信。"
   ]
 }

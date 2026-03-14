@@ -22,6 +22,28 @@
 
 ## Session Log
 
+### Session 88 - 2026-03-14
+- Focus: `hnsw-fairness-gate-effective-ef-authority-rerun`
+- Completed:
+  - tightened the fairness gate and compare-lane verdict contracts first, confirming TDD red against the stale `effective_ef=200` authority artifacts and the stale `14.8x` HNSW summary text before touching any JSON evidence
+  - re-synced the workspace to the remote x86 host, replayed a remote `cargo test --lib -q` smoke in the isolated authority directories `/data/work/knowhere-rs-target-hnsw-fairness-effective-ef` and `/data/work/knowhere-rs-logs-hnsw-fairness-effective-ef`, and confirmed the remote library lane stayed green even though the local SSH control channel again timed out after the remote status had already reached `ok`
+  - ran the fair-lane same-schema Rust HDF5 baseline on the authority host with `--hnsw-adaptive-k 0`, pulled the refreshed `benchmark_results/rs_hnsw_sift128.full_k100.json` back into the local worktree, and captured a new authoritative Rust row at `2315.890` qps / `0.9886` recall with `requested_ef_search=138`, `effective_ef_search=138`, and `adaptive_k=0.0`
+  - rebuilt the current-source same-schema, stop/go, family-verdict, final-proof, methodology-gap, and fairness-gate artifacts around that authority row; the effective-`ef` blocker is now closed mechanically, but `hnsw_fairness_gate.json` remains `fair_for_leadership_claim=false` because datatype and serial per-query dispatch still do not match native
+- Verification:
+  - `python3 -m unittest tests/test_hnsw_fairness_gate.py` -> initial `FAIL` (`adaptive_k=2.0`, `effective_ef_search=200`)
+  - `cargo test --test bench_hnsw_cpp_compare -- --nocapture` -> initial `FAIL` (stale `14.8x` HNSW verdict/proof artifacts), then `ok`
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-fairness-effective-ef KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-fairness-effective-ef bash scripts/remote/test.sh --command "cargo test --lib -q"` -> remote `status=ok` in `/data/work/knowhere-rs-logs-hnsw-fairness-effective-ef/test_20260314T094002Z_81798.log` and `.status`, local wrapper ended with SSH proxy timeout after completion
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-fairness-effective-ef KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-fairness-effective-ef bash scripts/remote/test.sh --command "cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --recall-gate 0.95"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-fairness-effective-ef/test_20260314T094327Z_83675.log`)
+  - `python3 -m unittest tests/test_hnsw_fairness_gate.py tests/test_baseline_methodology_lock.py` -> `ok`
+  - `cargo test --test bench_hnsw_cpp_compare -- --nocapture` -> `ok`
+- Result:
+  - `authority_result=effective_ef_blocker_closed`
+- Notes:
+  - this authority rerun materially improved the Rust same-schema row versus the previous `effective_ef=200` lane (`2315.890` qps vs `1497.689`) while preserving trusted recall above the native row (`0.9886` vs `0.95`)
+  - the fairness gate still blocks leadership claims because the lane remains `Float32` on Rust and `BF16` on native, and Rust still measures throughput via `serial_per_query_index_search`
+  - the next strategic step should stay on the same fairness track and target batch/query-dispatch parity first, with datatype parity treated as the remaining hard gating input for any honest leadership claim
+
 ### Session 87 - 2026-03-14
 - Focus: `hnsw-fairness-gate-effective-ef-screen`
 - Completed:

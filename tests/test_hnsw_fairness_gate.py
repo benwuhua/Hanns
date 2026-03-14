@@ -24,14 +24,10 @@ class HnswFairnessGateTests(unittest.TestCase):
         rust_report = load_json("rs_hnsw_sift128.full_k100.json")
         rust_row = rust_report["rows"][0]
         requested_ef = parse_param(rust_row["params"], "ef")
-        top_k = parse_param(rust_row["params"], "top_k")
-        expected_effective_ef = max(
-            requested_ef,
-            int(rust_row["adaptive_k"] * top_k),
-        )
 
         self.assertEqual(rust_row["requested_ef_search"], requested_ef)
-        self.assertEqual(rust_row["effective_ef_search"], expected_effective_ef)
+        self.assertEqual(rust_row["adaptive_k"], 0.0)
+        self.assertEqual(rust_row["effective_ef_search"], requested_ef)
         self.assertEqual(rust_row["vector_datatype"], "Float32")
         self.assertEqual(rust_row["query_dispatch_model"], "serial_per_query_index_search")
         self.assertEqual(rust_row["query_batch_size"], 1)
@@ -66,7 +62,8 @@ class HnswFairnessGateTests(unittest.TestCase):
         self.assertEqual(requested["rust_requested_ef_search"], rust_row["requested_ef_search"])
         self.assertEqual(requested["native_compare_ef_search"], parse_param(native_row["params"], "ef"))
 
-        self.assertFalse(effective["pass"])
+        self.assertTrue(effective["pass"])
+        self.assertEqual(effective["rust_adaptive_k"], rust_row["adaptive_k"])
         self.assertEqual(effective["rust_effective_ef_search"], rust_row["effective_ef_search"])
         self.assertEqual(effective["native_compare_ef_search"], parse_param(native_row["params"], "ef"))
 

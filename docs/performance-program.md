@@ -8,7 +8,7 @@
 - Program state: `blocked_on_hnsw_fairness_gate`
 - Next strategic track: `hnsw-fairness-gate`
 - North star lane: `HNSW same-schema remote x86`
-- Blocker summary: the current trusted final proof still ends with `criterion_met=false`, and the last HNSW reopen rounds did not produce a durable fair-lane leadership result.
+- Blocker summary: the current trusted final proof still ends with `criterion_met=false`; the fair-ef authority rerun has closed the effective-`ef` mismatch, but the HNSW lane still lacks datatype and query-dispatch parity.
 
 ## Fairness Gate
 
@@ -32,7 +32,7 @@
 
 ## Immediate Next Actions
 
-- Remove the dynamic effective-`ef` mismatch from the compare lane or encode the same policy on both sides.
+- Keep `--hnsw-adaptive-k 0` on the Rust same-schema authority lane unless a symmetric native effective-`ef` policy is introduced.
 - Add batch-first Rust authority search so throughput reflects real query parallelism instead of per-query serial dispatch.
-- Keep `benchmark_results/hnsw_fairness_gate.json` aligned with the Rust baseline artifact before any new authority rerun.
-- Rebuild the trusted baseline artifact chain on the fair lane before any new HNSW reopen round.
+- Match datatype before reading the fair-lane qps gap as leadership evidence.
+- Keep `benchmark_results/hnsw_fairness_gate.json` and the same-schema baseline artifact chain aligned with every future Rust authority rerun.

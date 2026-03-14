@@ -14,11 +14,11 @@
     },
     "effective_ef_alignment": {
       "rust_requested_ef_search": 138,
-      "rust_adaptive_k": 2.0,
+      "rust_adaptive_k": 0.0,
       "top_k": 100,
-      "rust_effective_ef_search": 200,
+      "rust_effective_ef_search": 138,
       "native_compare_ef_search": 138,
-      "pass": false
+      "pass": true
     },
     "datatype_alignment": {
       "rust_datatype": "Float32",
@@ -31,6 +31,6 @@
       "pass": false
     }
   },
-  "summary": "The current HNSW same-schema lane is not fair enough for leadership claims: requested ef is aligned, but Rust still runs with effective_ef=200 from adaptive_k=2.0, compares Float32 against native BF16, and measures throughput through serial per-query dispatch.",
-  "next_action": "Do not reopen leadership benchmarking until the Rust authority lane records matching effective ef, matching datatype, and a non-serial query-dispatch surface."
+  "summary": "The current HNSW same-schema lane still is not fair enough for leadership claims: requested ef and effective ef are now aligned, but Rust still compares Float32 against native BF16 and still measures throughput through serial per-query dispatch.",
+  "next_action": "Keep leadership benchmarking blocked until the Rust authority lane records matching datatype and a non-serial query-dispatch surface."
 }

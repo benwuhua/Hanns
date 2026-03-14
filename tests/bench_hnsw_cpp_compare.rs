@@ -50,6 +50,17 @@ fn find_family<'a>(artifact: &'a Value, family: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("family entry for {family} must exist"))
 }
 
+fn assert_close(actual: &Value, expected: f64) {
+    let actual = actual
+        .as_f64()
+        .expect("artifact metric fields must be numeric");
+    let delta = (actual - expected).abs();
+    assert!(
+        delta < 1e-9,
+        "expected {expected} but found {actual} (delta={delta})"
+    );
+}
+
 #[test]
 fn hnsw_compare_lane_blocks_leadership_claims_until_native_gap_closes() {
     let verdict = load_hnsw_final_verdict();
@@ -61,11 +72,17 @@ fn hnsw_compare_lane_blocks_leadership_claims_until_native_gap_closes() {
         "no_go_for_performance_leadership"
     );
     assert_eq!(verdict["leadership_claim_allowed"], false);
+    assert_close(&verdict["evidence"]["rust_recall_at_10"], 0.9885999999999988);
+    assert_close(&verdict["evidence"]["rust_qps"], 2315.890476249884);
+    assert_close(
+        &verdict["evidence"]["native_over_rust_qps_ratio"],
+        4.5446194921285095,
+    );
     assert!(
         verdict["summary"]
             .as_str()
             .expect("summary must be a string")
-            .contains("14.8x"),
+            .contains("4.5x"),
         "summary must disclose the current throughput gap that blocks leadership claims"
     );
 }
@@ -95,6 +112,9 @@ fn final_performance_proof_artifact_records_the_unmet_completion_criterion() {
         "trusted_but_blocked_by_native_qps_gap"
     );
     assert_eq!(hnsw["leadership_claim_allowed"], false);
+    assert_close(&hnsw["evidence"]["rust_recall_at_10"], 0.9885999999999988);
+    assert_close(&hnsw["evidence"]["rust_qps"], 2315.890476249884);
+    assert_close(&hnsw["evidence"]["native_over_rust_qps_ratio"], 4.5446194921285095);
 
     assert_eq!(ivfpq["classification"], "no-go");
     assert_eq!(ivfpq["leadership_status"], "family_no_go");

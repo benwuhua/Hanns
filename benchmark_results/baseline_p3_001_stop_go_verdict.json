@@ -2,7 +2,7 @@
   "task_id": "BASELINE-P3-001",
   "benchmark": "BASELINE-P3-001-stop-go-verdict",
   "verdict": "no_go_for_performance_leadership",
-  "verdict_date": "2026-03-11",
+  "verdict_date": "2026-03-14",
   "dataset": "sift-128-euclidean",
   "methodology": "hdf5_ann_benchmark_recall10",
   "methodology_fix": "Rust and native are now compared on refreshed full-dataset HDF5 rows with recall measured at 10 while searching top_k=100.",
@@ -14,22 +14,22 @@
   },
   "rust_same_schema_row": {
     "params": "M=16 | efConstruction=100, ef=138, top_k=100, recall_at=10",
-    "recall_at_10": 0.9914999999999993,
-    "qps": 710.9623183892526,
-    "qps_ratio_native_over_rust": 14.803655169580505
+    "recall_at_10": 0.9885999999999988,
+    "qps": 2315.890476249884,
+    "qps_ratio_native_over_rust": 4.5446194921285095
   },
-  "root_cause": "The layer-0 neighbor-selection repair closed the old recall-quality gap on the HDF5 same-schema lane, but the refreshed authority artifact still leaves a large throughput deficit: native BF16 remains about 14.8x faster at a slightly lower recall. The blocker is now performance leadership, not recall credibility.",
+  "root_cause": "The fair-ef authority rerun removed the old effective-ef mismatch on the HDF5 same-schema lane and materially narrowed the throughput gap, but native BF16 still remains about 4.5x faster at a slightly lower recall. The blocker is still performance leadership, not recall credibility, and the broader fairness gate remains open on datatype and dispatch.",
   "gap_summary": {
     "same_schema_hdf5": {
-      "rust_recall10": 0.9914999999999993,
+      "rust_recall10": 0.9885999999999988,
       "native_recall10": 0.95,
-      "recall_gap_native_minus_rust": -0.041499999999999315,
-      "rust_qps": 710.9623183892526,
+      "recall_gap_native_minus_rust": -0.03859999999999886,
+      "rust_qps": 2315.890476249884,
       "native_qps": 10524.841,
-      "qps_ratio_native_over_rust": 14.803655169580505
+      "qps_ratio_native_over_rust": 4.5446194921285095
     }
   },
-  "action": "close the remote-recall benchmark refresh as passing evidence, keep HNSW out of leadership claims, and continue with remaining production-contract / family-priority work rather than treating recall quality as the active blocker.",
+  "action": "archive the fair-ef authority refresh as passing evidence for the effective-ef blocker, keep HNSW out of leadership claims, and continue on datatype / dispatch parity rather than treating recall quality as the active blocker.",
   "artifacts": [
     "benchmark_results/rs_hnsw_sift128.full_k100.json",
     "benchmark_results/native_hnsw_sift128.remote.json",

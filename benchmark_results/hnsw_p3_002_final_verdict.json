@@ -4,7 +4,7 @@
   "classification": "functional-but-not-leading",
   "leadership_verdict": "no_go_for_performance_leadership",
   "leadership_claim_allowed": false,
-  "verdict_date": "2026-03-12",
+  "verdict_date": "2026-03-14",
   "authority_scope": "remote_x86_only",
   "methodology": "same_schema_hdf5_recall_gated_plus_contract_closure",
   "same_schema_source": "benchmark_results/baseline_p3_001_same_schema_hnsw_hdf5.json",
@@ -15,12 +15,12 @@
     "/data/work/knowhere-rs-logs-hnsw-ffi-contract-sync/test_20260311T172323Z_90911.log"
   ],
   "evidence": {
-    "rust_recall_at_10": 0.9914999999999993,
+    "rust_recall_at_10": 0.9885999999999988,
     "native_recall_at_10": 0.95,
-    "rust_qps": 710.9623183892526,
+    "rust_qps": 2315.890476249884,
     "native_qps": 10524.841,
-    "native_over_rust_qps_ratio": 14.803655169580505
+    "native_over_rust_qps_ratio": 4.5446194921285095
   },
-  "summary": "HNSW is functional-but-not-leading on the current remote x86 authority lane: recall and production contract gates are closed, but native remains about 14.8x faster on the trusted same-schema HDF5 benchmark.",
-  "action": "Archive HNSW as functional-but-not-leading, allow production-contract usage to rely on the closed FFI/persistence evidence, and keep HNSW out of performance-leadership claims until a new remote authority artifact materially closes the native throughput gap."
+  "summary": "HNSW remains functional-but-not-leading on the current remote x86 authority lane: recall and production contract gates are closed, the fair-ef same-schema rerun still leaves native about 4.5x faster, and the broader fairness gate is still open on datatype plus query dispatch.",
+  "action": "Archive HNSW as functional-but-not-leading, allow production-contract usage to rely on the closed FFI/persistence evidence, and keep HNSW out of performance-leadership claims until a new remote authority artifact closes the remaining fairness blockers and materially shrinks the native throughput gap."
 }

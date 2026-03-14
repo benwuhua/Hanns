@@ -9,20 +9,20 @@
       "params": "M=16 | efConstruction=100, ef=138, top_k=100, recall_at=10 | repeat=1",
       "thread_num": 8,
       "requested_ef_search": 138,
-      "effective_ef_search": 200,
-      "adaptive_k": 2.0,
+      "effective_ef_search": 138,
+      "adaptive_k": 0.0,
       "vector_datatype": "Float32",
       "query_dispatch_model": "serial_per_query_index_search",
       "query_batch_size": 1,
-      "qps": 1497.6886964123275,
+      "qps": 2315.890476249884,
       "qps_runs": [
-        1497.6886964123275
+        2315.890476249884
       ],
-      "recall_at_10": 0.9941999999999994,
+      "recall_at_10": 0.9885999999999988,
       "ground_truth_source": "ann_benchmarks_hdf5_neighbors",
       "confidence": "trusted",
       "confidence_explanation": "",
-      "runtime_seconds": 0.667695498,
+      "runtime_seconds": 0.431799349,
       "source": "knowhere_rs_hnsw_hdf5"
     }
   ]
