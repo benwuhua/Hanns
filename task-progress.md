@@ -22,6 +22,22 @@
 
 ## Session Log
 
+### Session 86 - 2026-03-14
+- Focus: `post-closeout-main-smoke`
+- Completed:
+  - re-read the durable long-task state after `d9a9455 fix(build): restore cross-platform all-features gates` and confirmed the project remains at `66/66` passing with no queued tracked feature
+  - synced the current workspace to the authority host with `bash init.sh`, then revalidated the latest `main` snapshot through isolated remote smoke directories `/data/work/knowhere-rs-target-postcloseout-d9a9455` and `/data/work/knowhere-rs-logs-postcloseout-d9a9455`
+  - ran a remote release build smoke and a remote `cargo test --lib -q` lane on the post-closeout tree, confirming that the cross-platform gate repair still leaves the authority Linux surface in a clean state
+- Verification:
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-postcloseout-d9a9455 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-postcloseout-d9a9455 bash scripts/remote/build.sh --no-all-targets` -> `build=ok` (`/data/work/knowhere-rs-logs-postcloseout-d9a9455/build_20260314T065949Z.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-postcloseout-d9a9455 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-postcloseout-d9a9455 bash scripts/remote/test.sh --command "cargo test --lib -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-postcloseout-d9a9455/test_20260314T070108Z_52694.log`)
+- Result:
+  - current `main` remains authority-smoke-clean after the cross-platform all-features gate repair
+  - there is still no next queued feature
+- Notes:
+  - with tracked work closed and latest `main` now revalidated on the authority host, any future reopening should begin as a new local `screen` rather than by editing `feature-list.json` directly
+
 ### Session 85 - 2026-03-14
 - Focus: `hnsw-round12-authority-same-schema-rerun`
 - Completed:
