@@ -22,6 +22,29 @@
 
 ## Session Log
 
+### Session 98 - 2026-03-14
+- Focus: `hnsw-fair-lane-throughput-screen-bf16-scalar-bits-helper`
+- Completed:
+  - ran a fourth local throughput screen on the BF16 fair lane with a narrow hypothesis: reduce BF16 scalar-tail conversion overhead by introducing a dedicated scalar squared-distance helper and routing HNSW BF16 scalar distance paths through direct bits-to-f32 conversion
+  - followed TDD red first by adding `test_bf16_l2_sq_scalar_matches_l2_squared`; it initially failed at compile-time (`bf16_l2_sq_scalar` missing), then turned green after implementing the helper
+  - measured local fair-lane pre/post with identical settings by stashing the experiment for a clean pre run, then restoring the experiment for the post run
+  - after confirming negative signal, fully reverted all experiment code and left only the durable session record
+- Verification:
+  - `cargo test --lib test_bf16_l2_sq_scalar_matches_l2_squared -- --nocapture` -> initial `FAIL` (missing symbol), then `ok`
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok` on experiment branch
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt4_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt4_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - local pre baseline: `29522.147` qps, `recall_at_10=0.9953`
+  - local post sample: `28740.381` qps, `recall_at_10=0.9953`
+  - post vs pre is about `-2.65%`; this hypothesis does not improve the BF16 fair lane and has been rolled back
+  - next recommended screen should avoid scalar BF16 conversion micro-tuning and instead target a larger hot-path lever (for example fewer distance calls/candidate expansions on the same fair lane)
+
 ### Session 97 - 2026-03-14
 - Focus: `hnsw-fair-lane-throughput-authority-rerun-nosqrt-bf16`
 - Completed:
