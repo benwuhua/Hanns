@@ -22,6 +22,28 @@
 
 ## Session Log
 
+### Session 87 - 2026-03-14
+- Focus: `hnsw-fairness-gate-effective-ef-screen`
+- Completed:
+  - tightened the fairness gate into a real TDD red-green loop by adding new `IndexParams` contracts for effective HNSW `ef_search`, first confirming the missing shared helper failed to compile, then implementing one `effective_hnsw_ef_search(...)` path that now drives both `HnswIndex::search{,_with_bitset}` and the HDF5 baseline artifact metadata
+  - extended `src/bin/generate_hdf5_hnsw_baseline.rs` with an explicit `--hnsw-adaptive-k` control so the fairness compare lane can disable the adaptive floor with `--hnsw-adaptive-k 0` instead of silently widening `effective_ef`
+  - validated the new fair-ef control end-to-end on the local HDF5 screen lane by generating `/tmp/hnsw_fairness_effective_ef_screen.json`; the resulting Rust row kept `requested_ef_search=138`, `effective_ef_search=138`, and `adaptive_k=0.0`, which closes the first fairness blocker mechanically without changing the remaining datatype or serial-dispatch blockers
+- Verification:
+  - `cargo test --lib test_hnsw_effective_ef_search_allows_disabling_adaptive_floor -- --nocapture` -> initial `FAIL` (`IndexParams::effective_hnsw_ef_search` missing), then `ok`
+  - `cargo test --lib test_hnsw_effective_ef_search -- --nocapture` -> `ok`
+  - `cargo test hnsw_search_with --lib -- --nocapture` -> `ok`
+  - `cargo test test_hnsw --lib -- --nocapture` -> `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline build_hnsw_config_carries_random_seed_and_adaptive_k -- --nocapture` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_effective_ef_screen.json --base-limit 10000 --query-limit 10 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `python3 -m unittest tests/test_hnsw_fairness_gate.py` -> `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - this remains local screen evidence only; it does not make `benchmark_results/hnsw_fairness_gate.json` fair or authority-ready by itself
+  - the next step should be an authority same-schema rerun that regenerates `benchmark_results/rs_hnsw_sift128.full_k100.json` with `--hnsw-adaptive-k 0`, then refreshes `benchmark_results/hnsw_fairness_gate.json` against that new Rust source before tackling datatype and batch/query-dispatch parity
+
 ### Session 86 - 2026-03-14
 - Focus: `post-closeout-main-smoke`
 - Completed:

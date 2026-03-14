@@ -3308,13 +3308,10 @@ impl HnswIndex {
         }
 
         let k = req.top_k;
-        // OPT-030: Adaptive ef strategy - ef = max(base_ef, adaptive_k * top_k)
-        // OPT-016: Dynamic ef_search adjustment - ensure ef >= 2*top_k for better recall
-        let adaptive_k = self.config.params.hnsw_adaptive_k();
         let ef = self
-            .ef_search
-            .max(req.nprobe.max(1))
-            .max((adaptive_k * k as f64) as usize);
+            .config
+            .params
+            .effective_hnsw_ef_search(self.ef_search, req.nprobe, k);
         let filter = req.filter.clone();
 
         let mut all_ids = vec![-1; n_queries * k];
@@ -3389,13 +3386,10 @@ impl HnswIndex {
         }
 
         let k = req.top_k;
-        // OPT-030: Adaptive ef strategy - ef = max(base_ef, adaptive_k * top_k)
-        // OPT-016: Dynamic ef_search adjustment - ensure ef >= 2*top_k for better recall
-        let adaptive_k = self.config.params.hnsw_adaptive_k();
         let ef = self
-            .ef_search
-            .max(req.nprobe.max(1))
-            .max((adaptive_k * k as f64) as usize);
+            .config
+            .params
+            .effective_hnsw_ef_search(self.ef_search, req.nprobe, k);
 
         let mut all_ids = Vec::new();
         let mut all_dists = Vec::new();

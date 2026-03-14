@@ -294,6 +294,7 @@ pub struct IndexParams {
     /// OPT-030: Adaptive ef multiplier for HNSW search
     /// Formula: ef = max(base_ef, adaptive_k * top_k)
     /// Default: 2.0 (same as OPT-016 dynamic ef strategy)
+    /// Set to 0.0 to disable the adaptive floor and honor the requested/base ef.
     #[serde(default)]
     pub hnsw_adaptive_k: Option<f64>,
 }
@@ -454,6 +455,19 @@ impl IndexParams {
     pub fn hnsw_adaptive_k(&self) -> f64 {
         self.hnsw_adaptive_k.unwrap_or(2.0)
     }
+
+    /// Resolve the effective HNSW ef_search after applying the optional adaptive floor.
+    pub fn effective_hnsw_ef_search(
+        &self,
+        base_ef_search: usize,
+        requested_ef_search: usize,
+        top_k: usize,
+    ) -> usize {
+        let adaptive_floor = (self.hnsw_adaptive_k().max(0.0) * top_k as f64) as usize;
+        base_ef_search
+            .max(requested_ef_search.max(1))
+            .max(adaptive_floor)
+    }
 }
 
 #[cfg(test)]
@@ -529,5 +543,26 @@ mod tests {
         assert_eq!(cfg.params.with_raw_data, Some(true));
         assert_eq!(cfg.params.use_bloom, Some(true));
         assert_eq!(cfg.params.bloom_fp_rate, Some(0.01));
+    }
+
+    #[test]
+    fn test_hnsw_effective_ef_search_defaults_to_adaptive_floor() {
+        let params = IndexParams {
+            ef_search: Some(138),
+            ..Default::default()
+        };
+
+        assert_eq!(params.effective_hnsw_ef_search(138, 138, 100), 200);
+    }
+
+    #[test]
+    fn test_hnsw_effective_ef_search_allows_disabling_adaptive_floor() {
+        let params = IndexParams {
+            ef_search: Some(138),
+            hnsw_adaptive_k: Some(0.0),
+            ..Default::default()
+        };
+
+        assert_eq!(params.effective_hnsw_ef_search(138, 138, 100), 138);
     }
 }

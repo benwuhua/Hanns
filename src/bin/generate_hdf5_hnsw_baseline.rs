@@ -30,6 +30,8 @@ const DEFAULT_RECALL_AT: usize = 10;
 #[cfg(feature = "hdf5")]
 const DEFAULT_EF_SEARCH: usize = 138;
 #[cfg(feature = "hdf5")]
+const DEFAULT_HNSW_ADAPTIVE_K: f64 = 2.0;
+#[cfg(feature = "hdf5")]
 const DEFAULT_M: usize = 16;
 #[cfg(feature = "hdf5")]
 const DEFAULT_EF_CONSTRUCTION: usize = 100;
@@ -150,7 +152,7 @@ fn parse_usize_list_arg(args: &[String], name: &str) -> Vec<usize> {
 #[cfg(feature = "hdf5")]
 fn print_usage(program: &str) {
     eprintln!(
-        "Usage: {program} --input <path> [--output <path>] [--base-limit <n>] [--query-limit <n>] [--top-k <n>] [--recall-at <n>] [--m <n>] [--ef-construction <n>] [--ef-search <n>] [--recall-gate <f>] [--with-repair]"
+        "Usage: {program} --input <path> [--output <path>] [--base-limit <n>] [--query-limit <n>] [--top-k <n>] [--recall-at <n>] [--m <n>] [--ef-construction <n>] [--ef-search <n>] [--hnsw-adaptive-k <f>] [--recall-gate <f>] [--with-repair]"
     );
     eprintln!("  --top-k      number of results to retrieve per query (default: {DEFAULT_TOP_K})");
     eprintln!("  --recall-at  k for recall@k measurement, independent of top-k (default: {DEFAULT_RECALL_AT})");
@@ -158,6 +160,9 @@ fn print_usage(program: &str) {
         "               Set --recall-at 10 to match native benchmark methodology (recall@10)"
     );
     eprintln!("  --random-seed <u64>        optional deterministic HNSW build seed");
+    eprintln!(
+        "  --hnsw-adaptive-k <f>     HNSW adaptive ef multiplier (0 disables the adaptive floor)"
+    );
     eprintln!("  --repeat <n>               repeat each query batch and report median qps");
     eprintln!("  --diagnosis-output <path>  optional JSON output for search-cost diagnosis");
     eprintln!(
@@ -173,6 +178,7 @@ fn build_hnsw_config(
     m: usize,
     ef_construction: usize,
     ef_search: usize,
+    hnsw_adaptive_k: f64,
     random_seed: Option<u64>,
 ) -> IndexConfig {
     IndexConfig {
@@ -184,6 +190,7 @@ fn build_hnsw_config(
             m: Some(m),
             ef_construction: Some(ef_construction),
             ef_search: Some(ef_search),
+            hnsw_adaptive_k: Some(hnsw_adaptive_k),
             random_seed,
             ..Default::default()
         },
@@ -396,6 +403,7 @@ fn run() {
     let m = parse_usize_arg(&args, "--m", DEFAULT_M);
     let ef_construction = parse_usize_arg(&args, "--ef-construction", DEFAULT_EF_CONSTRUCTION);
     let ef_search = parse_usize_arg(&args, "--ef-search", DEFAULT_EF_SEARCH);
+    let hnsw_adaptive_k = parse_f64_arg(&args, "--hnsw-adaptive-k", DEFAULT_HNSW_ADAPTIVE_K);
     let recall_gate = parse_f64_arg(&args, "--recall-gate", DEFAULT_RECALL_GATE);
     let random_seed = parse_u64_arg(&args, "--random-seed");
     let repeat = parse_usize_arg(&args, "--repeat", 1).max(1);
@@ -438,9 +446,18 @@ fn run() {
         )
     };
 
-    let config = build_hnsw_config(dim, m, ef_construction, ef_search, random_seed);
+    let config = build_hnsw_config(
+        dim,
+        m,
+        ef_construction,
+        ef_search,
+        hnsw_adaptive_k,
+        random_seed,
+    );
     let adaptive_k = config.params.hnsw_adaptive_k();
-    let effective_ef_search = ef_search.max((adaptive_k * top_k as f64) as usize);
+    let effective_ef_search = config
+        .params
+        .effective_hnsw_ef_search(ef_search, ef_search, top_k);
 
     let mut index = HnswIndex::new(&config).expect("create hnsw");
     if with_repair {
@@ -688,10 +705,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_hnsw_config_carries_random_seed() {
-        let config = build_hnsw_config(128, 16, 100, 138, Some(42));
+    fn build_hnsw_config_carries_random_seed_and_adaptive_k() {
+        let config = build_hnsw_config(128, 16, 100, 138, 0.0, Some(42));
 
         assert_eq!(config.params.random_seed, Some(42));
+        assert_eq!(config.params.hnsw_adaptive_k, Some(0.0));
     }
 
     #[test]
