@@ -22,6 +22,25 @@
 
 ## Session Log
 
+### Session 99 - 2026-03-14
+- Focus: `hnsw-fair-lane-throughput-screen-ef-sweep-diagnosis`
+- Completed:
+  - ran a diagnosis-only local screen on the BF16 fair lane to test a larger-lever hypothesis without code changes: if candidate expansion / distance-call volume is reduced via lower `ef`, qps should improve while keeping recall gate credibility
+  - reused the existing HDF5 baseline diagnosis surface (`--diagnosis-output`) with the fair-lane contract preserved (`adaptive_k=0`, parallel dispatch batch=32, `vector-datatype=bfloat16`) and swept `ef` across `96,138,180` with `repeat=3`
+  - extracted per-ef qps/recall and averaged search-cost counters (`visited_nodes`, `distance_calls`, frontier push/pop) from `/tmp/hnsw_fairness_bf16_diagnosis_opt5_local.json`
+- Verification:
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_diag_baseline_opt5_local.json --diagnosis-output /tmp/hnsw_fairness_bf16_diagnosis_opt5_local.json --base-limit 100000 --query-limit 300 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --ef-sweep 96,138,180 --repeat 3 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - sampled diagnosis rows:
+    - `ef=96`: `qps=27372.575`, `recall_at_10=0.992333`, `avg_distance_calls=1411.39`, `avg_visited_nodes=1337.84`
+    - `ef=138`: `qps=28115.226`, `recall_at_10=0.992333`, `avg_distance_calls=1852.33`, `avg_visited_nodes=1778.78`
+    - `ef=180`: `qps=23132.382`, `recall_at_10=0.993667`, `avg_distance_calls=2255.12`, `avg_visited_nodes=2181.57`
+  - versus `ef=138`, `ef=96` reduces distance calls by about `-23.8%` but still loses qps by about `-2.64%`; this rejects the simple “reduce candidate expansion volume to gain throughput” hypothesis on this lane
+  - next recommended screen should keep `ef=138` fixed and target per-distance compute efficiency on the actual hot path (for example reducing conversion/load overhead in the layer-0 slab/flat batch loops without changing fairness contract metadata)
+
 ### Session 98 - 2026-03-14
 - Focus: `hnsw-fair-lane-throughput-screen-bf16-scalar-bits-helper`
 - Completed:
