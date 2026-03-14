@@ -4278,8 +4278,7 @@ impl HnswIndex {
     ) -> Vec<(usize, f32)> {
         let num_nodes = self.node_info.len();
         let use_flat_graph = level == 0 && self.layer0_flat_graph.is_enabled_for(num_nodes);
-        let use_layer0_slab =
-            use_flat_graph && self.layer0_slab.is_enabled_for(num_nodes) && query_bf16.is_none();
+        let use_layer0_slab = use_flat_graph && self.layer0_slab.is_enabled_for(num_nodes);
         let query_ptr = query.as_ptr();
         let base_ptr = self.vectors.as_ptr();
         scratch.prepare(num_nodes);

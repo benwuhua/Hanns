@@ -22,6 +22,27 @@
 
 ## Session Log
 
+### Session 104 - 2026-03-14
+- Focus: `hnsw-fair-lane-throughput-authority-rerun-bf16-no-slab`
+- Completed:
+  - promoted Session 103 local signal into authority execution on remote x86 with isolated target/log directories (`/data/work/knowhere-rs-target-hnsw-fairness-noslab-bf16`, `/data/work/knowhere-rs-logs-hnsw-fairness-noslab-bf16`)
+  - replayed remote `cargo test --lib -q` smoke successfully, then ran the same full-dataset BF16 fair-lane command used by current authority lane (`adaptive_k=0`, parallel dispatch batch=32, `vector-datatype=bfloat16`, `repeat=5`)
+  - handled one remote wrapper conflict (`status=conflict`) and a local proxy timeout while the authority task kept running; final status file resolved to `status=ok`
+  - synced authority artifact back to local for inspection and confirmed this hypothesis regresses throughput severely on authority
+  - rolled back the no-slab code change and restored local baseline artifact chain to pre-experiment state
+- Verification:
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-fairness-noslab-bf16 KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-fairness-noslab-bf16 bash scripts/remote/test.sh --command "cargo test --lib -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-fairness-noslab-bf16/test_20260314T144549Z_81068.log`)
+  - first authority benchmark launch -> `status=conflict` (`/data/work/knowhere-rs-logs-hnsw-fairness-noslab-bf16/test_20260314T144549Z_81099.status`)
+  - rerun authority benchmark -> `status=ok` (`/data/work/knowhere-rs-logs-hnsw-fairness-noslab-bf16/test_20260314T145006Z_83079.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `authority_result=reject_no_slab_hypothesis`
+- Notes:
+  - authority BF16 lane from this hypothesis: `qps=1772.699257552247`, `recall_at_10=0.9879999999999989`, `requested/effective datatype=BFloat16/BFloat16`, `requested/effective ef=138/138`, dispatch `rayon_query_batch_parallel_search / 32`
+  - compared with current accepted BF16 authority baseline (`qps=8502.98026056941`), this is about `-79%` throughput; hypothesis is decisively rejected on authority
+  - next screen should avoid disabling layer0 slab globally on BF16 lane and instead target lower-risk optimizations that preserve current authority-level throughput characteristics
+
 ### Session 103 - 2026-03-14
 - Focus: `hnsw-fair-lane-throughput-screen-bf16-disable-layer0-slab`
 - Completed:
