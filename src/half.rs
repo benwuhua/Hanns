@@ -785,6 +785,40 @@ pub fn bf16_l2_batch_4_scalar(
     [d0, d1, d2, d3]
 }
 
+/// BF16 batch_4: 计算一个查询向量与 4 个数据库向量的 L2 平方距离（标量实现）
+#[inline]
+pub fn bf16_l2_sq_batch_4_scalar(
+    query: &[u16],
+    db0: &[u16],
+    db1: &[u16],
+    db2: &[u16],
+    db3: &[u16],
+) -> [f32; 4] {
+    let dim = query.len();
+    assert_eq!(db0.len(), dim);
+    assert_eq!(db1.len(), dim);
+    assert_eq!(db2.len(), dim);
+    assert_eq!(db3.len(), dim);
+
+    let mut out = [0.0f32; 4];
+    for i in 0..dim {
+        let q = Bf16::from_bits(query[i]).to_f32();
+        let v0 = Bf16::from_bits(db0[i]).to_f32();
+        let v1 = Bf16::from_bits(db1[i]).to_f32();
+        let v2 = Bf16::from_bits(db2[i]).to_f32();
+        let v3 = Bf16::from_bits(db3[i]).to_f32();
+        let d0 = q - v0;
+        let d1 = q - v1;
+        let d2 = q - v2;
+        let d3 = q - v3;
+        out[0] += d0 * d0;
+        out[1] += d1 * d1;
+        out[2] += d2 * d2;
+        out[3] += d3 * d3;
+    }
+    out
+}
+
 /// BF16 batch_4: 计算一个查询向量与 4 个数据库向量的 L2 距离 (AVX2 SIMD)
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
@@ -857,6 +891,70 @@ pub unsafe fn bf16_l2_batch_4_avx2(
     result
 }
 
+/// BF16 batch_4: 计算一个查询向量与 4 个数据库向量的 L2 平方距离 (AVX2 SIMD)
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+/// # Safety
+/// `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim` contiguous `u16`
+/// elements.
+pub unsafe fn bf16_l2_sq_batch_4_avx2(
+    query: *const u16,
+    db0: *const u16,
+    db1: *const u16,
+    db2: *const u16,
+    db3: *const u16,
+    dim: usize,
+) -> [f32; 4] {
+    use std::arch::x86_64::*;
+
+    let mut sum0 = _mm256_setzero_ps();
+    let mut sum1 = _mm256_setzero_ps();
+    let mut sum2 = _mm256_setzero_ps();
+    let mut sum3 = _mm256_setzero_ps();
+
+    let chunks = dim / 8;
+
+    for i in 0..chunks {
+        let offset = i * 8;
+        let q = load_bf16x8_as_m256(query.add(offset));
+        let v0 = load_bf16x8_as_m256(db0.add(offset));
+        let v1 = load_bf16x8_as_m256(db1.add(offset));
+        let v2 = load_bf16x8_as_m256(db2.add(offset));
+        let v3 = load_bf16x8_as_m256(db3.add(offset));
+
+        let diff0 = _mm256_sub_ps(q, v0);
+        let diff1 = _mm256_sub_ps(q, v1);
+        let diff2 = _mm256_sub_ps(q, v2);
+        let diff3 = _mm256_sub_ps(q, v3);
+
+        sum0 = _mm256_add_ps(sum0, _mm256_mul_ps(diff0, diff0));
+        sum1 = _mm256_add_ps(sum1, _mm256_mul_ps(diff1, diff1));
+        sum2 = _mm256_add_ps(sum2, _mm256_mul_ps(diff2, diff2));
+        sum3 = _mm256_add_ps(sum3, _mm256_mul_ps(diff3, diff3));
+    }
+
+    let mut result = [0.0f32; 4];
+    result[0] = horizontal_sum_avx2_fp16(sum0);
+    result[1] = horizontal_sum_avx2_fp16(sum1);
+    result[2] = horizontal_sum_avx2_fp16(sum2);
+    result[3] = horizontal_sum_avx2_fp16(sum3);
+
+    for i in (chunks * 8)..dim {
+        let q = Bf16::from_bits(*query.add(i)).to_f32();
+        let d0 = Bf16::from_bits(*db0.add(i)).to_f32();
+        let d1 = Bf16::from_bits(*db1.add(i)).to_f32();
+        let d2 = Bf16::from_bits(*db2.add(i)).to_f32();
+        let d3 = Bf16::from_bits(*db3.add(i)).to_f32();
+
+        result[0] += (q - d0) * (q - d0);
+        result[1] += (q - d1) * (q - d1);
+        result[2] += (q - d2) * (q - d2);
+        result[3] += (q - d3) * (q - d3);
+    }
+
+    result
+}
+
 /// BF16 batch_4: 计算一个查询向量与 4 个数据库向量的 L2 距离 (AVX512 SIMD)
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 #[inline]
@@ -923,6 +1021,70 @@ pub unsafe fn bf16_l2_batch_4_avx512(
     result[1] = result[1].sqrt();
     result[2] = result[2].sqrt();
     result[3] = result[3].sqrt();
+    result
+}
+
+/// BF16 batch_4: 计算一个查询向量与 4 个数据库向量的 L2 平方距离 (AVX512 SIMD)
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+#[allow(clippy::incompatible_msrv)]
+/// # Safety
+/// `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim` contiguous `u16`
+/// elements.
+pub unsafe fn bf16_l2_sq_batch_4_avx512(
+    query: *const u16,
+    db0: *const u16,
+    db1: *const u16,
+    db2: *const u16,
+    db3: *const u16,
+    dim: usize,
+) -> [f32; 4] {
+    use std::arch::x86_64::*;
+
+    let mut sum0 = _mm512_setzero_ps();
+    let mut sum1 = _mm512_setzero_ps();
+    let mut sum2 = _mm512_setzero_ps();
+    let mut sum3 = _mm512_setzero_ps();
+    let chunks = dim / 16;
+
+    for i in 0..chunks {
+        let offset = i * 16;
+        let q = load_bf16x16_as_m512(query.add(offset));
+        let v0 = load_bf16x16_as_m512(db0.add(offset));
+        let v1 = load_bf16x16_as_m512(db1.add(offset));
+        let v2 = load_bf16x16_as_m512(db2.add(offset));
+        let v3 = load_bf16x16_as_m512(db3.add(offset));
+
+        let diff0 = _mm512_sub_ps(q, v0);
+        let diff1 = _mm512_sub_ps(q, v1);
+        let diff2 = _mm512_sub_ps(q, v2);
+        let diff3 = _mm512_sub_ps(q, v3);
+
+        sum0 = _mm512_add_ps(sum0, _mm512_mul_ps(diff0, diff0));
+        sum1 = _mm512_add_ps(sum1, _mm512_mul_ps(diff1, diff1));
+        sum2 = _mm512_add_ps(sum2, _mm512_mul_ps(diff2, diff2));
+        sum3 = _mm512_add_ps(sum3, _mm512_mul_ps(diff3, diff3));
+    }
+
+    let mut result = [
+        _mm512_reduce_add_ps(sum0),
+        _mm512_reduce_add_ps(sum1),
+        _mm512_reduce_add_ps(sum2),
+        _mm512_reduce_add_ps(sum3),
+    ];
+
+    for i in (chunks * 16)..dim {
+        let q = Bf16::from_bits(*query.add(i)).to_f32();
+        let d0 = Bf16::from_bits(*db0.add(i)).to_f32();
+        let d1 = Bf16::from_bits(*db1.add(i)).to_f32();
+        let d2 = Bf16::from_bits(*db2.add(i)).to_f32();
+        let d3 = Bf16::from_bits(*db3.add(i)).to_f32();
+
+        result[0] += (q - d0) * (q - d0);
+        result[1] += (q - d1) * (q - d1);
+        result[2] += (q - d2) * (q - d2);
+        result[3] += (q - d3) * (q - d3);
+    }
     result
 }
 
@@ -1026,9 +1188,104 @@ pub unsafe fn bf16_l2_batch_4_neon(
     result
 }
 
-/// BF16 batch_4: 计算一个查询向量与 4 个数据库向量的 L2 距离（自动选择最优实现）
+/// BF16 batch_4: 计算一个查询向量与 4 个数据库向量的 L2 平方距离 (NEON SIMD)
+///
+/// # Safety
+/// - `query`, `db0`, `db1`, `db2`, and `db3` must each point to at least `dim`
+///   readable `u16` values.
+#[cfg(all(feature = "simd", target_arch = "aarch64"))]
 #[inline]
-pub fn bf16_l2_batch_4(
+pub unsafe fn bf16_l2_sq_batch_4_neon(
+    query: *const u16,
+    db0: *const u16,
+    db1: *const u16,
+    db2: *const u16,
+    db3: *const u16,
+    dim: usize,
+) -> [f32; 4] {
+    use std::arch::aarch64::*;
+
+    let mut sum0 = vdupq_n_f32(0.0);
+    let mut sum1 = vdupq_n_f32(0.0);
+    let mut sum2 = vdupq_n_f32(0.0);
+    let mut sum3 = vdupq_n_f32(0.0);
+    let chunks = dim / 4;
+
+    for i in 0..chunks {
+        let offset = i * 4;
+        let q_buf = [
+            Bf16::from_bits(*query.add(offset)).to_f32(),
+            Bf16::from_bits(*query.add(offset + 1)).to_f32(),
+            Bf16::from_bits(*query.add(offset + 2)).to_f32(),
+            Bf16::from_bits(*query.add(offset + 3)).to_f32(),
+        ];
+        let db0_buf = [
+            Bf16::from_bits(*db0.add(offset)).to_f32(),
+            Bf16::from_bits(*db0.add(offset + 1)).to_f32(),
+            Bf16::from_bits(*db0.add(offset + 2)).to_f32(),
+            Bf16::from_bits(*db0.add(offset + 3)).to_f32(),
+        ];
+        let db1_buf = [
+            Bf16::from_bits(*db1.add(offset)).to_f32(),
+            Bf16::from_bits(*db1.add(offset + 1)).to_f32(),
+            Bf16::from_bits(*db1.add(offset + 2)).to_f32(),
+            Bf16::from_bits(*db1.add(offset + 3)).to_f32(),
+        ];
+        let db2_buf = [
+            Bf16::from_bits(*db2.add(offset)).to_f32(),
+            Bf16::from_bits(*db2.add(offset + 1)).to_f32(),
+            Bf16::from_bits(*db2.add(offset + 2)).to_f32(),
+            Bf16::from_bits(*db2.add(offset + 3)).to_f32(),
+        ];
+        let db3_buf = [
+            Bf16::from_bits(*db3.add(offset)).to_f32(),
+            Bf16::from_bits(*db3.add(offset + 1)).to_f32(),
+            Bf16::from_bits(*db3.add(offset + 2)).to_f32(),
+            Bf16::from_bits(*db3.add(offset + 3)).to_f32(),
+        ];
+
+        let q = vld1q_f32(q_buf.as_ptr());
+        let v0 = vld1q_f32(db0_buf.as_ptr());
+        let v1 = vld1q_f32(db1_buf.as_ptr());
+        let v2 = vld1q_f32(db2_buf.as_ptr());
+        let v3 = vld1q_f32(db3_buf.as_ptr());
+
+        let diff0 = vsubq_f32(q, v0);
+        let diff1 = vsubq_f32(q, v1);
+        let diff2 = vsubq_f32(q, v2);
+        let diff3 = vsubq_f32(q, v3);
+
+        sum0 = vaddq_f32(sum0, vmulq_f32(diff0, diff0));
+        sum1 = vaddq_f32(sum1, vmulq_f32(diff1, diff1));
+        sum2 = vaddq_f32(sum2, vmulq_f32(diff2, diff2));
+        sum3 = vaddq_f32(sum3, vmulq_f32(diff3, diff3));
+    }
+
+    let mut result = [
+        vaddvq_f32(sum0),
+        vaddvq_f32(sum1),
+        vaddvq_f32(sum2),
+        vaddvq_f32(sum3),
+    ];
+
+    for i in (chunks * 4)..dim {
+        let q = Bf16::from_bits(*query.add(i)).to_f32();
+        let d0 = Bf16::from_bits(*db0.add(i)).to_f32();
+        let d1 = Bf16::from_bits(*db1.add(i)).to_f32();
+        let d2 = Bf16::from_bits(*db2.add(i)).to_f32();
+        let d3 = Bf16::from_bits(*db3.add(i)).to_f32();
+
+        result[0] += (q - d0) * (q - d0);
+        result[1] += (q - d1) * (q - d1);
+        result[2] += (q - d2) * (q - d2);
+        result[3] += (q - d3) * (q - d3);
+    }
+    result
+}
+
+/// BF16 batch_4: 计算一个查询向量与 4 个数据库向量的 L2 平方距离（自动选择最优实现）
+#[inline]
+pub fn bf16_l2_sq_batch_4(
     query: &[u16],
     db0: &[u16],
     db1: &[u16],
@@ -1045,7 +1302,7 @@ pub fn bf16_l2_batch_4(
     {
         if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512bw") {
             return unsafe {
-                bf16_l2_batch_4_avx512(
+                bf16_l2_sq_batch_4_avx512(
                     query.as_ptr(),
                     db0.as_ptr(),
                     db1.as_ptr(),
@@ -1057,7 +1314,7 @@ pub fn bf16_l2_batch_4(
         }
         if std::is_x86_feature_detected!("avx2") {
             return unsafe {
-                bf16_l2_batch_4_avx2(
+                bf16_l2_sq_batch_4_avx2(
                     query.as_ptr(),
                     db0.as_ptr(),
                     db1.as_ptr(),
@@ -1073,7 +1330,7 @@ pub fn bf16_l2_batch_4(
     {
         if std::arch::is_aarch64_feature_detected!("neon") {
             return unsafe {
-                bf16_l2_batch_4_neon(
+                bf16_l2_sq_batch_4_neon(
                     query.as_ptr(),
                     db0.as_ptr(),
                     db1.as_ptr(),
@@ -1085,7 +1342,24 @@ pub fn bf16_l2_batch_4(
         }
     }
 
-    bf16_l2_batch_4_scalar(query, db0, db1, db2, db3)
+    bf16_l2_sq_batch_4_scalar(query, db0, db1, db2, db3)
+}
+
+/// BF16 batch_4: 计算一个查询向量与 4 个数据库向量的 L2 距离（自动选择最优实现）
+#[inline]
+pub fn bf16_l2_batch_4(
+    query: &[u16],
+    db0: &[u16],
+    db1: &[u16],
+    db2: &[u16],
+    db3: &[u16],
+) -> [f32; 4] {
+    let mut out = bf16_l2_sq_batch_4(query, db0, db1, db2, db3);
+    out[0] = out[0].sqrt();
+    out[1] = out[1].sqrt();
+    out[2] = out[2].sqrt();
+    out[3] = out[3].sqrt();
+    out
 }
 
 /// FP16 batch_4: 计算一个查询向量与 4 个数据库向量的内积
@@ -1979,6 +2253,33 @@ mod tests {
         assert!((results[1] - expected1).abs() < 0.01);
         assert!((results[2] - expected2).abs() < 0.01);
         assert!((results[3] - expected3).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_bf16_l2_sq_batch_4_matches_l2_squared() {
+        let dim = 128;
+        let query: Vec<f32> = (0..dim).map(|i| i as f32 * 0.1).collect();
+        let db0: Vec<f32> = (0..dim).map(|i| i as f32 * 0.1 + 1.0).collect();
+        let db1: Vec<f32> = (0..dim).map(|i| i as f32 * 0.1 + 2.0).collect();
+        let db2: Vec<f32> = (0..dim).map(|i| i as f32 * 0.1 + 3.0).collect();
+        let db3: Vec<f32> = (0..dim).map(|i| i as f32 * 0.1 + 4.0).collect();
+
+        let query_bf16 = f32_to_bf16(&query);
+        let db0_bf16 = f32_to_bf16(&db0);
+        let db1_bf16 = f32_to_bf16(&db1);
+        let db2_bf16 = f32_to_bf16(&db2);
+        let db3_bf16 = f32_to_bf16(&db3);
+
+        let sq = bf16_l2_sq_batch_4(&query_bf16, &db0_bf16, &db1_bf16, &db2_bf16, &db3_bf16);
+        let d = bf16_l2_batch_4(&query_bf16, &db0_bf16, &db1_bf16, &db2_bf16, &db3_bf16);
+
+        for i in 0..4 {
+            assert!(
+                (sq[i] - d[i] * d[i]).abs() < 0.05,
+                "bf16 l2 sq mismatch at {}",
+                i
+            );
+        }
     }
 
     #[test]

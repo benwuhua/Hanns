@@ -22,6 +22,33 @@
 
 ## Session Log
 
+### Session 96 - 2026-03-14
+- Focus: `hnsw-fair-lane-throughput-screen-nosqrt-bf16-kernel`
+- Completed:
+  - ran a third local throughput screen on the BF16 fair lane with a tighter hypothesis: add a `no-sqrt` BF16 batch-4 distance kernel in `src/half.rs`, then use per-query BF16 scratch bits in HNSW layer-0 fast search to avoid repeated query conversion and avoid per-batch sqrt in the hot path
+  - followed TDD red first by adding `test_bf16_l2_sq_batch_4_matches_l2_squared`; it initially failed at compile-time (`bf16_l2_sq_batch_4` missing), then turned green after implementing `bf16_l2_sq_batch_4_{scalar,avx2,avx512,neon}` plus dispatcher and refactoring `bf16_l2_batch_4` to reuse the square-distance kernel
+  - wired HNSW fast unfiltered L2 lane (`search_single_l2_unfiltered` -> `search_layer_idx_l2_ordered_pool_fast`) to precompute per-query BF16 bits once and use the new BF16 squared-distance helpers for batch-4 and tail distances when BF16 storage is enabled
+  - added BF16 fast-path equivalence regression (`test_search_single_l2_fast_bfloat16_matches_generic_unfiltered`) and kept existing BF16 distance-path regressions green
+  - measured local fair-lane pre/post with same settings and two reruns for noise bounding
+- Verification:
+  - `cargo test --lib test_bf16_l2_sq_batch_4_matches_l2_squared -- --nocapture` -> initial `FAIL` (missing symbol), then `ok`
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok`
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt3_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt3_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt3_local_rerun.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt3_local_rerun2.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline requested_bfloat16_reports_bfloat16_effective_lane_when_supported -- --nocapture` -> `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - local pre baseline: `30555.383` qps, `recall_at_10=0.9953`
+  - local post samples: `31873.018`, `31660.598`, `32604.886` qps (all `recall_at_10=0.9953`)
+  - post mean is `32046.167` qps, i.e. `+4.88%` vs pre; best/worst sample deltas are `+6.71% / +3.62%`
+  - this is local-only evidence; next step should be authority rerun on the same BF16 fair lane (`--vector-datatype bfloat16`) and then verdict/fair-lane artifact refresh only if authority confirms the gain
+
 ### Session 95 - 2026-03-14
 - Focus: `hnsw-fair-lane-throughput-screen-query-cache-plus-bf16-batch4-kernel`
 - Completed:

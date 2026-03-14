@@ -22,7 +22,7 @@ use crate::api::{
 };
 use crate::bitset::BitsetView;
 use crate::dataset::Dataset;
-use crate::half::Bf16;
+use crate::half::{bf16_l2_sq_batch_4, Bf16};
 use crate::index::{Index as IndexTrait, IndexError, SearchResult as IndexSearchResult};
 use crate::simd;
 
@@ -3306,6 +3306,41 @@ impl HnswIndex {
         sum
     }
 
+    #[inline(always)]
+    fn l2_distance_to_idx_bf16_with_query_bits(&self, query_bf16: &[u16], idx: usize) -> f32 {
+        debug_assert_eq!(query_bf16.len(), self.dim);
+        let start = idx * self.dim;
+        let mut sum = 0.0f32;
+        for (offset, &q_bits) in query_bf16.iter().enumerate() {
+            let q = Bf16::from_bits(q_bits).to_f32();
+            let v = Bf16::from_bits(self.bf16_vectors[start + offset]).to_f32();
+            let diff = q - v;
+            sum += diff * diff;
+        }
+        sum
+    }
+
+    #[inline(always)]
+    fn l2_distance_to_4_idxs_bf16_with_query_bits(
+        &self,
+        query_bf16: &[u16],
+        idxs: [usize; 4],
+    ) -> [f32; 4] {
+        let starts = [
+            idxs[0] * self.dim,
+            idxs[1] * self.dim,
+            idxs[2] * self.dim,
+            idxs[3] * self.dim,
+        ];
+        bf16_l2_sq_batch_4(
+            query_bf16,
+            &self.bf16_vectors[starts[0]..starts[0] + self.dim],
+            &self.bf16_vectors[starts[1]..starts[1] + self.dim],
+            &self.bf16_vectors[starts[2]..starts[2] + self.dim],
+            &self.bf16_vectors[starts[3]..starts[3] + self.dim],
+        )
+    }
+
     #[inline]
     fn l2_distance_to_idx(&self, query: &[f32], idx: usize) -> f32 {
         unsafe { self.l2_distance_to_idx_ptr(query.as_ptr(), self.vectors.as_ptr(), idx) }
@@ -4239,6 +4274,7 @@ impl HnswIndex {
         level: usize,
         ef: usize,
         scratch: &mut SearchScratch,
+        query_bf16: Option<&[u16]>,
     ) -> Vec<(usize, f32)> {
         let num_nodes = self.node_info.len();
         let use_flat_graph = level == 0 && self.layer0_flat_graph.is_enabled_for(num_nodes);
@@ -4248,7 +4284,11 @@ impl HnswIndex {
         scratch.prepare(num_nodes);
         scratch.prepare_layer0_pools(ef);
 
-        let entry_dist = unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, entry_idx) };
+        let entry_dist = if let Some(bits) = query_bf16 {
+            self.l2_distance_to_idx_bf16_with_query_bits(bits, entry_idx)
+        } else {
+            unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, entry_idx) }
+        };
 
         let entry = Layer0PoolEntry {
             idx: entry_idx,
@@ -4332,8 +4372,12 @@ impl HnswIndex {
                     batch_len += 1;
 
                     if batch_len == 4 {
-                        let distances = unsafe {
-                            self.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, batch_indices)
+                        let distances = if let Some(bits) = query_bf16 {
+                            self.l2_distance_to_4_idxs_bf16_with_query_bits(bits, batch_indices)
+                        } else {
+                            unsafe {
+                                self.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, batch_indices)
+                            }
                         };
                         for (offset, nbr_dist) in distances.into_iter().enumerate() {
                             self.process_layer0_l2_candidate_fast(
@@ -4366,8 +4410,12 @@ impl HnswIndex {
                     batch_len += 1;
 
                     if batch_len == 4 {
-                        let distances = unsafe {
-                            self.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, batch_indices)
+                        let distances = if let Some(bits) = query_bf16 {
+                            self.l2_distance_to_4_idxs_bf16_with_query_bits(bits, batch_indices)
+                        } else {
+                            unsafe {
+                                self.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, batch_indices)
+                            }
                         };
                         for (offset, nbr_dist) in distances.into_iter().enumerate() {
                             self.process_layer0_l2_candidate_fast(
@@ -4391,6 +4439,8 @@ impl HnswIndex {
                             self.dim,
                         )
                     }
+                } else if let Some(bits) = query_bf16 {
+                    self.l2_distance_to_idx_bf16_with_query_bits(bits, nbr_idx)
                 } else {
                     unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) }
                 };
@@ -4989,8 +5039,24 @@ impl HnswIndex {
             }
         }
 
-        let results =
-            self.search_layer_idx_l2_ordered_pool_fast(query, best_ep_idx, 0, ef, &mut scratch);
+        let query_bf16 = if self.use_bf16_storage {
+            Some(
+                query
+                    .iter()
+                    .map(|&v| Bf16::from_f32(v).to_bits())
+                    .collect::<Vec<u16>>(),
+            )
+        } else {
+            None
+        };
+        let results = self.search_layer_idx_l2_ordered_pool_fast(
+            query,
+            best_ep_idx,
+            0,
+            ef,
+            &mut scratch,
+            query_bf16.as_deref(),
+        );
 
         let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
         for (idx, dist) in results {
@@ -7068,6 +7134,36 @@ mod tests {
         assert!(
             filtered_ids.iter().all(|id| matches!(id, 0 | 2)),
             "filtered searches must keep using the generic path and never leak filtered-out ids"
+        );
+    }
+
+    #[test]
+    fn test_search_single_l2_fast_bfloat16_matches_generic_unfiltered() {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::BFloat16,
+            params: crate::api::IndexParams {
+                ef_search: Some(32),
+                ..Default::default()
+            },
+        };
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        let query = vec![0.5, 0.0, 0.0, 0.0];
+        let generic = index.search_single(&query, 32, 4, &None);
+        let fast = index.search_single_l2_unfiltered(&query, 32, 4);
+
+        assert_eq!(
+            fast, generic,
+            "BF16 fast unfiltered search must preserve generic unfiltered results"
         );
     }
 
