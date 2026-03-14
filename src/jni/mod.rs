@@ -41,10 +41,10 @@ use crate::api::{
 use crate::faiss::{DiskAnnIndex, HnswIndex, IvfPqIndex, MemIndex};
 
 enum RegisteredIndex {
-    Mem(MemIndex),
-    Hnsw(HnswIndex),
-    IvfPq(IvfPqIndex),
-    DiskAnn(DiskAnnIndex),
+    Mem(Box<MemIndex>),
+    Hnsw(Box<HnswIndex>),
+    IvfPq(Box<IvfPqIndex>),
+    DiskAnn(Box<DiskAnnIndex>),
 }
 
 impl RegisteredIndex {
@@ -186,10 +186,14 @@ fn build_config(
 
 fn build_registered_index(config: &IndexConfig) -> crate::api::Result<RegisteredIndex> {
     match config.index_type {
-        IndexType::Flat | IndexType::IvfFlat => Ok(RegisteredIndex::Mem(MemIndex::new(config)?)),
-        IndexType::Hnsw => Ok(RegisteredIndex::Hnsw(HnswIndex::new(config)?)),
-        IndexType::IvfPq => Ok(RegisteredIndex::IvfPq(IvfPqIndex::new(config)?)),
-        IndexType::DiskAnn => Ok(RegisteredIndex::DiskAnn(DiskAnnIndex::new(config)?)),
+        IndexType::Flat | IndexType::IvfFlat => {
+            Ok(RegisteredIndex::Mem(Box::new(MemIndex::new(config)?)))
+        }
+        IndexType::Hnsw => Ok(RegisteredIndex::Hnsw(Box::new(HnswIndex::new(config)?))),
+        IndexType::IvfPq => Ok(RegisteredIndex::IvfPq(Box::new(IvfPqIndex::new(config)?))),
+        IndexType::DiskAnn => Ok(RegisteredIndex::DiskAnn(Box::new(DiskAnnIndex::new(
+            config,
+        )?))),
         _ => Err(KnowhereError::InvalidArg(format!(
             "unsupported JNI index type: {:?}",
             config.index_type
@@ -281,7 +285,7 @@ fn deserialize_registered_index(bytes: &[u8]) -> crate::api::Result<RegisteredIn
         let config = build_config(IndexType::Flat, dim, MetricType::L2, IndexParams::default());
         let mut index = MemIndex::new(&config)?;
         index.deserialize_from_memory(bytes)?;
-        return Ok(RegisteredIndex::Mem(index));
+        return Ok(RegisteredIndex::Mem(Box::new(index)));
     }
 
     if bytes.starts_with(b"HNSW") {
@@ -289,7 +293,7 @@ fn deserialize_registered_index(bytes: &[u8]) -> crate::api::Result<RegisteredIn
         let config = build_config(IndexType::Hnsw, dim, MetricType::L2, IndexParams::default());
         let mut index = HnswIndex::new(&config)?;
         load_from_temp_bytes(bytes, |path| index.load(path))?;
-        return Ok(RegisteredIndex::Hnsw(index));
+        return Ok(RegisteredIndex::Hnsw(Box::new(index)));
     }
 
     if bytes.starts_with(b"DANN") {
@@ -302,7 +306,7 @@ fn deserialize_registered_index(bytes: &[u8]) -> crate::api::Result<RegisteredIn
         );
         let mut index = DiskAnnIndex::new(&config)?;
         load_from_temp_bytes(bytes, |path| index.load(path))?;
-        return Ok(RegisteredIndex::DiskAnn(index));
+        return Ok(RegisteredIndex::DiskAnn(Box::new(index)));
     }
 
     if bytes.starts_with(b"IVFPQ") {
@@ -316,7 +320,7 @@ fn deserialize_registered_index(bytes: &[u8]) -> crate::api::Result<RegisteredIn
         let config = build_config(IndexType::IvfPq, dim, MetricType::L2, params);
         let mut index = IvfPqIndex::new(&config)?;
         load_from_temp_bytes(bytes, |path| index.load(path))?;
-        return Ok(RegisteredIndex::IvfPq(index));
+        return Ok(RegisteredIndex::IvfPq(Box::new(index)));
     }
 
     Err(KnowhereError::Codec(

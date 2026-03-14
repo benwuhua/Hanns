@@ -176,6 +176,9 @@ pub fn l2_distance_sq_ptr_kernel() -> L2DistanceSqPtrKernel {
 }
 
 #[inline]
+/// # Safety
+///
+/// `a` and `b` must each point to at least `dim` contiguous `f32` values that are valid to read.
 pub unsafe fn l2_distance_sq_ptr(a: *const f32, b: *const f32, dim: usize) -> f32 {
     let kernel = l2_distance_sq_ptr_kernel();
     kernel(a, b, dim)

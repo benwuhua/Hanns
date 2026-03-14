@@ -15,7 +15,7 @@ simd = ["wide"]
 hdf5 = ["dep:hdf5", "dep:ndarray"]
 scann = []
 std-f16 = []
-async-io = ["io-uring"]
+async-io = ["dep:io-uring"]
 long-tests = []
 
 [dependencies]
@@ -41,8 +41,10 @@ wide = { version = "0.7", optional = true }
 libc = "0.2"
 hdf5 = { version = "0.8", optional = true }
 ndarray = { version = "0.15", optional = true }
-io-uring = { version = "0.6", optional = true }
 tempfile = "3.3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = { version = "0.6", optional = true }
 
 [lib]
 name = "knowhere_rs"

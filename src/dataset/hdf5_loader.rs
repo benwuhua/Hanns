@@ -21,8 +21,6 @@
 //! - macOS: `brew install hdf5`
 //! - Ubuntu: `apt-get install libhdf5-dev`
 
-#![cfg(feature = "hdf5")]
-
 use std::path::Path;
 use thiserror::Error;
 

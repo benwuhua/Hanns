@@ -281,6 +281,7 @@ fn run_query_batch_with_bitset(
 }
 
 #[cfg(feature = "hdf5")]
+#[allow(clippy::too_many_arguments)]
 fn run_query_batch_with_bitset_repeated(
     index: &HnswIndex,
     query_vectors: &[f32],

@@ -288,7 +288,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
 
         let vector = vec![1.0f32; 128];
-        write_test_fvecs(&dir.join("sift_base.fvecs"), &[vector.clone()]);
+        write_test_fvecs(&dir.join("sift_base.fvecs"), std::slice::from_ref(&vector));
         write_test_fvecs(&dir.join("sift_query.fvecs"), &[vector]);
         write_test_ivecs(&dir.join("sift_groundtruth.ivecs"), &[vec![7, 8, 9]]);
 

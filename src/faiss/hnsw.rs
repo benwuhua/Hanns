@@ -3519,7 +3519,7 @@ impl HnswIndex {
 
                 let distance_start = Instant::now();
                 let nbr_dist = self.distance(query, nbr_idx);
-                if let Some(stats) = profile.as_deref_mut() {
+                if let Some(stats) = profile.as_mut() {
                     stats.record_upper_layer_query_distance(distance_start.elapsed(), 1);
                 }
                 if nbr_dist < best_dist {
@@ -3566,7 +3566,7 @@ impl HnswIndex {
 
                 let distance_start = Instant::now();
                 let nbr_dist = unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) };
-                if let Some(stats) = profile.as_deref_mut() {
+                if let Some(stats) = profile.as_mut() {
                     stats.record_upper_layer_query_distance(distance_start.elapsed(), 1);
                 }
                 if nbr_dist < best_dist {
@@ -3708,6 +3708,7 @@ impl HnswIndex {
         "derived_from_canonical_flat_graph_and_vectors"
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn search_layer_idx_shared(
         &self,
         query: &[f32],
@@ -3728,7 +3729,7 @@ impl HnswIndex {
             let pruning_start = Instant::now();
             let should_add = scratch.generic_results.len() < ef
                 || nbr_dist < scratch.generic_worst_result_distance;
-            if let Some(stats) = profile.as_deref_mut() {
+            if let Some(stats) = profile.as_mut() {
                 stats.record_candidate_pruning(pruning_start.elapsed(), u64::from(!should_add));
             }
 
@@ -3738,7 +3739,7 @@ impl HnswIndex {
                 scratch
                     .generic_frontier
                     .push((SearchMinDist(nbr_dist), nbr_idx));
-                if let Some(stats) = profile.as_deref_mut() {
+                if let Some(stats) = profile.as_mut() {
                     stats.record_frontier_ops(frontier_start.elapsed(), 2, result_pops);
                 }
             }
@@ -3761,7 +3762,7 @@ impl HnswIndex {
         let visited_start = Instant::now();
         scratch.prepare(num_nodes);
         scratch.prepare_generic_heaps(ef);
-        if let Some(stats) = profile.as_deref_mut() {
+        if let Some(stats) = profile.as_mut() {
             stats.start_layer0_candidate_search();
             stats.record_visited_ops(visited_start.elapsed(), 0);
         }
@@ -3772,7 +3773,7 @@ impl HnswIndex {
         } else {
             self.distance(query, entry_idx)
         };
-        if let Some(stats) = profile.as_deref_mut() {
+        if let Some(stats) = profile.as_mut() {
             stats.record_layer0_query_distance(distance_start.elapsed(), 1);
         }
 
@@ -3787,7 +3788,7 @@ impl HnswIndex {
                 .push((SearchMaxDist(entry_dist), entry_idx));
             scratch.sync_generic_worst_result_distance();
         }
-        if let Some(stats) = profile.as_deref_mut() {
+        if let Some(stats) = profile.as_mut() {
             stats.record_frontier_ops(
                 frontier_start.elapsed(),
                 1 + u64::from(!entry_is_filtered),
@@ -3797,19 +3798,19 @@ impl HnswIndex {
 
         let visited_start = Instant::now();
         let entry_marked = scratch.mark_visited(entry_idx);
-        if let Some(stats) = profile.as_deref_mut() {
+        if let Some(stats) = profile.as_mut() {
             stats.record_visited_ops(visited_start.elapsed(), u64::from(entry_marked));
         }
 
         loop {
             let frontier_start = Instant::now();
             let Some((SearchMinDist(cand_dist), cand_idx)) = scratch.generic_frontier.pop() else {
-                if let Some(stats) = profile.as_deref_mut() {
+                if let Some(stats) = profile.as_mut() {
                     stats.record_frontier_ops(frontier_start.elapsed(), 0, 0);
                 }
                 break;
             };
-            if let Some(stats) = profile.as_deref_mut() {
+            if let Some(stats) = profile.as_mut() {
                 stats.record_frontier_ops(frontier_start.elapsed(), 0, 1);
             }
 
@@ -3817,12 +3818,12 @@ impl HnswIndex {
             if scratch.generic_results.len() >= ef
                 && cand_dist > scratch.generic_worst_result_distance
             {
-                if let Some(stats) = profile.as_deref_mut() {
+                if let Some(stats) = profile.as_mut() {
                     stats.record_candidate_pruning(pruning_start.elapsed(), 1);
                 }
                 break;
             }
-            if let Some(stats) = profile.as_deref_mut() {
+            if let Some(stats) = profile.as_mut() {
                 stats.record_candidate_pruning(pruning_start.elapsed(), 0);
             }
 
@@ -3838,7 +3839,7 @@ impl HnswIndex {
 
                     let visited_start = Instant::now();
                     let marked = scratch.mark_visited(nbr_idx);
-                    if let Some(stats) = profile.as_deref_mut() {
+                    if let Some(stats) = profile.as_mut() {
                         stats.record_visited_ops(visited_start.elapsed(), u64::from(marked));
                     }
                     if !marked || is_filtered(nbr_idx) {
@@ -3853,7 +3854,7 @@ impl HnswIndex {
                             let nbr_dists = unsafe {
                                 self.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, grouped_nbrs)
                             };
-                            if let Some(stats) = profile.as_deref_mut() {
+                            if let Some(stats) = profile.as_mut() {
                                 stats.record_layer0_query_distance_batch4(distance_start.elapsed());
                             }
                             for (idx, dist) in grouped_nbrs.into_iter().zip(nbr_dists.into_iter()) {
@@ -3865,7 +3866,7 @@ impl HnswIndex {
                         let distance_start = Instant::now();
                         let nbr_dist =
                             unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) };
-                        if let Some(stats) = profile.as_deref_mut() {
+                        if let Some(stats) = profile.as_mut() {
                             stats.record_layer0_query_distance(distance_start.elapsed(), 1);
                         }
                         accept_shared_neighbor(scratch, ef, nbr_idx, nbr_dist, &mut profile);
@@ -3875,7 +3876,7 @@ impl HnswIndex {
                     let distance_start = Instant::now();
                     let nbr_dist =
                         unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) };
-                    if let Some(stats) = profile.as_deref_mut() {
+                    if let Some(stats) = profile.as_mut() {
                         stats.record_layer0_query_distance(distance_start.elapsed(), 1);
                     }
                     accept_shared_neighbor(scratch, ef, nbr_idx, nbr_dist, &mut profile);
@@ -3895,7 +3896,7 @@ impl HnswIndex {
 
                     let visited_start = Instant::now();
                     let marked = scratch.mark_visited(nbr_idx);
-                    if let Some(stats) = profile.as_deref_mut() {
+                    if let Some(stats) = profile.as_mut() {
                         stats.record_visited_ops(visited_start.elapsed(), u64::from(marked));
                     }
                     if !marked || is_filtered(nbr_idx) {
@@ -3908,14 +3909,14 @@ impl HnswIndex {
                     } else {
                         self.distance(query, nbr_idx)
                     };
-                    if let Some(stats) = profile.as_deref_mut() {
+                    if let Some(stats) = profile.as_mut() {
                         stats.record_layer0_query_distance(distance_start.elapsed(), 1);
                     }
 
                     let pruning_start = Instant::now();
                     let should_add = scratch.generic_results.len() < ef
                         || nbr_dist < scratch.generic_worst_result_distance;
-                    if let Some(stats) = profile.as_deref_mut() {
+                    if let Some(stats) = profile.as_mut() {
                         stats.record_candidate_pruning(
                             pruning_start.elapsed(),
                             u64::from(!should_add),
@@ -3928,7 +3929,7 @@ impl HnswIndex {
                         scratch
                             .generic_frontier
                             .push((SearchMinDist(nbr_dist), nbr_idx));
-                        if let Some(stats) = profile.as_deref_mut() {
+                        if let Some(stats) = profile.as_mut() {
                             stats.record_frontier_ops(frontier_start.elapsed(), 2, result_pops);
                         }
                     }
@@ -3938,7 +3939,7 @@ impl HnswIndex {
 
         let frontier_start = Instant::now();
         let sorted = scratch.drain_generic_results_sorted();
-        if let Some(stats) = profile.as_deref_mut() {
+        if let Some(stats) = profile.as_mut() {
             stats.record_frontier_ops(frontier_start.elapsed(), 0, sorted.len() as u64);
         }
         sorted
@@ -3994,14 +3995,14 @@ impl HnswIndex {
         let visited_start = Instant::now();
         scratch.prepare(num_nodes);
         scratch.prepare_generic_heaps(ef);
-        if let Some(stats) = profile.as_deref_mut() {
+        if let Some(stats) = profile.as_mut() {
             stats.start_layer0_candidate_search();
             stats.record_visited_ops(visited_start.elapsed(), 0);
         }
 
         let distance_start = Instant::now();
         let entry_dist = unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, entry_idx) };
-        if let Some(stats) = profile.as_deref_mut() {
+        if let Some(stats) = profile.as_mut() {
             stats.record_layer0_query_distance(distance_start.elapsed(), 1);
         }
 
@@ -4012,25 +4013,25 @@ impl HnswIndex {
         scratch
             .generic_results
             .push((SearchMaxDist(entry_dist), entry_idx));
-        if let Some(stats) = profile.as_deref_mut() {
+        if let Some(stats) = profile.as_mut() {
             stats.record_frontier_ops(frontier_start.elapsed(), 2, 0);
         }
 
         let visited_start = Instant::now();
         let entry_marked = scratch.mark_visited(entry_idx);
-        if let Some(stats) = profile.as_deref_mut() {
+        if let Some(stats) = profile.as_mut() {
             stats.record_visited_ops(visited_start.elapsed(), u64::from(entry_marked));
         }
 
         loop {
             let frontier_start = Instant::now();
             let Some((SearchMinDist(cand_dist), cand_idx)) = scratch.generic_frontier.pop() else {
-                if let Some(stats) = profile.as_deref_mut() {
+                if let Some(stats) = profile.as_mut() {
                     stats.record_frontier_ops(frontier_start.elapsed(), 0, 0);
                 }
                 break;
             };
-            if let Some(stats) = profile.as_deref_mut() {
+            if let Some(stats) = profile.as_mut() {
                 stats.record_frontier_ops(frontier_start.elapsed(), 0, 1);
             }
 
@@ -4038,14 +4039,14 @@ impl HnswIndex {
             if scratch.generic_results.len() >= ef {
                 if let Some(&(SearchMaxDist(worst_dist), _)) = scratch.generic_results.peek() {
                     if cand_dist > worst_dist {
-                        if let Some(stats) = profile.as_deref_mut() {
+                        if let Some(stats) = profile.as_mut() {
                             stats.record_candidate_pruning(pruning_start.elapsed(), 1);
                         }
                         break;
                     }
                 }
             }
-            if let Some(stats) = profile.as_deref_mut() {
+            if let Some(stats) = profile.as_mut() {
                 stats.record_candidate_pruning(pruning_start.elapsed(), 0);
             }
 
@@ -4063,7 +4064,7 @@ impl HnswIndex {
 
                 let visited_start = Instant::now();
                 let marked = scratch.mark_visited(nbr_idx);
-                if let Some(stats) = profile.as_deref_mut() {
+                if let Some(stats) = profile.as_mut() {
                     stats.record_visited_ops(visited_start.elapsed(), u64::from(marked));
                 }
                 if !marked {
@@ -4072,7 +4073,7 @@ impl HnswIndex {
 
                 let distance_start = Instant::now();
                 let nbr_dist = unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) };
-                if let Some(stats) = profile.as_deref_mut() {
+                if let Some(stats) = profile.as_mut() {
                     stats.record_layer0_query_distance(distance_start.elapsed(), 1);
                 }
 
@@ -4084,7 +4085,7 @@ impl HnswIndex {
                             .peek()
                             .map(|&(SearchMaxDist(d), _)| d)
                             .unwrap_or(f32::INFINITY);
-                if let Some(stats) = profile.as_deref_mut() {
+                if let Some(stats) = profile.as_mut() {
                     stats.record_candidate_pruning(pruning_start.elapsed(), u64::from(!should_add));
                 }
 
@@ -4101,7 +4102,7 @@ impl HnswIndex {
                     scratch
                         .generic_frontier
                         .push((SearchMinDist(nbr_dist), nbr_idx));
-                    if let Some(stats) = profile.as_deref_mut() {
+                    if let Some(stats) = profile.as_mut() {
                         stats.record_frontier_ops(frontier_start.elapsed(), 2, result_pops);
                     }
                 }
@@ -4110,7 +4111,7 @@ impl HnswIndex {
 
         let frontier_start = Instant::now();
         let sorted = scratch.drain_generic_results_sorted();
-        if let Some(stats) = profile.as_deref_mut() {
+        if let Some(stats) = profile.as_mut() {
             stats.record_frontier_ops(frontier_start.elapsed(), 0, sorted.len() as u64);
         }
         sorted
@@ -4126,7 +4127,7 @@ impl HnswIndex {
     ) {
         let pruning_start = Instant::now();
         let should_add = scratch.layer0_results.can_insert(nbr_dist, ef);
-        if let Some(stats) = profile.as_deref_mut() {
+        if let Some(stats) = profile.as_mut() {
             stats.record_candidate_pruning(pruning_start.elapsed(), u64::from(!should_add));
         }
 
@@ -4141,7 +4142,7 @@ impl HnswIndex {
         };
         let result_pops = scratch.layer0_results.insert(entry, ef);
         scratch.layer0_frontier.push(entry);
-        if let Some(stats) = profile.as_deref_mut() {
+        if let Some(stats) = profile.as_mut() {
             stats.record_frontier_ops(frontier_start.elapsed(), 2, result_pops);
         }
     }
@@ -4215,7 +4216,7 @@ impl HnswIndex {
 
             if use_layer0_slab {
                 let neighbors = self.layer0_slab.neighbors_for(candidate.idx);
-                for (_neighbor_offset, &nbr_u32) in neighbors.iter().enumerate() {
+                for &nbr_u32 in neighbors {
                     let nbr_idx = nbr_u32 as usize;
                     if nbr_idx >= num_nodes || !scratch.mark_visited(nbr_idx) {
                         continue;
@@ -4343,7 +4344,7 @@ impl HnswIndex {
         scratch: &mut SearchScratch,
         mut profile: Option<&mut HnswCandidateSearchProfileStats>,
     ) -> Vec<(usize, f32)> {
-        if let Some(stats) = profile.as_deref_mut() {
+        if let Some(stats) = profile.as_mut() {
             stats.mark_layer0_ordered_pool();
         }
 
@@ -4354,7 +4355,7 @@ impl HnswIndex {
         let visited_start = Instant::now();
         scratch.prepare(num_nodes);
         scratch.prepare_layer0_pools(ef);
-        if let Some(stats) = profile.as_deref_mut() {
+        if let Some(stats) = profile.as_mut() {
             stats.start_layer0_candidate_search();
             stats.record_visited_ops(visited_start.elapsed(), 0);
             stats.mark_layer0_flat_graph_enabled(use_flat_graph);
@@ -4362,7 +4363,7 @@ impl HnswIndex {
 
         let distance_start = Instant::now();
         let entry_dist = unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, entry_idx) };
-        if let Some(stats) = profile.as_deref_mut() {
+        if let Some(stats) = profile.as_mut() {
             stats.record_layer0_query_distance(distance_start.elapsed(), 1);
         }
 
@@ -4373,25 +4374,25 @@ impl HnswIndex {
         };
         scratch.layer0_frontier.push(entry);
         scratch.layer0_results.insert(entry, ef);
-        if let Some(stats) = profile.as_deref_mut() {
+        if let Some(stats) = profile.as_mut() {
             stats.record_frontier_ops(frontier_start.elapsed(), 2, 0);
         }
 
         let visited_start = Instant::now();
         let entry_marked = scratch.mark_visited(entry_idx);
-        if let Some(stats) = profile.as_deref_mut() {
+        if let Some(stats) = profile.as_mut() {
             stats.record_visited_ops(visited_start.elapsed(), u64::from(entry_marked));
         }
 
         loop {
             let frontier_start = Instant::now();
             let Some(candidate) = scratch.layer0_frontier.pop_best() else {
-                if let Some(stats) = profile.as_deref_mut() {
+                if let Some(stats) = profile.as_mut() {
                     stats.record_frontier_ops(frontier_start.elapsed(), 0, 0);
                 }
                 break;
             };
-            if let Some(stats) = profile.as_deref_mut() {
+            if let Some(stats) = profile.as_mut() {
                 stats.record_frontier_ops(frontier_start.elapsed(), 0, 1);
             }
 
@@ -4399,14 +4400,14 @@ impl HnswIndex {
             if scratch.layer0_results.len() >= ef {
                 if let Some(worst_dist) = scratch.layer0_results.worst_dist() {
                     if candidate.dist > worst_dist {
-                        if let Some(stats) = profile.as_deref_mut() {
+                        if let Some(stats) = profile.as_mut() {
                             stats.record_candidate_pruning(pruning_start.elapsed(), 1);
                         }
                         break;
                     }
                 }
             }
-            if let Some(stats) = profile.as_deref_mut() {
+            if let Some(stats) = profile.as_mut() {
                 stats.record_candidate_pruning(pruning_start.elapsed(), 0);
             }
 
@@ -4420,7 +4421,7 @@ impl HnswIndex {
 
             if use_flat_graph {
                 let neighbors = self.layer0_flat_graph.neighbors_for(candidate.idx);
-                if let Some(stats) = profile.as_deref_mut() {
+                if let Some(stats) = profile.as_mut() {
                     stats.record_layer0_flat_graph_neighbor_reads(neighbors.len() as u64);
                 }
                 for (neighbor_offset, &nbr_u32) in neighbors.iter().enumerate() {
@@ -4430,7 +4431,7 @@ impl HnswIndex {
                             let prefetched =
                                 unsafe { self.prefetch_l2_vector_idx(base_ptr, next_nbr_idx) };
                             if prefetched {
-                                if let Some(stats) = profile.as_deref_mut() {
+                                if let Some(stats) = profile.as_mut() {
                                     stats.record_layer0_vector_prefetch();
                                 }
                             }
@@ -4444,7 +4445,7 @@ impl HnswIndex {
 
                     let visited_start = Instant::now();
                     let marked = scratch.mark_visited(nbr_idx);
-                    if let Some(stats) = profile.as_deref_mut() {
+                    if let Some(stats) = profile.as_mut() {
                         stats.record_visited_ops(visited_start.elapsed(), u64::from(marked));
                     }
                     if !marked {
@@ -4459,7 +4460,7 @@ impl HnswIndex {
                         let distances = unsafe {
                             self.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, batch_indices)
                         };
-                        if let Some(stats) = profile.as_deref_mut() {
+                        if let Some(stats) = profile.as_mut() {
                             stats.record_layer0_query_distance_batch4(distance_start.elapsed());
                         }
                         for (offset, nbr_dist) in distances.into_iter().enumerate() {
@@ -4484,7 +4485,7 @@ impl HnswIndex {
                             let prefetched =
                                 unsafe { self.prefetch_l2_vector_idx(base_ptr, next_nbr_idx) };
                             if prefetched {
-                                if let Some(stats) = profile.as_deref_mut() {
+                                if let Some(stats) = profile.as_mut() {
                                     stats.record_layer0_vector_prefetch();
                                 }
                             }
@@ -4498,7 +4499,7 @@ impl HnswIndex {
 
                     let visited_start = Instant::now();
                     let marked = scratch.mark_visited(nbr_idx);
-                    if let Some(stats) = profile.as_deref_mut() {
+                    if let Some(stats) = profile.as_mut() {
                         stats.record_visited_ops(visited_start.elapsed(), u64::from(marked));
                     }
                     if !marked {
@@ -4513,7 +4514,7 @@ impl HnswIndex {
                         let distances = unsafe {
                             self.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, batch_indices)
                         };
-                        if let Some(stats) = profile.as_deref_mut() {
+                        if let Some(stats) = profile.as_mut() {
                             stats.record_layer0_query_distance_batch4(distance_start.elapsed());
                         }
                         for (offset, nbr_dist) in distances.into_iter().enumerate() {
@@ -4533,7 +4534,7 @@ impl HnswIndex {
             for &nbr_idx in &batch_indices[..batch_len] {
                 let distance_start = Instant::now();
                 let nbr_dist = unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) };
-                if let Some(stats) = profile.as_deref_mut() {
+                if let Some(stats) = profile.as_mut() {
                     stats.record_layer0_query_distance(distance_start.elapsed(), 1);
                 }
                 self.process_layer0_l2_candidate(nbr_idx, nbr_dist, ef, scratch, &mut profile);
@@ -4542,7 +4543,7 @@ impl HnswIndex {
 
         let frontier_start = Instant::now();
         let sorted = scratch.layer0_results.to_sorted_pairs();
-        if let Some(stats) = profile.as_deref_mut() {
+        if let Some(stats) = profile.as_mut() {
             stats.record_frontier_ops(frontier_start.elapsed(), 0, sorted.len() as u64);
         }
         sorted
@@ -4988,9 +4989,8 @@ impl HnswIndex {
             // Find the best valid result for jumping
             let mut best_valid_idx = curr_ep_idx;
 
-            for (idx, _dist) in results {
+            if let Some((idx, _dist)) = results.into_iter().next() {
                 best_valid_idx = idx;
-                break;
             }
 
             if best_valid_idx != curr_ep_idx {
@@ -5047,7 +5047,6 @@ impl HnswIndex {
         bitset: &crate::bitset::BitsetView,
         scratch: &mut SearchScratch,
     ) -> (Vec<(usize, f32)>, usize) {
-        let before_epoch = scratch.epoch;
         let before_snapshot = scratch.visited_epoch.clone();
         let result =
             self.search_layer_idx_with_bitset_scratch(query, entry_idx, level, ef, bitset, scratch);
@@ -5059,11 +5058,7 @@ impl HnswIndex {
             .filter(|&(after, before)| *after == scratch.epoch && *before != scratch.epoch)
             .count();
 
-        if scratch.epoch == before_epoch {
-            (result, visited_count)
-        } else {
-            (result, visited_count)
-        }
+        (result, visited_count)
     }
 
     #[cfg(test)]

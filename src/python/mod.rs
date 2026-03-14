@@ -40,10 +40,10 @@ use crate::faiss::{HnswIndex, IvfFlatIndex, IvfPqIndex, MemIndex};
 
 /// 内部索引枚举（避免 trait object 问题）
 enum InnerIndex {
-    Flat(MemIndex),
-    Hnsw(HnswIndex),
-    IvfFlat(IvfFlatIndex),
-    IvfPq(IvfPqIndex),
+    Flat(Box<MemIndex>),
+    Hnsw(Box<HnswIndex>),
+    IvfFlat(Box<IvfFlatIndex>),
+    IvfPq(Box<IvfPqIndex>),
 }
 
 impl InnerIndex {
@@ -191,18 +191,24 @@ impl PyIndex {
         };
 
         let index = match index_type_enum {
-            IndexType::Flat => InnerIndex::Flat(MemIndex::new(&config).map_err(|e| {
+            IndexType::Flat => InnerIndex::Flat(Box::new(MemIndex::new(&config).map_err(|e| {
                 PyValueError::new_err(format!("Failed to create Flat index: {:?}", e))
-            })?),
-            IndexType::Hnsw => InnerIndex::Hnsw(HnswIndex::new(&config).map_err(|e| {
-                PyValueError::new_err(format!("Failed to create HNSW index: {:?}", e))
-            })?),
-            IndexType::IvfFlat => InnerIndex::IvfFlat(IvfFlatIndex::new(&config).map_err(|e| {
-                PyValueError::new_err(format!("Failed to create IVF-Flat index: {:?}", e))
-            })?),
-            IndexType::IvfPq => InnerIndex::IvfPq(IvfPqIndex::new(&config).map_err(|e| {
-                PyValueError::new_err(format!("Failed to create IVF-PQ index: {:?}", e))
-            })?),
+            })?)),
+            IndexType::Hnsw => {
+                InnerIndex::Hnsw(Box::new(HnswIndex::new(&config).map_err(|e| {
+                    PyValueError::new_err(format!("Failed to create HNSW index: {:?}", e))
+                })?))
+            }
+            IndexType::IvfFlat => {
+                InnerIndex::IvfFlat(Box::new(IvfFlatIndex::new(&config).map_err(|e| {
+                    PyValueError::new_err(format!("Failed to create IVF-Flat index: {:?}", e))
+                })?))
+            }
+            IndexType::IvfPq => {
+                InnerIndex::IvfPq(Box::new(IvfPqIndex::new(&config).map_err(|e| {
+                    PyValueError::new_err(format!("Failed to create IVF-PQ index: {:?}", e))
+                })?))
+            }
             _ => {
                 return Err(PyValueError::new_err(format!(
                     "Unsupported index type: {:?}",
@@ -438,15 +444,19 @@ impl PyIndex {
         drop(file);
 
         let mut index = match index_type_enum {
-            IndexType::Flat => InnerIndex::Flat(MemIndex::new(&config).map_err(|e| {
+            IndexType::Flat => InnerIndex::Flat(Box::new(MemIndex::new(&config).map_err(|e| {
                 PyValueError::new_err(format!("Failed to create Flat index: {:?}", e))
-            })?),
-            IndexType::Hnsw => InnerIndex::Hnsw(HnswIndex::new(&config).map_err(|e| {
-                PyValueError::new_err(format!("Failed to create HNSW index: {:?}", e))
-            })?),
-            IndexType::IvfPq => InnerIndex::IvfPq(IvfPqIndex::new(&config).map_err(|e| {
-                PyValueError::new_err(format!("Failed to create IVF-PQ index: {:?}", e))
-            })?),
+            })?)),
+            IndexType::Hnsw => {
+                InnerIndex::Hnsw(Box::new(HnswIndex::new(&config).map_err(|e| {
+                    PyValueError::new_err(format!("Failed to create HNSW index: {:?}", e))
+                })?))
+            }
+            IndexType::IvfPq => {
+                InnerIndex::IvfPq(Box::new(IvfPqIndex::new(&config).map_err(|e| {
+                    PyValueError::new_err(format!("Failed to create IVF-PQ index: {:?}", e))
+                })?))
+            }
             _ => {
                 return Err(PyValueError::new_err(format!(
                     "Unsupported index type: {:?}",
