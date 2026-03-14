@@ -22,6 +22,30 @@
 
 ## Session Log
 
+### Session 103 - 2026-03-14
+- Focus: `hnsw-fair-lane-throughput-screen-bf16-disable-layer0-slab`
+- Completed:
+  - executed an implementation screen on the BF16 fair lane using the newly promoted stable harness (`RAYON_NUM_THREADS=8`, `--repeat 5`)
+  - changed only one hot-path policy in `search_layer_idx_l2_ordered_pool_fast`: when BF16 query bits are active, skip layer0 slab path and use the existing BF16 flat-graph batch distance path instead (`use_layer0_slab` now requires `query_bf16.is_none()`)
+  - validated BF16 search-path correctness and filtered-search regressions, then measured pre/post with one baseline and two post runs under identical parameters
+- Verification:
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok`
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok`
+  - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt8_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt8_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt8_local_rerun1.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - pre baseline: `qps=29139.015`, `recall_at_10=0.9953`
+  - post sample #1: `qps=33112.812`, `recall_at_10=0.9953` (`+13.64%`)
+  - post sample #2: `qps=32024.680`, `recall_at_10=0.9953` (`+9.90%`)
+  - post mean is `32568.746` qps (`+11.77%` vs pre), exceeding the current local promotion threshold while keeping recall unchanged
+  - this remains local-only evidence; next step should be authority rerun on the same BF16 fair lane before any durable verdict refresh
+
 ### Session 102 - 2026-03-14
 - Focus: `hnsw-fair-lane-throughput-screen-local-stability-harness`
 - Completed:
