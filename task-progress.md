@@ -22,6 +22,25 @@
 
 ## Session Log
 
+### Session 91 - 2026-03-14
+- Focus: `hnsw-fairness-gate-datatype-screen`
+- Completed:
+  - wrote a dedicated design/spec and execution plan for the datatype-parity screen, explicitly constraining the work to a harness-side capability audit instead of fabricating a fake BF16 benchmark lane or reopening HNSW core storage in the same slice
+  - tightened `src/bin/generate_hdf5_hnsw_baseline.rs` with a TDD red contract first: the new unit test required a requested BF16 lane to surface its current effective datatype explicitly, proving the current HNSW fair lane still resolves to `Float32`
+  - added a local-only datatype audit surface to the HDF5 baseline binary with `--vector-datatype <float32|bfloat16>`, wiring the requested datatype into `IndexConfig.data_type` while emitting both `requested_vector_datatype` and effective `vector_datatype` into the output artifact
+  - ran the fair local lane twice with the already-aligned effective-`ef` and parallel-dispatch settings; the BF16-request artifact reported `requested_vector_datatype=BFloat16` but still `vector_datatype=Float32`, while recall stayed exactly flat and qps only moved within a local-noise band
+- Verification:
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline requested_bfloat16_reports_float32_effective_lane_for_current_hnsw -- --nocapture` -> initial `FAIL` (`RequestedVectorDatatype` missing), then `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline -- --nocapture` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_datatype_float32.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype float32 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_datatype_bfloat16.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42` -> `ok`
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - the harness-only datatype path does not cross the fairness boundary: the BF16-request lane still reports effective `Float32`, so it cannot justify a datatype-parity authority rerun
+  - local screen outputs were `/tmp/hnsw_fairness_datatype_float32.json` (`29214.389 qps`, `0.9953` recall, requested/effective `Float32/Float32`) and `/tmp/hnsw_fairness_datatype_bfloat16.json` (`31071.622 qps`, `0.9953` recall, requested/effective `BFloat16/Float32`)
+  - the small local qps delta is not meaningful fairness evidence because the effective lane did not change; the next strategic step should target real HNSW BF16 storage/distance-path work or explicitly archive datatype parity as requiring core changes
+
 ### Session 90 - 2026-03-14
 - Focus: `hnsw-fairness-gate-batch-dispatch-authority-rerun`
 - Completed:

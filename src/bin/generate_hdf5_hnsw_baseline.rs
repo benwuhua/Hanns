@@ -56,6 +56,7 @@ struct RsBaselineRow {
     requested_ef_search: usize,
     effective_ef_search: usize,
     adaptive_k: f64,
+    requested_vector_datatype: String,
     vector_datatype: String,
     query_dispatch_model: String,
     query_batch_size: usize,
@@ -152,6 +153,56 @@ struct QueryDispatchMetadata {
 }
 
 #[cfg(feature = "hdf5")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VectorDatatypeMetadata {
+    requested_label: &'static str,
+    effective_label: &'static str,
+}
+
+#[cfg(feature = "hdf5")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RequestedVectorDatatype {
+    Float32,
+    BFloat16,
+}
+
+#[cfg(feature = "hdf5")]
+impl RequestedVectorDatatype {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "float32" | "float" => Ok(Self::Float32),
+            "bfloat16" | "bf16" => Ok(Self::BFloat16),
+            _ => Err(format!(
+                "unsupported vector datatype `{value}`; expected `float32` or `bfloat16`"
+            )),
+        }
+    }
+
+    fn index_data_type(self) -> DataType {
+        match self {
+            Self::Float32 => DataType::Float,
+            Self::BFloat16 => DataType::BFloat16,
+        }
+    }
+
+    fn requested_label(self) -> &'static str {
+        match self {
+            Self::Float32 => "Float32",
+            Self::BFloat16 => "BFloat16",
+        }
+    }
+
+    fn metadata_for_current_hnsw_lane(self) -> VectorDatatypeMetadata {
+        // The current HNSW implementation stores/query-dispatches dense vectors as f32
+        // even if the requested API datatype is BFloat16.
+        VectorDatatypeMetadata {
+            requested_label: self.requested_label(),
+            effective_label: "Float32",
+        }
+    }
+}
+
+#[cfg(feature = "hdf5")]
 impl QueryDispatchConfig {
     fn serial() -> Self {
         Self {
@@ -233,7 +284,7 @@ fn parse_usize_list_arg(args: &[String], name: &str) -> Vec<usize> {
 #[cfg(feature = "hdf5")]
 fn print_usage(program: &str) {
     eprintln!(
-        "Usage: {program} --input <path> [--output <path>] [--base-limit <n>] [--query-limit <n>] [--top-k <n>] [--recall-at <n>] [--m <n>] [--ef-construction <n>] [--ef-search <n>] [--hnsw-adaptive-k <f>] [--query-dispatch-mode <serial|parallel>] [--query-batch-size <n>] [--recall-gate <f>] [--with-repair]"
+        "Usage: {program} --input <path> [--output <path>] [--base-limit <n>] [--query-limit <n>] [--top-k <n>] [--recall-at <n>] [--m <n>] [--ef-construction <n>] [--ef-search <n>] [--hnsw-adaptive-k <f>] [--vector-datatype <float32|bfloat16>] [--query-dispatch-mode <serial|parallel>] [--query-batch-size <n>] [--recall-gate <f>] [--with-repair]"
     );
     eprintln!("  --top-k      number of results to retrieve per query (default: {DEFAULT_TOP_K})");
     eprintln!("  --recall-at  k for recall@k measurement, independent of top-k (default: {DEFAULT_RECALL_AT})");
@@ -243,6 +294,9 @@ fn print_usage(program: &str) {
     eprintln!("  --random-seed <u64>        optional deterministic HNSW build seed");
     eprintln!(
         "  --hnsw-adaptive-k <f>     HNSW adaptive ef multiplier (0 disables the adaptive floor)"
+    );
+    eprintln!(
+        "  --vector-datatype <float32|bfloat16>  requested datatype for the HNSW fair-lane audit"
     );
     eprintln!(
         "  --query-dispatch-mode <serial|parallel>  query execution mode for the benchmark lane"
@@ -266,13 +320,14 @@ fn build_hnsw_config(
     ef_construction: usize,
     ef_search: usize,
     hnsw_adaptive_k: f64,
+    requested_vector_datatype: RequestedVectorDatatype,
     random_seed: Option<u64>,
 ) -> IndexConfig {
     IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
         dim,
-        data_type: DataType::Float,
+        data_type: requested_vector_datatype.index_data_type(),
         params: IndexParams {
             m: Some(m),
             ef_construction: Some(ef_construction),
@@ -553,6 +608,14 @@ fn run() {
     let ef_construction = parse_usize_arg(&args, "--ef-construction", DEFAULT_EF_CONSTRUCTION);
     let ef_search = parse_usize_arg(&args, "--ef-search", DEFAULT_EF_SEARCH);
     let hnsw_adaptive_k = parse_f64_arg(&args, "--hnsw-adaptive-k", DEFAULT_HNSW_ADAPTIVE_K);
+    let requested_vector_datatype = arg_value(&args, "--vector-datatype")
+        .map(|value| {
+            RequestedVectorDatatype::parse(&value).unwrap_or_else(|message| {
+                eprintln!("{message}");
+                std::process::exit(2);
+            })
+        })
+        .unwrap_or(RequestedVectorDatatype::Float32);
     let query_dispatch_mode = arg_value(&args, "--query-dispatch-mode")
         .map(|value| {
             QueryDispatchMode::parse(&value).unwrap_or_else(|message| {
@@ -610,12 +673,14 @@ fn run() {
         ef_construction,
         ef_search,
         hnsw_adaptive_k,
+        requested_vector_datatype,
         random_seed,
     );
     let adaptive_k = config.params.hnsw_adaptive_k();
     let effective_ef_search = config
         .params
         .effective_hnsw_ef_search(ef_search, ef_search, top_k);
+    let vector_datatype_metadata = requested_vector_datatype.metadata_for_current_hnsw_lane();
     let query_dispatch = match query_dispatch_mode {
         QueryDispatchMode::Serial => QueryDispatchConfig::serial(),
         QueryDispatchMode::Parallel => QueryDispatchConfig::parallel(query_batch_size),
@@ -685,7 +750,8 @@ fn run() {
             requested_ef_search: ef_search,
             effective_ef_search,
             adaptive_k,
-            vector_datatype: "Float32".to_string(),
+            requested_vector_datatype: vector_datatype_metadata.requested_label.to_string(),
+            vector_datatype: vector_datatype_metadata.effective_label.to_string(),
             query_dispatch_model: query_dispatch_metadata.model.to_string(),
             query_batch_size: query_dispatch_metadata.batch_size,
             qps,
@@ -879,7 +945,15 @@ mod tests {
         let top_k = 2;
         let ef_search = 8;
 
-        let config = build_hnsw_config(dim, 8, 40, ef_search, 0.0, Some(42));
+        let config = build_hnsw_config(
+            dim,
+            8,
+            40,
+            ef_search,
+            0.0,
+            RequestedVectorDatatype::Float32,
+            Some(42),
+        );
         let mut index = HnswIndex::new(&config).expect("create hnsw");
         index.train(&base).expect("train hnsw");
         index.add(&base, None).expect("add hnsw");
@@ -923,11 +997,30 @@ mod tests {
     }
 
     #[test]
+    fn requested_bfloat16_reports_float32_effective_lane_for_current_hnsw() {
+        let requested = RequestedVectorDatatype::parse("bfloat16").expect("parse datatype");
+        let metadata = requested.metadata_for_current_hnsw_lane();
+
+        assert_eq!(requested.index_data_type(), DataType::BFloat16);
+        assert_eq!(metadata.requested_label, "BFloat16");
+        assert_eq!(metadata.effective_label, "Float32");
+    }
+
+    #[test]
     fn build_hnsw_config_carries_random_seed_and_adaptive_k() {
-        let config = build_hnsw_config(128, 16, 100, 138, 0.0, Some(42));
+        let config = build_hnsw_config(
+            128,
+            16,
+            100,
+            138,
+            0.0,
+            RequestedVectorDatatype::Float32,
+            Some(42),
+        );
 
         assert_eq!(config.params.random_seed, Some(42));
         assert_eq!(config.params.hnsw_adaptive_k, Some(0.0));
+        assert_eq!(config.data_type, DataType::Float);
     }
 
     #[test]
