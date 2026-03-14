@@ -22,6 +22,30 @@
 
 ## Session Log
 
+### Session 100 - 2026-03-14
+- Focus: `hnsw-fair-lane-throughput-screen-bf16-batch4-pointer-dispatch`
+- Completed:
+  - ran a new implementation screen on the BF16 fair lane targeting a larger hot-path lever than scalar micro-tuning: replace slice-based BF16 batch-4 dispatch with a raw-pointer dispatch path to reduce repeated slice construction/bounds overhead in the layer-0 fast search loop
+  - followed TDD red first by adding `test_bf16_l2_sq_batch_4_ptrs_matches_slice_dispatch`; it initially failed at compile-time (`bf16_l2_sq_batch_4_ptrs` missing), then turned green after implementing pointer dispatch and temporarily wiring HNSW BF16 batch-4 distance path to the new API
+  - reran BF16 fast-path regressions to confirm semantics and storage-lane behavior stayed intact
+  - measured local fair-lane pre/post with identical settings by stashing the experiment for pre, then restoring for post
+  - after confirming negative throughput signal, fully reverted all experiment code and left only the durable session record
+- Verification:
+  - `cargo test --lib test_bf16_l2_sq_batch_4_ptrs_matches_slice_dispatch -- --nocapture` -> initial `FAIL` (missing symbol), then `ok`
+  - `cargo test --lib test_bf16_l2_sq_batch_4_matches_l2_squared -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok` on experiment branch
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt6_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt6_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - local pre baseline: `30255.927` qps, `recall_at_10=0.9953`
+  - local post sample: `29082.166` qps, `recall_at_10=0.9953`
+  - post vs pre is about `-3.88%`; this pointer-dispatch hypothesis does not improve the BF16 fair lane and has been rolled back
+  - next recommended screen should avoid dispatch plumbing changes and instead target algorithmic reductions in layer-0 neighbor expansion work (same fair-lane contract)
+
 ### Session 99 - 2026-03-14
 - Focus: `hnsw-fair-lane-throughput-screen-ef-sweep-diagnosis`
 - Completed:
