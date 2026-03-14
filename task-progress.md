@@ -22,6 +22,27 @@
 
 ## Session Log
 
+### Session 102 - 2026-03-14
+- Focus: `hnsw-fair-lane-throughput-screen-local-stability-harness`
+- Completed:
+  - ran a methodology screen (no code change) to tighten local throughput experiment stability before reopening algorithmic hypotheses
+  - executed the same BF16 fair-lane benchmark three times under fixed `RAYON_NUM_THREADS=8` with `--repeat 5` so each artifact uses median qps over five internal runs
+  - compared cross-invocation spread and variance to decide whether this should become the default local screen harness for follow-up optimization experiments
+- Verification:
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_stability_run1.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_stability_run2.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_stability_run3.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - run medians:
+    - run1: `qps=27164.901`, `recall_at_10=0.9953` (`qps_runs=27876.410,26631.070,27164.901,27956.877,26540.716`)
+    - run2: `qps=28457.329`, `recall_at_10=0.9953` (`qps_runs=26666.815,28004.863,28618.240,29257.589,28457.329`)
+    - run3: `qps=28949.809`, `recall_at_10=0.9953` (`qps_runs=28155.267,28949.809,29059.489,29015.399,28520.837`)
+  - cross-run spread is now about `6.33%` (min/max over mean) with stddev about `2.67%`, materially tighter than the prior single-repeat pattern that produced ~`31%` swing
+  - follow-up local screens should use this harness (`RAYON_NUM_THREADS=8`, `--repeat 5`) and treat signals below about `+8%` qps (with no recall drop) as inconclusive/noise-bound
+
 ### Session 101 - 2026-03-14
 - Focus: `hnsw-fair-lane-throughput-screen-layer0-neighbor-scan-cap`
 - Completed:
