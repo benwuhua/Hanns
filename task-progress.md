@@ -14,12 +14,49 @@
 - Phase: worker-active
 - Current focus: `none`
 - Next feature: `none`
-- Last updated: 2026-03-13
+- Strategic state: `blocked_on_hnsw_fairness_gate` (see `docs/performance-program.md`)
+- Last updated: 2026-03-14
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 - Workflow policy: narrow performance hypotheses should start with `screen`, promote to tracked work only after `screen_result=promote`, and update durable docs only after authority verdicts
 - Progress: 64/64 features passing (100%)
 
 ## Session Log
+
+### Session 74 - 2026-03-14
+- Focus: `hnsw-fairness-gate`
+- Completed:
+  - extended `src/bin/generate_hdf5_hnsw_baseline.rs` so the Rust HDF5 baseline row now records fairness-relevant metadata: requested/effective `ef`, `adaptive_k`, datatype, and query-dispatch model
+  - updated `benchmark_results/rs_hnsw_sift128.full_k100.json` and `benchmark_results/baseline_p3_001_same_schema_hnsw_hdf5.json` with the same metadata, added `benchmark_results/hnsw_fairness_gate.json` as a durable blocker artifact for the current unfair lane, and whitelisted that artifact in `.gitignore`
+  - added `tests/test_hnsw_fairness_gate.py` so future sessions cannot silently regress the current fairness diagnosis or reopen leadership work without updating the evidence
+- Verification:
+  - `python3 -m unittest tests/test_hnsw_fairness_gate.py tests/test_baseline_methodology_lock.py tests/test_validate_features.py` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+  - `cargo build --features hdf5 --bin generate_hdf5_hnsw_baseline` -> local `FAIL` because `hdf5-sys` could not locate HDF5 headers on this macOS host
+  - `bash init.sh` -> `ok`
+  - `bash scripts/remote/test.sh --command "cargo build --features hdf5 --bin generate_hdf5_hnsw_baseline"` -> `conflict` because another knowhere-rs remote test was already active
+- Result:
+  - all tracked features remain `passing`
+  - the HNSW strategic blocker is now a mechanical fairness gate artifact instead of oral analysis only
+- Notes:
+  - the current fairness gate still fails on three fronts: effective `ef`, datatype, and serial per-query dispatch
+  - the Rust baseline binary change should be replayed on the remote authority host once the shared remote test lock is free
+- Git Commits: pending
+
+### Session 73 - 2026-03-14
+- Focus: `project-performance-governance`
+- Completed:
+  - added `docs/performance-program.md` so the repo keeps a durable project-level blocker and next strategic track even when the tracked feature queue is empty
+  - tightened `scripts/validate_features.py` and `tests/test_validate_features.py` so an all-passing `feature-list.json` cannot silently imply completion while `benchmark_results/final_performance_leadership_proof.json` still says `criterion_met=false`
+  - updated `long-task-guide.md`, `task-progress.md`, and `RELEASE_NOTES.md` so future sessions must keep the fairness gate and pivot gate visible in durable workflow state
+- Verification:
+  - `python3 -m unittest tests/test_validate_features.py` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+- Result:
+  - all tracked features remain `passing`
+  - the repo now exposes a non-terminal strategic blocker instead of implying project completion from an empty tracked queue
+- Notes:
+  - the active project-level blocker is the HNSW fair-compare gate recorded in `docs/performance-program.md`; any future reopen should satisfy that gate before claiming leadership progress
+- Git Commits: pending
 
 ### Session 72 - 2026-03-13
 - Focus: `hnsw-round11-authority-same-schema-rerun`

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import importlib.util
 import json
 import pathlib
@@ -56,11 +58,15 @@ def build_task_progress(
     *,
     current_focus: str = "feature-beta",
     next_feature: str = "feature-beta",
+    strategic_state: str | None = None,
     passing: int = 1,
     total: int = 2,
     percent: int = 50,
     latest_verification: str = "`python3 scripts/validate_features.py feature-list.json` -> `VALID`",
 ) -> str:
+    strategic_state_line = (
+        f"- Strategic state: `{strategic_state}`\n" if strategic_state is not None else ""
+    )
     return textwrap.dedent(
         f"""\
         # Task Progress
@@ -69,6 +75,7 @@ def build_task_progress(
 
         - Current focus: `{current_focus}`
         - Next feature: `{next_feature}` (selected for execution)
+        {strategic_state_line}\
         - Last updated: 2026-03-12
         - Progress: {passing}/{total} features passing ({percent}%)
 
@@ -97,6 +104,46 @@ def build_release_notes() -> str:
     )
 
 
+def build_final_performance_proof(*, criterion_met: bool = False) -> dict[str, object]:
+    return {
+        "task_id": "FINAL-PERFORMANCE-LEADERSHIP-PROOF",
+        "criterion_met": criterion_met,
+    }
+
+
+def build_performance_program(
+    *,
+    program_state: str = "blocked_on_hnsw_fairness_gate",
+    next_track: str = "hnsw-fairness-gate",
+    final_status: str = "unmet",
+    final_source: str = "benchmark_results/final_performance_leadership_proof.json",
+) -> str:
+    return textwrap.dedent(
+        f"""\
+        # Performance Program
+
+        ## Current Verdict
+
+        - Final criterion source: `{final_source}`
+        - Final criterion status: `{final_status}`
+        - Program state: `{program_state}`
+        - Next strategic track: `{next_track}`
+
+        ## Fairness Gate
+
+        - Match effective `ef` before reading qps deltas.
+
+        ## Canonical Compare Lane
+
+        - Use the remote x86 same-schema lane only.
+
+        ## Pivot Gate
+
+        - Pause pure-Rust HNSW reopen work after repeated non-attributable fair-lane rounds.
+        """
+    )
+
+
 class ValidateFeaturesWorkflowTests(unittest.TestCase):
     def write_repo(
         self,
@@ -105,6 +152,8 @@ class ValidateFeaturesWorkflowTests(unittest.TestCase):
         features: list[dict[str, object]] | None = None,
         task_progress: str | None = None,
         release_notes: str | None = None,
+        final_performance_proof: dict[str, object] | None = None,
+        performance_program: str | None = None,
         extra_files: dict[str, str] | None = None,
     ) -> pathlib.Path:
         feature_list_path = root / "feature-list.json"
@@ -120,6 +169,17 @@ class ValidateFeaturesWorkflowTests(unittest.TestCase):
             release_notes or build_release_notes(),
             encoding="utf-8",
         )
+        if final_performance_proof is not None:
+            proof_path = root / "benchmark_results" / "final_performance_leadership_proof.json"
+            proof_path.parent.mkdir(parents=True, exist_ok=True)
+            proof_path.write_text(
+                json.dumps(final_performance_proof, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        if performance_program is not None:
+            program_path = root / "docs" / "performance-program.md"
+            program_path.parent.mkdir(parents=True, exist_ok=True)
+            program_path.write_text(performance_program, encoding="utf-8")
 
         for relative_path, contents in (extra_files or {}).items():
             file_path = root / relative_path
@@ -240,6 +300,86 @@ class ValidateFeaturesWorkflowTests(unittest.TestCase):
 
             self.assertIn(
                 "Repository contains temporary/orphan artifact: src/faiss/hnsw.rs.new",
+                errors,
+            )
+
+    def test_validate_rejects_unmet_final_proof_without_strategic_program(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            features = base_features()
+            features[1]["status"] = "passing"
+            feature_list_path = self.write_repo(
+                root,
+                features=features,
+                task_progress=build_task_progress(
+                    current_focus="none",
+                    next_feature="none",
+                    passing=2,
+                    total=2,
+                    percent=100,
+                ),
+                final_performance_proof=build_final_performance_proof(),
+            )
+
+            errors = VALIDATOR.validate(str(feature_list_path))
+
+            self.assertIn(
+                "docs/performance-program.md is required when all tracked features are passing but the final performance leadership criterion remains unmet",
+                errors,
+            )
+            self.assertIn(
+                "task-progress.md missing `- Strategic state: ` line required when all tracked features are passing but the final performance leadership criterion remains unmet",
+                errors,
+            )
+
+    def test_validate_accepts_unmet_final_proof_with_strategic_program(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            features = base_features()
+            features[1]["status"] = "passing"
+            feature_list_path = self.write_repo(
+                root,
+                features=features,
+                task_progress=build_task_progress(
+                    current_focus="none",
+                    next_feature="none",
+                    strategic_state="blocked_on_hnsw_fairness_gate",
+                    passing=2,
+                    total=2,
+                    percent=100,
+                ),
+                final_performance_proof=build_final_performance_proof(),
+                performance_program=build_performance_program(),
+            )
+
+            errors = VALIDATOR.validate(str(feature_list_path))
+
+            self.assertEqual(errors, [])
+
+    def test_validate_rejects_strategic_state_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            features = base_features()
+            features[1]["status"] = "passing"
+            feature_list_path = self.write_repo(
+                root,
+                features=features,
+                task_progress=build_task_progress(
+                    current_focus="none",
+                    next_feature="none",
+                    strategic_state="stale_state",
+                    passing=2,
+                    total=2,
+                    percent=100,
+                ),
+                final_performance_proof=build_final_performance_proof(),
+                performance_program=build_performance_program(),
+            )
+
+            errors = VALIDATOR.validate(str(feature_list_path))
+
+            self.assertIn(
+                "task-progress.md strategic state `stale_state` does not match docs/performance-program.md program state `blocked_on_hnsw_fairness_gate`",
                 errors,
             )
 

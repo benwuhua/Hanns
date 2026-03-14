@@ -37,6 +37,15 @@ The purpose of `screen` is to reject weak ideas before they consume a full track
 
 A hypothesis is promoted into tracked work only after `screen_result=promote`.
 
+## Strategic Closure Rule
+
+When `feature-list.json` is fully passing but `benchmark_results/final_performance_leadership_proof.json`
+still records `criterion_met=false`, the project is not complete.
+
+- Keep `task-progress.md` explicit with a `- Strategic state: ...` line.
+- Maintain `docs/performance-program.md` as the durable source for the blocker, fairness gate, canonical compare lane, pivot gate, and next strategic track.
+- Do not treat `Current focus = none` and `Next feature = none` as release-ready state by themselves.
+
 ## Default Autonomy Rule
 
 Future Codex sessions should continue autonomously by default.

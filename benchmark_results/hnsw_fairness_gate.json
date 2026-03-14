@@ -1,0 +1,36 @@
+{
+  "task_id": "HNSW-FAIRNESS-GATE",
+  "verdict_date": "2026-03-14",
+  "authority_scope": "remote_x86_only",
+  "fairness_criterion": "requested_ef_match_plus_effective_ef_match_plus_datatype_match_plus_non_serial_query_dispatch",
+  "fair_for_leadership_claim": false,
+  "same_schema_source": "benchmark_results/baseline_p3_001_same_schema_hnsw_hdf5.json",
+  "rust_source": "benchmark_results/rs_hnsw_sift128.full_k100.json",
+  "checks": {
+    "requested_ef_alignment": {
+      "rust_requested_ef_search": 138,
+      "native_compare_ef_search": 138,
+      "pass": true
+    },
+    "effective_ef_alignment": {
+      "rust_requested_ef_search": 138,
+      "rust_adaptive_k": 2.0,
+      "top_k": 100,
+      "rust_effective_ef_search": 200,
+      "native_compare_ef_search": 138,
+      "pass": false
+    },
+    "datatype_alignment": {
+      "rust_datatype": "Float32",
+      "native_datatype": "BF16",
+      "pass": false
+    },
+    "query_dispatch_alignment": {
+      "rust_query_dispatch_model": "serial_per_query_index_search",
+      "rust_query_batch_size": 1,
+      "pass": false
+    }
+  },
+  "summary": "The current HNSW same-schema lane is not fair enough for leadership claims: requested ef is aligned, but Rust still runs with effective_ef=200 from adaptive_k=2.0, compares Float32 against native BF16, and measures throughput through serial per-query dispatch.",
+  "next_action": "Do not reopen leadership benchmarking until the Rust authority lane records matching effective ef, matching datatype, and a non-serial query-dispatch surface."
+}

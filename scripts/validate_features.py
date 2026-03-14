@@ -25,6 +25,7 @@ VALID_STATUSES = {"failing", "passing"}
 VALID_PRIORITIES = {"high", "medium", "low"}
 CURRENT_FOCUS_PATTERN = re.compile(r"^- Current focus: `([^`]+)`(?: .*)?$", re.MULTILINE)
 NEXT_FEATURE_PATTERN = re.compile(r"^- Next feature: `([^`]+)`(?: .*)?$", re.MULTILINE)
+STRATEGIC_STATE_PATTERN = re.compile(r"^- Strategic state: `([^`]+)`(?: .*)?$", re.MULTILINE)
 PROGRESS_PATTERN = re.compile(
     r"^- Progress: (\d+)/(\d+) features passing \((\d+)%\)$",
     re.MULTILINE,
@@ -34,6 +35,31 @@ SESSION_HEADING_PATTERN = re.compile(r"^### Session .+$", re.MULTILINE)
 TEMP_ARTIFACT_SUFFIXES = (".new", ".old", ".tmp")
 SKIP_SCAN_DIRECTORIES = {".git", "target", "__pycache__"}
 REQUIRED_RELEASE_NOTES_MARKERS = ("# Release Notes", "## [Unreleased]")
+FINAL_PERFORMANCE_PROOF_PATH = Path("benchmark_results/final_performance_leadership_proof.json")
+PERFORMANCE_PROGRAM_PATH = Path("docs/performance-program.md")
+PERFORMANCE_PROGRAM_REQUIRED_MARKERS = (
+    "# Performance Program",
+    "## Current Verdict",
+    "## Fairness Gate",
+    "## Canonical Compare Lane",
+    "## Pivot Gate",
+)
+PERFORMANCE_PROGRAM_SOURCE_PATTERN = re.compile(
+    r"^- Final criterion source: `([^`]+)`(?: .*)?$",
+    re.MULTILINE,
+)
+PERFORMANCE_PROGRAM_STATUS_PATTERN = re.compile(
+    r"^- Final criterion status: `([^`]+)`(?: .*)?$",
+    re.MULTILINE,
+)
+PERFORMANCE_PROGRAM_STATE_PATTERN = re.compile(
+    r"^- Program state: `([^`]+)`(?: .*)?$",
+    re.MULTILINE,
+)
+PERFORMANCE_PROGRAM_NEXT_TRACK_PATTERN = re.compile(
+    r"^- Next strategic track: `([^`]+)`(?: .*)?$",
+    re.MULTILINE,
+)
 
 
 def read_json(path: Path) -> dict | list | str:
@@ -118,6 +144,26 @@ def find_temp_artifacts(repo_root: Path) -> list[Path]:
             temp_artifacts.append(path)
 
     return sorted(temp_artifacts)
+
+
+def load_final_performance_proof(repo_root: Path) -> tuple[dict[str, object] | None, str | None]:
+    proof_path = repo_root / FINAL_PERFORMANCE_PROOF_PATH
+    if not proof_path.exists():
+        return None, None
+
+    try:
+        proof = read_json(proof_path)
+    except (json.JSONDecodeError, FileNotFoundError) as exc:
+        return None, f"Cannot read {FINAL_PERFORMANCE_PROOF_PATH}: {exc}"
+
+    if not isinstance(proof, dict):
+        return None, f"{FINAL_PERFORMANCE_PROOF_PATH} must contain a JSON object"
+
+    criterion_met = proof.get("criterion_met")
+    if not isinstance(criterion_met, bool):
+        return None, f"{FINAL_PERFORMANCE_PROOF_PATH} must define boolean `criterion_met`"
+
+    return proof, None
 
 
 def validate(path: str) -> list[str]:
@@ -215,6 +261,10 @@ def validate(path: str) -> list[str]:
         errors.append(f"Missing durable workflow file: {release_notes_path}")
         release_notes = ""
 
+    final_performance_proof, proof_error = load_final_performance_proof(repo_root)
+    if proof_error is not None:
+        errors.append(proof_error)
+
     if release_notes:
         for marker in REQUIRED_RELEASE_NOTES_MARKERS:
             if marker not in release_notes:
@@ -294,6 +344,111 @@ def validate(path: str) -> list[str]:
             if placeholder is not None:
                 errors.append(
                     f"Latest session still contains unresolved placeholder: {placeholder}"
+                )
+
+    all_features_passing = all(feature.get("status") == "passing" for feature in features)
+    if (
+        final_performance_proof is not None
+        and all_features_passing
+        and final_performance_proof["criterion_met"] is False
+    ):
+        performance_program_path = repo_root / PERFORMANCE_PROGRAM_PATH
+        performance_program = ""
+        performance_program_state: str | None = None
+
+        try:
+            performance_program = read_text(performance_program_path)
+        except FileNotFoundError:
+            errors.append(
+                "docs/performance-program.md is required when all tracked features are "
+                "passing but the final performance leadership criterion remains unmet"
+            )
+
+        if performance_program:
+            for marker in PERFORMANCE_PROGRAM_REQUIRED_MARKERS:
+                if marker not in performance_program:
+                    errors.append(
+                        f"docs/performance-program.md missing required marker: {marker}"
+                    )
+
+            source_match = parse_required_match(
+                PERFORMANCE_PROGRAM_SOURCE_PATTERN,
+                performance_program,
+                "docs/performance-program.md missing `- Final criterion source: ` line",
+            )
+            if source_match is None:
+                errors.append(
+                    "docs/performance-program.md missing `- Final criterion source: ` line"
+                )
+            elif source_match.group(1) != FINAL_PERFORMANCE_PROOF_PATH.as_posix():
+                errors.append(
+                    "docs/performance-program.md final criterion source must be "
+                    f"`{FINAL_PERFORMANCE_PROOF_PATH.as_posix()}`"
+                )
+
+            status_match = parse_required_match(
+                PERFORMANCE_PROGRAM_STATUS_PATTERN,
+                performance_program,
+                "docs/performance-program.md missing `- Final criterion status: ` line",
+            )
+            if status_match is None:
+                errors.append(
+                    "docs/performance-program.md missing `- Final criterion status: ` line"
+                )
+            elif status_match.group(1) != "unmet":
+                errors.append(
+                    "docs/performance-program.md final criterion status must be `unmet` "
+                    "when final_performance_leadership_proof.json says criterion_met=false"
+                )
+
+            program_state_match = parse_required_match(
+                PERFORMANCE_PROGRAM_STATE_PATTERN,
+                performance_program,
+                "docs/performance-program.md missing `- Program state: ` line",
+            )
+            if program_state_match is None:
+                errors.append(
+                    "docs/performance-program.md missing `- Program state: ` line"
+                )
+            else:
+                performance_program_state = program_state_match.group(1)
+
+            next_track_match = parse_required_match(
+                PERFORMANCE_PROGRAM_NEXT_TRACK_PATTERN,
+                performance_program,
+                "docs/performance-program.md missing `- Next strategic track: ` line",
+            )
+            if next_track_match is None:
+                errors.append(
+                    "docs/performance-program.md missing `- Next strategic track: ` line"
+                )
+            elif next_track_match.group(1) == "none":
+                errors.append(
+                    "docs/performance-program.md next strategic track may not be `none` "
+                    "while the final performance leadership criterion remains unmet"
+                )
+
+        if task_progress:
+            strategic_state_match = parse_required_match(
+                STRATEGIC_STATE_PATTERN,
+                task_progress,
+                "task-progress.md missing `- Strategic state: ` line",
+            )
+            if strategic_state_match is None:
+                errors.append(
+                    "task-progress.md missing `- Strategic state: ` line required when all "
+                    "tracked features are passing but the final performance leadership "
+                    "criterion remains unmet"
+                )
+            elif (
+                performance_program_state is not None
+                and strategic_state_match.group(1) != performance_program_state
+            ):
+                errors.append(
+                    "task-progress.md strategic state "
+                    f"`{strategic_state_match.group(1)}` does not match "
+                    "docs/performance-program.md program state "
+                    f"`{performance_program_state}`"
                 )
 
     for artifact in find_temp_artifacts(repo_root):

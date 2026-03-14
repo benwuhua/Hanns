@@ -45,6 +45,12 @@ struct RsBaselineRow {
     index: String,
     params: String,
     thread_num: u32,
+    requested_ef_search: usize,
+    effective_ef_search: usize,
+    adaptive_k: f64,
+    vector_datatype: String,
+    query_dispatch_model: String,
+    query_batch_size: usize,
     qps: f64,
     recall_at_10: f64,
     ground_truth_source: String,
@@ -200,6 +206,8 @@ fn run() {
             ..Default::default()
         },
     };
+    let adaptive_k = config.params.hnsw_adaptive_k();
+    let effective_ef_search = ef_search.max((adaptive_k * top_k as f64) as usize);
 
     let mut index = HnswIndex::new(&config).expect("create hnsw");
     if with_repair {
@@ -256,6 +264,12 @@ fn run() {
                 m, ef_construction, ef_search, top_k, recall_at
             ),
             thread_num: rayon::current_num_threads() as u32,
+            requested_ef_search: ef_search,
+            effective_ef_search,
+            adaptive_k,
+            vector_datatype: "Float32".to_string(),
+            query_dispatch_model: "serial_per_query_index_search".to_string(),
+            query_batch_size: 1,
             qps,
             recall_at_10: recall_value,
             ground_truth_source,
