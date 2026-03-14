@@ -22,6 +22,30 @@
 
 ## Session Log
 
+### Session 101 - 2026-03-14
+- Focus: `hnsw-fair-lane-throughput-screen-layer0-neighbor-scan-cap`
+- Completed:
+  - ran an implementation screen on the BF16 fair lane targeting algorithmic reduction in layer-0 expansion work: when layer-0 result pool is already full, temporarily cap per-candidate neighbor scanning to `m` instead of scanning full layer-0 neighbor fanout
+  - validated hot-path safety with existing BF16 fast-path regressions and bitset/filtered search regressions
+  - measured one pre baseline and three post samples on the same lane (`adaptive_k=0`, parallel dispatch batch=32, `vector-datatype=bfloat16`) to bound noise after the first post run showed a large uplift
+  - because post samples showed very wide spread and only one run had strong uplift, reverted all experiment code and kept only durable session notes
+- Verification:
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok` on experiment branch
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt7_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt7_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt7_local_rerun1.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt7_local_rerun2.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=needs_more_local`
+- Notes:
+  - pre baseline: `qps=30978.335`, `recall_at_10=0.9953`
+  - post samples: `35754.456`, `26058.292`, `30770.019` qps (all `recall_at_10=0.9904`)
+  - post mean is `30860.923` qps, i.e. about `-0.38%` vs pre, with very wide spread (`+15.42%` best / `-15.88%` worst)
+  - this signal is currently too unstable to promote and also shifts recall downward on local lane; keep this idea out of authority until a tighter local experiment design stabilizes the throughput signal
+
 ### Session 100 - 2026-03-14
 - Focus: `hnsw-fair-lane-throughput-screen-bf16-batch4-pointer-dispatch`
 - Completed:
