@@ -22,6 +22,24 @@
 
 ## Session Log
 
+### Session 105 - 2026-03-14
+- Focus: `hnsw-fair-lane-throughput-authority-rerun-noslab-confirmation`
+- Completed:
+  - reran the same no-slab BF16 authority lane to rule out earlier remote contention as the root cause
+  - replayed remote `cargo test --lib -q` smoke in isolated rerun dirs, then reran full-dataset BF16 fair-lane benchmark (`adaptive_k=0`, parallel dispatch batch=32, `vector-datatype=bfloat16`, `repeat=5`)
+  - synced refreshed authority artifact back to local and compared against current accepted fair-lane baseline
+  - confirmed this rerun remains materially below accepted baseline throughput, so no-slab stays rejected
+- Verification:
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-fairness-noslab-bf16-rerun KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-fairness-noslab-bf16-rerun bash scripts/remote/test.sh --command "cargo test --lib -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-fairness-noslab-bf16-rerun/test_20260314T151457Z_94146.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-fairness-noslab-bf16-rerun KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-fairness-noslab-bf16-rerun bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-fairness-noslab-bf16-rerun/test_20260314T151907Z_96110.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `authority_result=rerun_confirms_no_slab_reject`
+- Notes:
+  - rerun authority row: `qps=3111.013631301324`, `qps_runs=[3150.0197901568326,3111.013631301324,3163.491075764786,3095.9852773763796,3069.6882090672793]`, `recall_at_10=0.9879999999999989`
+  - fairness metadata remains aligned (`requested/effective datatype=BFloat16/BFloat16`, `requested/effective ef=138/138`, dispatch `rayon_query_batch_parallel_search / 32`)
+  - throughput is still far below accepted fair-lane baseline `qps=8502.98026056941`, so no-slab remains rejected
+
 ### Session 104 - 2026-03-14
 - Focus: `hnsw-fair-lane-throughput-authority-rerun-bf16-no-slab`
 - Completed:
