@@ -22,6 +22,31 @@
 
 ## Session Log
 
+### Session 137 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-base1m-variance-calibration`
+- Completed:
+  - ran a methodology calibration screen (no code change) to quantify local lane noise on the current fair-lane parameters (`base-limit=1000000`, BF16, `parallel`, `batch=32`, `repeat=5`)
+  - aborted an initial accidental parallel launch because concurrent benchmark runs would contaminate throughput evidence; reran sequentially with isolated runs only
+  - computed across-run dispersion from three independent baseline artifacts to calibrate future local promotion interpretation
+- Verification:
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_baseline_var_opt35_run1.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_baseline_var_opt35_run2.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_baseline_var_opt35_run3.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - run #1: `qps=6920.034`, `recall_at_10=0.9880`
+  - run #2: `qps=6885.296`, `recall_at_10=0.9880`
+  - run #3: `qps=7051.575`, `recall_at_10=0.9880`
+  - across-run dispersion:
+    - `mean_qps=6952.302`
+    - `std_qps=71.615`
+    - `cv=1.03%`
+    - `span(max/min-1)=2.41%`
+  - interpretation: the local lane itself is reasonably stable; large swing observed in Session 136 is more likely hypothesis-induced instability than baseline noise
+  - next recommended step is to prioritize changes that reduce worst-case outliers (tail-latency/candidate churn) and treat mixed-sign large-spread samples as reject-prone unless repeated evidence tightens
+
 ### Session 136 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-layer0-results-heap-base1m`
 - Completed:
