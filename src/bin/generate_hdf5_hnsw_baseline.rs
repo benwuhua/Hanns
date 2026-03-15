@@ -143,6 +143,7 @@ struct RsCandidateSearchProfileArtifact {
     sampled_correlation_summary: RsSampledCorrelationSummary,
     sampled_frontier_efficiency_summary: RsSampledFrontierEfficiencySummary,
     sampled_frontier_shift_summary: RsSampledFrontierShiftSummary,
+    sampled_tail_skew_summary: RsSampledTailSkewSummary,
     tail_queries_by_distance_calls: Vec<RsSampledSearchCostTailQuery>,
     profile: HnswCandidateSearchProfileReport,
 }
@@ -187,6 +188,17 @@ struct RsSampledFrontierEfficiencySummary {
 struct RsSampledFrontierShiftSummary {
     average_estimated_shift_units: f64,
     p95_estimated_shift_units: f64,
+}
+
+#[cfg(feature = "hdf5")]
+#[derive(Debug, Serialize)]
+struct RsSampledTailSkewSummary {
+    distance_calls_p99_over_p50: f64,
+    distance_calls_max_over_p50: f64,
+    distance_calls_top8_share: f64,
+    frontier_pressure_p95_over_p50: f64,
+    frontier_pressure_p99_over_p50: f64,
+    frontier_pressure_max: f64,
 }
 
 #[cfg(feature = "hdf5")]
@@ -507,6 +519,15 @@ fn percentile_f64(values: &[f64], percentile: f64) -> f64 {
     let clamped = percentile.clamp(0.0, 100.0);
     let rank = ((clamped / 100.0) * (sorted.len().saturating_sub(1) as f64)).round() as usize;
     sorted[rank]
+}
+
+#[cfg(feature = "hdf5")]
+fn safe_ratio(numerator: f64, denominator: f64) -> f64 {
+    if denominator.abs() <= f64::EPSILON {
+        0.0
+    } else {
+        numerator / denominator
+    }
 }
 
 #[cfg(feature = "hdf5")]
@@ -1069,6 +1090,38 @@ fn run() {
                 / sampled_query_count.max(1) as f64,
             p95_estimated_shift_units: percentile_f64(&sampled_estimated_shift_units, 95.0),
         };
+        let distance_calls_p50 = percentile_usize(&sampled_distance_calls, 50.0) as f64;
+        let distance_calls_p99 = percentile_usize(&sampled_distance_calls, 99.0) as f64;
+        let distance_calls_max = sampled_distance_calls.iter().copied().max().unwrap_or(0) as f64;
+        let distance_calls_sum = sampled_distance_calls.iter().sum::<usize>() as f64;
+        let mut top8_distance_calls = sampled_rows
+            .iter()
+            .map(|row| row.distance_calls as f64)
+            .collect::<Vec<_>>();
+        top8_distance_calls.sort_by(|a, b| b.total_cmp(a));
+        let top8_distance_calls_sum = top8_distance_calls.iter().take(8).sum::<f64>();
+        let frontier_pressure_p50 = percentile_f64(&sampled_frontier_pressure, 50.0);
+        let frontier_pressure_p95 = percentile_f64(&sampled_frontier_pressure, 95.0);
+        let frontier_pressure_p99 = percentile_f64(&sampled_frontier_pressure, 99.0);
+        let frontier_pressure_max = sampled_frontier_pressure
+            .iter()
+            .copied()
+            .max_by(|a, b| a.total_cmp(b))
+            .unwrap_or(0.0);
+        let sampled_tail_skew_summary = RsSampledTailSkewSummary {
+            distance_calls_p99_over_p50: safe_ratio(distance_calls_p99, distance_calls_p50),
+            distance_calls_max_over_p50: safe_ratio(distance_calls_max, distance_calls_p50),
+            distance_calls_top8_share: safe_ratio(top8_distance_calls_sum, distance_calls_sum),
+            frontier_pressure_p95_over_p50: safe_ratio(
+                frontier_pressure_p95,
+                frontier_pressure_p50,
+            ),
+            frontier_pressure_p99_over_p50: safe_ratio(
+                frontier_pressure_p99,
+                frontier_pressure_p50,
+            ),
+            frontier_pressure_max,
+        };
         let tail_queries_by_distance_calls = top_tail_queries_by_distance_calls(&sampled_rows, 8);
         let profile = index
             .candidate_search_profile_report(sampled_queries, ef_search, top_k)
@@ -1099,6 +1152,7 @@ fn run() {
             sampled_correlation_summary,
             sampled_frontier_efficiency_summary,
             sampled_frontier_shift_summary,
+            sampled_tail_skew_summary,
             tail_queries_by_distance_calls,
             profile,
         };

@@ -22,6 +22,37 @@
 
 ## Session Log
 
+### Session 139 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-tail-skew-summary-diagnostics`
+- Completed:
+  - extended candidate-profile artifact with `sampled_tail_skew_summary` to quantify tail/outlier concentration and pressure skew from sampled queries
+  - added non-intrusive diagnostics-only metrics (no search hot-path behavior change):
+    - `distance_calls_p99_over_p50`
+    - `distance_calls_max_over_p50`
+    - `distance_calls_top8_share`
+    - `frontier_pressure_p95_over_p50`
+    - `frontier_pressure_p99_over_p50`
+    - `frontier_pressure_max`
+  - generated a local BF16 profile artifact and verified the new summary block is emitted with stable numeric values
+- Verification:
+  - `cargo fmt --all -- --check` -> `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline -- --nocapture` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_profile_baseline_opt37_local.json --candidate-profile-output /tmp/hnsw_fairness_bf16_candidate_profile_opt37_local.json --candidate-profile-query-limit 128 --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - sampled profile artifact: `/tmp/hnsw_fairness_bf16_candidate_profile_opt37_local.json`
+  - sampled tail skew summary:
+    - `distance_calls_p99_over_p50=1.3370`
+    - `distance_calls_max_over_p50=1.4120`
+    - `distance_calls_top8_share=0.0863`
+    - `frontier_pressure_p95_over_p50=1.0522`
+    - `frontier_pressure_p99_over_p50=1.0634`
+    - `frontier_pressure_max=1.5282`
+  - interpretation: call-volume tail concentration exists but is moderate on this lane; frontier pressure quantiles are relatively tight while max pressure spikes still occur
+  - next recommended step is a targeted implementation screen that reacts only to extreme pressure spikes (`frontier_pressure` upper tail) instead of broad container rewrites
+
 ### Session 138 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-frontier-and-results-heap-base1m`
 - Completed:
