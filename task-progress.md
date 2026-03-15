@@ -22,6 +22,29 @@
 
 ## Session Log
 
+### Session 131 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-frontier-heap-substitution-repeat11`
+- Completed:
+  - reran the same frontier container-substitution hypothesis (layer0 frontier `Vec+insert` -> `BinaryHeap`) with higher repeat count (`--repeat 11`) to tighten confidence bounds further
+  - validated BF16/filter regressions and measured one pre + two post samples under identical lane parameters
+  - preserved recall parity but still treated as insufficient local signal for promotion; rolled back experiment code
+- Verification:
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok` on experiment branch
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt30_repeat11_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 11` -> `ok` (pre, code stashed)
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt30_repeat11_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 11` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt30_repeat11_local_rerun1.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 11` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=needs_more_local`
+- Notes:
+  - pre baseline: `qps=28482.252`, `recall_at_10=0.9953`
+  - post sample #1: `qps=29374.903`, `recall_at_10=0.9953` (`+3.13%`)
+  - post sample #2: `qps=29280.826`, `recall_at_10=0.9953` (`+2.80%`)
+  - uplift remains consistent but below current local promotion threshold (~`+8%`), so this is still inconclusive for authority promotion
+  - next recommended step is to A/B a second non-heuristic container variant (or apply a stricter local promotion rule update if methodology policy changes), rather than jumping to authority now
+
 ### Session 130 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-frontier-heap-substitution-repeat9`
 - Completed:
