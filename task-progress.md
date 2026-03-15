@@ -22,6 +22,34 @@
 
 ## Session Log
 
+### Session 121 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-cluster-aware-density-tail-cap`
+- Completed:
+  - ran an implementation screen on `search_layer_idx_l2_ordered_pool_fast` using a cluster-aware runtime proxy:
+    - high frontier pressure (`frontier.len() >= ef*2`)
+    - dense result band (`(worst-best)/worst <= 8%`)
+    - candidate near tail
+    - only then cap accepted neighbor expansion to `m`
+  - kept slab distance kernel path unchanged and validated BF16/filter regressions before benchmarking
+  - measured with stable harness (`RAYON_NUM_THREADS=8`, `--repeat 5`) using one pre and two post samples
+  - after confirmed negative signal, fully reverted experiment code and kept only durable notes
+- Verification:
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok` on experiment branch
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt22_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok` (pre, code stashed)
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt22_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt22_local_rerun1.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - pre baseline: `qps=29282.934`, `recall_at_10=0.9953`
+  - post sample #1: `qps=28469.582`, `recall_at_10=0.9953` (`-2.78%`)
+  - post sample #2: `qps=28948.203`, `recall_at_10=0.9953` (`-1.14%`)
+  - mean signal is negative (about `-1.96%`); this density-tail cap is rejected and rolled back
+  - next recommended step should stay diagnostics-only and enrich tail artifacts with upper-layer descent depth/entry-shift signals before reopening any expansion-limit heuristic
+
 ### Session 120 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-tail-query-cluster-analysis`
 - Completed:
