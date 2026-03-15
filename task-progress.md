@@ -22,6 +22,31 @@
 
 ## Session Log
 
+### Session 108 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-candidate-profile-instrumentation`
+- Completed:
+  - added instrumentation-first diagnostics to the HDF5 baseline binary so fair-lane screens can emit candidate-search hotspot detail directly from the real lane:
+    - new CLI option `--candidate-profile-output <path>`
+    - new CLI option `--candidate-profile-query-limit <n>` (default `128`)
+    - new JSON artifact `HNSW-FAIR-LANE-candidate-search-profile` carrying `HnswCandidateSearchProfileReport` plus fair-lane metadata
+  - generated a local BF16 fair-lane baseline + candidate profile artifact using stable harness (`RAYON_NUM_THREADS=8`, `--repeat 5`) and sampled `256` queries for profile stats
+  - confirmed diagnostics point to distance-compute hot path (especially layer0 query distance) as the dominant target for next implementation screens
+- Verification:
+  - `cargo fmt --all -- --check` -> `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline -- --nocapture` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_profile_baseline_opt11_local.json --candidate-profile-output /tmp/hnsw_fairness_bf16_candidate_profile_opt11_local.json --candidate-profile-query-limit 256 --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - sampled profile artifact: `/tmp/hnsw_fairness_bf16_candidate_profile_opt11_local.json`
+  - top hotspots:
+    - `distance_compute` `35.219 ms` (`468670` calls)
+    - `visited_ops` `14.121 ms`
+    - `candidate_pruning` `6.313 ms`
+  - distance breakdown shows `layer0_query_distance_ms=34.059779` dominating `upper_layer_query_distance_ms=1.15884`
+  - profile recommendation is `distance_compute_inner_loop`; next screen should target layer0 query-distance efficiency directly, not traversal/prefetch heuristics
+
 ### Session 107 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-layer0-stop-bound-tightening`
 - Completed:

@@ -7,6 +7,8 @@ use knowhere_rs::bitset::BitsetView;
 #[cfg(feature = "hdf5")]
 use knowhere_rs::dataset::load_hdf5_dataset;
 #[cfg(feature = "hdf5")]
+use knowhere_rs::faiss::hnsw::HnswCandidateSearchProfileReport;
+#[cfg(feature = "hdf5")]
 use knowhere_rs::faiss::HnswIndex;
 #[cfg(feature = "hdf5")]
 use knowhere_rs::MetricType;
@@ -116,6 +118,23 @@ struct RsBitsetSearchCostDiagnosisReport {
     filtered_fraction: f64,
     selected_recall_gate: f64,
     ef_sweep: Vec<RsSearchCostDiagnosisRow>,
+}
+
+#[cfg(feature = "hdf5")]
+#[derive(Debug, Serialize)]
+struct RsCandidateSearchProfileArtifact {
+    benchmark: String,
+    dataset: String,
+    methodology: String,
+    build_random_seed: Option<u64>,
+    query_sample_size: usize,
+    ef_search: usize,
+    top_k: usize,
+    requested_vector_datatype: String,
+    vector_datatype: String,
+    query_dispatch_model: String,
+    query_batch_size: usize,
+    profile: HnswCandidateSearchProfileReport,
 }
 
 #[cfg(feature = "hdf5")]
@@ -305,6 +324,12 @@ fn print_usage(program: &str) {
     );
     eprintln!("  --repeat <n>               repeat each query batch and report median qps");
     eprintln!("  --diagnosis-output <path>  optional JSON output for search-cost diagnosis");
+    eprintln!(
+        "  --candidate-profile-output <path>  optional JSON output for candidate-search profile"
+    );
+    eprintln!(
+        "  --candidate-profile-query-limit <n>  max queries sampled for candidate profile (default: 128)"
+    );
     eprintln!(
         "  --bitset-diagnosis-output <path>  optional JSON output for bitset search-cost diagnosis"
     );
@@ -628,6 +653,9 @@ fn run() {
     let random_seed = parse_u64_arg(&args, "--random-seed");
     let repeat = parse_usize_arg(&args, "--repeat", 1).max(1);
     let diagnosis_output = arg_value(&args, "--diagnosis-output");
+    let candidate_profile_output = arg_value(&args, "--candidate-profile-output");
+    let candidate_profile_query_limit =
+        parse_usize_arg(&args, "--candidate-profile-query-limit", 128).max(1);
     let bitset_diagnosis_output = arg_value(&args, "--bitset-diagnosis-output");
     let bitset_step = parse_usize_arg(&args, "--bitset-step", 0);
     let ef_sweep = parse_usize_list_arg(&args, "--ef-sweep");
@@ -770,6 +798,36 @@ fn run() {
     }
     fs::write(&output_path, output).expect("write output");
     println!("wrote {}", output_path);
+
+    if let Some(candidate_profile_output) = candidate_profile_output {
+        let sampled_query_count = query_count.min(candidate_profile_query_limit);
+        let sampled_queries = &query_vectors[..sampled_query_count * dim];
+        let profile = index
+            .candidate_search_profile_report(sampled_queries, ef_search, top_k)
+            .expect("generate candidate-search profile");
+        let profile_artifact = RsCandidateSearchProfileArtifact {
+            benchmark: "HNSW-FAIR-LANE-candidate-search-profile".to_string(),
+            dataset: dataset_name.clone(),
+            methodology: "rust_hdf5_ann_candidate_search_profile".to_string(),
+            build_random_seed: random_seed,
+            query_sample_size: sampled_query_count,
+            ef_search,
+            top_k,
+            requested_vector_datatype: vector_datatype_metadata.requested_label.to_string(),
+            vector_datatype: vector_datatype_metadata.effective_label.to_string(),
+            query_dispatch_model: query_dispatch_metadata.model.to_string(),
+            query_batch_size: query_dispatch_metadata.batch_size,
+            profile,
+        };
+        let profile_output_json = serde_json::to_string_pretty(&profile_artifact)
+            .expect("serialize candidate-search profile artifact");
+        if let Some(parent) = Path::new(&candidate_profile_output).parent() {
+            fs::create_dir_all(parent).expect("create candidate profile output dir");
+        }
+        fs::write(&candidate_profile_output, profile_output_json)
+            .expect("write candidate profile output");
+        println!("wrote {}", candidate_profile_output);
+    }
 
     if let Some(diagnosis_output) = diagnosis_output {
         let diagnosis_efs = if ef_sweep.is_empty() {
