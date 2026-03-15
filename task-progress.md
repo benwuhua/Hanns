@@ -22,6 +22,26 @@
 
 ## Session Log
 
+### Session 134 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-query-batch-size-64-base1m`
+- Completed:
+  - ran a new non-heuristic batching-level screen without code changes: compared lane baseline `query-batch-size=32` against `query-batch-size=64` on the same BF16 fair-lane parameters
+  - used one pre + two post samples on `--base-limit 1000000` and preserved all other settings (`ef=138`, `dispatch=parallel`, `repeat=5`)
+  - confirmed recall parity and kept the repository code unchanged
+- Verification:
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt32_batch32_base1m_local.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt32_batch64_base1m_local.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 64 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt32_batch64_base1m_local_rerun1.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 64 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - pre baseline (`batch=32`): `qps=6248.649`, `recall_at_10=0.9880`
+  - post sample #1 (`batch=64`): `qps=6247.200`, `recall_at_10=0.9880` (`-0.02%`)
+  - post sample #2 (`batch=64`): `qps=6225.209`, `recall_at_10=0.9880` (`-0.38%`)
+  - this batching shift is neutral-to-negative on the local fair lane and is rejected
+  - next recommended step is to test a materially different non-heuristic runtime lever (for example dispatch mode or thread/batch coupling), not adjacent batch-size increments
+
 ### Session 133 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-frontier-heap-substitution-base1m-repeat5`
 - Completed:
