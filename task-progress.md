@@ -15,12 +15,35 @@
 - Current focus: `none`
 - Next feature: `none`
 - Strategic state: `blocked_on_hnsw_leadership_gap` (see `docs/performance-program.md`)
-- Last updated: 2026-03-14
+- Last updated: 2026-03-15
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 - Workflow policy: narrow performance hypotheses should start with `screen`, promote to tracked work only after `screen_result=promote`, and update durable docs only after authority verdicts
 - Progress: 66/66 features passing (100%)
 
 ## Session Log
+
+### Session 111 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-candidate-profile-mode-clarity`
+- Completed:
+  - extended candidate-profile artifact metadata to explicitly report layer0 mode differences between production and profiled lanes
+  - promoted four audit helpers on `HnswIndex` to non-test visibility so the HDF5 baseline binary can persist mode metadata directly from index state
+  - validated that new artifact fields are emitted and correctly indicate this lane currently uses production slab path vs profiled flat-graph path
+- Verification:
+  - `cargo fmt --all -- --check` -> `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline -- --nocapture` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_profile_baseline_opt13_local.json --candidate-profile-output /tmp/hnsw_fairness_bf16_candidate_profile_opt13_local.json --candidate-profile-query-limit 128 --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - sampled profile artifact: `/tmp/hnsw_fairness_bf16_candidate_profile_opt13_local.json`
+  - newly emitted fields:
+    - `production_layer0_l2_search_mode=fast_unprofiled`
+    - `profiled_layer0_l2_search_mode=profiled_optional`
+    - `production_layer0_layout_mode=layer0_slab`
+    - `profiled_layer0_layout_mode=flat_graph_profiled`
+    - `production_layer0_avoids_profile_timing=true`
+  - this closes a diagnostics ambiguity: follow-up hotspot interpretation can now explicitly account for profile-vs-production layer0 execution/layout differences
 
 ### Session 110 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-profile-stability-deepening`

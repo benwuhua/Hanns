@@ -134,6 +134,11 @@ struct RsCandidateSearchProfileArtifact {
     vector_datatype: String,
     query_dispatch_model: String,
     query_batch_size: usize,
+    production_layer0_l2_search_mode: String,
+    profiled_layer0_l2_search_mode: String,
+    production_layer0_layout_mode: String,
+    profiled_layer0_layout_mode: String,
+    production_layer0_avoids_profile_timing: bool,
     profile: HnswCandidateSearchProfileReport,
 }
 
@@ -817,6 +822,16 @@ fn run() {
             vector_datatype: vector_datatype_metadata.effective_label.to_string(),
             query_dispatch_model: query_dispatch_metadata.model.to_string(),
             query_batch_size: query_dispatch_metadata.batch_size,
+            production_layer0_l2_search_mode: index
+                .layer0_l2_search_mode_for_audit(false)
+                .to_string(),
+            profiled_layer0_l2_search_mode: index.layer0_l2_search_mode_for_audit(true).to_string(),
+            production_layer0_layout_mode: index
+                .production_layer0_layout_mode_for_audit()
+                .to_string(),
+            profiled_layer0_layout_mode: index.profiled_layer0_layout_mode_for_audit().to_string(),
+            production_layer0_avoids_profile_timing: index
+                .production_layer0_avoids_profile_timing_for_audit(),
             profile,
         };
         let profile_output_json = serde_json::to_string_pretty(&profile_artifact)

@@ -3740,7 +3740,6 @@ impl HnswIndex {
         )
     }
 
-    #[cfg(any(test, feature = "long-tests"))]
     pub fn layer0_l2_search_mode_for_audit(&self, profiled: bool) -> &'static str {
         if profiled {
             "profiled_optional"
@@ -3749,7 +3748,6 @@ impl HnswIndex {
         }
     }
 
-    #[cfg(any(test, feature = "long-tests"))]
     pub fn production_layer0_avoids_profile_timing_for_audit(&self) -> bool {
         true
     }
@@ -3769,7 +3767,6 @@ impl HnswIndex {
         self.layer0_slab.vector_for_audit(node_idx)
     }
 
-    #[cfg(any(test, feature = "long-tests"))]
     pub fn production_layer0_layout_mode_for_audit(&self) -> &'static str {
         if self.layer0_slab.is_enabled_for(self.node_info.len()) {
             "layer0_slab"
@@ -3780,7 +3777,6 @@ impl HnswIndex {
         }
     }
 
-    #[cfg(any(test, feature = "long-tests"))]
     pub fn profiled_layer0_layout_mode_for_audit(&self) -> &'static str {
         if self.layer0_flat_graph.is_enabled_for(self.node_info.len()) {
             "flat_graph_profiled"
