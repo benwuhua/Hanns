@@ -22,6 +22,26 @@
 
 ## Session Log
 
+### Session 143 - 2026-03-15
+- Focus: `hnsw-fair-lane-authority-aa-stability-opt40`
+- Completed:
+  - executed an authority-side A/A stability pair on remote x86 (same code, same lane, back-to-back) to calibrate real authority drift before reopening behavior-changing screens
+  - persisted both artifacts under remote log directory (`/data/work/knowhere-rs-logs/`) to avoid rsync overwrite during later syncs
+  - compared median QPS and recall from the two authority runs to derive an explicit drift baseline
+- Verification:
+  - `bash init.sh` -> `ok`
+  - `bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output /data/work/knowhere-rs-logs/rs_hnsw_authority_aa_run1_opt40.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5"` -> `ok`
+  - `bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output /data/work/knowhere-rs-logs/rs_hnsw_authority_aa_run2_opt40.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5"` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - authority run #1: `qps=8757.227`, `recall_at_10=0.9880`
+  - authority run #2: `qps=8800.913`, `recall_at_10=0.9880`
+  - A/A drift: `+0.50%`
+  - interpretation: authority lane noise is low on this setup; behavior-changing hypotheses should exceed this envelope materially to be considered credible
+  - next recommended step is to require at least ~`+2%` authority uplift (with recall parity) before keeping any new hot-path change, and otherwise reject quickly
+
 ### Session 142 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-tail-concentration-summary-diagnostics`
 - Completed:
