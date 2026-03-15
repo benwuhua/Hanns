@@ -22,6 +22,25 @@
 
 ## Session Log
 
+### Session 119 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-tail-query-geometry-signals`
+- Completed:
+  - added offline structure signals to tail-query rows in candidate-profile artifact: `query_l2_norm`, `exact_top1_distance`, `exact_top10_distance`, and `exact_top10_minus_top1`
+  - signals are computed from sampled queries against current base vectors inside the benchmark binary (diagnostics-only; no HNSW hot-path changes)
+  - generated local BF16 fair-lane artifact and verified tail rows now carry both runtime counters and geometric hardness context
+- Verification:
+  - `cargo fmt --all -- --check` -> `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline -- --nocapture` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_profile_baseline_opt20_local.json --candidate-profile-output /tmp/hnsw_fairness_bf16_candidate_profile_opt20_local.json --candidate-profile-query-limit 128 --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - sampled profile artifact: `/tmp/hnsw_fairness_bf16_candidate_profile_opt20_local.json`
+  - tail example now includes geometry signal:
+    - `sampled_query_index=117`: `distance_calls=2543`, `visited_nodes=2469`, `query_l2_norm=507.6485`, `exact_top1_distance=50216.0`, `exact_top10_distance=74416.0`, `exact_top10_minus_top1=24200.0`
+  - next recommended step is a no-code clustering analysis over tail rows (`distance_calls`, `frontier`, `exact_top10_minus_top1`) to choose one bounded pruning hypothesis with stronger prior before reopening hot-path edits
+
 ### Session 118 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-frontier-pressure-tail-cap`
 - Completed:

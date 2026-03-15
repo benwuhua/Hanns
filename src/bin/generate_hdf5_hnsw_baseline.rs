@@ -161,13 +161,17 @@ struct RsSampledSearchCostSummary {
 }
 
 #[cfg(feature = "hdf5")]
-#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 struct RsSampledSearchCostTailQuery {
     sampled_query_index: usize,
     distance_calls: usize,
     visited_nodes: usize,
     frontier_pushes: usize,
     frontier_pops: usize,
+    query_l2_norm: f64,
+    exact_top1_distance: f64,
+    exact_top10_distance: f64,
+    exact_top10_minus_top1: f64,
 }
 
 #[cfg(feature = "hdf5")]
@@ -633,6 +637,26 @@ fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
 }
 
 #[cfg(feature = "hdf5")]
+fn l2_norm(a: &[f32]) -> f64 {
+    a.iter()
+        .map(|v| f64::from(*v) * f64::from(*v))
+        .sum::<f64>()
+        .sqrt()
+}
+
+#[cfg(feature = "hdf5")]
+fn exact_kth_distance(base: &[f32], dim: usize, query: &[f32], k: usize) -> f64 {
+    let num_base = base.len() / dim;
+    let mut distances = Vec::with_capacity(num_base);
+    for j in 0..num_base {
+        let base_vec = &base[j * dim..(j + 1) * dim];
+        distances.push(f64::from(l2_distance_squared(query, base_vec)));
+    }
+    distances.sort_by(|a, b| a.total_cmp(b));
+    distances[k.saturating_sub(1).min(distances.len().saturating_sub(1))]
+}
+
+#[cfg(feature = "hdf5")]
 fn compute_ground_truth(
     base: &[f32],
     queries: &[f32],
@@ -867,12 +891,18 @@ fn run() {
         for i in 0..sampled_query_count {
             let query = &sampled_queries[i * dim..(i + 1) * dim];
             let diagnosis = index.search_cost_diagnosis(query, ef_search, top_k);
+            let exact_top1_distance = exact_kth_distance(base_vectors, dim, query, 1);
+            let exact_top10_distance = exact_kth_distance(base_vectors, dim, query, 10);
             sampled_rows.push(RsSampledSearchCostTailQuery {
                 sampled_query_index: i,
                 distance_calls: diagnosis.distance_calls,
                 visited_nodes: diagnosis.visited_nodes,
                 frontier_pushes: diagnosis.frontier_pushes,
                 frontier_pops: diagnosis.frontier_pops,
+                query_l2_norm: l2_norm(query),
+                exact_top1_distance,
+                exact_top10_distance,
+                exact_top10_minus_top1: (exact_top10_distance - exact_top1_distance).max(0.0),
             });
         }
         let sampled_distance_calls = sampled_rows
@@ -1224,6 +1254,10 @@ mod tests {
                 visited_nodes: 70,
                 frontier_pushes: 0,
                 frontier_pops: 0,
+                query_l2_norm: 0.0,
+                exact_top1_distance: 0.0,
+                exact_top10_distance: 0.0,
+                exact_top10_minus_top1: 0.0,
             },
             RsSampledSearchCostTailQuery {
                 sampled_query_index: 1,
@@ -1231,6 +1265,10 @@ mod tests {
                 visited_nodes: 50,
                 frontier_pushes: 0,
                 frontier_pops: 0,
+                query_l2_norm: 0.0,
+                exact_top1_distance: 0.0,
+                exact_top10_distance: 0.0,
+                exact_top10_minus_top1: 0.0,
             },
             RsSampledSearchCostTailQuery {
                 sampled_query_index: 2,
@@ -1238,11 +1276,25 @@ mod tests {
                 visited_nodes: 90,
                 frontier_pushes: 0,
                 frontier_pops: 0,
+                query_l2_norm: 0.0,
+                exact_top1_distance: 0.0,
+                exact_top10_distance: 0.0,
+                exact_top10_minus_top1: 0.0,
             },
         ];
 
         let top = top_tail_queries_by_distance_calls(&rows, 2);
         assert_eq!(top[0].sampled_query_index, 2);
         assert_eq!(top[1].sampled_query_index, 1);
+    }
+
+    #[test]
+    fn exact_kth_distance_matches_expected_rank() {
+        let base = vec![0.0, 0.0, 1.0, 0.0, 3.0, 0.0, 6.0, 0.0];
+        let query = vec![0.0, 0.0];
+        let dim = 2;
+
+        assert!((exact_kth_distance(&base, dim, &query, 1) - 0.0).abs() < 1e-12);
+        assert!((exact_kth_distance(&base, dim, &query, 3) - 9.0).abs() < 1e-12);
     }
 }
