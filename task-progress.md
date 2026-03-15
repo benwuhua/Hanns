@@ -22,6 +22,30 @@
 
 ## Session Log
 
+### Session 132 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-frontier-unsorted-vec-pop-best`
+- Completed:
+  - ran an A/B second non-heuristic container variant for `Layer0OrderedFrontier`: switched from ordered insert to unsorted `Vec` with linear-scan `pop_best` (`swap_remove`)
+  - preserved distance kernels, recall gate, and all heuristic controls; only frontier container semantics changed
+  - validated BF16/filter regressions and measured with stable harness (`RAYON_NUM_THREADS=8`, `--repeat 9`) using one pre and two post samples
+  - after observing strong negative throughput signal, fully reverted experiment code and kept only durable notes
+- Verification:
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok` on experiment branch
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt31_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 9` -> `ok` (pre, code stashed)
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt31_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 9` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt31_local_rerun1.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 9` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - pre baseline: `qps=28417.400`, `recall_at_10=0.9953`
+  - post sample #1: `qps=21463.047`, `recall_at_10=0.9953` (`-24.47%`)
+  - post sample #2: `qps=21634.134`, `recall_at_10=0.9953` (`-23.87%`)
+  - this container variant is decisively negative and has been rolled back
+  - next recommended step should avoid linear-scan frontier pop designs and keep exploring alternatives that preserve ordered-pop efficiency without insert-shift overhead
+
 ### Session 131 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-frontier-heap-substitution-repeat11`
 - Completed:
