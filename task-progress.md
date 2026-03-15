@@ -22,6 +22,27 @@
 
 ## Session Log
 
+### Session 141 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-authority-opt38-extreme-frontier-pressure-gate`
+- Completed:
+  - promoted Session 140 local hypothesis into authority validation on remote x86 with strict pre/post comparison
+  - cleared a stale remote test lock from a long-running March 11 task, then executed paired authority runs with immutable output paths under `/data/work/knowhere-rs-logs/` to avoid rsync overwrite
+  - observed authority regression despite local uplift; reverted the extreme-frontier-pressure gate implementation in `src/faiss/hnsw.rs`
+- Verification:
+  - `bash init.sh` -> `ok`
+  - `bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output /data/work/knowhere-rs-logs/rs_hnsw_opt38_pre_authority_v2.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5"` -> `ok`
+  - `bash init.sh` -> `ok` (resync patched code for post arm)
+  - `bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output /data/work/knowhere-rs-logs/rs_hnsw_opt38_post_authority_v2.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5"` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `authority_result=reject`
+- Notes:
+  - authority pre: `qps=8761.037`, `recall_at_10=0.9880`
+  - authority post: `qps=8501.828`, `recall_at_10=0.9880`
+  - authority uplift: `-2.96%` (regression)
+  - decision: local uplift in Session 140 was not portable to authority; code has been rolled back and should not be reopened without stronger mechanism evidence
+  - next recommended step is to continue diagnostics-first and prioritize changes with explicit authority-lane A/B controls early
+
 ### Session 140 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-extreme-frontier-pressure-gate-base1m`
 - Completed:
