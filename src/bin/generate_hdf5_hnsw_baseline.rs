@@ -141,6 +141,7 @@ struct RsCandidateSearchProfileArtifact {
     production_layer0_avoids_profile_timing: bool,
     sampled_search_cost_summary: RsSampledSearchCostSummary,
     sampled_correlation_summary: RsSampledCorrelationSummary,
+    sampled_frontier_efficiency_summary: RsSampledFrontierEfficiencySummary,
     tail_queries_by_distance_calls: Vec<RsSampledSearchCostTailQuery>,
     profile: HnswCandidateSearchProfileReport,
 }
@@ -168,6 +169,16 @@ struct RsSampledCorrelationSummary {
     distance_calls_vs_upper_layer_calls: f64,
     distance_calls_vs_frontier_pushes: f64,
     distance_calls_vs_frontier_pressure: f64,
+}
+
+#[cfg(feature = "hdf5")]
+#[derive(Debug, Serialize)]
+struct RsSampledFrontierEfficiencySummary {
+    average_candidate_acceptance_rate: f64,
+    p50_candidate_acceptance_rate: f64,
+    p95_candidate_acceptance_rate: f64,
+    average_frontier_pressure: f64,
+    p95_frontier_pressure: f64,
 }
 
 #[cfg(feature = "hdf5")]
@@ -476,6 +487,18 @@ fn pearson_correlation(xs: &[f64], ys: &[f64]) -> f64 {
     } else {
         num / den
     }
+}
+
+#[cfg(feature = "hdf5")]
+fn percentile_f64(values: &[f64], percentile: f64) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let clamped = percentile.clamp(0.0, 100.0);
+    let rank = ((clamped / 100.0) * (sorted.len().saturating_sub(1) as f64)).round() as usize;
+    sorted[rank]
 }
 
 #[cfg(feature = "hdf5")]
@@ -1016,6 +1039,19 @@ fn run() {
                 &sampled_frontier_pressure,
             ),
         };
+        let sampled_acceptance_rates = sampled_rows
+            .iter()
+            .map(|row| row.frontier_pushes as f64 / row.distance_calls.max(1) as f64)
+            .collect::<Vec<_>>();
+        let sampled_frontier_efficiency_summary = RsSampledFrontierEfficiencySummary {
+            average_candidate_acceptance_rate: sampled_acceptance_rates.iter().sum::<f64>()
+                / sampled_query_count.max(1) as f64,
+            p50_candidate_acceptance_rate: percentile_f64(&sampled_acceptance_rates, 50.0),
+            p95_candidate_acceptance_rate: percentile_f64(&sampled_acceptance_rates, 95.0),
+            average_frontier_pressure: sampled_frontier_pressure.iter().sum::<f64>()
+                / sampled_query_count.max(1) as f64,
+            p95_frontier_pressure: percentile_f64(&sampled_frontier_pressure, 95.0),
+        };
         let tail_queries_by_distance_calls = top_tail_queries_by_distance_calls(&sampled_rows, 8);
         let profile = index
             .candidate_search_profile_report(sampled_queries, ef_search, top_k)
@@ -1044,6 +1080,7 @@ fn run() {
                 .production_layer0_avoids_profile_timing_for_audit(),
             sampled_search_cost_summary,
             sampled_correlation_summary,
+            sampled_frontier_efficiency_summary,
             tail_queries_by_distance_calls,
             profile,
         };
@@ -1389,5 +1426,11 @@ mod tests {
         let ys = vec![2.0, 4.0, 6.0, 8.0];
         let corr = pearson_correlation(&xs, &ys);
         assert!((corr - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn percentile_f64_reports_expected_quantile() {
+        let values = vec![0.1, 0.9, 0.5, 0.3];
+        assert!((percentile_f64(&values, 50.0) - 0.5).abs() < 1e-12);
     }
 }

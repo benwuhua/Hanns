@@ -22,6 +22,30 @@
 
 ## Session Log
 
+### Session 126 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-frontier-efficiency-summary`
+- Completed:
+  - extended candidate-profile artifact with `sampled_frontier_efficiency_summary` to quantify expansion efficiency directly from sampled queries:
+    - candidate acceptance rate (`frontier_pushes / distance_calls`) with average/p50/p95
+    - frontier pressure (`frontier_pushes / frontier_pops`) with average/p95
+  - kept the work diagnostics-only (no HNSW search hot-path behavior change)
+  - generated local BF16 fair-lane profile artifact and verified new efficiency fields are emitted
+- Verification:
+  - `cargo fmt --all -- --check` -> `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline -- --nocapture` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_profile_baseline_opt27_local.json --candidate-profile-output /tmp/hnsw_fairness_bf16_candidate_profile_opt27_local.json --candidate-profile-query-limit 128 --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - sampled profile artifact: `/tmp/hnsw_fairness_bf16_candidate_profile_opt27_local.json`
+  - sampled frontier efficiency summary:
+    - `average_candidate_acceptance_rate=0.399554`
+    - `p95_candidate_acceptance_rate=0.583101`
+    - `average_frontier_pressure=1.399541`
+    - `p95_frontier_pressure=1.483395`
+  - next recommended step is to prioritize non-heuristic levers that lower frontier pressure structurally (container/layout and batching behavior) rather than further pruning heuristics
+
 ### Session 125 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-frontier-expansion-push-gate`
 - Completed:
