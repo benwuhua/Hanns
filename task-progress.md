@@ -22,6 +22,30 @@
 
 ## Session Log
 
+### Session 114 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-candidate-profile-call-volume-summary`
+- Completed:
+  - added diagnostics-only metadata to candidate-profile artifact to summarize sampled `search_cost_diagnosis` call-volume distribution (`avg/p50/p95/p99`) without changing HNSW hot-path behavior
+  - extended artifact schema with `sampled_search_cost_summary` so follow-up optimization screens can target real query-tail call-volume behavior instead of aggregate-only counters
+  - generated a local BF16 fair-lane baseline + candidate-profile artifact and confirmed new summary fields are emitted
+- Verification:
+  - `cargo fmt --all -- --check` -> `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline -- --nocapture` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_profile_baseline_opt15_local.json --candidate-profile-output /tmp/hnsw_fairness_bf16_candidate_profile_opt15_local.json --candidate-profile-query-limit 128 --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - sampled profile artifact: `/tmp/hnsw_fairness_bf16_candidate_profile_opt15_local.json`
+  - new summary sample:
+    - `average_distance_calls=1719.875`
+    - `p50_distance_calls=1801`
+    - `p95_distance_calls=2321`
+    - `p99_distance_calls=2408`
+    - `average_visited_nodes=1646.40625`
+    - `p95_visited_nodes=2228`
+  - next recommended screen should use this tail-aware call-volume signal to evaluate pruning/expansion hypotheses, while keeping the authority-validated slab distance kernel path unchanged
+
 ### Session 113 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-authority-bf16-slab-distance-kernel-alignment`
 - Completed:

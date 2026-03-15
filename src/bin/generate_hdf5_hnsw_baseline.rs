@@ -139,7 +139,20 @@ struct RsCandidateSearchProfileArtifact {
     production_layer0_layout_mode: String,
     profiled_layer0_layout_mode: String,
     production_layer0_avoids_profile_timing: bool,
+    sampled_search_cost_summary: RsSampledSearchCostSummary,
     profile: HnswCandidateSearchProfileReport,
+}
+
+#[cfg(feature = "hdf5")]
+#[derive(Debug, Serialize)]
+struct RsSampledSearchCostSummary {
+    query_sample_size: usize,
+    average_distance_calls: f64,
+    p50_distance_calls: usize,
+    p95_distance_calls: usize,
+    p99_distance_calls: usize,
+    average_visited_nodes: f64,
+    p95_visited_nodes: usize,
 }
 
 #[cfg(feature = "hdf5")]
@@ -378,6 +391,18 @@ fn median_f64(values: &[f64]) -> f64 {
     } else {
         sorted[mid]
     }
+}
+
+#[cfg(feature = "hdf5")]
+fn percentile_usize(values: &[usize], percentile: f64) -> usize {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let clamped = percentile.clamp(0.0, 100.0);
+    let rank = ((clamped / 100.0) * (sorted.len().saturating_sub(1) as f64)).round() as usize;
+    sorted[rank]
 }
 
 #[cfg(feature = "hdf5")]
@@ -807,6 +832,25 @@ fn run() {
     if let Some(candidate_profile_output) = candidate_profile_output {
         let sampled_query_count = query_count.min(candidate_profile_query_limit);
         let sampled_queries = &query_vectors[..sampled_query_count * dim];
+        let mut sampled_distance_calls = Vec::with_capacity(sampled_query_count);
+        let mut sampled_visited_nodes = Vec::with_capacity(sampled_query_count);
+        for i in 0..sampled_query_count {
+            let query = &sampled_queries[i * dim..(i + 1) * dim];
+            let diagnosis = index.search_cost_diagnosis(query, ef_search, top_k);
+            sampled_distance_calls.push(diagnosis.distance_calls);
+            sampled_visited_nodes.push(diagnosis.visited_nodes);
+        }
+        let sampled_search_cost_summary = RsSampledSearchCostSummary {
+            query_sample_size: sampled_query_count,
+            average_distance_calls: sampled_distance_calls.iter().sum::<usize>() as f64
+                / sampled_query_count.max(1) as f64,
+            p50_distance_calls: percentile_usize(&sampled_distance_calls, 50.0),
+            p95_distance_calls: percentile_usize(&sampled_distance_calls, 95.0),
+            p99_distance_calls: percentile_usize(&sampled_distance_calls, 99.0),
+            average_visited_nodes: sampled_visited_nodes.iter().sum::<usize>() as f64
+                / sampled_query_count.max(1) as f64,
+            p95_visited_nodes: percentile_usize(&sampled_visited_nodes, 95.0),
+        };
         let profile = index
             .candidate_search_profile_report(sampled_queries, ef_search, top_k)
             .expect("generate candidate-search profile");
@@ -832,6 +876,7 @@ fn run() {
             profiled_layer0_layout_mode: index.profiled_layer0_layout_mode_for_audit().to_string(),
             production_layer0_avoids_profile_timing: index
                 .production_layer0_avoids_profile_timing_for_audit(),
+            sampled_search_cost_summary,
             profile,
         };
         let profile_output_json = serde_json::to_string_pretty(&profile_artifact)
@@ -1100,5 +1145,14 @@ mod tests {
         let values = vec![9.0, 3.0, 5.0];
 
         assert_eq!(median_f64(&values), 5.0);
+    }
+
+    #[test]
+    fn percentile_usize_returns_expected_percentiles() {
+        let values = vec![10, 50, 20, 40, 30];
+
+        assert_eq!(percentile_usize(&values, 50.0), 30);
+        assert_eq!(percentile_usize(&values, 95.0), 50);
+        assert_eq!(percentile_usize(&values, 0.0), 10);
     }
 }
