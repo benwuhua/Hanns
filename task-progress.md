@@ -22,6 +22,30 @@
 
 ## Session Log
 
+### Session 125 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-frontier-expansion-push-gate`
+- Completed:
+  - ran an implementation screen on frontier expansion policy only: in `process_layer0_l2_candidate_fast`, under very high frontier pressure (`frontier.len() >= ef*3`) and full result pool, skip frontier push when candidate improvement over current worst is below a tiny threshold
+  - preserved slab distance kernel path and validated BF16/filter regressions before benchmarking
+  - measured with stable harness (`RAYON_NUM_THREADS=8`, `--repeat 5`) using one pre and two post samples
+  - after confirming clear negative signal, fully reverted experiment code and kept only durable notes
+- Verification:
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok` on experiment branch
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt26_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok` (pre, code stashed)
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt26_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt26_local_rerun1.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - pre baseline: `qps=29424.061`, `recall_at_10=0.9953`
+  - post sample #1: `qps=28682.950`, `recall_at_10=0.9953` (`-2.52%`)
+  - post sample #2: `qps=28637.225`, `recall_at_10=0.9953` (`-2.67%`)
+  - this frontier-push gate is consistently negative and has been rolled back
+  - next recommended step should avoid expansion/pruning path edits and instead continue diagnostics to identify non-heuristic levers for reducing frontier pressure
+
 ### Session 124 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-sampled-correlation-summary`
 - Completed:
