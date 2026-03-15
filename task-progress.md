@@ -22,6 +22,30 @@
 
 ## Session Log
 
+### Session 112 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-bf16-slab-distance-kernel-alignment`
+- Completed:
+  - ran an implementation screen on `search_layer_idx_l2_ordered_pool_fast` to align BF16 slab traversal with BF16 distance storage path
+  - hypothesis: keep slab neighbor layout (to preserve traversal characteristics) but, when `query_bf16` is present, route slab batch4 and scalar-tail distance evaluations through BF16 distance helpers instead of f32 slab-vector kernels
+  - validated BF16 fast-path and filtered-search regressions, then measured with stable harness (`RAYON_NUM_THREADS=8`, `--repeat 5`) using one pre and two post samples
+- Verification:
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok`
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok`
+  - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt14_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok` (pre, code stashed)
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt14_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt14_local_rerun1.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `cargo fmt --all -- --check` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - pre baseline: `qps=28496.422`, `recall_at_10=0.9953`
+  - post sample #1: `qps=34321.753`, `recall_at_10=0.9953` (`+20.44%`)
+  - post sample #2: `qps=35501.121`, `recall_at_10=0.9953` (`+24.58%`)
+  - post mean is `34911.437` qps (`+22.51%` vs pre), above local promotion threshold while preserving recall
+  - next recommended step is authority rerun on the same BF16 fair lane, because this signal materially exceeds local noise bounds and preserves correctness checks
+
 ### Session 111 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-candidate-profile-mode-clarity`
 - Completed:
