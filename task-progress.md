@@ -22,6 +22,28 @@
 
 ## Session Log
 
+### Session 110 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-profile-stability-deepening`
+- Completed:
+  - ran a diagnostics-only screen using the new `--candidate-profile-output` surface to stabilize hotspot conclusions before further implementation edits
+  - executed three identical BF16 fair-lane runs with stable harness (`RAYON_NUM_THREADS=8`, `--repeat 5`, `candidate-profile-query-limit=256`) and collected baseline + candidate-profile artifacts per run
+  - summarized hotspot shares, call ratios, and qps variation across runs to decide which optimization directions are worth continuing
+- Verification:
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_profile_opt12_run1.json --candidate-profile-output /tmp/hnsw_fairness_bf16_candidate_profile_opt12_run1.json --candidate-profile-query-limit 256 --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_profile_opt12_run2.json --candidate-profile-output /tmp/hnsw_fairness_bf16_candidate_profile_opt12_run2.json --candidate-profile-query-limit 256 --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_profile_opt12_run3.json --candidate-profile-output /tmp/hnsw_fairness_bf16_candidate_profile_opt12_run3.json --candidate-profile-query-limit 256 --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - run-level qps / recall:
+    - run1: `qps=26813.395`, `recall_at_10=0.9953`
+    - run2: `qps=26717.965`, `recall_at_10=0.9953`
+    - run3: `qps=27858.839`, `recall_at_10=0.9953`
+  - hotspot shares stayed stable: `distance_compute` avg `59.52%`, `visited_ops` around `~21.8%`, `candidate_pruning` around `~8.2%`
+  - `layer0_scalar_distance_calls / layer0_query_distance_calls` stayed fixed at `~11.91%`; scalar-tail micro-optimizations are therefore unlikely to move lane-level throughput materially
+  - next implementation screens should target reducing layer0 distance-call volume at source (or reducing per-call cost for the full batch-dominant path), not scalar-tail handling
+
 ### Session 109 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-layer0-tail-batch-padding`
 - Completed:
