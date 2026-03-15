@@ -22,6 +22,31 @@
 
 ## Session Log
 
+### Session 138 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-frontier-and-results-heap-base1m`
+- Completed:
+  - ran an implementation-level non-heuristic container screen that replaced both layer-0 ordered pools simultaneously:
+    - `layer0_frontier`: ordered `Vec+insert` -> `BinaryHeap` min-pop wrapper
+    - `layer0_results`: ordered `Vec+insert` -> `BinaryHeap` max-heap (worst-at-peek)
+  - preserved pruning/termination semantics and validated BF16/filter regressions
+  - measured one pre + two post samples on the `base-limit=1000000` local fair lane, then reverted experiment code after negative signal
+- Verification:
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok` on experiment branch
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt36_frontier_results_heap_base1m_local.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok` (pre, code stashed)
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt36_frontier_results_heap_base1m_local.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt36_frontier_results_heap_base1m_local_rerun1.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - pre baseline: `qps=6667.498`, `recall_at_10=0.9880`
+  - post sample #1: `qps=6452.912`, `recall_at_10=0.9880` (`-3.22%`)
+  - post sample #2: `qps=6595.217`, `recall_at_10=0.9880` (`-1.08%`)
+  - combined heap substitution is consistently negative on this lane and is rejected
+  - next recommended step is to stop reopening container substitutions and return to diagnostics-first work for tail/outlier roots (candidate churn shape, per-stage skew), then pick a more targeted implementation lever
+
 ### Session 137 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-base1m-variance-calibration`
 - Completed:
