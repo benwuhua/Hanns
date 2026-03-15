@@ -22,6 +22,34 @@
 
 ## Session Log
 
+### Session 140 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-extreme-frontier-pressure-gate-base1m`
+- Completed:
+  - implemented a targeted tail/outlier mitigation in `process_layer0_l2_candidate_fast`:
+    - under extreme frontier pressure (`frontier_len >= ef * 6`) and full result pool
+    - when candidate relative improvement over current worst is tiny (`<= 0.05%`)
+    - skip only frontier expansion for that candidate while still allowing result-pool insert
+  - preserved BF16/filter regression behavior and ran one pre + three post samples on the `base-limit=1000000` local fair lane
+  - observed consistent throughput uplift with recall parity across all post samples
+- Verification:
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok` on experiment branch
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt38_extreme_frontier_gate_base1m_local.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok` (pre, code stashed)
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt38_extreme_frontier_gate_base1m_local.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt38_extreme_frontier_gate_base1m_local_rerun1.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt38_extreme_frontier_gate_base1m_local_rerun2.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - pre baseline: `qps=6171.958`, `recall_at_10=0.9880`
+  - post sample #1: `qps=7067.523`, `recall_at_10=0.9880` (`+14.51%`)
+  - post sample #2: `qps=6705.334`, `recall_at_10=0.9880` (`+8.64%`)
+  - post sample #3: `qps=6899.288`, `recall_at_10=0.9880` (`+11.78%`)
+  - this is the first recent implementation screen with consistent >`+8%` local uplift; promote to authority validation
+  - next recommended step is to run remote-x86 authority verification on the same fair-lane parameters before any durable stop-go claim
+
 ### Session 139 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-tail-skew-summary-diagnostics`
 - Completed:

@@ -4257,12 +4257,29 @@ impl HnswIndex {
             return;
         }
 
+        let mut should_expand_frontier = true;
+        if scratch.layer0_results.len() >= ef {
+            if let Some(worst_dist) = scratch.layer0_results.worst_dist() {
+                let improvement = (worst_dist - nbr_dist).max(0.0);
+                let relative_improvement = improvement / worst_dist.max(1e-6);
+                // Very conservative gate: only suppress expansion under extreme frontier pressure
+                // when the candidate barely improves the current worst result.
+                if scratch.layer0_frontier.entries.len() >= ef.saturating_mul(6)
+                    && relative_improvement <= 0.0005
+                {
+                    should_expand_frontier = false;
+                }
+            }
+        }
+
         let entry = Layer0PoolEntry {
             idx: nbr_idx,
             dist: nbr_dist,
         };
         scratch.layer0_results.insert(entry, ef);
-        scratch.layer0_frontier.push(entry);
+        if should_expand_frontier {
+            scratch.layer0_frontier.push(entry);
+        }
     }
 
     fn search_layer_idx_l2_ordered_pool_fast(
