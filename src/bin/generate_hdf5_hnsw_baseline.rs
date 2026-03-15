@@ -140,6 +140,7 @@ struct RsCandidateSearchProfileArtifact {
     profiled_layer0_layout_mode: String,
     production_layer0_avoids_profile_timing: bool,
     sampled_search_cost_summary: RsSampledSearchCostSummary,
+    tail_queries_by_distance_calls: Vec<RsSampledSearchCostTailQuery>,
     profile: HnswCandidateSearchProfileReport,
 }
 
@@ -153,6 +154,16 @@ struct RsSampledSearchCostSummary {
     p99_distance_calls: usize,
     average_visited_nodes: f64,
     p95_visited_nodes: usize,
+}
+
+#[cfg(feature = "hdf5")]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+struct RsSampledSearchCostTailQuery {
+    sampled_query_index: usize,
+    distance_calls: usize,
+    visited_nodes: usize,
+    frontier_pushes: usize,
+    frontier_pops: usize,
 }
 
 #[cfg(feature = "hdf5")]
@@ -403,6 +414,22 @@ fn percentile_usize(values: &[usize], percentile: f64) -> usize {
     let clamped = percentile.clamp(0.0, 100.0);
     let rank = ((clamped / 100.0) * (sorted.len().saturating_sub(1) as f64)).round() as usize;
     sorted[rank]
+}
+
+#[cfg(feature = "hdf5")]
+fn top_tail_queries_by_distance_calls(
+    sampled_rows: &[RsSampledSearchCostTailQuery],
+    top_n: usize,
+) -> Vec<RsSampledSearchCostTailQuery> {
+    let mut sorted = sampled_rows.to_vec();
+    sorted.sort_by(|a, b| {
+        b.distance_calls
+            .cmp(&a.distance_calls)
+            .then_with(|| b.visited_nodes.cmp(&a.visited_nodes))
+            .then_with(|| a.sampled_query_index.cmp(&b.sampled_query_index))
+    });
+    sorted.truncate(top_n);
+    sorted
 }
 
 #[cfg(feature = "hdf5")]
@@ -832,14 +859,26 @@ fn run() {
     if let Some(candidate_profile_output) = candidate_profile_output {
         let sampled_query_count = query_count.min(candidate_profile_query_limit);
         let sampled_queries = &query_vectors[..sampled_query_count * dim];
-        let mut sampled_distance_calls = Vec::with_capacity(sampled_query_count);
-        let mut sampled_visited_nodes = Vec::with_capacity(sampled_query_count);
+        let mut sampled_rows = Vec::with_capacity(sampled_query_count);
         for i in 0..sampled_query_count {
             let query = &sampled_queries[i * dim..(i + 1) * dim];
             let diagnosis = index.search_cost_diagnosis(query, ef_search, top_k);
-            sampled_distance_calls.push(diagnosis.distance_calls);
-            sampled_visited_nodes.push(diagnosis.visited_nodes);
+            sampled_rows.push(RsSampledSearchCostTailQuery {
+                sampled_query_index: i,
+                distance_calls: diagnosis.distance_calls,
+                visited_nodes: diagnosis.visited_nodes,
+                frontier_pushes: diagnosis.frontier_pushes,
+                frontier_pops: diagnosis.frontier_pops,
+            });
         }
+        let sampled_distance_calls = sampled_rows
+            .iter()
+            .map(|row| row.distance_calls)
+            .collect::<Vec<_>>();
+        let sampled_visited_nodes = sampled_rows
+            .iter()
+            .map(|row| row.visited_nodes)
+            .collect::<Vec<_>>();
         let sampled_search_cost_summary = RsSampledSearchCostSummary {
             query_sample_size: sampled_query_count,
             average_distance_calls: sampled_distance_calls.iter().sum::<usize>() as f64
@@ -851,6 +890,7 @@ fn run() {
                 / sampled_query_count.max(1) as f64,
             p95_visited_nodes: percentile_usize(&sampled_visited_nodes, 95.0),
         };
+        let tail_queries_by_distance_calls = top_tail_queries_by_distance_calls(&sampled_rows, 8);
         let profile = index
             .candidate_search_profile_report(sampled_queries, ef_search, top_k)
             .expect("generate candidate-search profile");
@@ -877,6 +917,7 @@ fn run() {
             production_layer0_avoids_profile_timing: index
                 .production_layer0_avoids_profile_timing_for_audit(),
             sampled_search_cost_summary,
+            tail_queries_by_distance_calls,
             profile,
         };
         let profile_output_json = serde_json::to_string_pretty(&profile_artifact)
@@ -1154,5 +1195,36 @@ mod tests {
         assert_eq!(percentile_usize(&values, 50.0), 30);
         assert_eq!(percentile_usize(&values, 95.0), 50);
         assert_eq!(percentile_usize(&values, 0.0), 10);
+    }
+
+    #[test]
+    fn top_tail_queries_orders_by_distance_then_visited() {
+        let rows = vec![
+            RsSampledSearchCostTailQuery {
+                sampled_query_index: 3,
+                distance_calls: 100,
+                visited_nodes: 70,
+                frontier_pushes: 0,
+                frontier_pops: 0,
+            },
+            RsSampledSearchCostTailQuery {
+                sampled_query_index: 1,
+                distance_calls: 120,
+                visited_nodes: 50,
+                frontier_pushes: 0,
+                frontier_pops: 0,
+            },
+            RsSampledSearchCostTailQuery {
+                sampled_query_index: 2,
+                distance_calls: 120,
+                visited_nodes: 90,
+                frontier_pushes: 0,
+                frontier_pops: 0,
+            },
+        ];
+
+        let top = top_tail_queries_by_distance_calls(&rows, 2);
+        assert_eq!(top[0].sampled_query_index, 2);
+        assert_eq!(top[1].sampled_query_index, 1);
     }
 }

@@ -22,6 +22,26 @@
 
 ## Session Log
 
+### Session 115 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-candidate-profile-tail-query-ranking`
+- Completed:
+  - extended candidate-profile artifact with `tail_queries_by_distance_calls` (top-N sampled queries ranked by distance-call volume, tie-broken by visited-node count)
+  - kept this as diagnostics-only work: no HNSW search hot-path behavior change
+  - generated local BF16 fair-lane artifact and verified top-tail query rows are emitted with distance/visited/frontier counters for direct follow-up hypothesis targeting
+- Verification:
+  - `cargo fmt --all -- --check` -> `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline -- --nocapture` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_profile_baseline_opt16_local.json --candidate-profile-output /tmp/hnsw_fairness_bf16_candidate_profile_opt16_local.json --candidate-profile-query-limit 128 --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - sampled profile artifact: `/tmp/hnsw_fairness_bf16_candidate_profile_opt16_local.json`
+  - top tail rows now surfaced directly, e.g.:
+    - `sampled_query_index=117`: `distance_calls=2543`, `visited_nodes=2469`, `frontier_pushes=844`, `frontier_pops=563`
+    - `sampled_query_index=6`: `distance_calls=2408`, `visited_nodes=2358`
+  - next recommended screen should use this tail list to test one bounded pruning/expansion control specifically against high-call queries while preserving the current authority-favorable slab distance kernel path
+
 ### Session 114 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-candidate-profile-call-volume-summary`
 - Completed:
