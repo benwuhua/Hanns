@@ -22,6 +22,26 @@
 
 ## Session Log
 
+### Session 135 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-thread-batch-coupling-10v8-base1m`
+- Completed:
+  - ran a non-heuristic runtime screen on thread/batch coupling with no code changes: compared `RAYON_NUM_THREADS=8` (current local lane default) against `RAYON_NUM_THREADS=10` (host logical CPU count), keeping dispatch and batch (`parallel`, `query-batch-size=32`) fixed
+  - collected one pre + two post samples on `--base-limit 1000000` with identical BF16 fair-lane parameters and confirmed recall parity
+  - kept repository code unchanged and treated this as environment-lane tuning evidence only
+- Verification:
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt33_threads8_base1m_local.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=10 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt33_threads10_base1m_local.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=10 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt33_threads10_base1m_local_rerun1.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - pre baseline (`threads=8`): `qps=6729.454`, `recall_at_10=0.9880`
+  - post sample #1 (`threads=10`): `qps=6256.509`, `recall_at_10=0.9880` (`-7.03%`)
+  - post sample #2 (`threads=10`): `qps=6391.956`, `recall_at_10=0.9880` (`-5.02%`)
+  - increasing thread count to logical maximum is clearly negative on this local lane and rejected
+  - next recommended step is to return to implementation-level non-heuristic levers (scratch/pool layout or memory movement reductions), not further local thread-count tuning
+
 ### Session 134 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-query-batch-size-64-base1m`
 - Completed:
