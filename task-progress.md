@@ -22,6 +22,30 @@
 
 ## Session Log
 
+### Session 109 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-layer0-tail-batch-padding`
+- Completed:
+  - ran an implementation screen targeting the diagnosed `distance_compute_inner_loop` hotspot in `search_layer_idx_l2_ordered_pool_fast`
+  - hypothesis: reduce layer0 scalar tail distance calls by padding per-candidate remainder (`2/3` neighbors) to a synthetic batch4 distance evaluation, while keeping traversal logic unchanged
+  - verified BF16 path correctness regressions before benchmarking, then measured with stable harness (`RAYON_NUM_THREADS=8`, `--repeat 5`) using one pre and two post samples
+  - after confirming consistent negative throughput signal, fully reverted experiment code and kept only durable session notes
+- Verification:
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok` on experiment branch
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt11_impl_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt11_impl_local.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt11_impl_local_rerun1.json --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - pre baseline: `qps=28573.810`, `recall_at_10=0.9953`
+  - post sample #1: `qps=26530.506`, `recall_at_10=0.9953` (`-7.15%`)
+  - post sample #2: `qps=27247.214`, `recall_at_10=0.9953` (`-4.64%`)
+  - mean post delta is about `-5.90%`; this tail-padding hypothesis is negative and has been rolled back
+  - next recommended screen should keep the new candidate-profile diagnostics and target a different distance hotspot lever (for example reducing layer0 distance call count at source rather than changing per-call shape)
+
 ### Session 108 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-candidate-profile-instrumentation`
 - Completed:
