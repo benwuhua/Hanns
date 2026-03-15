@@ -22,6 +22,25 @@
 
 ## Session Log
 
+### Session 120 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-tail-query-cluster-analysis`
+- Completed:
+  - ran a no-code, offline clustering analysis over tail-query rows from the latest candidate-profile artifact (`distance_calls`, `frontier_*`, `exact_top10_minus_top1`)
+  - generated a durable local analysis artifact at `/tmp/hnsw_fairness_bf16_tail_cluster_opt21_local.json`
+  - derived one bounded next-step hypothesis: apply future expansion controls only to the low-geometry-gap tail cluster (`exact_top10_minus_top1 <= median`) while leaving geometry-hard tails unchanged
+- Verification:
+  - `python3 - <<'PY' ...` (tail cluster analysis over `/tmp/hnsw_fairness_bf16_candidate_profile_opt20_local.json`) -> `wrote /tmp/hnsw_fairness_bf16_tail_cluster_opt21_local.json`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - tail set size was `8`
+  - split by median `exact_top10_minus_top1=12369.0`:
+    - `low_gap` (`n=4`): mean `distance_calls=2361.5`, mean `frontier_pushes=826.5`
+    - `high_gap` (`n=4`): mean `distance_calls=2390.0`, mean `frontier_pushes=799.0`
+  - top tail row remained query `117` (`distance_calls=2543`, `frontier_pushes=844`, `exact_top10_minus_top1=24200.0`)
+  - next recommended screen is an implementation hypothesis gated by this cluster split, not a global tail cap
+
 ### Session 119 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-tail-query-geometry-signals`
 - Completed:
