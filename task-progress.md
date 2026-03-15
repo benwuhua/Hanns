@@ -22,6 +22,27 @@
 
 ## Session Log
 
+### Session 122 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-tail-entry-descent-signals`
+- Completed:
+  - extended `HnswSearchCostDiagnosis` and candidate-profile tail rows with upper-layer path signals:
+    - `entry_descent_calls`
+    - `upper_layer_query_distance_calls`
+  - preserved diagnostics-only scope (no HNSW search hot-path behavior change)
+  - generated local BF16 fair-lane profile artifact and verified new tail fields are emitted
+- Verification:
+  - `cargo fmt --all -- --check` -> `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline -- --nocapture` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_profile_baseline_opt23_local.json --candidate-profile-output /tmp/hnsw_fairness_bf16_candidate_profile_opt23_local.json --candidate-profile-query-limit 128 --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - sampled profile artifact: `/tmp/hnsw_fairness_bf16_candidate_profile_opt23_local.json`
+  - tail row example now includes upper-layer path signals:
+    - `sampled_query_index=117`: `entry_descent_calls=4`, `upper_layer_query_distance_calls=74`
+  - next recommended step is one bounded implementation screen that uses these upper-layer signals to gate expansion heuristics only on low-entry-overhead tails
+
 ### Session 121 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-cluster-aware-density-tail-cap`
 - Completed:

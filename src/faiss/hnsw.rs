@@ -585,6 +585,8 @@ pub struct HnswSearchCostDiagnosis {
     pub frontier_pushes: usize,
     pub frontier_pops: usize,
     pub distance_calls: usize,
+    pub entry_descent_calls: usize,
+    pub upper_layer_query_distance_calls: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -6051,6 +6053,8 @@ impl HnswIndex {
                 frontier_pushes: 0,
                 frontier_pops: 0,
                 distance_calls: 0,
+                entry_descent_calls: 0,
+                upper_layer_query_distance_calls: 0,
             };
         }
 
@@ -6062,6 +6066,8 @@ impl HnswIndex {
             frontier_pushes: stats.frontier_pushes as usize,
             frontier_pops: stats.frontier_pops as usize,
             distance_calls: stats.distance_calls as usize,
+            entry_descent_calls: stats.entry_descent_calls as usize,
+            upper_layer_query_distance_calls: stats.upper_layer_query_distance_calls as usize,
         }
     }
 
@@ -6082,6 +6088,8 @@ impl HnswIndex {
                 frontier_pushes: 0,
                 frontier_pops: 0,
                 distance_calls: 0,
+                entry_descent_calls: 0,
+                upper_layer_query_distance_calls: 0,
             };
         }
 
@@ -6099,6 +6107,8 @@ impl HnswIndex {
             frontier_pushes: stats.frontier_pushes as usize,
             frontier_pops: stats.frontier_pops as usize,
             distance_calls: stats.distance_calls as usize,
+            entry_descent_calls: stats.entry_descent_calls as usize,
+            upper_layer_query_distance_calls: stats.upper_layer_query_distance_calls as usize,
         }
     }
 
