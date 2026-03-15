@@ -22,6 +22,33 @@
 
 ## Session Log
 
+### Session 124 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-sampled-correlation-summary`
+- Completed:
+  - extended candidate-profile artifact with sampled-query correlation summary (`sampled_correlation_summary`) using Pearson coefficients:
+    - `distance_calls` vs `exact_top10_minus_top1`
+    - `distance_calls` vs `upper_layer_query_distance_calls`
+    - `distance_calls` vs `frontier_pushes`
+    - `distance_calls` vs `frontier_pressure`
+  - kept the work diagnostics-only; no search hot-path behavior change
+  - generated local BF16 fair-lane artifact and verified correlation fields are emitted
+- Verification:
+  - `cargo fmt --all -- --check` -> `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline -- --nocapture` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_profile_baseline_opt25_local.json --candidate-profile-output /tmp/hnsw_fairness_bf16_candidate_profile_opt25_local.json --candidate-profile-query-limit 128 --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - sampled profile artifact: `/tmp/hnsw_fairness_bf16_candidate_profile_opt25_local.json`
+  - sampled correlations:
+    - `distance_calls_vs_exact_gap=0.00897`
+    - `distance_calls_vs_upper_layer_calls=0.10011`
+    - `distance_calls_vs_frontier_pushes=0.77281`
+    - `distance_calls_vs_frontier_pressure=0.77305`
+  - interpretation: current tail call volume is strongly aligned with frontier expansion pressure, but weakly aligned with geometry gap and upper-layer call count
+  - next recommended step is an implementation screen that targets frontier expansion policy only, while avoiding upper-layer or geometry-gap heuristics
+
 ### Session 123 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-low-entry-overhead-tail-cap`
 - Completed:

@@ -140,6 +140,7 @@ struct RsCandidateSearchProfileArtifact {
     profiled_layer0_layout_mode: String,
     production_layer0_avoids_profile_timing: bool,
     sampled_search_cost_summary: RsSampledSearchCostSummary,
+    sampled_correlation_summary: RsSampledCorrelationSummary,
     tail_queries_by_distance_calls: Vec<RsSampledSearchCostTailQuery>,
     profile: HnswCandidateSearchProfileReport,
 }
@@ -158,6 +159,15 @@ struct RsSampledSearchCostSummary {
     p95_frontier_pushes: usize,
     average_frontier_pops: f64,
     p95_frontier_pops: usize,
+}
+
+#[cfg(feature = "hdf5")]
+#[derive(Debug, Serialize)]
+struct RsSampledCorrelationSummary {
+    distance_calls_vs_exact_gap: f64,
+    distance_calls_vs_upper_layer_calls: f64,
+    distance_calls_vs_frontier_pushes: f64,
+    distance_calls_vs_frontier_pressure: f64,
 }
 
 #[cfg(feature = "hdf5")]
@@ -440,6 +450,32 @@ fn top_tail_queries_by_distance_calls(
     });
     sorted.truncate(top_n);
     sorted
+}
+
+#[cfg(feature = "hdf5")]
+fn pearson_correlation(xs: &[f64], ys: &[f64]) -> f64 {
+    if xs.len() != ys.len() || xs.len() < 2 {
+        return 0.0;
+    }
+    let n = xs.len() as f64;
+    let mean_x = xs.iter().sum::<f64>() / n;
+    let mean_y = ys.iter().sum::<f64>() / n;
+    let mut num = 0.0;
+    let mut den_x = 0.0;
+    let mut den_y = 0.0;
+    for (x, y) in xs.iter().zip(ys.iter()) {
+        let dx = *x - mean_x;
+        let dy = *y - mean_y;
+        num += dx * dy;
+        den_x += dx * dx;
+        den_y += dy * dy;
+    }
+    let den = (den_x * den_y).sqrt();
+    if den <= f64::EPSILON {
+        0.0
+    } else {
+        num / den
+    }
 }
 
 #[cfg(feature = "hdf5")]
@@ -925,6 +961,26 @@ fn run() {
             .iter()
             .map(|row| row.frontier_pops)
             .collect::<Vec<_>>();
+        let sampled_exact_gaps = sampled_rows
+            .iter()
+            .map(|row| row.exact_top10_minus_top1)
+            .collect::<Vec<_>>();
+        let sampled_upper_layer_calls = sampled_rows
+            .iter()
+            .map(|row| row.upper_layer_query_distance_calls as f64)
+            .collect::<Vec<_>>();
+        let sampled_distance_calls_f64 = sampled_rows
+            .iter()
+            .map(|row| row.distance_calls as f64)
+            .collect::<Vec<_>>();
+        let sampled_frontier_pushes_f64 = sampled_rows
+            .iter()
+            .map(|row| row.frontier_pushes as f64)
+            .collect::<Vec<_>>();
+        let sampled_frontier_pressure = sampled_rows
+            .iter()
+            .map(|row| row.frontier_pushes as f64 / row.frontier_pops.max(1) as f64)
+            .collect::<Vec<_>>();
         let sampled_search_cost_summary = RsSampledSearchCostSummary {
             query_sample_size: sampled_query_count,
             average_distance_calls: sampled_distance_calls.iter().sum::<usize>() as f64
@@ -941,6 +997,24 @@ fn run() {
             average_frontier_pops: sampled_frontier_pops.iter().sum::<usize>() as f64
                 / sampled_query_count.max(1) as f64,
             p95_frontier_pops: percentile_usize(&sampled_frontier_pops, 95.0),
+        };
+        let sampled_correlation_summary = RsSampledCorrelationSummary {
+            distance_calls_vs_exact_gap: pearson_correlation(
+                &sampled_distance_calls_f64,
+                &sampled_exact_gaps,
+            ),
+            distance_calls_vs_upper_layer_calls: pearson_correlation(
+                &sampled_distance_calls_f64,
+                &sampled_upper_layer_calls,
+            ),
+            distance_calls_vs_frontier_pushes: pearson_correlation(
+                &sampled_distance_calls_f64,
+                &sampled_frontier_pushes_f64,
+            ),
+            distance_calls_vs_frontier_pressure: pearson_correlation(
+                &sampled_distance_calls_f64,
+                &sampled_frontier_pressure,
+            ),
         };
         let tail_queries_by_distance_calls = top_tail_queries_by_distance_calls(&sampled_rows, 8);
         let profile = index
@@ -969,6 +1043,7 @@ fn run() {
             production_layer0_avoids_profile_timing: index
                 .production_layer0_avoids_profile_timing_for_audit(),
             sampled_search_cost_summary,
+            sampled_correlation_summary,
             tail_queries_by_distance_calls,
             profile,
         };
@@ -1306,5 +1381,13 @@ mod tests {
 
         assert!((exact_kth_distance(&base, dim, &query, 1) - 0.0).abs() < 1e-12);
         assert!((exact_kth_distance(&base, dim, &query, 3) - 9.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn pearson_correlation_reports_perfect_positive_relation() {
+        let xs = vec![1.0, 2.0, 3.0, 4.0];
+        let ys = vec![2.0, 4.0, 6.0, 8.0];
+        let corr = pearson_correlation(&xs, &ys);
+        assert!((corr - 1.0).abs() < 1e-12);
     }
 }
