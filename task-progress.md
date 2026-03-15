@@ -22,11 +22,30 @@
 
 ## Session Log
 
+### Session 113 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-authority-bf16-slab-distance-kernel-alignment`
+- Completed:
+  - promoted Session 112 local signal into authority execution on remote x86 using isolated target/log dirs (`/data/work/knowhere-rs-target-hnsw-fairness-bf16-slab-bf16dist`, `/data/work/knowhere-rs-logs-hnsw-fairness-bf16-slab-bf16dist`)
+  - executed remote `cargo test --lib -q` smoke and full-dataset BF16 fair-lane benchmark (`adaptive_k=0`, parallel dispatch batch=32, `vector-datatype=bfloat16`, `repeat=5`)
+  - confirmed authority benchmark throughput regresses heavily versus accepted baseline, so hypothesis is rejected on authority and implementation was rolled back
+- Verification:
+  - `bash init.sh` -> `ok`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-fairness-bf16-slab-bf16dist KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-fairness-bf16-slab-bf16dist bash scripts/remote/test.sh --command "cargo test --lib -q"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-fairness-bf16-slab-bf16dist/test_20260315T024425Z_83097.log`)
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-hnsw-fairness-bf16-slab-bf16dist KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-hnsw-fairness-bf16-slab-bf16dist bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output benchmark_results/rs_hnsw_sift128.full_k100.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5"` -> `test=ok` (`/data/work/knowhere-rs-logs-hnsw-fairness-bf16-slab-bf16dist/test_20260315T024920Z_85840.log`)
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `authority_result=reject_bf16_slab_distance_alignment`
+- Notes:
+  - authority row: `qps=1844.9218538886169`, `recall_at_10=0.9879999999999989`
+  - fairness metadata remains aligned (`requested/effective datatype=BFloat16/BFloat16`, `requested/effective ef=138/138`, dispatch `rayon_query_batch_parallel_search / 32`)
+  - compared with current accepted BF16 authority baseline (`qps=8502.98026056941`), this is about `-78%` throughput; implementation is rolled back
+  - next recommended screen should avoid BF16 storage distance kernels on this authority lane and target call-volume reduction mechanisms that keep the current authority-favorable slab distance kernel path
+
 ### Session 112 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-bf16-slab-distance-kernel-alignment`
 - Completed:
   - ran an implementation screen on `search_layer_idx_l2_ordered_pool_fast` to align BF16 slab traversal with BF16 distance storage path
-  - hypothesis: keep slab neighbor layout (to preserve traversal characteristics) but, when `query_bf16` is present, route slab batch4 and scalar-tail distance evaluations through BF16 distance helpers instead of f32 slab-vector kernels
+  - hypothesis: keep slab neighbor layout but, when `query_bf16` is present, route slab batch4 and scalar-tail distance evaluations through BF16 distance helpers instead of f32 slab-vector kernels
   - validated BF16 fast-path and filtered-search regressions, then measured with stable harness (`RAYON_NUM_THREADS=8`, `--repeat 5`) using one pre and two post samples
 - Verification:
   - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok`
@@ -43,8 +62,7 @@
   - pre baseline: `qps=28496.422`, `recall_at_10=0.9953`
   - post sample #1: `qps=34321.753`, `recall_at_10=0.9953` (`+20.44%`)
   - post sample #2: `qps=35501.121`, `recall_at_10=0.9953` (`+24.58%`)
-  - post mean is `34911.437` qps (`+22.51%` vs pre), above local promotion threshold while preserving recall
-  - next recommended step is authority rerun on the same BF16 fair lane, because this signal materially exceeds local noise bounds and preserves correctness checks
+  - post mean is `34911.437` qps (`+22.51%` vs pre), but this remained local-only and was later rejected by authority in Session 113
 
 ### Session 111 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-candidate-profile-mode-clarity`

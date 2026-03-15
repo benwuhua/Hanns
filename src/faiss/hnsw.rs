@@ -4328,19 +4328,15 @@ impl HnswIndex {
                     batch_len += 1;
 
                     if batch_len == 4 {
-                        let distances = if let Some(bits) = query_bf16 {
-                            self.l2_distance_to_4_idxs_bf16_with_query_bits(bits, batch_indices)
-                        } else {
-                            unsafe {
-                                simd::l2_batch_4_ptrs(
-                                    query_ptr,
-                                    self.layer0_slab.vector_ptr_for(batch_indices[0]),
-                                    self.layer0_slab.vector_ptr_for(batch_indices[1]),
-                                    self.layer0_slab.vector_ptr_for(batch_indices[2]),
-                                    self.layer0_slab.vector_ptr_for(batch_indices[3]),
-                                    self.dim,
-                                )
-                            }
+                        let distances = unsafe {
+                            simd::l2_batch_4_ptrs(
+                                query_ptr,
+                                self.layer0_slab.vector_ptr_for(batch_indices[0]),
+                                self.layer0_slab.vector_ptr_for(batch_indices[1]),
+                                self.layer0_slab.vector_ptr_for(batch_indices[2]),
+                                self.layer0_slab.vector_ptr_for(batch_indices[3]),
+                                self.dim,
+                            )
                         };
                         for (offset, nbr_dist) in distances.into_iter().enumerate() {
                             self.process_layer0_l2_candidate_fast(
@@ -4431,9 +4427,7 @@ impl HnswIndex {
             }
 
             for &nbr_idx in &batch_indices[..batch_len] {
-                let nbr_dist = if let Some(bits) = query_bf16 {
-                    self.l2_distance_to_idx_bf16_with_query_bits(bits, nbr_idx)
-                } else if use_layer0_slab {
+                let nbr_dist = if use_layer0_slab {
                     unsafe {
                         (self.l2_distance_sq_ptr_kernel)(
                             query_ptr,
@@ -4441,6 +4435,8 @@ impl HnswIndex {
                             self.dim,
                         )
                     }
+                } else if let Some(bits) = query_bf16 {
+                    self.l2_distance_to_idx_bf16_with_query_bits(bits, nbr_idx)
                 } else {
                     unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) }
                 };
