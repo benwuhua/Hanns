@@ -145,6 +145,7 @@ struct RsCandidateSearchProfileArtifact {
     sampled_frontier_shift_summary: RsSampledFrontierShiftSummary,
     sampled_tail_skew_summary: RsSampledTailSkewSummary,
     tail_queries_by_distance_calls: Vec<RsSampledSearchCostTailQuery>,
+    tail_queries_by_frontier_pressure: Vec<RsSampledSearchCostTailQuery>,
     profile: HnswCandidateSearchProfileReport,
 }
 
@@ -480,6 +481,25 @@ fn top_tail_queries_by_distance_calls(
         b.distance_calls
             .cmp(&a.distance_calls)
             .then_with(|| b.visited_nodes.cmp(&a.visited_nodes))
+            .then_with(|| a.sampled_query_index.cmp(&b.sampled_query_index))
+    });
+    sorted.truncate(top_n);
+    sorted
+}
+
+#[cfg(feature = "hdf5")]
+fn top_tail_queries_by_frontier_pressure(
+    sampled_rows: &[RsSampledSearchCostTailQuery],
+    top_n: usize,
+) -> Vec<RsSampledSearchCostTailQuery> {
+    let mut sorted = sampled_rows.to_vec();
+    sorted.sort_by(|a, b| {
+        let a_pressure = a.frontier_pushes as f64 / a.frontier_pops.max(1) as f64;
+        let b_pressure = b.frontier_pushes as f64 / b.frontier_pops.max(1) as f64;
+        b_pressure
+            .total_cmp(&a_pressure)
+            .then_with(|| b.frontier_pushes.cmp(&a.frontier_pushes))
+            .then_with(|| b.distance_calls.cmp(&a.distance_calls))
             .then_with(|| a.sampled_query_index.cmp(&b.sampled_query_index))
     });
     sorted.truncate(top_n);
@@ -1151,6 +1171,8 @@ fn run() {
             frontier_pressure_max,
         };
         let tail_queries_by_distance_calls = top_tail_queries_by_distance_calls(&sampled_rows, 8);
+        let tail_queries_by_frontier_pressure =
+            top_tail_queries_by_frontier_pressure(&sampled_rows, 8);
         let profile = index
             .candidate_search_profile_report(sampled_queries, ef_search, top_k)
             .expect("generate candidate-search profile");
@@ -1182,6 +1204,7 @@ fn run() {
             sampled_frontier_shift_summary,
             sampled_tail_skew_summary,
             tail_queries_by_distance_calls,
+            tail_queries_by_frontier_pressure,
             profile,
         };
         let profile_output_json = serde_json::to_string_pretty(&profile_artifact)
@@ -1508,6 +1531,55 @@ mod tests {
         let top = top_tail_queries_by_distance_calls(&rows, 2);
         assert_eq!(top[0].sampled_query_index, 2);
         assert_eq!(top[1].sampled_query_index, 1);
+    }
+
+    #[test]
+    fn top_tail_queries_orders_by_frontier_pressure_then_pushes() {
+        let rows = vec![
+            RsSampledSearchCostTailQuery {
+                sampled_query_index: 10,
+                distance_calls: 80,
+                visited_nodes: 40,
+                frontier_pushes: 120,
+                frontier_pops: 100, // pressure 1.2
+                entry_descent_calls: 0,
+                upper_layer_query_distance_calls: 0,
+                query_l2_norm: 0.0,
+                exact_top1_distance: 0.0,
+                exact_top10_distance: 0.0,
+                exact_top10_minus_top1: 0.0,
+            },
+            RsSampledSearchCostTailQuery {
+                sampled_query_index: 11,
+                distance_calls: 60,
+                visited_nodes: 35,
+                frontier_pushes: 180,
+                frontier_pops: 100, // pressure 1.8
+                entry_descent_calls: 0,
+                upper_layer_query_distance_calls: 0,
+                query_l2_norm: 0.0,
+                exact_top1_distance: 0.0,
+                exact_top10_distance: 0.0,
+                exact_top10_minus_top1: 0.0,
+            },
+            RsSampledSearchCostTailQuery {
+                sampled_query_index: 12,
+                distance_calls: 90,
+                visited_nodes: 45,
+                frontier_pushes: 170,
+                frontier_pops: 100, // pressure 1.7
+                entry_descent_calls: 0,
+                upper_layer_query_distance_calls: 0,
+                query_l2_norm: 0.0,
+                exact_top1_distance: 0.0,
+                exact_top10_distance: 0.0,
+                exact_top10_minus_top1: 0.0,
+            },
+        ];
+
+        let top = top_tail_queries_by_frontier_pressure(&rows, 2);
+        assert_eq!(top[0].sampled_query_index, 11);
+        assert_eq!(top[1].sampled_query_index, 12);
     }
 
     #[test]

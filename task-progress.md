@@ -22,6 +22,28 @@
 
 ## Session Log
 
+### Session 145 - 2026-03-16
+- Focus: `hnsw-fair-lane-throughput-screen-frontier-pressure-tail-ranking-diagnostics`
+- Completed:
+  - extended candidate-profile artifact with `tail_queries_by_frontier_pressure`, parallel to existing `tail_queries_by_distance_calls`
+  - added a dedicated ranking function that sorts sampled queries by derived `frontier_pressure=frontier_pushes/frontier_pops`, then by pushes and distance-call volume for stable tie-breaks
+  - added unit regression `top_tail_queries_orders_by_frontier_pressure_then_pushes`
+  - generated local BF16 candidate profile artifact and verified new tail ranking block is emitted with expected ordering
+- Verification:
+  - `cargo fmt --all -- --check` -> `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline -- --nocapture` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_profile_baseline_opt41_local.json --candidate-profile-output /tmp/hnsw_fairness_bf16_candidate_profile_opt41_local.json --candidate-profile-query-limit 128 --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - sampled profile artifact: `/tmp/hnsw_fairness_bf16_candidate_profile_opt41_local.json`
+  - `tail_queries_by_frontier_pressure` present with 8 ranked entries
+  - top sampled pressure examples:
+    - query `17`: `frontier_pressure=1.5282`
+    - query `117`: `frontier_pressure=1.4991`
+  - next recommended step is a narrow behavior screen that only targets these high-pressure tail samples, with immediate authority A/B validation against the `+2%` keep threshold
+
 ### Session 144 - 2026-03-16
 - Focus: `durable-closure-authority-drift-guardrail`
 - Completed:
