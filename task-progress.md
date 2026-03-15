@@ -22,6 +22,33 @@
 
 ## Session Log
 
+### Session 142 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-tail-concentration-summary-diagnostics`
+- Completed:
+  - extended candidate-profile artifact `sampled_tail_skew_summary` with distance-call concentration metrics to better quantify outlier dominance
+  - added diagnostics-only fields (no search hot-path behavior change):
+    - `distance_calls_top1_share`
+    - `distance_calls_top4_share`
+    - `distance_calls_gini`
+  - added a unit test for concentration helper correctness (`gini_coefficient_reports_expected_distribution_skew`)
+  - generated a local BF16 candidate profile artifact and verified new fields are emitted
+- Verification:
+  - `cargo fmt --all -- --check` -> `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline -- --nocapture` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_profile_baseline_opt39_local.json --candidate-profile-output /tmp/hnsw_fairness_bf16_candidate_profile_opt39_local.json --candidate-profile-query-limit 128 --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - sampled profile artifact: `/tmp/hnsw_fairness_bf16_candidate_profile_opt39_local.json`
+  - sampled tail concentration summary:
+    - `distance_calls_top1_share=0.0116`
+    - `distance_calls_top4_share=0.0440`
+    - `distance_calls_top8_share=0.0863`
+    - `distance_calls_gini=0.1381`
+  - interpretation: observed query-call concentration is present but not heavy-tail extreme on this lane; future gates should target rare outliers with strict authority A/B checkpoints
+  - next recommended step is to run a very narrow authority-side A/A stability pair (same code twice) before reopening behavior-changing screens
+
 ### Session 141 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-authority-opt38-extreme-frontier-pressure-gate`
 - Completed:

@@ -195,7 +195,10 @@ struct RsSampledFrontierShiftSummary {
 struct RsSampledTailSkewSummary {
     distance_calls_p99_over_p50: f64,
     distance_calls_max_over_p50: f64,
+    distance_calls_top1_share: f64,
+    distance_calls_top4_share: f64,
     distance_calls_top8_share: f64,
+    distance_calls_gini: f64,
     frontier_pressure_p95_over_p50: f64,
     frontier_pressure_p99_over_p50: f64,
     frontier_pressure_max: f64,
@@ -528,6 +531,26 @@ fn safe_ratio(numerator: f64, denominator: f64) -> f64 {
     } else {
         numerator / denominator
     }
+}
+
+#[cfg(feature = "hdf5")]
+fn gini_coefficient(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let total = sorted.iter().sum::<f64>();
+    if total <= f64::EPSILON {
+        return 0.0;
+    }
+    let n = sorted.len() as f64;
+    let weighted_sum = sorted
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (i as f64 + 1.0) * *v)
+        .sum::<f64>();
+    (2.0 * weighted_sum) / (n * total) - (n + 1.0) / n
 }
 
 #[cfg(feature = "hdf5")]
@@ -1099,6 +1122,8 @@ fn run() {
             .map(|row| row.distance_calls as f64)
             .collect::<Vec<_>>();
         top8_distance_calls.sort_by(|a, b| b.total_cmp(a));
+        let top1_distance_calls_sum = top8_distance_calls.iter().take(1).sum::<f64>();
+        let top4_distance_calls_sum = top8_distance_calls.iter().take(4).sum::<f64>();
         let top8_distance_calls_sum = top8_distance_calls.iter().take(8).sum::<f64>();
         let frontier_pressure_p50 = percentile_f64(&sampled_frontier_pressure, 50.0);
         let frontier_pressure_p95 = percentile_f64(&sampled_frontier_pressure, 95.0);
@@ -1111,7 +1136,10 @@ fn run() {
         let sampled_tail_skew_summary = RsSampledTailSkewSummary {
             distance_calls_p99_over_p50: safe_ratio(distance_calls_p99, distance_calls_p50),
             distance_calls_max_over_p50: safe_ratio(distance_calls_max, distance_calls_p50),
+            distance_calls_top1_share: safe_ratio(top1_distance_calls_sum, distance_calls_sum),
+            distance_calls_top4_share: safe_ratio(top4_distance_calls_sum, distance_calls_sum),
             distance_calls_top8_share: safe_ratio(top8_distance_calls_sum, distance_calls_sum),
+            distance_calls_gini: gini_coefficient(&top8_distance_calls),
             frontier_pressure_p95_over_p50: safe_ratio(
                 frontier_pressure_p95,
                 frontier_pressure_p50,
@@ -1504,5 +1532,14 @@ mod tests {
     fn percentile_f64_reports_expected_quantile() {
         let values = vec![0.1, 0.9, 0.5, 0.3];
         assert!((percentile_f64(&values, 50.0) - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn gini_coefficient_reports_expected_distribution_skew() {
+        let equal = vec![10.0, 10.0, 10.0, 10.0];
+        let skewed = vec![1.0, 1.0, 1.0, 97.0];
+
+        assert!(gini_coefficient(&equal).abs() < 1e-12);
+        assert!(gini_coefficient(&skewed) > 0.70);
     }
 }
