@@ -154,6 +154,10 @@ struct RsSampledSearchCostSummary {
     p99_distance_calls: usize,
     average_visited_nodes: f64,
     p95_visited_nodes: usize,
+    average_frontier_pushes: f64,
+    p95_frontier_pushes: usize,
+    average_frontier_pops: f64,
+    p95_frontier_pops: usize,
 }
 
 #[cfg(feature = "hdf5")]
@@ -879,6 +883,14 @@ fn run() {
             .iter()
             .map(|row| row.visited_nodes)
             .collect::<Vec<_>>();
+        let sampled_frontier_pushes = sampled_rows
+            .iter()
+            .map(|row| row.frontier_pushes)
+            .collect::<Vec<_>>();
+        let sampled_frontier_pops = sampled_rows
+            .iter()
+            .map(|row| row.frontier_pops)
+            .collect::<Vec<_>>();
         let sampled_search_cost_summary = RsSampledSearchCostSummary {
             query_sample_size: sampled_query_count,
             average_distance_calls: sampled_distance_calls.iter().sum::<usize>() as f64
@@ -889,6 +901,12 @@ fn run() {
             average_visited_nodes: sampled_visited_nodes.iter().sum::<usize>() as f64
                 / sampled_query_count.max(1) as f64,
             p95_visited_nodes: percentile_usize(&sampled_visited_nodes, 95.0),
+            average_frontier_pushes: sampled_frontier_pushes.iter().sum::<usize>() as f64
+                / sampled_query_count.max(1) as f64,
+            p95_frontier_pushes: percentile_usize(&sampled_frontier_pushes, 95.0),
+            average_frontier_pops: sampled_frontier_pops.iter().sum::<usize>() as f64
+                / sampled_query_count.max(1) as f64,
+            p95_frontier_pops: percentile_usize(&sampled_frontier_pops, 95.0),
         };
         let tail_queries_by_distance_calls = top_tail_queries_by_distance_calls(&sampled_rows, 8);
         let profile = index
