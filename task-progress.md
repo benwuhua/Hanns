@@ -22,6 +22,26 @@
 
 ## Session Log
 
+### Session 128 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-frontier-shift-pressure-estimate`
+- Completed:
+  - extended candidate-profile artifact with `sampled_frontier_shift_summary` to estimate ordered-frontier insertion shift pressure from sampled query counters
+  - kept this diagnostics-only and explicitly marked as estimate (`frontier_pushes * frontier_pops * 0.5`)
+  - generated local BF16 fair-lane profile artifact and verified new shift summary fields are emitted
+- Verification:
+  - `cargo fmt --all -- --check` -> `ok`
+  - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline -- --nocapture` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_profile_baseline_opt29_local.json --candidate-profile-output /tmp/hnsw_fairness_bf16_candidate_profile_opt29_local.json --candidate-profile-query-limit 128 --base-limit 100000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - sampled profile artifact: `/tmp/hnsw_fairness_bf16_candidate_profile_opt29_local.json`
+  - sampled shift estimate summary:
+    - `average_estimated_shift_units=156694.34375`
+    - `p95_estimated_shift_units=219232.0`
+  - next recommended step is to evaluate one isolated container-substitution screen (ordered frontier representation) rather than further heuristic gating
+
 ### Session 127 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-frontier-capacity-headroom`
 - Completed:

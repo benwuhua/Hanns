@@ -142,6 +142,7 @@ struct RsCandidateSearchProfileArtifact {
     sampled_search_cost_summary: RsSampledSearchCostSummary,
     sampled_correlation_summary: RsSampledCorrelationSummary,
     sampled_frontier_efficiency_summary: RsSampledFrontierEfficiencySummary,
+    sampled_frontier_shift_summary: RsSampledFrontierShiftSummary,
     tail_queries_by_distance_calls: Vec<RsSampledSearchCostTailQuery>,
     profile: HnswCandidateSearchProfileReport,
 }
@@ -179,6 +180,13 @@ struct RsSampledFrontierEfficiencySummary {
     p95_candidate_acceptance_rate: f64,
     average_frontier_pressure: f64,
     p95_frontier_pressure: f64,
+}
+
+#[cfg(feature = "hdf5")]
+#[derive(Debug, Serialize)]
+struct RsSampledFrontierShiftSummary {
+    average_estimated_shift_units: f64,
+    p95_estimated_shift_units: f64,
 }
 
 #[cfg(feature = "hdf5")]
@@ -1052,6 +1060,15 @@ fn run() {
                 / sampled_query_count.max(1) as f64,
             p95_frontier_pressure: percentile_f64(&sampled_frontier_pressure, 95.0),
         };
+        let sampled_estimated_shift_units = sampled_rows
+            .iter()
+            .map(|row| (row.frontier_pushes as f64) * (row.frontier_pops as f64) * 0.5)
+            .collect::<Vec<_>>();
+        let sampled_frontier_shift_summary = RsSampledFrontierShiftSummary {
+            average_estimated_shift_units: sampled_estimated_shift_units.iter().sum::<f64>()
+                / sampled_query_count.max(1) as f64,
+            p95_estimated_shift_units: percentile_f64(&sampled_estimated_shift_units, 95.0),
+        };
         let tail_queries_by_distance_calls = top_tail_queries_by_distance_calls(&sampled_rows, 8);
         let profile = index
             .candidate_search_profile_report(sampled_queries, ef_search, top_k)
@@ -1081,6 +1098,7 @@ fn run() {
             sampled_search_cost_summary,
             sampled_correlation_summary,
             sampled_frontier_efficiency_summary,
+            sampled_frontier_shift_summary,
             tail_queries_by_distance_calls,
             profile,
         };
