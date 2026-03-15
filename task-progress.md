@@ -22,6 +22,31 @@
 
 ## Session Log
 
+### Session 136 - 2026-03-15
+- Focus: `hnsw-fair-lane-throughput-screen-layer0-results-heap-base1m`
+- Completed:
+  - tested a new implementation-level non-heuristic hypothesis in `search_layer_idx_l2_ordered_pool_fast`: replaced `layer0_results` container from ordered `Vec+insert` to a max-`BinaryHeap` (worst-at-peek), while keeping frontier container and pruning logic unchanged
+  - validated BF16/filter regressions on experiment code, then ran one pre + three post samples on the `base-limit=1000000` local fair lane due observed variance
+  - reverted experiment code after measurement and kept only durable screen notes
+- Verification:
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok` on experiment branch
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt34_results_heap_base1m_local.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok` (pre, code stashed)
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt34_results_heap_base1m_local.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt34_results_heap_base1m_local_rerun1.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt34_results_heap_base1m_local_rerun2.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=needs_more_local`
+- Notes:
+  - pre baseline: `qps=6862.089`, `recall_at_10=0.9880`
+  - post sample #1: `qps=6274.365`, `recall_at_10=0.9880` (`-8.56%`)
+  - post sample #2: `qps=7039.161`, `recall_at_10=0.9880` (`+2.58%`)
+  - post sample #3: `qps=6849.688`, `recall_at_10=0.9880` (`-0.18%`)
+  - the signal is variance-dominated and non-promotable; this container swap is not a strong candidate for authority promotion yet
+  - next recommended step is to prioritize deterministic diagnostics or lower-variance measurement setup before reopening additional container-level rewrites
+
 ### Session 135 - 2026-03-15
 - Focus: `hnsw-fair-lane-throughput-screen-thread-batch-coupling-10v8-base1m`
 - Completed:
