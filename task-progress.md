@@ -15,12 +15,27 @@
 - Current focus: `none`
 - Next feature: `none`
 - Strategic state: `blocked_on_hnsw_leadership_gap` (see `docs/performance-program.md`)
-- Last updated: 2026-03-15
+- Last updated: 2026-03-16
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 - Workflow policy: narrow performance hypotheses should start with `screen`, promote to tracked work only after `screen_result=promote`, and update durable docs only after authority verdicts
 - Progress: 66/66 features passing (100%)
 
 ## Session Log
+
+### Session 144 - 2026-03-16
+- Focus: `durable-closure-authority-drift-guardrail`
+- Completed:
+  - performed durable-closure update after authority A/A calibration by codifying the measured authority drift envelope and keep/reject threshold into `docs/performance-program.md`
+  - updated immediate-action policy to use remote log-based authority A/B artifacts as the active fast comparison baseline set
+  - kept code behavior unchanged (docs-only policy hardening)
+- Verification:
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `durable_closure=completed`
+- Notes:
+  - calibrated authority drift baseline remains `~+0.50%` (Session 143)
+  - durable guardrail now requires roughly `+2%` authority uplift with recall parity before retaining hot-path behavior changes
+  - next recommended step is a narrow screen hypothesis that can be promoted quickly to authority and judged against this new guardrail
 
 ### Session 143 - 2026-03-15
 - Focus: `hnsw-fair-lane-authority-aa-stability-opt40`

@@ -29,8 +29,14 @@
 - Resume only with one of: a new architecture proposal, a narrower production-parity target, or a backend strategy change.
 - Do not reopen filtered-query policy work until the unfiltered leadership lane is fair and stable.
 
+## Authority Stability Guardrail
+
+- Authority A/A calibration (2026-03-15, same code same lane): `qps=8757.227` vs `qps=8800.913` (`+0.50%` drift) with recall parity.
+- Treat authority noise on this lane as low; require at least about `+2%` authority uplift with recall parity before keeping new hot-path behavior changes.
+- If a hypothesis shows strong local signal but fails authority pre/post, reject and roll back immediately instead of expanding local reruns.
+
 ## Immediate Next Actions
 
 - Keep `--hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16` on the Rust same-schema authority lane unless a symmetric native policy changes.
-- Treat `benchmark_results/rs_hnsw_sift128.full_k100.json` at `qps=8502.98026056941` as the current fair-lane Rust baseline and require attributable gains over it before reopening broader claims.
+- Treat authority reference artifacts in `/data/work/knowhere-rs-logs/` as the active fair-lane baseline set for fast A/B (`rs_hnsw_authority_aa_run*_opt40.json`, `rs_hnsw_opt38_*_authority_v2.json`) and require attributable gains over that envelope before reopening broader claims.
 - Keep `benchmark_results/hnsw_fairness_gate.json` and the same-schema baseline artifact chain aligned with every future Rust authority rerun.
