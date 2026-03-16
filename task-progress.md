@@ -22,6 +22,34 @@
 
 ## Session Log
 
+### Session 163 - 2026-03-16
+- Focus: `hnsw-benchmark-workflow-index-cache-acceleration`
+- Completed:
+  - added index cache support to `generate_hdf5_hnsw_baseline`:
+    - `--index-cache-path <path>`: if cache exists, load index directly; otherwise build and save.
+    - `--rebuild-index-cache`: force rebuild even when cache exists.
+  - added usage docs for the new flags and a unit test for flag parsing helper.
+  - validated on remote x86 with two back-to-back runs on the same lane (build+save vs load-only).
+- Verification:
+  - local:
+    - `cargo fmt --all -- --check` -> `ok`
+    - `cargo test --features hdf5 --bin generate_hdf5_hnsw_baseline has_flag_detects_present_and_absent_flags -- --nocapture` -> `ok`
+    - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok`
+  - remote:
+    - `bash init.sh` -> `ok`
+    - build+save run (`--rebuild-index-cache`):
+      - run log: `/data/work/knowhere-rs-logs/test_20260316T155943Z_54712.log`
+      - cache artifact: `/data/work/knowhere-rs-logs/cache/hnsw_sift100k_ef60.bin`
+      - observed wall time: `2026-03-16T15:59:52Z -> 2026-03-16T16:01:40Z` (~108s)
+    - load-only run (same lane, no rebuild):
+      - run log: `/data/work/knowhere-rs-logs/test_20260316T160155Z_55103.log`
+      - observed wall time: `2026-03-16T16:02:04Z -> 2026-03-16T16:02:10Z` (~6s)
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - this change is for benchmark workflow acceleration, not a production-kernel speed claim.
+  - next recommended step: use index cache in all narrow HNSW A/B screens to avoid repeated build cost before authority full-lane confirmation.
+
 ### Session 162 - 2026-03-16
 - Focus: `hnsw-fair-lane-throughput-screen-opt55-avx512-dim128-batch4-scheduling`
 - Completed:

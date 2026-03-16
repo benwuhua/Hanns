@@ -384,9 +384,14 @@ fn parse_usize_list_arg(args: &[String], name: &str) -> Vec<usize> {
 }
 
 #[cfg(feature = "hdf5")]
+fn has_flag(args: &[String], name: &str) -> bool {
+    args.iter().any(|arg| arg == name)
+}
+
+#[cfg(feature = "hdf5")]
 fn print_usage(program: &str) {
     eprintln!(
-        "Usage: {program} --input <path> [--output <path>] [--base-limit <n>] [--query-limit <n>] [--top-k <n>] [--recall-at <n>] [--m <n>] [--ef-construction <n>] [--ef-search <n>] [--hnsw-adaptive-k <f>] [--vector-datatype <float32|bfloat16>] [--query-dispatch-mode <serial|parallel>] [--query-batch-size <n>] [--recall-gate <f>] [--with-repair]"
+        "Usage: {program} --input <path> [--output <path>] [--base-limit <n>] [--query-limit <n>] [--top-k <n>] [--recall-at <n>] [--m <n>] [--ef-construction <n>] [--ef-search <n>] [--hnsw-adaptive-k <f>] [--vector-datatype <float32|bfloat16>] [--query-dispatch-mode <serial|parallel>] [--query-batch-size <n>] [--recall-gate <f>] [--index-cache-path <path>] [--rebuild-index-cache] [--with-repair]"
     );
     eprintln!("  --top-k      number of results to retrieve per query (default: {DEFAULT_TOP_K})");
     eprintln!("  --recall-at  k for recall@k measurement, independent of top-k (default: {DEFAULT_RECALL_AT})");
@@ -419,6 +424,12 @@ fn print_usage(program: &str) {
     );
     eprintln!("  --bitset-step <n>          mask every n-th base vector in bitset diagnosis mode");
     eprintln!("  --ef-sweep <csv>           comma-separated ef values for diagnosis mode");
+    eprintln!(
+        "  --index-cache-path <path> optional HNSW snapshot path; load when present, otherwise build then save"
+    );
+    eprintln!(
+        "  --rebuild-index-cache      force rebuild even when --index-cache-path already exists"
+    );
 }
 
 #[cfg(feature = "hdf5")]
@@ -877,7 +888,9 @@ fn run() {
     let bitset_diagnosis_output = arg_value(&args, "--bitset-diagnosis-output");
     let bitset_step = parse_usize_arg(&args, "--bitset-step", 0);
     let ef_sweep = parse_usize_list_arg(&args, "--ef-sweep");
-    let with_repair = args.iter().any(|arg| arg == "--with-repair");
+    let index_cache_path = arg_value(&args, "--index-cache-path");
+    let rebuild_index_cache = has_flag(&args, "--rebuild-index-cache");
+    let with_repair = has_flag(&args, "--with-repair");
 
     let dataset = match load_hdf5_dataset(&input_path) {
         Ok(dataset) => dataset,
@@ -933,13 +946,33 @@ fn run() {
     let query_dispatch_metadata = query_dispatch.metadata_for_query_count(query_count);
 
     let mut index = HnswIndex::new(&config).expect("create hnsw");
-    if with_repair {
-        index
-            .build_with_repair(base_vectors, None)
-            .expect("build hnsw with repair");
-    } else {
-        index.train(base_vectors).expect("train hnsw");
-        index.add(base_vectors, None).expect("add hnsw");
+    let mut loaded_from_cache = false;
+    if let Some(cache_path) = index_cache_path.as_ref() {
+        let cache_path = Path::new(cache_path);
+        if cache_path.exists() && !rebuild_index_cache {
+            index.load(cache_path).expect("load hnsw index cache");
+            loaded_from_cache = true;
+            println!("loaded index cache {}", cache_path.display());
+        }
+    }
+
+    if !loaded_from_cache {
+        if with_repair {
+            index
+                .build_with_repair(base_vectors, None)
+                .expect("build hnsw with repair");
+        } else {
+            index.train(base_vectors).expect("train hnsw");
+            index.add(base_vectors, None).expect("add hnsw");
+        }
+        if let Some(cache_path) = index_cache_path.as_ref() {
+            let cache_path = Path::new(cache_path);
+            if let Some(parent) = cache_path.parent() {
+                fs::create_dir_all(parent).expect("create index cache dir");
+            }
+            index.save(cache_path).expect("save hnsw index cache");
+            println!("saved index cache {}", cache_path.display());
+        }
     }
 
     let (all_results, qps_runs) = run_query_batch_repeated(
@@ -1380,6 +1413,18 @@ fn main() {
 #[cfg(all(test, feature = "hdf5"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn has_flag_detects_present_and_absent_flags() {
+        let args = vec![
+            "bin".to_string(),
+            "--input".to_string(),
+            "x.hdf5".to_string(),
+            "--rebuild-index-cache".to_string(),
+        ];
+        assert!(has_flag(&args, "--rebuild-index-cache"));
+        assert!(!has_flag(&args, "--with-repair"));
+    }
 
     #[test]
     fn parallel_query_dispatch_matches_serial_results_and_reports_batch_metadata() {
