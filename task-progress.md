@@ -22,6 +22,44 @@
 
 ## Session Log
 
+### Session 158 - 2026-03-16
+- Focus: `hnsw-fair-lane-throughput-screen-authority-opt51-id-conversion-hoist`
+- Completed:
+  - tested a non-prefetch hot-path hypothesis in layer-0 `layer_neighbors` traversal:
+    - changed neighbor loop from per-iteration `current+next` id->idx conversion to a sliding-window form to avoid re-converting middle neighbors.
+  - local screen on `ef=60` was positive with recall parity, so promoted to authority A/B.
+  - authority pre/post on remote x86 showed no attributable gain (slight regression) with recall parity.
+  - rolled back the opt51 code change after authority verdict (`git restore src/faiss/hnsw.rs`).
+- Verification:
+  - local correctness:
+    - `cargo fmt --all -- --check` -> `ok`
+    - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok`
+    - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok`
+  - local screen:
+    - pre (stashed baseline): `... --output /tmp/hnsw_equal_recall_opt51_pre_local.json --ef-search 60 ...` -> `ok`
+    - post (patch): `... --output /tmp/hnsw_equal_recall_opt51_post_local.json --ef-search 60 ...` -> `ok`
+  - authority A/B:
+    - `bash init.sh` (pre arm sync with stashed baseline) -> `ok`
+    - `bash scripts/remote/test.sh --command "... --output /data/work/knowhere-rs-logs/rs_hnsw_opt51_pre_authority_ef60.json --ef-search 60 ..."` -> `ok` (`run_id=20260316T115803Z_66302`)
+    - `git stash pop` + `bash init.sh` (post arm sync with patch) -> `ok`
+    - `bash scripts/remote/test.sh --command "... --output /data/work/knowhere-rs-logs/rs_hnsw_opt51_post_authority_ef60.json --ef-search 60 ..."` -> `ok` (`run_id=20260316T121540Z_68599`)
+    - remote parser extraction (`python3`) for pre/post qps/recall -> `ok`
+  - rollback verification:
+    - `git diff -- src/faiss/hnsw.rs` -> empty
+- Result:
+  - `authority_result=reject`
+- Notes:
+  - local screen:
+    - pre: `qps=7662.241`, `recall_at_10=0.9518`
+    - post: `qps=7847.674`, `recall_at_10=0.9518`
+    - delta: `+2.42%`
+  - authority A/B (`ef=60`, clean window):
+    - pre: `qps=14241.930`, `recall_at_10=0.9518`
+    - post: `qps=14208.760`, `recall_at_10=0.9518`
+    - delta: `-0.23%`
+  - interpretation: local positive signal did not transfer to x86 authority; reject and keep code rolled back.
+  - next recommended step is to keep targeting non-prefetch levers but require stronger multi-run local margin before authority promotion.
+
 ### Session 157 - 2026-03-16
 - Focus: `hnsw-fair-lane-throughput-authority-opt50-visited-mark-unchecked`
 - Completed:
