@@ -22,6 +22,34 @@
 
 ## Session Log
 
+### Session 154 - 2026-03-16
+- Focus: `hnsw-fair-lane-throughput-screen-opt47-visited-prefetch-alignment`
+- Completed:
+  - tested a native-aligned prefetch hypothesis in Rust production fast path:
+    - switched next-neighbor prefetch target from vector payload to `visited_epoch` state (L2-style intent)
+    - kept profile/audit paths unchanged
+  - ran local pre/post replay on the equal-recall lane (`ef=60`) with recall parity checks
+  - rejected the hypothesis on local screen and rolled back code before authority promotion
+- Verification:
+  - `cargo fmt --all -- --check` -> `ok`
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok` on experiment code
+  - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok` on experiment code
+  - `git stash push -m "opt47-visited-prefetch-screen" src/faiss/hnsw.rs` -> `ok` (for pre arm)
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_equal_recall_opt47_pre_local.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 60 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `git stash pop` -> `ok` (restore experiment code for post arms)
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_equal_recall_opt47_post_local.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 60 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_equal_recall_opt47_post_local_rerun1.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 60 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - rollback verification: `git diff -- src/faiss/hnsw.rs` -> empty
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - pre: `qps=8042.494`, `recall_at_10=0.9518`
+  - post #1: `qps=7745.121`, `recall_at_10=0.9518`
+  - post #2: `qps=7858.021`, `recall_at_10=0.9518`
+  - post mean vs pre: `-2.996%`
+  - interpretation: native-style visited prefetch does not transfer as-is to current Rust fast path on local lane; reject without authority promotion
+  - next recommended step is to keep x86 prefetch hint switch (`t0|t1|t2|nta`) as the active test lever and do full-size authority `t0` vs `t2` confirmation instead of adding new prefetch targets
+
 ### Session 153 - 2026-03-16
 - Focus: `hnsw-x86-prefetch-isa-review-screen`
 - Completed:
