@@ -22,6 +22,44 @@
 
 ## Session Log
 
+### Session 156 - 2026-03-16
+- Focus: `hnsw-x86-prefetch-target-authority-recheck-opt49`
+- Completed:
+  - revisited the previously local-only `visited-state prefetch` hypothesis on the remote x86 authority lane, explicitly addressing the prior arm-only evidence limitation.
+  - added a temporary x86 experiment switch (`KNOWHERE_RS_X86_PREFETCH_TARGET=vector|visited`) to run same-binary A/B under identical lane params, then rolled back the experiment code after measurement (`git diff -- src/faiss/hnsw.rs` empty).
+  - enforced clean-window execution before valid samples:
+    - audited remote process table for concurrent `cargo/rustc/generate_hdf5_hnsw_baseline/bench_hnsw_recall`
+    - detected and removed a long-running foreign benchmark process (`bench_hnsw_recall`) before restarting A/B
+    - accepted only runs captured after clean-window checks
+  - completed authority A/B pair on full-size equal-recall lane (`ef=60`):
+    - `vector` (`t0`) artifact: `/data/work/knowhere-rs-logs/rs_hnsw_x86_prefetch_target_vector_a1_opt49_clean.json`
+    - `visited` (`t0`) artifact: `/data/work/knowhere-rs-logs/rs_hnsw_x86_prefetch_target_visited_b1_opt49_clean.json`
+- Verification:
+  - local preflight:
+    - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok`
+    - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok`
+  - authority bootstrap:
+    - `bash init.sh` -> `ok`
+  - clean-window checks:
+    - `bash -lc 'source scripts/remote/common.sh && load_remote_config && run_ssh "ps -eo ... | grep -E \"bench_hnsw_recall|generate_hdf5_hnsw_baseline|cargo|rustc\" ..."'` -> confirmed empty before accepted runs
+    - stale interference handling:
+      - detected foreign `bench_hnsw_recall` high-CPU process
+      - terminated stale competing benchmark/test processes, then rechecked clean window
+  - authority runs:
+    - `bash scripts/remote/test.sh --command "export KNOWHERE_RS_X86_PREFETCH_HINT=t0; export KNOWHERE_RS_X86_PREFETCH_TARGET=vector; ... --output /data/work/knowhere-rs-logs/rs_hnsw_x86_prefetch_target_vector_a1_opt49_clean.json ..."` -> `ok` (`run_id=20260316T085117Z_40849`)
+    - `bash scripts/remote/test.sh --command "export KNOWHERE_RS_X86_PREFETCH_HINT=t0; export KNOWHERE_RS_X86_PREFETCH_TARGET=visited; ... --output /data/work/knowhere-rs-logs/rs_hnsw_x86_prefetch_target_visited_b1_opt49_clean.json ..."` -> `ok` (`run_id=20260316T090719Z_43982`)
+  - rollback verification:
+    - `git diff -- src/faiss/hnsw.rs` -> empty
+- Result:
+  - `authority_result=reject`
+- Notes:
+  - authority sample (clean window):
+    - `vector` (`t0`): `qps=14027.164`, `recall_at_10=0.9518`
+    - `visited` (`t0`): `qps=14077.019`, `recall_at_10=0.9518`
+  - uplift `visited` vs `vector`: `+0.355%`, materially below the lane keep threshold (~`+2%`).
+  - interpretation: on x86 authority, native-style visited-state prefetch is not a meaningful win for current Rust fast path; keep production path unchanged.
+  - next recommended step is to stop reopening prefetch-target variants and return to non-prefetch hot-path overhead reductions.
+
 ### Session 155 - 2026-03-16
 - Focus: `hnsw-x86-prefetch-isa-authority-fullsize-opt48`
 - Completed:
