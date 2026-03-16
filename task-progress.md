@@ -22,6 +22,39 @@
 
 ## Session Log
 
+### Session 146 - 2026-03-16
+- Focus: `hnsw-fair-lane-throughput-authority-opt42-narrow-tail-frontier-gate`
+- Completed:
+  - ran a narrow behavior screen targeting only extreme frontier-pressure tail candidates:
+    - in `process_layer0_l2_candidate_fast`, under `frontier_len >= ef * 8` and full result pool
+    - skip frontier expansion when candidate relative improvement is tiny (`<= 0.02%`)
+    - result-pool insert remained unchanged
+  - local screen showed moderate positive signal, so promoted immediately to authority pre/post validation per guardrail
+  - authority run regressed throughput with recall parity; reverted code change
+- Verification:
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok` on experiment branch
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt42_narrow_tail_gate_base1m_local.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok` (pre, code stashed)
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt42_narrow_tail_gate_base1m_local.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt42_narrow_tail_gate_base1m_local_rerun1.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `bash init.sh` -> `ok`
+  - `bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output /data/work/knowhere-rs-logs/rs_hnsw_opt42_pre_authority.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5"` -> `ok`
+  - `bash init.sh` -> `ok` (resync patched code for post arm)
+  - `bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-native-src/sift-128-euclidean.hdf5 --output /data/work/knowhere-rs-logs/rs_hnsw_opt42_post_authority.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5"` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `authority_result=reject`
+- Notes:
+  - local pre: `qps=6393.775`, `recall_at_10=0.9880`
+  - local post #1: `qps=6638.716`, `recall_at_10=0.9880` (`+3.83%`)
+  - local post #2: `qps=6742.639`, `recall_at_10=0.9880` (`+5.46%`)
+  - authority pre: `qps=8847.065`, `recall_at_10=0.9880`
+  - authority post: `qps=8728.767`, `recall_at_10=0.9880`
+  - authority uplift: `-1.34%`
+  - decision: does not pass `+2%` authority keep threshold; patch rolled back
+  - next recommended step is to prioritize non-behavioral efficiency work (data/layout or memory traffic) and keep authority A/B early
+
 ### Session 145 - 2026-03-16
 - Focus: `hnsw-fair-lane-throughput-screen-frontier-pressure-tail-ranking-diagnostics`
 - Completed:
