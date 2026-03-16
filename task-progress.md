@@ -22,6 +22,35 @@
 
 ## Session Log
 
+### Session 161 - 2026-03-16
+- Focus: `hnsw-fair-lane-throughput-authority-opt54-avx512-dim128-dual-accumulator`
+- Completed:
+  - tested an x86-only micro-tuning on top of opt53 dim=128 AVX-512 kernels:
+    - switched dim=128 specialized kernels from single accumulator chains to dual-accumulator form to reduce FMA dependency depth.
+  - ran full authority pre/post A/B on `ef=60` with recall parity checks.
+  - rejected the tuning after authority result and rolled back code (`git restore src/simd.rs`).
+- Verification:
+  - local checks:
+    - `cargo fmt --all -- --check` -> `ok`
+    - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok`
+    - `cargo test --lib simd -- --nocapture` -> `ok`
+  - authority A/B:
+    - `git stash push ... src/simd.rs` + `bash init.sh` (pre arm sync) -> `ok`
+    - `bash scripts/remote/test.sh --command "... --output /data/work/knowhere-rs-logs/rs_hnsw_opt54_pre_authority_ef60.json --ef-search 60 ..."` -> `ok` (`run_id=20260316T142928Z_9874`)
+    - `git stash pop` + `bash init.sh` (post arm sync) -> `ok`
+    - `bash scripts/remote/test.sh --command "... --output /data/work/knowhere-rs-logs/rs_hnsw_opt54_post_authority_ef60.json --ef-search 60 ..."` -> `ok` (`run_id=20260316T144727Z_18451`)
+    - remote parser extraction (`python3`) for pre/post qps/recall -> `ok`
+  - rollback verification:
+    - `git diff -- src/simd.rs` -> empty
+- Result:
+  - `authority_result=reject`
+- Notes:
+  - authority pre: `qps=14460.505`, `recall_at_10=0.9518`
+  - authority post: `qps=14407.721`, `recall_at_10=0.9518`
+  - delta: `-0.37%`
+  - interpretation: dual-accumulator tuning does not improve the dim=128 AVX-512 path on authority lane; keep opt53 baseline.
+  - next recommended step is to pivot from accumulator micro-tuning to other kernel-quality levers (for example, dimension-specialized batch4 scheduling or memory/layout-side opportunities) with the same authority gate.
+
 ### Session 160 - 2026-03-16
 - Focus: `hnsw-fair-lane-throughput-authority-opt53-avx512-dim128-specialization`
 - Completed:
