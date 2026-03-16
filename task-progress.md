@@ -22,6 +22,36 @@
 
 ## Session Log
 
+### Session 162 - 2026-03-16
+- Focus: `hnsw-fair-lane-throughput-screen-opt55-avx512-dim128-batch4-scheduling`
+- Completed:
+  - tested an x86-only `dim=128` AVX-512 batch-4 scheduling change in `l2_batch_4_avx512_128`:
+    - switched from per-offset interleaved lane accumulation to query-block hoist + per-db-lane accumulation.
+  - validated local correctness (`fmt` + targeted tests), then ran remote short-lane A/B screen.
+  - quick-lane (`base=100k, query=100`) first showed positive signal, but a larger authority-screen lane (`base=300k, query=300`) failed with recall parity; rejected and rolled back code.
+- Verification:
+  - local:
+    - `cargo fmt --all -- --check` -> `ok`
+    - `cargo test --lib simd::tests::test_l2_batch_4_avx512_128_matches_scalar -- --nocapture` -> `ok` (non-AVX512 host: filtered/no-op)
+    - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok`
+  - remote quick-lane A/B:
+    - pre: `/data/work/knowhere-rs-logs/rs_hnsw_opt55_pre_quicklane.json` -> `qps=16761.382445`, `recall_at_10=0.9880`
+    - post: `/data/work/knowhere-rs-logs/rs_hnsw_opt55_post_quicklane.json` -> `qps=19508.103178`, `recall_at_10=0.9880`
+    - pre rerun: `/data/work/knowhere-rs-logs/rs_hnsw_opt55_pre_quicklane_rerun1.json` -> `qps=15457.247803`, `recall_at_10=0.9880`
+    - post rerun: `/data/work/knowhere-rs-logs/rs_hnsw_opt55_post_quicklane_rerun1.json` -> `qps=20707.449298`, `recall_at_10=0.9880`
+    - quick-lane median delta: `+24.82%`
+  - remote authority-screen A/B:
+    - pre: `/data/work/knowhere-rs-logs/rs_hnsw_opt55_pre_authscreen_ef60.json` -> `qps=18757.426769`, `recall_at_10=0.9703`
+    - post: `/data/work/knowhere-rs-logs/rs_hnsw_opt55_post_authscreen_ef60.json` -> `qps=18419.878930`, `recall_at_10=0.9703`
+    - delta: `-1.80%`
+  - rollback:
+    - `git restore src/simd.rs` -> `ok`
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - interpretation: this scheduling variant appears to overfit cache-friendly small lanes; it does not transfer to larger authority-screen pressure.
+  - next recommended step: stop this scheduling direction and pivot to structure-level levers (layout/access path) instead of further instruction-order micro-tuning.
+
 ### Session 161 - 2026-03-16
 - Focus: `hnsw-fair-lane-throughput-authority-opt54-avx512-dim128-dual-accumulator`
 - Completed:
