@@ -22,6 +22,33 @@
 
 ## Session Log
 
+### Session 159 - 2026-03-16
+- Focus: `hnsw-fair-lane-throughput-screen-opt52-sequential-id-branch-hoist`
+- Completed:
+  - screened a non-prefetch hypothesis in layer-0 `layer_neighbors` traversal:
+    - split the hot loop by `use_sequential_ids` to hoist the per-neighbor ID-mode branch out of the loop body.
+  - ran local multi-sample gate (`pre + post + post_rerun1`) on `ef=60`.
+  - rejected the hypothesis locally and rolled back code without authority promotion.
+- Verification:
+  - `cargo fmt --all -- --check` -> `ok`
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok`
+  - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok`
+  - local screen commands:
+    - baseline (stashed pre): `... --output /tmp/hnsw_equal_recall_opt52_pre_local.json --ef-search 60 ...` -> `ok`
+    - patch post #1: `... --output /tmp/hnsw_equal_recall_opt52_post_local.json --ef-search 60 ...` -> `ok`
+    - patch post #2: `... --output /tmp/hnsw_equal_recall_opt52_post_local_rerun1.json --ef-search 60 ...` -> `ok`
+  - rollback verification:
+    - `git diff -- src/faiss/hnsw.rs` -> empty
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - pre: `qps=8100.626`, `recall_at_10=0.9518`
+  - post #1: `qps=8025.081`, `recall_at_10=0.9518`
+  - post #2: `qps=7665.243`, `recall_at_10=0.9518`
+  - post median: `7845.162` (vs pre `-3.15%`)
+  - interpretation: branch-hoist variant does not hold even locally under multi-sample gate; do not promote to authority.
+  - next recommended step is to prioritize a different non-prefetch lever (for example, reducing layer0 ordered-container mutation cost) and keep multi-sample local gating before authority.
+
 ### Session 158 - 2026-03-16
 - Focus: `hnsw-fair-lane-throughput-screen-authority-opt51-id-conversion-hoist`
 - Completed:
