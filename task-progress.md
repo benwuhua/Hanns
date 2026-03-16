@@ -22,6 +22,34 @@
 
 ## Session Log
 
+### Session 155 - 2026-03-16
+- Focus: `hnsw-x86-prefetch-isa-authority-fullsize-opt48`
+- Completed:
+  - completed authority full-size confirmation for x86 prefetch hint A/B in the equal-recall lane (`ef=60`), using previously generated artifacts:
+    - `t0` full run #1: `/data/work/knowhere-rs-logs/rs_hnsw_x86_prefetch_t0_full_opt48.json`
+    - `t0` full run #2 (rerun): `/data/work/knowhere-rs-logs/rs_hnsw_x86_prefetch_t0_full_opt48_rerun1.json`
+    - `t2` full run #1: `/data/work/knowhere-rs-logs/rs_hnsw_x86_prefetch_t2_full_opt48.json`
+  - confirmed recall parity across completed full-size samples (`recall_at_10=0.9518`).
+  - launched an additional `t2` full rerun for stability (`..._t2_full_opt48_rerun2.json`) but observed abnormal long-tail runtime (`>14m`, single process pinned ~100% CPU) and terminated it; excluded this aborted sample from verdict.
+  - finalized decision: keep x86 prefetch default at `t0`; keep runtime override (`KNOWHERE_RS_X86_PREFETCH_HINT`) for controlled follow-up experiments only.
+- Verification:
+  - `bash init.sh` -> `ok`
+  - `bash scripts/remote/test.sh --command "export KNOWHERE_RS_X86_PREFETCH_HINT=t2; RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /data/work/knowhere-rs-src/data/sift/sift-128-euclidean.hdf5 --output /data/work/knowhere-rs-logs/rs_hnsw_x86_prefetch_t2_full_opt48_rerun2.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 60 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5"` -> `failed` (`exit_code=143`, aborted as abnormal long-tail sample)
+  - `bash -lc 'source scripts/remote/common.sh && load_remote_config && run_ssh "cat /data/work/knowhere-rs-logs/rs_hnsw_x86_prefetch_t0_full_opt48.json"'` -> `ok`
+  - `bash -lc 'source scripts/remote/common.sh && load_remote_config && run_ssh "cat /data/work/knowhere-rs-logs/rs_hnsw_x86_prefetch_t0_full_opt48_rerun1.json"'` -> `ok`
+  - `bash -lc 'source scripts/remote/common.sh && load_remote_config && run_ssh "cat /data/work/knowhere-rs-logs/rs_hnsw_x86_prefetch_t2_full_opt48.json"'` -> `ok`
+  - remote parser extraction (`python3`) for qps/recall summary -> `ok`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - completed full-size sample values:
+    - `t0` run #1: `qps=3475.511`, `recall_at_10=0.9518` (clear outlier low sample)
+    - `t0` run #2: `qps=12280.988`, `recall_at_10=0.9518`
+    - `t2` run #1: `qps=11600.931`, `recall_at_10=0.9518`
+  - decision delta on stable completed samples: `t2` is `-5.54%` vs `t0` rerun baseline.
+  - interpretation: x86 hint switch is useful as an experiment lever, but current authority evidence does not support promoting `t2` to default; retain `t0`.
+  - next recommended step is to close this prefetch-hint round and return to non-prefetch hot-path overhead reductions for the `ef=60` equal-recall lane.
+
 ### Session 154 - 2026-03-16
 - Focus: `hnsw-fair-lane-throughput-screen-opt47-visited-prefetch-alignment`
 - Completed:
