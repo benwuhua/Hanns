@@ -22,6 +22,37 @@
 
 ## Session Log
 
+### Session 153 - 2026-03-16
+- Focus: `hnsw-x86-prefetch-isa-review-screen`
+- Completed:
+  - refactored x86 prefetch path in `src/faiss/hnsw.rs` to use explicit ISA hint selection with runtime knob:
+    - new env switch: `KNOWHERE_RS_X86_PREFETCH_HINT=t0|t1|t2|nta`
+    - default remains `t0` (backward-compatible behavior)
+    - non-x86 paths unchanged
+  - ran a small authority x86 hint screen on the equal-recall lane (`ef=60`) to check whether hint choice explains part of the local/authority divergence
+- Verification:
+  - `cargo fmt --all -- --check` -> `ok`
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok`
+  - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok`
+  - `bash init.sh` -> `ok`
+  - authority hint screen (small sample: `base-limit=200000`, `query-limit=200`, `repeat=2`, same lane params otherwise):
+    - `t0` -> `run_id=20260316T062027Z_23668` (`/data/work/knowhere-rs-logs/rs_hnsw_x86_prefetch_hint_t0_small.json`)
+    - `t1` -> `run_id=20260316T062324Z_24049` (`/data/work/knowhere-rs-logs/rs_hnsw_x86_prefetch_hint_t1_small.json`)
+    - `t2` -> `run_id=20260316T062620Z_24410` (`/data/work/knowhere-rs-logs/rs_hnsw_x86_prefetch_hint_t2_small.json`)
+    - `nta` -> `run_id=20260316T062913Z_24785` (`/data/work/knowhere-rs-logs/rs_hnsw_x86_prefetch_hint_nta_small.json`)
+  - result extraction via remote python parser -> `ok`
+- Result:
+  - `screen_result=needs_more_local`
+- Notes:
+  - all four hints held recall parity in the screen lane (`recall_at_10=0.9675`)
+  - small-sample qps medians (screen-only):
+    - `t0`: `3228.070`
+    - `t1`: `3381.350` (`+4.75%` vs `t0`)
+    - `t2`: `3539.759` (`+9.66%` vs `t0`)
+    - `nta`: `3258.419` (`+0.94%` vs `t0`)
+  - but variance is very high with `repeat=2` and short query set (per-hint runs span roughly `2.3k~4.5k`), so this is directional only
+  - next recommended step is to run authority confirmatory A/B at production sample size (`base-limit=1000000`, `query-limit=1000`, `repeat=5`) at least for `t0` vs `t2` before any keep/reject claim
+
 ### Session 152 - 2026-03-16
 - Focus: `hnsw-local-positive-history-replay`
 - Completed:

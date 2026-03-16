@@ -14,6 +14,8 @@ use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::{BTreeMap, BinaryHeap};
 use std::sync::Arc;
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use crate::api::{
@@ -46,6 +48,31 @@ const HNSW_SEARCH_BF_TOPK_THRESHOLD: f32 = 0.5;
 /// Without this, high M values (e.g., M=64) would have very few layers, collapsing the
 /// multi-layer structure and degrading recall.
 const REFERENCE_M_FOR_LEVEL: usize = 16;
+
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+#[derive(Clone, Copy)]
+enum X86PrefetchHint {
+    T0,
+    T1,
+    T2,
+    Nta,
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+fn x86_prefetch_hint() -> X86PrefetchHint {
+    static PREFETCH_HINT: OnceLock<X86PrefetchHint> = OnceLock::new();
+    *PREFETCH_HINT.get_or_init(|| {
+        let raw = std::env::var("KNOWHERE_RS_X86_PREFETCH_HINT")
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase());
+        match raw.as_deref() {
+            Some("t1") => X86PrefetchHint::T1,
+            Some("t2") => X86PrefetchHint::T2,
+            Some("nta") => X86PrefetchHint::Nta,
+            _ => X86PrefetchHint::T0,
+        }
+    })
+}
 
 /// A single node's neighbor connections at a specific layer
 ///
@@ -3378,12 +3405,62 @@ impl HnswIndex {
         let vec_ptr = base_ptr.add(idx * self.dim);
         #[cfg(target_arch = "x86_64")]
         {
-            core::arch::x86_64::_mm_prefetch(vec_ptr as *const i8, core::arch::x86_64::_MM_HINT_T0);
+            match x86_prefetch_hint() {
+                X86PrefetchHint::T0 => {
+                    core::arch::x86_64::_mm_prefetch(
+                        vec_ptr as *const i8,
+                        core::arch::x86_64::_MM_HINT_T0,
+                    );
+                }
+                X86PrefetchHint::T1 => {
+                    core::arch::x86_64::_mm_prefetch(
+                        vec_ptr as *const i8,
+                        core::arch::x86_64::_MM_HINT_T1,
+                    );
+                }
+                X86PrefetchHint::T2 => {
+                    core::arch::x86_64::_mm_prefetch(
+                        vec_ptr as *const i8,
+                        core::arch::x86_64::_MM_HINT_T2,
+                    );
+                }
+                X86PrefetchHint::Nta => {
+                    core::arch::x86_64::_mm_prefetch(
+                        vec_ptr as *const i8,
+                        core::arch::x86_64::_MM_HINT_NTA,
+                    );
+                }
+            }
             true
         }
         #[cfg(target_arch = "x86")]
         {
-            core::arch::x86::_mm_prefetch(vec_ptr as *const i8, core::arch::x86::_MM_HINT_T0);
+            match x86_prefetch_hint() {
+                X86PrefetchHint::T0 => {
+                    core::arch::x86::_mm_prefetch(
+                        vec_ptr as *const i8,
+                        core::arch::x86::_MM_HINT_T0,
+                    );
+                }
+                X86PrefetchHint::T1 => {
+                    core::arch::x86::_mm_prefetch(
+                        vec_ptr as *const i8,
+                        core::arch::x86::_MM_HINT_T1,
+                    );
+                }
+                X86PrefetchHint::T2 => {
+                    core::arch::x86::_mm_prefetch(
+                        vec_ptr as *const i8,
+                        core::arch::x86::_MM_HINT_T2,
+                    );
+                }
+                X86PrefetchHint::Nta => {
+                    core::arch::x86::_mm_prefetch(
+                        vec_ptr as *const i8,
+                        core::arch::x86::_MM_HINT_NTA,
+                    );
+                }
+            }
             true
         }
         #[cfg(target_arch = "aarch64")]
