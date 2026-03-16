@@ -1132,6 +1132,17 @@ impl SearchScratch {
         true
     }
 
+    #[inline]
+    unsafe fn mark_visited_unchecked(&mut self, idx: usize) -> bool {
+        let epoch = self.epoch;
+        let slot = unsafe { self.visited_epoch.get_unchecked_mut(idx) };
+        if *slot == epoch {
+            return false;
+        }
+        *slot = epoch;
+        true
+    }
+
     fn prepare_layer0_pools(&mut self, ef: usize) {
         self.layer0_frontier.prepare(ef * 2);
         self.layer0_results.prepare(ef);
@@ -4014,7 +4025,7 @@ impl HnswIndex {
                     }
 
                     let visited_start = Instant::now();
-                    let marked = scratch.mark_visited(nbr_idx);
+                    let marked = unsafe { scratch.mark_visited_unchecked(nbr_idx) };
                     if let Some(stats) = profile.as_mut() {
                         stats.record_visited_ops(visited_start.elapsed(), u64::from(marked));
                     }
@@ -4071,7 +4082,7 @@ impl HnswIndex {
                     }
 
                     let visited_start = Instant::now();
-                    let marked = scratch.mark_visited(nbr_idx);
+                    let marked = unsafe { scratch.mark_visited_unchecked(nbr_idx) };
                     if let Some(stats) = profile.as_mut() {
                         stats.record_visited_ops(visited_start.elapsed(), u64::from(marked));
                     }
@@ -4239,7 +4250,7 @@ impl HnswIndex {
                 }
 
                 let visited_start = Instant::now();
-                let marked = scratch.mark_visited(nbr_idx);
+                let marked = unsafe { scratch.mark_visited_unchecked(nbr_idx) };
                 if let Some(stats) = profile.as_mut() {
                     stats.record_visited_ops(visited_start.elapsed(), u64::from(marked));
                 }
@@ -4399,7 +4410,10 @@ impl HnswIndex {
                 let neighbors = self.layer0_slab.neighbors_for(candidate.idx);
                 for &nbr_u32 in neighbors {
                     let nbr_idx = nbr_u32 as usize;
-                    if nbr_idx >= num_nodes || !scratch.mark_visited(nbr_idx) {
+                    if nbr_idx >= num_nodes {
+                        continue;
+                    }
+                    if !unsafe { scratch.mark_visited_unchecked(nbr_idx) } {
                         continue;
                     }
 
@@ -4439,7 +4453,10 @@ impl HnswIndex {
                     }
 
                     let nbr_idx = nbr_u32 as usize;
-                    if nbr_idx >= num_nodes || !scratch.mark_visited(nbr_idx) {
+                    if nbr_idx >= num_nodes {
+                        continue;
+                    }
+                    if !unsafe { scratch.mark_visited_unchecked(nbr_idx) } {
                         continue;
                     }
 
@@ -4477,7 +4494,10 @@ impl HnswIndex {
                     }
 
                     let nbr_idx = self.get_idx_from_id_fast(nbr_id);
-                    if nbr_idx >= num_nodes || !scratch.mark_visited(nbr_idx) {
+                    if nbr_idx >= num_nodes {
+                        continue;
+                    }
+                    if !unsafe { scratch.mark_visited_unchecked(nbr_idx) } {
                         continue;
                     }
 
@@ -4635,7 +4655,7 @@ impl HnswIndex {
                     }
 
                     let visited_start = Instant::now();
-                    let marked = scratch.mark_visited(nbr_idx);
+                    let marked = unsafe { scratch.mark_visited_unchecked(nbr_idx) };
                     if let Some(stats) = profile.as_mut() {
                         stats.record_visited_ops(visited_start.elapsed(), u64::from(marked));
                     }
@@ -4689,7 +4709,7 @@ impl HnswIndex {
                     }
 
                     let visited_start = Instant::now();
-                    let marked = scratch.mark_visited(nbr_idx);
+                    let marked = unsafe { scratch.mark_visited_unchecked(nbr_idx) };
                     if let Some(stats) = profile.as_mut() {
                         stats.record_visited_ops(visited_start.elapsed(), u64::from(marked));
                     }

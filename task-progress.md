@@ -22,6 +22,47 @@
 
 ## Session Log
 
+### Session 157 - 2026-03-16
+- Focus: `hnsw-fair-lane-throughput-authority-opt50-visited-mark-unchecked`
+- Completed:
+  - advanced a non-prefetch hot-path hypothesis for layer-0 loops:
+    - added `SearchScratch::mark_visited_unchecked` and used it only at callsites that already guard `nbr_idx < num_nodes`
+    - kept entry-node marking and other non-guarded sites on safe `mark_visited`
+  - local screen pre/post on the equal-recall lane (`ef=60`) showed stable positive signal with recall parity, so promoted to authority A/B.
+  - executed authority pre/post A/B on remote x86 with clean-window enforcement (no concurrent benchmark/test processes in accepted runs).
+  - refreshed native BF16 HNSW anchor after this authority round to avoid stale leadership comparison.
+- Verification:
+  - local correctness:
+    - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok`
+    - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok`
+    - `cargo fmt --all -- --check` -> `ok`
+  - local screen:
+    - baseline arm (stashed pre): `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- ... --output /tmp/hnsw_equal_recall_opt50_pre_local.json --ef-search 60 ...` -> `ok`
+    - patch arm (post): `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- ... --output /tmp/hnsw_equal_recall_opt50_post_local.json --ef-search 60 ...` -> `ok`
+  - authority pre/post:
+    - `bash init.sh` (pre arm sync with stashed baseline) -> `ok`
+    - `bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- ... --output /data/work/knowhere-rs-logs/rs_hnsw_opt50_pre_authority_ef60.json --ef-search 60 ..."` -> `ok` (`run_id=20260316T094334Z_50053`)
+    - `git stash pop` + `bash init.sh` (post arm sync with patch) -> `ok`
+    - `bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- ... --output /data/work/knowhere-rs-logs/rs_hnsw_opt50_post_authority_ef60.json --ef-search 60 ..."` -> `ok` (`run_id=20260316T100123Z_53516`)
+    - remote parser extraction (`python3`) for pre/post qps/recall -> `ok`
+  - refreshed native anchor:
+    - `bash scripts/remote/native_hnsw_qps_capture.sh` -> `ok` (`fallback=linkfix_worktree`, `log=/data/work/knowhere-native-logs/native_hnsw_qps_linkfix_20260316T101920Z.log`)
+    - `bash -lc 'source scripts/remote/common.sh && load_remote_config && run_ssh "tail -n 120 /data/work/knowhere-native-logs/native_hnsw_qps_linkfix_20260316T101920Z.log"'` -> `ok`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - local screen:
+    - pre: `qps=7292.913`, `recall_at_10=0.9518`
+    - post: `qps=7792.056`, `recall_at_10=0.9518`
+    - delta: `+6.84%`
+  - authority A/B (`ef=60`, clean window):
+    - pre: `qps=13971.284`, `recall_at_10=0.9518`
+    - post: `qps=14423.888`, `recall_at_10=0.9518`
+    - uplift: `+3.24%` (above keep threshold `~+2%`)
+  - refreshed native BF16 anchor (`R@10=0.9500`, `thread_num=8`): `qps=15344.859`
+  - equal-recall gap after opt50: Rust still about `-5.99%` vs refreshed native, so strategic state remains `blocked_on_hnsw_leadership_gap`.
+  - next recommended step is to keep non-prefetch hot-path reductions and prioritize another narrow authority-backed `ef=60` lever with expected `>=+2%` uplift.
+
 ### Session 156 - 2026-03-16
 - Focus: `hnsw-x86-prefetch-target-authority-recheck-opt49`
 - Completed:
