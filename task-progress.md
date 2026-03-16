@@ -22,6 +22,28 @@
 
 ## Session Log
 
+### Session 149 - 2026-03-16
+- Focus: `hnsw-fair-lane-authority-native-refresh-equal-recall-check`
+- Completed:
+  - refreshed native HNSW authority sample on remote x86 using the production capture wrapper
+  - extracted the latest BF16 equal-recall reference row from authority log:
+    - lane: `sift-128-euclidean | HNSW(BF16) | M=16 | efConstruction=100, ef=138, k=100, R@=0.9500`
+    - throughput: `thread_num=8`, `VPS=12866.654`
+  - compared this refreshed native row against Session 148 Rust low-ef sweep (`recall~0.957`, best `qps=12556.337`)
+  - updated durable interpretation: Rust still shows the expected recall/QPS tradeoff curve, but on the refreshed equal-recall band native is currently slightly faster
+- Verification:
+  - `bash init.sh` -> `ok`
+  - `bash scripts/remote/native_hnsw_qps_capture.sh` -> `ok` (`log=/data/work/knowhere-native-logs/native_hnsw_qps_linkfix_20260316T021543Z.log`, linkfix fallback arm)
+  - `bash -lc 'source scripts/remote/common.sh && load_remote_config && run_ssh tail -n 80 /data/work/knowhere-native-logs/native_hnsw_qps_linkfix_20260316T021543Z.log'` -> `ok`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - refreshed equal-recall reference: native `qps=12866.654` at `recall_at_10=0.9500`
+  - Session 148 Rust low-ef best: `qps=12556.337` at `recall_at_10=0.9570`
+  - near-equal recall band delta: native remains ahead by about `+2.47%` (`12866.654 / 12556.337`)
+  - this closes a stale-reference risk: older `~10.5k @ recall 0.95` native row should no longer be used as the active comparison anchor
+  - next recommended step is to run future Rust screens against this refreshed native envelope and require authority uplift over both Rust prior baseline and current native equal-recall row
+
 ### Session 148 - 2026-03-16
 - Focus: `hnsw-fair-lane-authority-recall-qps-tradeoff-mapping`
 - Completed:
