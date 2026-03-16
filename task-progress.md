@@ -22,6 +22,37 @@
 
 ## Session Log
 
+### Session 152 - 2026-03-16
+- Focus: `hnsw-local-positive-history-replay`
+- Completed:
+  - replayed historical "local-positive" optimization tasks on local machine to validate whether gains remain reproducible under controlled reruns
+  - covered two recent high-signal items:
+    - `opt46 layer0 slab next-neighbor prefetch` (just-finished screen line, code already rolled back after authority reject)
+    - `opt38 extreme frontier pressure gate` (historical commit `224bf03`, replayed in isolated worktree)
+  - for `opt38`, reproduced the historical lane command at current local environment and compared current baseline vs historical patch build
+- Verification:
+  - `git worktree add .worktrees/replay-opt38-local -b replay-opt38-local` -> `ok`
+  - `cargo build --release --verbose` (worktree) -> `ok`
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` (worktree) -> `ok`
+  - baseline run (current code, worktree):
+    - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input /Users/ryan/.openclaw/workspace-builder/knowhere-rs/data/sift/sift-128-euclidean.hdf5 --output /tmp/replay_opt38_baseline_current_local.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - patch replay runs (`git checkout 224bf03` in worktree):
+    - `... --output /tmp/replay_opt38_patch_local_seq1.json ...` -> `ok`
+    - `... --output /tmp/replay_opt38_patch_local_seq2.json ...` -> `ok`
+  - result extraction:
+    - `python3` parse of `/tmp/replay_opt38_*.json` -> `ok`
+- Result:
+  - `screen_result=needs_more_local`
+- Notes:
+  - `opt46` local-only replay signal remained positive in this session (`pre=7426.122`, `post_seq1=7878.606`, `post_seq2=8445.316`, recall parity), but it is already authority-rejected (`-60.76%`) and must stay rolled back
+  - `opt38` historical local-positive signal did not hold on replay:
+    - current baseline: `qps=7008.752`, `recall_at_10=0.9880`
+    - replay patch seq1: `qps=6875.042`, `recall_at_10=0.9880`
+    - replay patch seq2: `qps=7022.515`, `recall_at_10=0.9880`
+    - seq mean vs baseline: `-0.86%`
+  - interpretation: at least part of historical local uplift is non-stationary/noise-sensitive; future local promotion should require ABAB-style controlled replay before authority escalation
+  - next recommended step is to run controlled local ABAB replay for any remaining "local-positive" hypotheses that can still be reconstructed from git history, then only keep those with stable positive median uplift
+
 ### Session 151 - 2026-03-16
 - Focus: `hnsw-fair-lane-throughput-screen-authority-opt46-layer0-slab-prefetch`
 - Completed:
