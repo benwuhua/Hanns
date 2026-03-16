@@ -22,6 +22,39 @@
 
 ## Session Log
 
+### Session 151 - 2026-03-16
+- Focus: `hnsw-fair-lane-throughput-screen-authority-opt46-layer0-slab-prefetch`
+- Completed:
+  - screened a non-behavioral hot-path hypothesis in `search_layer_idx_l2_ordered_pool_fast`:
+    - add "next-neighbor vector prefetch" for the `use_layer0_slab` branch
+    - no change to candidate admission, frontier/result ordering, or recall policy
+  - local screen at `ef=60` showed strong positive signal with recall parity, so promoted to authority pre/post
+  - authority pre/post A/B at the same lane showed severe throughput regression with recall parity
+  - immediately rolled back the patch after authority rejection
+- Verification:
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok` on experiment code
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok` on experiment code
+  - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok` on experiment code
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- ... --output /tmp/hnsw_equal_recall_opt46_pre_local.json ... --ef-search 60 ...` -> `ok` (pre)
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- ... --output /tmp/hnsw_equal_recall_opt46_post_seq1_local.json ... --ef-search 60 ...` -> `ok` (post seq#1)
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- ... --output /tmp/hnsw_equal_recall_opt46_post_seq2_local.json ... --ef-search 60 ...` -> `ok` (post seq#2)
+  - `bash init.sh` -> `ok` (pre arm sync)
+  - `bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- ... --output /data/work/knowhere-rs-logs/rs_hnsw_opt46_pre_authority_ef60.json ... --ef-search 60 ..."` -> `ok` (`run_id=20260316T034606Z_8801`)
+  - `bash init.sh` -> `ok` (post arm sync with patch)
+  - `bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- ... --output /data/work/knowhere-rs-logs/rs_hnsw_opt46_post_authority_ef60.json ... --ef-search 60 ..."` -> `ok` (`run_id=20260316T040216Z_10841`)
+  - rollback verification: `git diff -- src/faiss/hnsw.rs` -> empty
+- Result:
+  - `authority_result=reject`
+- Notes:
+  - local pre: `qps=7426.122`, `recall_at_10=0.9518`
+  - local post seq#1: `qps=7878.606`, `recall_at_10=0.9518` (`+6.09%`)
+  - local post seq#2: `qps=8445.316`, `recall_at_10=0.9518` (`+13.72%`)
+  - authority pre: `qps=9667.161`, `recall_at_10=0.9518`
+  - authority post: `qps=3793.571`, `recall_at_10=0.9518`
+  - authority uplift: `-60.76%`; strong no-go, reverted
+  - interpretation: slab-branch prefetch can produce misleading local wins but is not portable to authority on this lane; keep it out of production path
+  - next recommended step is to avoid adding explicit slab prefetch and instead screen changes that reduce ordered-pool insertion/data-structure overhead without stressing memory hierarchy
+
 ### Session 150 - 2026-03-16
 - Focus: `hnsw-fair-lane-authority-rust-equal-recall-window-refresh`
 - Completed:
