@@ -22,6 +22,36 @@
 
 ## Session Log
 
+### Session 160 - 2026-03-16
+- Focus: `hnsw-fair-lane-throughput-authority-opt53-avx512-dim128-specialization`
+- Completed:
+  - implemented x86 AVX-512 dim=128 specialized L2 kernels in `src/simd.rs`:
+    - `l2_avx512_sq_ptr_128` (single-vector squared L2)
+    - `l2_batch_4_avx512_128` (query vs 4 vectors batch path)
+    - hooked both specializations into existing AVX-512 dispatch (`dim == 128` fast path).
+  - added AVX-512 correctness tests for dim=128 specialization paths.
+  - executed authority pre/post A/B at equal-recall lane (`ef=60`) with clean-window checks; kept change after positive authority uplift.
+- Verification:
+  - local checks:
+    - `cargo fmt --all -- --check` -> `ok`
+    - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok`
+    - `cargo test --lib simd::tests::test_l2_avx512_sq_ptr_128_matches_scalar -- --nocapture` -> `ok` (non-AVX512 local host: filtered/no-op)
+    - `cargo test --lib simd::tests::test_l2_batch_4_avx512_128_matches_scalar -- --nocapture` -> `ok` (non-AVX512 local host: filtered/no-op)
+  - authority A/B:
+    - `git stash push ... src/simd.rs` + `bash init.sh` (pre arm sync) -> `ok`
+    - `bash scripts/remote/test.sh --command "... --output /data/work/knowhere-rs-logs/rs_hnsw_opt53_pre_authority_ef60.json --ef-search 60 ..."` -> `ok` (`run_id=20260316T130145Z_73495`)
+    - `git stash pop` + `bash init.sh` (post arm sync) -> `ok`
+    - `bash scripts/remote/test.sh --command "... --output /data/work/knowhere-rs-logs/rs_hnsw_opt53_post_authority_ef60.json --ef-search 60 ..."` -> `ok` (`run_id=20260316T131940Z_77668`)
+    - remote parser extraction (`python3`) for pre/post qps/recall -> `ok`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - authority pre: `qps=14111.214`, `recall_at_10=0.9518`
+  - authority post: `qps=14423.421`, `recall_at_10=0.9518`
+  - uplift: `+2.21%` (above keep threshold `~+2%`)
+  - interpretation: dim=128 AVX-512 specialization gives attributable gain on authority and is kept.
+  - next recommended step is to continue x86-focused distance-kernel quality work (for example, further AVX-512 128-d path tuning around load/reduction schedule) while maintaining equal-recall guardrails.
+
 ### Session 159 - 2026-03-16
 - Focus: `hnsw-fair-lane-throughput-screen-opt52-sequential-id-branch-hoist`
 - Completed:

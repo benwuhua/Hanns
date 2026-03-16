@@ -511,8 +511,38 @@ unsafe fn l2_avx512_sq(a: &[f32], b: &[f32]) -> f32 {
 #[inline]
 #[allow(clippy::incompatible_msrv)]
 #[target_feature(enable = "avx512f,avx512bw")]
+unsafe fn l2_avx512_sq_ptr_128(a: *const f32, b: *const f32) -> f32 {
+    use std::arch::x86_64::*;
+    let mut sum = _mm512_setzero_ps();
+    macro_rules! step {
+        ($off:expr) => {{
+            let va = _mm512_loadu_ps(a.add($off));
+            let vb = _mm512_loadu_ps(b.add($off));
+            let diff = _mm512_sub_ps(va, vb);
+            sum = _mm512_fmadd_ps(diff, diff, sum);
+        }};
+    }
+    step!(0);
+    step!(16);
+    step!(32);
+    step!(48);
+    step!(64);
+    step!(80);
+    step!(96);
+    step!(112);
+    _mm512_reduce_add_ps(sum)
+}
+
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+#[allow(clippy::incompatible_msrv)]
+#[target_feature(enable = "avx512f,avx512bw")]
 unsafe fn l2_avx512_sq_ptr(a: *const f32, b: *const f32, dim: usize) -> f32 {
     use std::arch::x86_64::*;
+    if dim == 128 {
+        return l2_avx512_sq_ptr_128(a, b);
+    }
+
     let mut sum = _mm512_setzero_ps();
     let chunks = dim / 16;
 
@@ -909,6 +939,58 @@ pub unsafe fn l2_batch_4_neon(
 #[inline]
 #[allow(clippy::incompatible_msrv)]
 #[target_feature(enable = "avx512f,avx512bw")]
+unsafe fn l2_batch_4_avx512_128(
+    query: *const f32,
+    db0: *const f32,
+    db1: *const f32,
+    db2: *const f32,
+    db3: *const f32,
+) -> [f32; 4] {
+    use std::arch::x86_64::*;
+    let mut sum0 = _mm512_setzero_ps();
+    let mut sum1 = _mm512_setzero_ps();
+    let mut sum2 = _mm512_setzero_ps();
+    let mut sum3 = _mm512_setzero_ps();
+
+    macro_rules! step {
+        ($off:expr) => {{
+            let q = _mm512_loadu_ps(query.add($off));
+            let v0 = _mm512_loadu_ps(db0.add($off));
+            let v1 = _mm512_loadu_ps(db1.add($off));
+            let v2 = _mm512_loadu_ps(db2.add($off));
+            let v3 = _mm512_loadu_ps(db3.add($off));
+            let d0 = _mm512_sub_ps(q, v0);
+            let d1 = _mm512_sub_ps(q, v1);
+            let d2 = _mm512_sub_ps(q, v2);
+            let d3 = _mm512_sub_ps(q, v3);
+            sum0 = _mm512_fmadd_ps(d0, d0, sum0);
+            sum1 = _mm512_fmadd_ps(d1, d1, sum1);
+            sum2 = _mm512_fmadd_ps(d2, d2, sum2);
+            sum3 = _mm512_fmadd_ps(d3, d3, sum3);
+        }};
+    }
+
+    step!(0);
+    step!(16);
+    step!(32);
+    step!(48);
+    step!(64);
+    step!(80);
+    step!(96);
+    step!(112);
+
+    [
+        _mm512_reduce_add_ps(sum0),
+        _mm512_reduce_add_ps(sum1),
+        _mm512_reduce_add_ps(sum2),
+        _mm512_reduce_add_ps(sum3),
+    ]
+}
+
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+#[allow(clippy::incompatible_msrv)]
+#[target_feature(enable = "avx512f,avx512bw")]
 pub unsafe fn l2_batch_4_avx512(
     query: *const f32,
     db0: *const f32,
@@ -918,6 +1000,9 @@ pub unsafe fn l2_batch_4_avx512(
     dim: usize,
 ) -> [f32; 4] {
     use std::arch::x86_64::*;
+    if dim == 128 {
+        return l2_batch_4_avx512_128(query, db0, db1, db2, db3);
+    }
 
     let mut sum0 = _mm512_setzero_ps();
     let mut sum1 = _mm512_setzero_ps();
@@ -2314,6 +2399,60 @@ mod tests {
                     dists_scalar[i]
                 );
             }
+        }
+    }
+
+    #[test]
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    fn test_l2_avx512_sq_ptr_128_matches_scalar() {
+        if !(std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512bw"))
+        {
+            return;
+        }
+        let a: Vec<f32> = (0..128).map(|i| i as f32 * 0.17 + 0.5).collect();
+        let b: Vec<f32> = (0..128).map(|i| i as f32 * 0.11 - 1.25).collect();
+        let expected = l2_scalar_sq(&a, &b);
+        let actual = unsafe { l2_avx512_sq_ptr(a.as_ptr(), b.as_ptr(), 128) };
+        assert!(
+            (expected - actual).abs() < 1e-4,
+            "dim128 avx512 sq ptr mismatch: expected={}, actual={}",
+            expected,
+            actual
+        );
+    }
+
+    #[test]
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    fn test_l2_batch_4_avx512_128_matches_scalar() {
+        if !(std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512bw"))
+        {
+            return;
+        }
+        let query: Vec<f32> = (0..128).map(|i| i as f32 * 0.07 + 1.0).collect();
+        let db0: Vec<f32> = (0..128).map(|i| i as f32 * 0.13).collect();
+        let db1: Vec<f32> = (0..128).map(|i| i as f32 * 0.23 - 3.0).collect();
+        let db2: Vec<f32> = (0..128).map(|i| i as f32 * 0.31 + 2.5).collect();
+        let db3: Vec<f32> = (0..128).map(|i| i as f32 * 0.41 - 0.75).collect();
+
+        let expected = l2_batch_4_scalar(&query, &db0, &db1, &db2, &db3);
+        let actual = unsafe {
+            l2_batch_4_avx512(
+                query.as_ptr(),
+                db0.as_ptr(),
+                db1.as_ptr(),
+                db2.as_ptr(),
+                db3.as_ptr(),
+                128,
+            )
+        };
+        for i in 0..4 {
+            assert!(
+                (expected[i] - actual[i]).abs() < 1e-4,
+                "dim128 avx512 batch4 mismatch lane {}: expected={}, actual={}",
+                i,
+                expected[i],
+                actual[i]
+            );
         }
     }
 
