@@ -22,6 +22,32 @@
 
 ## Session Log
 
+### Session 147 - 2026-03-16
+- Focus: `hnsw-fair-lane-throughput-screen-layer0-worst-distance-cache`
+- Completed:
+  - tested a non-behavioral micro-optimization in layer0 search scratch:
+    - added cached `layer0_worst_result_distance` in `SearchScratch`
+    - synchronized the cache after each layer0 result-pool insert
+    - replaced repeated `layer0_results.worst_dist()` reads in hot loops with cache reads
+  - preserved algorithm semantics and validated BF16/filter regressions before benchmarking
+  - measured one pre + two post samples on `base-limit=1000000`; reverted code after mixed/negative signal
+- Verification:
+  - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_bfloat16_distance_path_reads_bfloat16_storage_instead_of_mutated_f32_buffer -- --nocapture` -> `ok` on experiment branch
+  - `cargo test --lib test_hnsw_search_with -- --nocapture` -> `ok` on experiment branch
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_pre_opt43_layer0_worst_cache_base1m_local.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok` (pre, code stashed)
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt43_layer0_worst_cache_base1m_local.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- --input data/sift/sift-128-euclidean.hdf5 --output /tmp/hnsw_fairness_bf16_post_opt43_layer0_worst_cache_base1m_local_rerun1.json --base-limit 1000000 --query-limit 1000 --top-k 100 --recall-at 10 --m 16 --ef-construction 100 --ef-search 138 --hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16 --recall-gate 0.95 --random-seed 42 --repeat 5` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 66 features (66 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - pre baseline: `qps=6705.866`, `recall_at_10=0.9880`
+  - post sample #1: `qps=6727.389`, `recall_at_10=0.9880` (`+0.32%`)
+  - post sample #2: `qps=6413.324`, `recall_at_10=0.9880` (`-4.36%`)
+  - signal is mixed with meaningful downside tail; rejected without authority promotion
+  - next recommended step is to keep non-behavioral focus but shift from scalar caching to broader data-movement reductions that can produce clearer gains
+
 ### Session 146 - 2026-03-16
 - Focus: `hnsw-fair-lane-throughput-authority-opt42-narrow-tail-frontier-gate`
 - Completed:
