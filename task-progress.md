@@ -22,6 +22,33 @@
 
 ## Session Log
 
+### Session 150 - 2026-03-16
+- Focus: `hnsw-fair-lane-authority-rust-equal-recall-window-refresh`
+- Completed:
+  - executed two fixed-point Rust authority reruns at `ef=56` to measure drift near the native-equal-recall region
+  - executed an authority narrow sweep (`ef=56,58,60,62,64`) to identify the practical equal-recall window against native `R@10=0.9500`
+  - derived a refreshed equal-recall comparison window:
+    - best Rust point with `recall_at_10 >= 0.95`: `ef=60`, `qps=12631.037`, `recall_at_10=0.9518`
+    - nearest-to-0.95 Rust point: `ef=58`, `qps=12883.932`, `recall_at_10=0.9491`
+  - compared against the refreshed native anchor from Session 149 (`qps=12866.654 @ recall_at_10=0.9500`)
+- Verification:
+  - `bash init.sh` -> `ok`
+  - `bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- ... --output /data/work/knowhere-rs-logs/rs_hnsw_equal_recall_opt45_ef56_run1.json ... --ef-search 56 ..."` -> `ok` (`run_id=20260316T022047Z_96704`)
+  - `bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- ... --output /data/work/knowhere-rs-logs/rs_hnsw_equal_recall_opt45_ef56_run2.json ... --ef-search 56 ..."` -> `ok` (`run_id=20260316T023647Z_2023`)
+  - `bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- ... --diagnosis-output /data/work/knowhere-rs-logs/rs_hnsw_equal_recall_opt45_narrow_diagnosis.json --ef-sweep 56,58,60,62,64 ..."` -> `ok` (`run_id=20260316T025352Z_4331`)
+  - `bash -lc 'source scripts/remote/common.sh && load_remote_config && run_ssh "cat /data/work/knowhere-rs-logs/rs_hnsw_equal_recall_opt45_narrow_diagnosis.json"'` -> `ok`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - fixed-point `ef=56` reruns:
+    - run1: `qps=12798.304`, `recall_at_10=0.9464`
+    - run2: `qps=12810.784`, `recall_at_10=0.9464`
+    - mean qps: `12804.544`
+  - equal-recall interpretation:
+    - strict `recall>=0.95` compare (`ef=60`): native leads by about `+1.87%` (`12866.654 / 12631.037`)
+    - near-equal closest point (`ef=58`, recall short by `0.0009`): Rust and native are effectively parity-level on qps
+  - next recommended step is a narrow non-behavioral Rust optimization screen targeting about `+2%` authority uplift in the `ef=60` lane to cross into clear equal-recall leadership
+
 ### Session 149 - 2026-03-16
 - Focus: `hnsw-fair-lane-authority-native-refresh-equal-recall-check`
 - Completed:
