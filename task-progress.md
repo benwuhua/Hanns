@@ -22,6 +22,31 @@
 
 ## Session Log
 
+### Session 148 - 2026-03-16
+- Focus: `hnsw-fair-lane-authority-recall-qps-tradeoff-mapping`
+- Completed:
+  - ran two authority sweeps on remote x86 to map Rust HNSW recall/QPS frontier under fixed fair-lane settings (`base-limit=1000000`, BF16, `query-dispatch-mode=parallel`, `query-batch-size=32`)
+  - sweep #1 (`ef=64,80,96,112,128,138,160,192`) confirmed the high-recall band:
+    - `ef=64..138`: recall stayed around `0.9880` with qps roughly `8.7k~8.8k`
+    - `ef=160`: recall `0.9909`, qps `8191.264`
+    - `ef=192`: recall `0.9931`, qps `7229.211`
+  - sweep #2 (`ef=8,12,16,24,32,40,48,56,64`) quantified lower-recall/high-throughput points:
+    - recall remained around `0.9570`
+    - qps ranged roughly `11.7k~12.56k`
+    - best sample in this sweep: `ef=56`, qps `12556.337`, recall `0.9570`
+- Verification:
+  - `bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- ... --diagnosis-output /data/work/knowhere-rs-logs/rs_hnsw_tradeoff_opt44_diagnosis.json --ef-sweep 64,80,96,112,128,138,160,192 ..."` -> `ok` (`run_id=20260316T013401Z_88799`)
+  - `bash scripts/remote/test.sh --command "RAYON_NUM_THREADS=8 cargo run --release --features hdf5 --bin generate_hdf5_hnsw_baseline -- ... --diagnosis-output /data/work/knowhere-rs-logs/rs_hnsw_tradeoff_opt44_lowef_diagnosis.json --ef-sweep 8,12,16,24,32,40,48,56,64 ..."` -> `ok` (`run_id=20260316T015150Z_90856`)
+  - `bash scripts/remote/run_ssh.sh cat /data/work/knowhere-rs-logs/rs_hnsw_tradeoff_opt44_diagnosis.json` -> `ok`
+  - `bash scripts/remote/run_ssh.sh cat /data/work/knowhere-rs-logs/rs_hnsw_tradeoff_opt44_lowef_diagnosis.json` -> `ok`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this validates the expected tradeoff curve: higher recall requires higher effective `ef` and yields lower qps
+  - at near-native recall (`~0.95-0.957`), Rust lane qps can exceed the historical native reference row (`~10.5k @ recall 0.95`) while the higher-recall Rust operating point (`~0.988`) stays slower but more accurate
+  - this is a measurement/closure session only; no code-path behavior was changed
+  - next recommended step is to keep fair-lane comparisons explicitly at equal recall bands before drawing leadership conclusions
+
 ### Session 147 - 2026-03-16
 - Focus: `hnsw-fair-lane-throughput-screen-layer0-worst-distance-cache`
 - Completed:

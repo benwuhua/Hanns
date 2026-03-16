@@ -40,3 +40,4 @@
 - Keep `--hnsw-adaptive-k 0 --query-dispatch-mode parallel --query-batch-size 32 --vector-datatype bfloat16` on the Rust same-schema authority lane unless a symmetric native policy changes.
 - Treat authority reference artifacts in `/data/work/knowhere-rs-logs/` as the active fair-lane baseline set for fast A/B (`rs_hnsw_authority_aa_run*_opt40.json`, `rs_hnsw_opt38_*_authority_v2.json`) and require attributable gains over that envelope before reopening broader claims.
 - Keep `benchmark_results/hnsw_fairness_gate.json` and the same-schema baseline artifact chain aligned with every future Rust authority rerun.
+- Use equal-recall bands for throughput claims: the 2026-03-16 authority tradeoff sweep shows Rust around `0.957` recall can run near `12.5k qps`, while the `~0.988` recall operating point is around `8.8k qps`; do not compare these cross-band points directly against native leadership claims.
