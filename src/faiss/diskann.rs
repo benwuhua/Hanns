@@ -21,7 +21,7 @@ use rand::seq::SliceRandom;
 use rand::SeedableRng;
 
 use crate::api::search::Predicate;
-use crate::api::{IndexConfig, MetricType, Result, SearchRequest, SearchResult};
+use crate::api::{IndexConfig, KnowhereError, MetricType, Result, SearchRequest, SearchResult};
 use crate::quantization::kmeans::KMeans;
 use crate::simd;
 
@@ -119,7 +119,7 @@ impl DiskAnnConfig {
             search_list_size,
             construction_l: params.construction_l.unwrap_or(search_list_size).max(16),
             beamwidth: params.beamwidth.unwrap_or(8),
-            pq_code_budget_gb: 0.0, // Not exposed in IndexParams yet
+            pq_code_budget_gb: params.disk_pq_code_budget_gb.unwrap_or(0.0).max(0.0),
             build_dram_budget_gb: params.disk_build_dram_budget_gb.unwrap_or(0.0).max(0.0),
             disk_pq_dims: params.disk_pq_dims.unwrap_or(0),
             pq_candidate_expand_pct: params
@@ -456,7 +456,7 @@ impl DiskAnnIndex {
 
         // Build PQ codes if configured
         if self.dann_config.disk_pq_dims > 0 {
-            self.build_pq_codes(vectors);
+            self.build_pq_codes(vectors)?;
         }
 
         // Warm-up if configured
@@ -932,10 +932,20 @@ impl DiskAnnIndex {
     }
 
     /// Build PQ codes for compression
-    fn build_pq_codes(&mut self, vectors: &[f32]) {
+    fn build_pq_codes(&mut self, vectors: &[f32]) -> Result<()> {
         let mut pq = PQCode::new(self.dann_config.disk_pq_dims);
         pq.encode(vectors, self.dim);
+        if let Some(budget) = DiskAnnConfig::budget_bytes(self.dann_config.pq_code_budget_gb) {
+            if pq.codes.len() > budget {
+                return Err(KnowhereError::InvalidArg(format!(
+                    "disk_pq_code_budget_gb exceeded: pq_code_bytes={} budget_bytes={}",
+                    pq.codes.len(),
+                    budget
+                )));
+            }
+        }
         self.pq_codes = Some(pq);
+        Ok(())
     }
 
     /// Warm-up: cache frequently accessed nodes
@@ -2678,6 +2688,7 @@ mod tests {
             construction_l: Some(240),
             beamwidth: Some(16),
             disk_pq_dims: Some(2),
+            disk_pq_code_budget_gb: Some(0.5),
             disk_pq_candidate_expand_pct: Some(150),
             disk_rerank_expand_pct: Some(220),
             disk_saturate_after_prune: Some(false),
@@ -2709,6 +2720,7 @@ mod tests {
         assert_eq!(index.dann_config.construction_l, 240);
         assert_eq!(index.dann_config.beamwidth, 16);
         assert_eq!(index.dann_config.disk_pq_dims, 2);
+        assert_eq!(index.dann_config.pq_code_budget_gb, 0.5);
         assert_eq!(index.dann_config.pq_candidate_expand_pct, 150);
         assert_eq!(index.dann_config.rerank_expand_pct, 220);
         assert!(!index.dann_config.saturate_after_prune);
@@ -2764,6 +2776,35 @@ mod tests {
 
         let index = DiskAnnIndex::new(&config).unwrap();
         assert_eq!(index.dann_config.rerank_expand_pct, 100);
+    }
+
+    #[test]
+    fn test_diskann_train_fails_when_pq_code_budget_too_small() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_pq_dims: Some(2),
+                disk_pq_code_budget_gb: Some(0.000_000_001),
+                ..Default::default()
+            },
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            2.0, 0.0, 0.0, 0.0, //
+            3.0, 0.0, 0.0, 0.0,
+        ];
+        let err = index.train(&vectors).unwrap_err();
+        match err {
+            KnowhereError::InvalidArg(message) => {
+                assert!(message.contains("disk_pq_code_budget_gb exceeded"));
+            }
+            other => panic!("expected InvalidArg, got {other:?}"),
+        }
     }
 
     #[test]

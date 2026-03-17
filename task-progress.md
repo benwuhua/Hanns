@@ -22,6 +22,41 @@
 
 ## Session Log
 
+### Session 227 - 2026-03-17
+- Focus: `diskann-pq-code-budget-api-and-enforcement`
+- Completed:
+  - exposed PQ code budget at API level:
+    - added `IndexParams.disk_pq_code_budget_gb`.
+  - wired budget mapping:
+    - `DiskAnnConfig::from_index_config` now maps `pq_code_budget_gb` from `disk_pq_code_budget_gb`.
+    - `AisaqConfig::from_index_config` now maps `pq_code_budget_gb` from `disk_pq_code_budget_gb`.
+  - added runtime budget enforcement:
+    - DiskANN: `build_pq_codes(...)` now validates compressed code bytes against budget and returns `InvalidArg` when exceeded.
+    - AISAQ: `add(...)` now validates projected PQ code bytes (`(existing + incoming) * pq_code_size`) via `validate_pq_code_budget(...)`.
+  - added regressions:
+    - DiskANN: `test_diskann_train_fails_when_pq_code_budget_too_small`
+    - AISAQ: `aisaq_add_fails_when_pq_code_budget_too_small`
+    - extended config mapping assertions in existing config tests.
+- Verification:
+  - local:
+    - `cargo test --lib test_diskann_train_fails_when_pq_code_budget_too_small -- --nocapture` -> `ok`
+    - `cargo test --lib aisaq_add_fails_when_pq_code_budget_too_small -- --nocapture` -> `ok`
+    - `cargo test --lib aisaq_config_maps_rerank_expand_pct -- --nocapture` -> `ok`
+    - `cargo test --lib diskann::tests:: -- --nocapture` -> `ok` (`35 passed`)
+    - `cargo test --lib diskann_aisaq::tests:: -- --nocapture` -> `ok` (`19 passed`)
+    - `cargo test --test test_diskann_aisaq -- --nocapture` -> `ok` (`10 passed`)
+    - `cargo test --features async-io --test test_diskann_aisaq -- --nocapture` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T120142Z_7665`)
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann_aisaq::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T120203Z_7737`)
+    - `bash scripts/remote/test.sh --command "cargo test --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T120221Z_7842`)
+    - `bash scripts/remote/test.sh --command "cargo test --features async-io --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T120238Z_7908`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the cross-path PQ code budget gap: API knob + DiskANN/AISAQ enforcement are now aligned.
+
 ### Session 226 - 2026-03-17
 - Focus: `diskann-aisaq-pq-cache-capacity-enforcement`
 - Completed:

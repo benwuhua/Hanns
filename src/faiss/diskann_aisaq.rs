@@ -95,6 +95,7 @@ impl AisaqConfig {
             search_list_size: params.search_list_size.unwrap_or(128),
             beamwidth: params.beamwidth.unwrap_or(8),
             disk_pq_dims: params.disk_pq_dims.unwrap_or(0),
+            pq_code_budget_gb: params.disk_pq_code_budget_gb.unwrap_or(0.0).max(0.0),
             num_entry_points: params.disk_num_entry_points.unwrap_or(1).clamp(1, 64),
             rerank_expand_pct: params.disk_rerank_expand_pct.unwrap_or(200).clamp(100, 400),
             pq_candidate_expand_pct: params
@@ -693,6 +694,7 @@ impl PQFlashIndex {
 
         let num_vectors = vectors.len() / self.dim;
         self.validate_build_dram_budget(num_vectors)?;
+        self.validate_pq_code_budget(num_vectors)?;
         let build_max_degree = self.compute_build_max_degree();
         for row in 0..num_vectors {
             let start = row * self.dim;
@@ -743,6 +745,23 @@ impl PQFlashIndex {
         if projected_bytes > budget_bytes {
             return Err(KnowhereError::InvalidArg(format!(
                 "disk_build_dram_budget_gb exceeded: projected={} bytes exceeds budget={} bytes",
+                projected_bytes, budget_bytes
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_pq_code_budget(&self, additional_nodes: usize) -> Result<()> {
+        if self.config.pq_code_budget_gb <= 0.0 || self.pq_code_size == 0 {
+            return Ok(());
+        }
+
+        let budget_bytes = gb_to_bytes(self.config.pq_code_budget_gb);
+        let total_nodes = self.nodes.len().saturating_add(additional_nodes);
+        let projected_bytes = total_nodes.saturating_mul(self.pq_code_size);
+        if projected_bytes > budget_bytes {
+            return Err(KnowhereError::InvalidArg(format!(
+                "disk_pq_code_budget_gb exceeded: projected={} bytes exceeds budget={} bytes",
                 projected_bytes, budget_bytes
             )));
         }
@@ -1871,6 +1890,7 @@ mod tests {
                 disk_pq_candidate_expand_pct: Some(150),
                 disk_num_entry_points: Some(3),
                 disk_pq_dims: Some(4),
+                disk_pq_code_budget_gb: Some(0.5),
                 disk_random_init_edges: Some(5),
                 disk_build_dram_budget_gb: Some(1.25),
                 disk_search_cache_budget_gb: Some(0.01),
@@ -1884,6 +1904,7 @@ mod tests {
         assert_eq!(mapped.pq_candidate_expand_pct, 150);
         assert_eq!(mapped.num_entry_points, 3);
         assert_eq!(mapped.disk_pq_dims, 4);
+        assert_eq!(mapped.pq_code_budget_gb, 0.5);
         assert_eq!(mapped.random_init_edges, 5);
         assert_eq!(mapped.random_seed, 9);
         assert_eq!(mapped.build_dram_budget_gb, 1.25);
@@ -2116,6 +2137,31 @@ mod tests {
 
         index.add(&vectors).unwrap();
         assert_eq!(index.len(), 2);
+    }
+
+    #[test]
+    fn aisaq_add_fails_when_pq_code_budget_too_small() {
+        let config = AisaqConfig {
+            max_degree: 4,
+            disk_pq_dims: 2,
+            pq_code_budget_gb: 0.000_000_001,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, 4).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            2.0, 0.0, 0.0, 0.0, //
+            3.0, 0.0, 0.0, 0.0,
+        ];
+
+        let err = index.add(&vectors).unwrap_err();
+        match err {
+            KnowhereError::InvalidArg(message) => {
+                assert!(message.contains("disk_pq_code_budget_gb exceeded"));
+            }
+            other => panic!("expected InvalidArg, got {other:?}"),
+        }
     }
 
     #[test]

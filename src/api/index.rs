@@ -232,6 +232,9 @@ pub struct IndexParams {
     /// For DiskANN: number of PQ sub-dimensions (0 = disabled)
     #[serde(default)]
     pub disk_pq_dims: Option<usize>,
+    /// For DiskANN/AISAQ PQ path: compressed code budget in GB (0 = disabled)
+    #[serde(default)]
+    pub disk_pq_code_budget_gb: Option<f32>,
     /// For DiskANN PQ path: candidate pool expansion percentage (100 = off, 125 = +25%)
     #[serde(default)]
     pub disk_pq_candidate_expand_pct: Option<usize>,
