@@ -338,6 +338,12 @@ pub struct DiskAnnIndex {
     cached_nodes: HashSet<usize>,
     /// Whether a flash-layout sidecar is available for this index snapshot.
     has_flash_layout: bool,
+    /// Fixed-stride neighbor ids loaded from flash sidecar.
+    flash_neighbor_ids: Option<Vec<i64>>,
+    /// Max neighbor slots per node in flash sidecar.
+    flash_max_degree: usize,
+    /// Raw vectors loaded from flash sidecar.
+    flash_vectors: Option<Vec<f32>>,
 }
 
 impl DiskAnnIndex {
@@ -365,6 +371,9 @@ impl DiskAnnIndex {
             pq_codes: None,
             cached_nodes: HashSet::new(),
             has_flash_layout: false,
+            flash_neighbor_ids: None,
+            flash_max_degree: 0,
+            flash_vectors: None,
         })
     }
 
@@ -378,6 +387,10 @@ impl DiskAnnIndex {
 
         self.vectors.reserve(n * self.dim);
         self.graph.reserve(n);
+        self.has_flash_layout = false;
+        self.flash_neighbor_ids = None;
+        self.flash_max_degree = 0;
+        self.flash_vectors = None;
 
         // Store vectors
         for i in 0..n {
@@ -487,7 +500,11 @@ impl DiskAnnIndex {
         Ok(())
     }
 
-    fn try_load_flash_layout_sidecar(&mut self, sidecar: &std::path::Path, count: usize) -> Result<bool> {
+    fn try_load_flash_layout_sidecar(
+        &mut self,
+        sidecar: &std::path::Path,
+        count: usize,
+    ) -> Result<bool> {
         use std::fs::File;
         use std::io::Read;
 
@@ -519,12 +536,6 @@ impl DiskAnnIndex {
         let mut md_bytes = [0u8; 4];
         file.read_exact(&mut md_bytes)?;
         let max_degree = u32::from_le_bytes(md_bytes) as usize;
-        if max_degree != self.dann_config.max_degree {
-            // Keep current config as source of truth for in-memory graph behavior.
-            // Sidecar may come from older params; still considered invalid for this snapshot.
-            return Ok(false);
-        }
-
         let mut count_bytes = [0u8; 8];
         file.read_exact(&mut count_bytes)?;
         let n = u64::from_le_bytes(count_bytes) as usize;
@@ -532,20 +543,52 @@ impl DiskAnnIndex {
             return Ok(false);
         }
 
-        // Validate node records shape, but do not materialize data yet.
-        let mut scratch_i64 = [0u8; 8];
-        let mut scratch_f32 = [0u8; 4];
+        let mut flash_neighbor_ids = Vec::with_capacity(n * max_degree);
+        let mut flash_vectors = Vec::with_capacity(n * self.dim);
         for _ in 0..n {
             file.read_exact(&mut md_bytes)?; // degree
+            let degree = u32::from_le_bytes(md_bytes) as usize;
+            if degree > max_degree {
+                return Ok(false);
+            }
             for _ in 0..max_degree {
-                file.read_exact(&mut scratch_i64)?;
+                let mut id_bytes = [0u8; 8];
+                file.read_exact(&mut id_bytes)?;
+                flash_neighbor_ids.push(i64::from_le_bytes(id_bytes));
             }
             for _ in 0..self.dim {
-                file.read_exact(&mut scratch_f32)?;
+                let mut f_bytes = [0u8; 4];
+                file.read_exact(&mut f_bytes)?;
+                flash_vectors.push(f32::from_le_bytes(f_bytes));
             }
         }
 
+        self.flash_max_degree = max_degree;
+        self.flash_neighbor_ids = Some(flash_neighbor_ids);
+        self.flash_vectors = Some(flash_vectors);
+
         Ok(true)
+    }
+
+    #[inline]
+    fn node_vector(&self, idx: usize) -> &[f32] {
+        let data: &[f32] = self.flash_vectors.as_deref().unwrap_or(&self.vectors);
+        let start = idx * self.dim;
+        &data[start..start + self.dim]
+    }
+
+    #[inline]
+    fn flash_neighbors(&self, idx: usize) -> Option<&[i64]> {
+        let ids = self.flash_neighbor_ids.as_deref()?;
+        if self.flash_max_degree == 0 {
+            return None;
+        }
+        let start = idx * self.flash_max_degree;
+        let end = start + self.flash_max_degree;
+        if end > ids.len() {
+            return None;
+        }
+        Some(&ids[start..end])
     }
 
     /// Build PQ codes for compression
@@ -973,8 +1016,7 @@ impl DiskAnnIndex {
 
     #[inline]
     fn l2_sqr(&self, a: &[f32], b_idx: usize) -> f32 {
-        let start = b_idx * self.dim;
-        let b = &self.vectors[start..start + self.dim];
+        let b = self.node_vector(b_idx);
 
         // Search/range gate on squared L2 directly to avoid an unnecessary sqrt+square roundtrip.
         simd::l2_distance_sq(a, b)
@@ -992,8 +1034,7 @@ impl DiskAnnIndex {
 
     #[inline]
     fn ip_distance(&self, a: &[f32], b_idx: usize) -> f32 {
-        let start = b_idx * self.dim;
-        let b = &self.vectors[start..start + self.dim];
+        let b = self.node_vector(b_idx);
 
         // For IP, higher is better, so we return negative (for consistent sorting)
         let mut sum = 0.0f32;
@@ -1031,7 +1072,7 @@ impl DiskAnnIndex {
     }
 
     pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<SearchResult> {
-        if self.vectors.is_empty() {
+        if self.ids.is_empty() {
             return Err(crate::api::KnowhereError::InvalidArg(
                 "index is empty".to_string(),
             ));
@@ -1165,7 +1206,60 @@ impl DiskAnnIndex {
             }
 
             // Explore neighbors with beamwidth limit
-            if let Some(nbrs) = self.graph.get(idx) {
+            if let Some(nbrs) = self.flash_neighbors(idx) {
+                let mut nbr_dists: Vec<(f32, usize)> = Vec::new();
+
+                for &nbr_id in nbrs {
+                    if nbr_id < 0 {
+                        continue;
+                    }
+                    let n_idx = nbr_id as usize;
+                    if n_idx < n && !visited[n_idx] {
+                        // Use PQ distance if available and node is not cached
+                        let d = if let Some(pq_codes) = &self.pq_codes {
+                            if !self.cached_nodes.contains(&n_idx) {
+                                if let Some(table) = &pq_query_table {
+                                    pq_codes.distance_with_table(table, n_idx, self.dim)
+                                } else {
+                                    pq_codes.distance(query, n_idx, self.dim)
+                                }
+                            } else {
+                                self.compute_dist(query, n_idx)
+                            }
+                        } else {
+                            self.compute_dist(query, n_idx)
+                        };
+                        nbr_dists.push((d, n_idx));
+                    }
+                }
+
+                // Phase-1: PQ/approx screening order.
+                nbr_dists.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+                // Phase-2: optional exact rerank on a wider candidate pool.
+                let rerank_width = if self.pq_codes.is_some() {
+                    beamwidth
+                        .saturating_mul(self.dann_config.rerank_expand_pct)
+                        .saturating_add(99)
+                        / 100
+                } else {
+                    beamwidth
+                }
+                .max(beamwidth)
+                .min(nbr_dists.len());
+
+                let mut reranked: Vec<(f32, usize)> = nbr_dists
+                    .into_iter()
+                    .take(rerank_width)
+                    .map(|(_screen_d, n_idx)| (self.compute_dist(query, n_idx), n_idx))
+                    .collect();
+                reranked.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+                for (exact_d, n_idx) in reranked.into_iter().take(beamwidth) {
+                    visited[n_idx] = true;
+                    candidates.push(ReverseOrderedFloat(exact_d, n_idx));
+                }
+            } else if let Some(nbrs) = self.graph.get(idx) {
                 let mut nbr_dists: Vec<(f32, usize)> = Vec::new();
 
                 for &(nbr_id, _) in nbrs {
@@ -1254,7 +1348,7 @@ impl DiskAnnIndex {
         radius: f32,
         max_results: usize,
     ) -> Result<Vec<(i64, f32)>> {
-        if self.vectors.is_empty() {
+        if self.ids.is_empty() {
             return Err(crate::api::KnowhereError::InvalidArg(
                 "index is empty".to_string(),
             ));
@@ -1281,7 +1375,30 @@ impl DiskAnnIndex {
             let (idx, _dist) = candidates.pop_front().unwrap();
 
             // Explore neighbors
-            if let Some(nbrs) = self.graph.get(idx) {
+            if let Some(nbrs) = self.flash_neighbors(idx) {
+                let mut nbr_dists: Vec<(f32, usize)> = Vec::new();
+
+                for &nbr_id in nbrs {
+                    if nbr_id < 0 {
+                        continue;
+                    }
+                    let n_idx = nbr_id as usize;
+                    if n_idx < n && !visited[n_idx] {
+                        let d = self.compute_dist(query, n_idx);
+                        if d <= radius * radius {
+                            results.push((self.ids[n_idx], d.sqrt()));
+                            nbr_dists.push((d, n_idx));
+                        }
+                        visited[n_idx] = true;
+                    }
+                }
+
+                // Continue searching from closest neighbors
+                nbr_dists.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                for (d, n_idx) in nbr_dists.into_iter().take(beamwidth) {
+                    candidates.push_back((n_idx, d));
+                }
+            } else if let Some(nbrs) = self.graph.get(idx) {
                 let mut nbr_dists: Vec<(f32, usize)> = Vec::new();
 
                 for &(nbr_id, _) in nbrs {
@@ -1552,6 +1669,11 @@ impl DiskAnnIndex {
         self.refresh_entry_points();
         let sidecar = Self::flash_layout_sidecar_path(path);
         self.has_flash_layout = self.try_load_flash_layout_sidecar(&sidecar, count)?;
+        if !self.has_flash_layout {
+            self.flash_neighbor_ids = None;
+            self.flash_vectors = None;
+            self.flash_max_degree = 0;
+        }
 
         self.trained = true;
         Ok(())
@@ -1800,6 +1922,59 @@ mod tests {
         let audit = loaded.scope_audit();
         assert!(audit.has_flash_layout);
         assert!(!audit.native_comparable);
+
+        std::fs::remove_file(temp_path).ok();
+        std::fs::remove_file(sidecar).ok();
+    }
+
+    #[test]
+    fn test_diskann_search_can_run_from_flash_sidecar_data() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_enable_flash_layout: Some(true),
+                max_degree: Some(16),
+                ..Default::default()
+            },
+        };
+
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            2.0, 0.0, 0.0, 0.0, //
+            3.0, 0.0, 0.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+
+        let temp_path = std::env::temp_dir().join("diskann_flash_sidecar_runtime_test.bin");
+        let sidecar = DiskAnnIndex::flash_layout_sidecar_path(&temp_path);
+        index.save(&temp_path).unwrap();
+
+        let mut loaded = DiskAnnIndex::new(&config).unwrap();
+        loaded.load(&temp_path).unwrap();
+        assert!(loaded.has_flash_layout);
+        assert!(loaded.flash_neighbor_ids.is_some());
+        assert!(loaded.flash_vectors.is_some());
+
+        // Force search path to rely on sidecar runtime data.
+        loaded.graph.clear();
+        loaded.vectors.clear();
+
+        let query = vec![0.1f32, 0.0, 0.0, 0.0];
+        let req = SearchRequest {
+            top_k: 2,
+            nprobe: 8,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let result = loaded.search(&query, &req).unwrap();
+        assert_eq!(result.ids.len(), 2);
+        assert!(result.ids[0] >= 0);
 
         std::fs::remove_file(temp_path).ok();
         std::fs::remove_file(sidecar).ok();

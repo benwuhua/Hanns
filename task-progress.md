@@ -22,6 +22,35 @@
 
 ## Session Log
 
+### Session 205 - 2026-03-17
+- Focus: `diskann-flash-layout-read-path-runtime`
+- Completed:
+  - extended DiskANN flash sidecar from “persistence-only” to runtime read-path participation:
+    - sidecar load now materializes fixed-stride runtime buffers:
+      - `flash_neighbor_ids`
+      - `flash_vectors`
+      - `flash_max_degree`
+    - search/range traversal now prefers flash neighbor slots when present.
+    - distance kernels (`l2_sqr` / `ip_distance`) now read node vectors from flash buffers when present.
+    - empty-index guard in `search`/`range_search` now keys off `ids` (not `vectors`) so sidecar-backed runtime is valid.
+  - added regression:
+    - `test_diskann_search_can_run_from_flash_sidecar_data`
+      - verifies search still works after clearing in-memory `graph` and `vectors`, proving runtime path can execute off sidecar data.
+- Verification:
+  - local:
+    - `cargo test --lib test_diskann_save_load_with_flash_layout_sidecar_sets_scope_audit -- --nocapture` -> `ok`
+    - `cargo test --lib test_diskann_search_can_run_from_flash_sidecar_data -- --nocapture` -> `ok`
+    - `cargo test --lib diskann::tests:: -- --nocapture` -> `ok` (`30 passed`)
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib test_diskann_save_load_with_flash_layout_sidecar_sets_scope_audit -- --nocapture"` -> `ok` (`run_id=20260317T090102Z_82856`)
+    - `bash scripts/remote/test.sh --command "cargo test --lib test_diskann_search_can_run_from_flash_sidecar_data -- --nocapture"` -> `ok` (`run_id=20260317T090123Z_82916`)
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T090153Z_83023`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - during authority runs there were transient proxy resets; immediate reruns succeeded and all final recorded run_ids are green.
+
 ### Session 204 - 2026-03-17
 - Focus: `diskann-flash-layout-sidecar-capability`
 - Completed:
