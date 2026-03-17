@@ -22,6 +22,31 @@
 
 ## Session Log
 
+### Session 190 - 2026-03-17
+- Focus: `diskann-profile-grid-authority-refresh`
+- Completed:
+  - executed authority mini-grid over `(intra_batch_candidates, construction_l)` with fixed lane (`lsearch=128`, `max_degree=48`, `beamwidth=8`, `pq_expand_pct=125`, `saturate=on`).
+  - refreshed Pareto candidates and extracted recommended runtime profiles.
+  - generated a local summary artifact `benchmark_results/diskann_profile_grid_20260317.json` (Pareto frontier + recommended profile map).
+- Verification:
+  - authority rows:
+    - `i0,c128`: `qps=11275.09`, `recall=0.8050`
+    - `i4,c128`: `qps=10849.28`, `recall=0.8350`
+    - `i8,c128`: `qps=11418.11`, `recall=0.8125`
+    - `i16,c128`: `qps=10800.60`, `recall=0.8200`
+    - `i0,c160`: `qps=11278.53`, `recall=0.7975`
+    - `i4,c160`: `qps=11250.90`, `recall=0.8075`
+    - `i8,c160`: `qps=11503.19`, `recall=0.7825`
+    - `i16,c160`: `qps=11048.22`, `recall=0.8050`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - Pareto frontier on this lane is:
+    - `qps-first`: `i8,c160` (`11503.19 / 0.7825`)
+    - `balanced`: `i8,c128` (`11418.11 / 0.8125`)
+    - `recall-first`: `i4,c128` (`10849.28 / 0.8350`)
+  - current default remains `i8,c128` as balanced profile.
+
 ### Session 189 - 2026-03-17
 - Focus: `diskann-fair-compare-template-automation`
 - Completed:
