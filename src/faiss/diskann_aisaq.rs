@@ -800,12 +800,8 @@ impl PQFlashIndex {
         let mut seen = HashSet::new();
         let mut expanded = Vec::new();
 
-        for &entry in &self.entry_points {
-            let score = self.coarse_distance(entry, query, pq_table.as_ref(), &mut io)?;
-            frontier.push(Candidate {
-                node_id: entry,
-                score,
-            });
+        for candidate in self.rank_entry_candidates(query, pq_table.as_ref(), &mut io)? {
+            frontier.push(candidate);
         }
 
         let max_visit = self.config.search_list_size.max(k).min(self.len());
@@ -898,14 +894,11 @@ impl PQFlashIndex {
         let mut seen = HashSet::new();
         let mut expanded = Vec::new();
 
-        for &entry in &self.entry_points {
-            let score = self
-                .coarse_distance_async(entry, query, pq_table.as_ref(), &mut io)
-                .await?;
-            frontier.push(Candidate {
-                node_id: entry,
-                score,
-            });
+        for candidate in self
+            .rank_entry_candidates_async(query, pq_table.as_ref(), &mut io)
+            .await?
+        {
+            frontier.push(candidate);
         }
 
         let max_visit = self.config.search_list_size.max(k).min(self.len());
@@ -976,6 +969,44 @@ impl PQFlashIndex {
             .saturating_add(99)
             / 100;
         target.max(k).min(expanded_len).max(1)
+    }
+
+    fn rank_entry_candidates(
+        &self,
+        query: &[f32],
+        pq_table: Option<&Vec<Vec<f32>>>,
+        io: &mut BeamSearchIO,
+    ) -> Result<Vec<Candidate>> {
+        let mut ranked = Vec::new();
+        for &entry in &self.entry_points {
+            let score = self.coarse_distance(entry, query, pq_table, io)?;
+            ranked.push(Candidate {
+                node_id: entry,
+                score,
+            });
+        }
+        ranked.sort_by(|a, b| a.score.total_cmp(&b.score));
+        Ok(ranked)
+    }
+
+    async fn rank_entry_candidates_async(
+        &self,
+        query: &[f32],
+        pq_table: Option<&Vec<Vec<f32>>>,
+        io: &mut BeamSearchIO,
+    ) -> Result<Vec<Candidate>> {
+        let mut ranked = Vec::new();
+        for &entry in &self.entry_points {
+            let score = self
+                .coarse_distance_async(entry, query, pq_table, io)
+                .await?;
+            ranked.push(Candidate {
+                node_id: entry,
+                score,
+            });
+        }
+        ranked.sort_by(|a, b| a.score.total_cmp(&b.score));
+        Ok(ranked)
     }
 
     pub fn scope_audit(&self) -> AisaqScopeAudit {
@@ -1213,8 +1244,76 @@ impl PQFlashIndex {
     }
 
     fn refresh_entry_points(&mut self) {
-        let count = self.config.num_entry_points.min(self.len()).max(1);
-        self.entry_points = (0..count as u32).collect();
+        let n = self.len();
+        if n == 0 {
+            self.entry_points.clear();
+            return;
+        }
+
+        let count = self.config.num_entry_points.min(n).max(1);
+        if self.vectors.is_empty() || self.nodes.is_empty() {
+            self.entry_points = (0..count as u32).collect();
+            return;
+        }
+
+        let mut centroid = vec![0.0f32; self.dim];
+        for node in &self.nodes {
+            let start = node.vector_offset;
+            let vec = &self.vectors[start..start + self.dim];
+            for d in 0..self.dim {
+                centroid[d] += vec[d];
+            }
+        }
+        let inv_n = 1.0f32 / n as f32;
+        for v in &mut centroid {
+            *v *= inv_n;
+        }
+
+        let first = (0..n)
+            .min_by(|&a, &b| {
+                self.exact_distance(&centroid, self.node_vector(a))
+                    .total_cmp(&self.exact_distance(&centroid, self.node_vector(b)))
+            })
+            .unwrap_or(0);
+
+        let mut selected = Vec::with_capacity(count);
+        selected.push(first as u32);
+        while selected.len() < count {
+            let next = (0..n)
+                .filter(|idx| !selected.contains(&(*idx as u32)))
+                .max_by(|&a, &b| {
+                    let min_a = selected
+                        .iter()
+                        .map(|&sid| {
+                            self.exact_distance(self.node_vector(sid as usize), self.node_vector(a))
+                        })
+                        .fold(f32::MAX, f32::min);
+                    let min_b = selected
+                        .iter()
+                        .map(|&sid| {
+                            self.exact_distance(self.node_vector(sid as usize), self.node_vector(b))
+                        })
+                        .fold(f32::MAX, f32::min);
+                    min_a.total_cmp(&min_b)
+                });
+            if let Some(idx) = next {
+                selected.push(idx as u32);
+            } else {
+                break;
+            }
+        }
+
+        if selected.is_empty() {
+            selected.push(0);
+        }
+        self.entry_points = selected;
+    }
+
+    #[inline]
+    fn node_vector(&self, idx: usize) -> &[f32] {
+        let node = &self.nodes[idx];
+        let start = node.vector_offset;
+        &self.vectors[start..start + self.dim]
     }
 
     fn warm_up_cache(&mut self) {
@@ -1555,5 +1654,51 @@ mod tests {
         for (a, b) in sync.distances.iter().zip(async_res.distances.iter()) {
             assert!((a - b).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn aisaq_entry_points_use_centroid_anchor_instead_of_sequential_ids() {
+        let config = AisaqConfig {
+            num_entry_points: 2,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, 2).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, //
+            1.0, 0.0, //
+            2.0, 0.0, //
+            100.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+
+        assert_eq!(index.entry_points.len(), 2);
+        assert_eq!(
+            index.entry_points[0], 2,
+            "first entry should be centroid-nearest anchor, not sequential id"
+        );
+    }
+
+    #[test]
+    fn aisaq_entry_points_include_far_diverse_seed() {
+        let config = AisaqConfig {
+            num_entry_points: 2,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, 2).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, //
+            1.0, 0.0, //
+            2.0, 0.0, //
+            100.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+
+        assert_eq!(index.entry_points.len(), 2);
+        assert_eq!(
+            index.entry_points[1], 3,
+            "second entry should be a far diverse seed from the centroid anchor"
+        );
     }
 }

@@ -22,6 +22,35 @@
 
 ## Session Log
 
+### Session 218 - 2026-03-17
+- Focus: `diskann-aisaq-medoid-entry-seeding`
+- Completed:
+  - improved AISAQ multi-entry selection in `refresh_entry_points()`:
+    - first entry now uses centroid-nearest anchor
+    - remaining entries use farthest-point diversification
+    - replaced sequential `[0..num_entry_points)` seeding with quality-oriented medoid-style seeding
+  - improved query-time start quality:
+    - `search` / `search_async` now rank entry candidates by coarse distance before frontier insertion.
+  - added TDD regressions for entry-point quality:
+    - `aisaq_entry_points_use_centroid_anchor_instead_of_sequential_ids`
+    - `aisaq_entry_points_include_far_diverse_seed`
+- Verification:
+  - local:
+    - `cargo test --lib aisaq_entry_points_use_centroid_anchor_instead_of_sequential_ids -- --nocapture` -> `ok` (after red fail)
+    - `cargo test --lib aisaq_entry_points_include_far_diverse_seed -- --nocapture` -> `ok` (after red fail)
+    - `cargo test --lib diskann_aisaq::tests:: -- --nocapture` -> `ok` (`7 passed`)
+    - `cargo test --test test_diskann_aisaq -- --nocapture` -> `ok` (`8 passed`)
+    - `cargo test --features async-io --test test_diskann_aisaq -- --nocapture` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann_aisaq::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T112135Z_99083`)
+    - `bash scripts/remote/test.sh --command "cargo test --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T112204Z_99196`)
+    - `bash scripts/remote/test.sh --command "cargo test --features async-io --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T112224Z_99295`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the “multi-entry/medoid seeding quality” capability slice for AISAQ search-start behavior.
+
 ### Session 217 - 2026-03-17
 - Focus: `diskann-aisaq-io-uring-read-path`
 - Completed:
