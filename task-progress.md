@@ -22,6 +22,19 @@
 
 ## Session Log
 
+### Session 171 - 2026-03-17
+- Focus: `historical-doc-layering-archive-cleanup`
+- Completed:
+  - compacted `DEV_ROADMAP.md` Phase-6 reopen timeline into an explicit archived summary plus reference list.
+  - added explicit historical partition marker in `GAP_ANALYSIS.md` so current-state and historical closure trails are visually separated.
+- Verification:
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+  - `python3 -m unittest tests/test_validate_features.py` -> `ok`
+- Result:
+  - `durable_closure=pass`
+- Notes:
+  - archival cleanup only; no algorithm/runtime behavior changes.
+
 ### Session 170 - 2026-03-17
 - Focus: `durable-governance-doc-current-state-sync`
 - Completed:
