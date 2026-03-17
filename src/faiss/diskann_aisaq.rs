@@ -73,7 +73,7 @@ impl Default for AisaqConfig {
             disk_pq_dims: 0,
             pq_cache_size: 0,
             pq_read_page_cache_size: 0,
-            rearrange: false,
+            rearrange: true,
             inline_pq: 0,
             num_entry_points: 1,
             rerank_expand_pct: 200,
@@ -97,6 +97,7 @@ impl AisaqConfig {
             disk_pq_dims: params.disk_pq_dims.unwrap_or(0),
             pq_code_budget_gb: params.disk_pq_code_budget_gb.unwrap_or(0.0).max(0.0),
             pq_cache_size: params.disk_pq_cache_size.unwrap_or(0),
+            rearrange: params.disk_rearrange.unwrap_or(true),
             num_entry_points: params.disk_num_entry_points.unwrap_or(1).clamp(1, 64),
             rerank_expand_pct: params.disk_rerank_expand_pct.unwrap_or(200).clamp(100, 400),
             pq_candidate_expand_pct: params
@@ -1126,6 +1127,9 @@ impl PQFlashIndex {
         if expanded_len == 0 {
             return 0;
         }
+        if !self.config.rearrange {
+            return k.min(expanded_len).max(1);
+        }
         let target = k
             .saturating_mul(self.config.rerank_expand_pct)
             .saturating_add(99)
@@ -1984,6 +1988,7 @@ mod tests {
                 disk_pq_dims: Some(4),
                 disk_pq_code_budget_gb: Some(0.5),
                 disk_pq_cache_size: Some(64),
+                disk_rearrange: Some(false),
                 disk_random_init_edges: Some(5),
                 disk_build_dram_budget_gb: Some(1.25),
                 disk_search_cache_budget_gb: Some(0.01),
@@ -2001,6 +2006,7 @@ mod tests {
         assert_eq!(mapped.disk_pq_dims, 4);
         assert_eq!(mapped.pq_code_budget_gb, 0.5);
         assert_eq!(mapped.pq_cache_size, 64);
+        assert!(!mapped.rearrange);
         assert_eq!(mapped.random_init_edges, 5);
         assert_eq!(mapped.random_seed, 9);
         assert_eq!(mapped.build_dram_budget_gb, 1.25);
@@ -2012,10 +2018,33 @@ mod tests {
 
     #[test]
     fn aisaq_rerank_pool_size_is_bounded() {
-        let index = PQFlashIndex::new(AisaqConfig::default(), MetricType::L2, 8).unwrap();
+        let index = PQFlashIndex::new(
+            AisaqConfig {
+                rearrange: true,
+                ..AisaqConfig::default()
+            },
+            MetricType::L2,
+            8,
+        )
+        .unwrap();
         assert_eq!(index.compute_rerank_pool_size(10, 0), 0);
         assert_eq!(index.compute_rerank_pool_size(10, 5), 5);
         assert_eq!(index.compute_rerank_pool_size(10, 30), 20);
+    }
+
+    #[test]
+    fn aisaq_rerank_pool_size_without_rearrange_uses_topk_only() {
+        let index = PQFlashIndex::new(
+            AisaqConfig {
+                rearrange: false,
+                rerank_expand_pct: 300,
+                ..AisaqConfig::default()
+            },
+            MetricType::L2,
+            8,
+        )
+        .unwrap();
+        assert_eq!(index.compute_rerank_pool_size(10, 30), 10);
     }
 
     #[test]

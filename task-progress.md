@@ -22,6 +22,40 @@
 
 ## Session Log
 
+### Session 231 - 2026-03-17
+- Focus: `diskann-aisaq-rearrange-parameter-semantics`
+- Completed:
+  - exposed AISAQ rearrange switch in API:
+    - added `IndexParams.disk_rearrange`.
+  - wired AISAQ config mapping:
+    - `AisaqConfig.rearrange <- disk_rearrange` with default `true` (to preserve current expanded-rerank behavior).
+  - implemented rearrange runtime semantics:
+    - `compute_rerank_pool_size(...)` now uses:
+      - `rearrange=true`: expanded rerank pool by `rerank_expand_pct` (existing behavior)
+      - `rearrange=false`: top-k-only rerank pool.
+  - extended regressions:
+    - `aisaq_config_maps_rerank_expand_pct` now asserts `rearrange` mapping.
+    - new `aisaq_rerank_pool_size_without_rearrange_uses_topk_only`.
+- Verification:
+  - local:
+    - `cargo test --lib aisaq_config_maps_rerank_expand_pct -- --nocapture` -> `ok`
+    - `cargo test --lib aisaq_rerank_pool_size_is_bounded -- --nocapture` -> `ok`
+    - `cargo test --lib aisaq_rerank_pool_size_without_rearrange_uses_topk_only -- --nocapture` -> `ok`
+    - `cargo test --lib diskann_aisaq::tests:: -- --nocapture` -> `ok` (`22 passed`)
+    - `cargo test --lib diskann::tests:: -- --nocapture` -> `ok` (`37 passed`)
+    - `cargo test --test test_diskann_aisaq -- --nocapture` -> `ok` (`10 passed`)
+    - `cargo test --features async-io --test test_diskann_aisaq -- --nocapture` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann_aisaq::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T122058Z_11929`)
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T122117Z_12030`)
+    - `bash scripts/remote/test.sh --command "cargo test --features async-io --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T122140Z_12098`)
+    - `bash scripts/remote/test.sh --command "cargo test --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T122207Z_12207`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the AISAQ `rearrange` capability gap by turning it into an explicit API/runtime switch with preserved default behavior.
+
 ### Session 230 - 2026-03-17
 - Focus: `diskann-filter-threshold-exact-fallback`
 - Completed:

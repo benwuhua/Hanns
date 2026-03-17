@@ -283,6 +283,9 @@ pub struct IndexParams {
     /// For DiskANN/AISAQ filtered search: threshold gate for exact fallback (-1 = disabled)
     #[serde(default)]
     pub disk_filter_threshold: Option<f32>,
+    /// For AISAQ: enable expanded exact rerank stage (default true)
+    #[serde(default)]
+    pub disk_rearrange: Option<bool>,
     /// For PRQ: number of subquantizer splits (m)
     #[serde(default)]
     pub prq_m: Option<usize>,
