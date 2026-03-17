@@ -22,6 +22,37 @@
 
 ## Session Log
 
+### Session 197 - 2026-03-17
+- Focus: `diskann-entry-point-selection-quality-upgrade`
+- Completed:
+  - upgraded `DiskAnnIndex` entry-point construction from simple first-dimension bucket picks to deterministic representative selection:
+    - candidate pool from first-dimension quantiles (bounded size)
+    - first seed = nearest to global centroid
+    - remaining seeds = farthest-point expansion (maximizing minimum distance to selected seeds)
+  - kept API/behavioral surface stable (`disk_num_entry_points` unchanged, default still `1`).
+  - updated start-seed dedup in `initial_search_starts` to preserve selection order instead of index sorting.
+  - added regression:
+    - `test_diskann_single_entry_prefers_centroid_representative`
+- Verification:
+  - `cargo test --lib diskann::tests::test_diskann_multi_entry_starts_pick_nearest_seed_first -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_single_entry_prefers_centroid_representative -- --nocapture` -> `ok`
+  - `cargo test --bin bench_diskann_pq_ab -- --nocapture` -> `ok`
+  - authority A/B (`base=5000`, `query=200`, `lsearch=128`, `construction_l=128`, `beamwidth=8`, `pq_dims=4`, `pq_expand_pct=125`, `saturate=on`, `intra=8`):
+    - `entry=1` old -> new:
+      - old: `qps=10240.55`, `recall=0.6150`
+      - new: `qps=11513.03`, `recall=0.6140`
+      - delta: `+12.43%` qps, `-0.0010` recall
+      - run_id: `20260317T074543Z_71528`
+    - `entry=4` old -> new:
+      - old: `qps=9775.15`, `recall=0.6235`
+      - new: `qps=11555.91`, `recall=0.6235`
+      - delta: `+18.22%` qps, `~0.0000` recall
+      - run_id: `20260317T074358Z_71284`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this is a rare “quality-aligned speedup”: better entry representative selection reduces search wandering and improves throughput without meaningful recall loss on the tested lane.
+
 ### Session 196 - 2026-03-17
 - Focus: `diskann-random-init-candidates-screen`
 - Completed:

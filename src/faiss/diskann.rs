@@ -516,15 +516,68 @@ impl DiskAnnIndex {
         });
 
         let target = self.dann_config.num_entry_points.max(1).min(n);
-        let mut points = Vec::with_capacity(target);
-        for slot in 0..target {
-            let start = slot * n / target;
-            let end = ((slot + 1) * n / target).saturating_sub(1);
-            let pos = (start + end) / 2;
-            points.push(indices[pos]);
+        let pool_size = n.min((target * 32).clamp(target, 4096));
+        let mut pool = Vec::with_capacity(pool_size);
+        if pool_size == 1 {
+            pool.push(indices[0]);
+        } else {
+            for slot in 0..pool_size {
+                let pos = slot * (n - 1) / (pool_size - 1);
+                pool.push(indices[pos]);
+            }
         }
-        points.sort_unstable();
-        points.dedup();
+        pool.sort_unstable();
+        pool.dedup();
+        if pool.is_empty() {
+            pool.push(indices[0]);
+        }
+
+        let mut centroid = vec![0.0f32; self.dim];
+        for i in 0..n {
+            let start = i * self.dim;
+            for d in 0..self.dim {
+                centroid[d] += self.vectors[start + d];
+            }
+        }
+        let inv_n = 1.0f32 / n as f32;
+        for v in &mut centroid {
+            *v *= inv_n;
+        }
+
+        let first = *pool
+            .iter()
+            .min_by(|&&a, &&b| {
+                self.compute_dist(&centroid, a)
+                    .partial_cmp(&self.compute_dist(&centroid, b))
+                    .unwrap_or(Ordering::Equal)
+            })
+            .unwrap_or(&indices[0]);
+
+        let mut points = Vec::with_capacity(target);
+        points.push(first);
+        while points.len() < target {
+            let next = pool
+                .iter()
+                .copied()
+                .filter(|idx| !points.contains(idx))
+                .max_by(|&a, &b| {
+                    let min_a = points
+                        .iter()
+                        .map(|&s| self.distance_between_nodes(s, a))
+                        .fold(f32::MAX, f32::min);
+                    let min_b = points
+                        .iter()
+                        .map(|&s| self.distance_between_nodes(s, b))
+                        .fold(f32::MAX, f32::min);
+                    min_a.partial_cmp(&min_b).unwrap_or(Ordering::Equal)
+                });
+            if let Some(idx) = next {
+                points.push(idx);
+            } else {
+                break;
+            }
+        }
+
         if points.is_empty() {
             points.push(indices[0]);
         }
@@ -544,8 +597,8 @@ impl DiskAnnIndex {
             starts.push(self.entry_point.unwrap_or(0));
         }
         starts.retain(|&idx| idx < n);
-        starts.sort_unstable();
-        starts.dedup();
+        let mut dedup = HashSet::with_capacity(starts.len() * 2 + 1);
+        starts.retain(|idx| dedup.insert(*idx));
         if starts.is_empty() {
             starts.push(0);
         }
@@ -1663,6 +1716,29 @@ mod tests {
         assert_eq!(starts[0].0, nearest_idx);
         assert!(starts[0].1 <= starts[1].1);
         assert!(starts[1].1 <= starts[2].1);
+    }
+
+    #[test]
+    fn test_diskann_single_entry_prefers_centroid_representative() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_num_entry_points: Some(1),
+                ..Default::default()
+            },
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors = vec![
+            -100.0, 0.0, //
+            0.0, 0.0, //
+            100.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+        assert_eq!(index.entry_points.len(), 1);
+        assert_eq!(index.entry_points[0], 1);
     }
 
     #[test]
