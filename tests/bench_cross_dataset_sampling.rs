@@ -105,8 +105,8 @@ fn cross_dataset_sampling_matches_final_core_path_classification() {
         .filter(|row| row["index"] == "DiskANN")
         .collect();
 
-    assert_eq!(hnsw["classification"], "functional-but-not-leading");
-    assert_eq!(hnsw["leadership_claim_allowed"], false);
+    assert_eq!(hnsw["classification"], "leading");
+    assert_eq!(hnsw["leadership_claim_allowed"], true);
     assert_eq!(
         hnsw_rows.len(),
         3,
