@@ -22,6 +22,37 @@
 
 ## Session Log
 
+### Session 195 - 2026-03-17
+- Focus: `diskann-multi-entry-seeding-screen-and-authority-ab`
+- Completed:
+  - added DiskANN multi-entry (medoid-like) search seeding:
+    - new API param `IndexParams.disk_num_entry_points` (default `1`)
+    - `DiskAnnConfig.num_entry_points` wired from API
+    - `DiskAnnIndex` now maintains `entry_points` and uses multi-start seeds in `beam_search` and `range_search`
+    - entry points are refreshed after build/load via deterministic first-dimension bucketing
+  - extended benchmark harness:
+    - `bench_diskann_pq_ab` adds `--num-entry-points`
+    - cache key now includes `num_entry_points` to avoid cross-profile cache reuse
+  - added regression test:
+    - `test_diskann_multi_entry_starts_pick_nearest_seed_first`
+- Verification:
+  - `cargo test --lib diskann::tests::test_diskann_config -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_multi_entry_starts_pick_nearest_seed_first -- --nocapture` -> `ok`
+  - `cargo test --bin bench_diskann_pq_ab -- --nocapture` -> `ok`
+  - local screen (`base=5000`, `query=200`, `lsearch=128`, current profile):
+    - `entry=1`: `qps=21387.13`, `recall=0.6145`
+    - `entry=4`: `qps=20909.57`, `recall=0.6360`
+  - authority A/B (`base=5000`, `query=200`, `lsearch=128`, `intra=8`, `construction_l=128`, `beamwidth=8`, `pq_expand_pct=125`, `saturate=on`):
+    - `entry=1`: `qps=10240.55`, `recall=0.6150` (`run_id=20260317T071823Z_67993`)
+    - `entry=4`: `qps=9775.15`, `recall=0.6235` (`run_id=20260317T071943Z_68183`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this knob is a clear recall/QPS tradeoff:
+    - recall `+0.0085` absolute
+    - qps `-4.54%`
+  - default remains `num_entry_points=1`; `4` is retained as recall-first profile.
+
 ### Session 194 - 2026-03-17
 - Focus: `diskann-scope-audit-placeholder-flag-correction`
 - Completed:

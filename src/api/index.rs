@@ -241,6 +241,9 @@ pub struct IndexParams {
     /// For DiskANN build: additional temporal candidates from recent inserts
     #[serde(default)]
     pub disk_intra_batch_candidates: Option<usize>,
+    /// For DiskANN search: number of entry points (medoid-like starts), default 1
+    #[serde(default)]
+    pub disk_num_entry_points: Option<usize>,
     /// For PRQ: number of subquantizer splits (m)
     #[serde(default)]
     pub prq_m: Option<usize>,

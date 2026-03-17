@@ -40,6 +40,8 @@ pub struct DiskAnnConfig {
     pub saturate_after_prune: bool,
     /// Additional temporal candidates during build (0 = disabled)
     pub intra_batch_candidates: usize,
+    /// Number of entry points for search-start seeding (medoid-like), default 1
+    pub num_entry_points: usize,
     /// Beamwidth for search (IO parallelism), default 8
     pub beamwidth: usize,
     /// Cache DRAM budget in GB
@@ -68,6 +70,7 @@ impl Default for DiskAnnConfig {
             pq_candidate_expand_pct: 125,
             saturate_after_prune: true,
             intra_batch_candidates: 8,
+            num_entry_points: 1,
             beamwidth: 8,
             cache_dram_budget_gb: 0.0,
             warm_up: false,
@@ -97,6 +100,7 @@ impl DiskAnnConfig {
                 .clamp(100, 300),
             saturate_after_prune: params.disk_saturate_after_prune.unwrap_or(true),
             intra_batch_candidates: params.disk_intra_batch_candidates.unwrap_or(8).min(256),
+            num_entry_points: params.disk_num_entry_points.unwrap_or(1).clamp(1, 64),
             cache_dram_budget_gb: 0.0,
             warm_up: false,
             filter_threshold: -1.0,
@@ -302,6 +306,7 @@ pub struct DiskAnnIndex {
     trained: bool,
     alpha: f32,
     entry_point: Option<usize>,
+    entry_points: Vec<usize>,
     /// PQ compression (optional)
     pq_codes: Option<PQCode>,
     /// Cached nodes for faster search
@@ -329,6 +334,7 @@ impl DiskAnnIndex {
             trained: false,
             alpha: 1.2,
             entry_point: None,
+            entry_points: Vec::new(),
             pq_codes: None,
             cached_nodes: HashSet::new(),
         })
@@ -401,8 +407,17 @@ impl DiskAnnIndex {
 
     /// Warm-up: cache frequently accessed nodes
     fn warm_up(&mut self) {
-        // Simple warm-up: cache entry point and its neighbors
-        if let Some(entry) = self.entry_point {
+        // Simple warm-up: cache entry points and their neighbors
+        let mut starts = self.entry_points.clone();
+        if starts.is_empty() {
+            if let Some(entry) = self.entry_point {
+                starts.push(entry);
+            }
+        }
+        for entry in starts {
+            if entry >= self.ids.len() {
+                continue;
+            }
             self.cached_nodes.insert(entry);
             if let Some(nbrs) = self.graph.get(entry) {
                 for &(id, _) in nbrs {
@@ -438,6 +453,7 @@ impl DiskAnnIndex {
 
         // First node is entry point
         self.entry_point = Some(0);
+        self.entry_points = vec![0];
         current_graph.push(Vec::new());
 
         // Insert remaining nodes one by one
@@ -480,6 +496,68 @@ impl DiskAnnIndex {
         if !self.dann_config.accelerate_build {
             self.refine_graph();
         }
+
+        self.refresh_entry_points();
+    }
+
+    fn refresh_entry_points(&mut self) {
+        let n = self.ids.len();
+        if n == 0 {
+            self.entry_point = None;
+            self.entry_points.clear();
+            return;
+        }
+
+        let mut indices: Vec<usize> = (0..n).collect();
+        indices.sort_by(|&a, &b| {
+            self.vectors[a * self.dim]
+                .partial_cmp(&self.vectors[b * self.dim])
+                .unwrap_or(Ordering::Equal)
+        });
+
+        let target = self.dann_config.num_entry_points.max(1).min(n);
+        let mut points = Vec::with_capacity(target);
+        for slot in 0..target {
+            let start = slot * n / target;
+            let end = ((slot + 1) * n / target).saturating_sub(1);
+            let pos = (start + end) / 2;
+            points.push(indices[pos]);
+        }
+        points.sort_unstable();
+        points.dedup();
+        if points.is_empty() {
+            points.push(indices[0]);
+        }
+
+        self.entry_point = Some(points[0]);
+        self.entry_points = points;
+    }
+
+    fn initial_search_starts(&self, query: &[f32]) -> Vec<(usize, f32)> {
+        let n = self.ids.len();
+        if n == 0 {
+            return Vec::new();
+        }
+
+        let mut starts = self.entry_points.clone();
+        if starts.is_empty() {
+            starts.push(self.entry_point.unwrap_or(0));
+        }
+        starts.retain(|&idx| idx < n);
+        starts.sort_unstable();
+        starts.dedup();
+        if starts.is_empty() {
+            starts.push(0);
+        }
+
+        let mut out: Vec<(usize, f32)> = starts
+            .into_iter()
+            .map(|idx| (idx, self.compute_dist(query, idx)))
+            .collect();
+        out.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+        let keep = self.dann_config.num_entry_points.max(1).min(out.len());
+        out.truncate(keep);
+        out
     }
 
     /// Add temporal candidates from recent inserted nodes.
@@ -788,15 +866,19 @@ impl DiskAnnIndex {
             }
         });
 
-        // Start from entry point or node 0
-        let start = self.entry_point.unwrap_or(0);
-        let dist = self.compute_dist(query, start);
-        candidates.push(ReverseOrderedFloat(dist, start));
-        visited[start] = true;
+        // Start from entry points (medoid-like seeds)
+        let starts = self.initial_search_starts(query);
+        if starts.is_empty() {
+            return Vec::new();
+        }
+        for (start, dist) in &starts {
+            candidates.push(ReverseOrderedFloat(*dist, *start));
+            visited[*start] = true;
+        }
 
         // Early termination tracking
         let mut no_progress_count = 0;
-        let mut best_dist = dist;
+        let mut best_dist = starts[0].1;
 
         // Beam search loop
         while !candidates.is_empty() && results.len() < effective_l {
@@ -884,16 +966,14 @@ impl DiskAnnIndex {
         let mut visited = vec![false; n];
         let mut candidates: VecDeque<(usize, f32)> = VecDeque::new();
 
-        // Start from entry point
-        let start = self.entry_point.unwrap_or(0);
-        let start_dist = self.compute_dist(query, start);
-
-        if start_dist <= radius * radius {
-            results.push((self.ids[start], start_dist.sqrt()));
+        // Start from entry points
+        for (start, start_dist) in self.initial_search_starts(query) {
+            if start_dist <= radius * radius {
+                results.push((self.ids[start], start_dist.sqrt()));
+            }
+            candidates.push_back((start, start_dist));
+            visited[start] = true;
         }
-
-        candidates.push_back((start, start_dist));
-        visited[start] = true;
 
         // BFS-style range search
         let beamwidth = self.dann_config.beamwidth;
@@ -1165,10 +1245,7 @@ impl DiskAnnIndex {
             }
         }
 
-        // Set entry point to first node
-        if count > 0 {
-            self.entry_point = Some(0);
-        }
+        self.refresh_entry_points();
 
         self.trained = true;
         Ok(())
@@ -1471,6 +1548,7 @@ mod tests {
             disk_pq_candidate_expand_pct: Some(150),
             disk_saturate_after_prune: Some(false),
             disk_intra_batch_candidates: Some(7),
+            disk_num_entry_points: Some(3),
             ..Default::default()
         };
 
@@ -1492,6 +1570,7 @@ mod tests {
         assert_eq!(index.dann_config.pq_candidate_expand_pct, 150);
         assert!(!index.dann_config.saturate_after_prune);
         assert_eq!(index.dann_config.intra_batch_candidates, 7);
+        assert_eq!(index.dann_config.num_entry_points, 3);
     }
 
     #[test]
@@ -1540,6 +1619,50 @@ mod tests {
         assert_eq!(cands.len(), 2);
         assert_eq!(cands[0].0, 1);
         assert_eq!(cands[1].0, 2);
+    }
+
+    #[test]
+    fn test_diskann_multi_entry_starts_pick_nearest_seed_first() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_num_entry_points: Some(3),
+                ..Default::default()
+            },
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors = vec![
+            -10.0, 0.0, //
+            -5.0, 0.0, //
+            0.0, 0.0, //
+            5.0, 0.0, //
+            10.0, 0.0, //
+            20.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+        assert_eq!(index.entry_points.len(), 3);
+
+        let query = [19.0f32, 0.0f32];
+        let starts = index.initial_search_starts(&query);
+        assert_eq!(starts.len(), 3);
+
+        let nearest_idx = index
+            .entry_points
+            .iter()
+            .copied()
+            .min_by(|&a, &b| {
+                index
+                    .compute_dist(&query, a)
+                    .partial_cmp(&index.compute_dist(&query, b))
+                    .unwrap_or(Ordering::Equal)
+            })
+            .unwrap();
+        assert_eq!(starts[0].0, nearest_idx);
+        assert!(starts[0].1 <= starts[1].1);
+        assert!(starts[1].1 <= starts[2].1);
     }
 
     #[test]
