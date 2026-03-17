@@ -1,5 +1,6 @@
 use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType};
 use knowhere_rs::benchmark::average_recall_at_k;
+use knowhere_rs::bitset::BitsetView;
 use knowhere_rs::dataset::Dataset;
 use knowhere_rs::faiss::DiskAnnIndex;
 use knowhere_rs::index::Index;
@@ -33,6 +34,7 @@ struct Row {
     search_seconds: f64,
     build_dram_budget_gb: f32,
     search_cache_budget_gb: f32,
+    filter_ratio: f32,
 }
 
 #[derive(Debug, Serialize)]
@@ -121,10 +123,19 @@ fn l2_sq(a: &[f32], b: &[f32]) -> f32 {
     acc
 }
 
-fn brute_force_topk(base: &[f32], query: &[f32], dim: usize, top_k: usize) -> Vec<i32> {
+fn brute_force_topk_with_bitset(
+    base: &[f32],
+    query: &[f32],
+    dim: usize,
+    top_k: usize,
+    bitset: Option<&BitsetView>,
+) -> Vec<i32> {
     let n = base.len() / dim;
     let mut scored = Vec::with_capacity(n);
     for i in 0..n {
+        if bitset.is_some_and(|bs| i < bs.len() && bs.get(i)) {
+            continue;
+        }
         let start = i * dim;
         let dist = l2_sq(query, &base[start..start + dim]);
         scored.push((dist, i as i32));
@@ -132,6 +143,19 @@ fn brute_force_topk(base: &[f32], query: &[f32], dim: usize, top_k: usize) -> Ve
     scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(top_k);
     scored.into_iter().map(|(_, id)| id).collect()
+}
+
+fn build_prefix_filter_bitset(base_size: usize, filter_ratio: f32) -> Option<BitsetView> {
+    if filter_ratio <= 0.0 {
+        return None;
+    }
+    let clamped = filter_ratio.clamp(0.0, 1.0);
+    let filter_count = ((base_size as f32) * clamped).round() as usize;
+    let mut bitset = BitsetView::new(base_size);
+    for idx in 0..filter_count.min(base_size) {
+        bitset.set(idx, true);
+    }
+    Some(bitset)
 }
 
 fn build_index_cache_path(
@@ -179,6 +203,7 @@ fn main() {
     let build_degree_slack_pct = parse_usize_arg("build-degree-slack-pct", 100);
     let build_dram_budget_gb = parse_f32_arg("build-dram-budget-gb", 0.0);
     let search_cache_budget_gb = parse_f32_arg("search-cache-budget-gb", 0.0);
+    let filter_ratio = parse_f32_arg("filter-ratio", 0.0).clamp(0.0, 1.0);
     let output = parse_string_arg("output", "benchmark_results/diskann_pq_ab.local.json");
     let pq_dims_list = parse_pq_dims_arg(&[0, 2, 4]);
     let reuse_index = parse_bool_arg("reuse-index", false);
@@ -202,10 +227,17 @@ fn main() {
         queries.push(rng.gen_range(-1.0f32..1.0f32));
     }
 
+    let bitset = build_prefix_filter_bitset(base_size, filter_ratio);
     let mut gt = Vec::with_capacity(query_size);
     for q in 0..query_size {
         let qv = &queries[q * dim..(q + 1) * dim];
-        gt.push(brute_force_topk(&base, qv, dim, top_k));
+        gt.push(brute_force_topk_with_bitset(
+            &base,
+            qv,
+            dim,
+            top_k,
+            bitset.as_ref(),
+        ));
     }
 
     let mut rows = Vec::new();
@@ -270,7 +302,11 @@ fn main() {
         for q in 0..query_size {
             let qv = &queries[q * dim..(q + 1) * dim];
             let q_ds = Dataset::from_vectors(qv.to_vec(), dim);
-            let res = Index::search(&index, &q_ds, top_k).expect("search");
+            let res = if let Some(bs) = bitset.as_ref() {
+                Index::search_with_bitset(&index, &q_ds, top_k, bs).expect("search_with_bitset")
+            } else {
+                Index::search(&index, &q_ds, top_k).expect("search")
+            };
             result_rows.push(res.ids);
         }
         let search_seconds = search_start.elapsed().as_secs_f64();
@@ -298,6 +334,7 @@ fn main() {
             search_seconds,
             build_dram_budget_gb,
             search_cache_budget_gb,
+            filter_ratio,
         });
     }
 
