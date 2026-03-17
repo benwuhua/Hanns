@@ -75,7 +75,7 @@ impl DiskAnnConfig {
             beamwidth: params.beamwidth.unwrap_or(8),
             pq_code_budget_gb: 0.0, // Not exposed in IndexParams yet
             build_dram_budget_gb: 0.0,
-            disk_pq_dims: 0,
+            disk_pq_dims: params.disk_pq_dims.unwrap_or(0),
             cache_dram_budget_gb: 0.0,
             warm_up: false,
             filter_threshold: -1.0,
@@ -159,19 +159,43 @@ impl PQCode {
             return f32::MAX; // Fallback to full distance
         }
 
+        let query_signature = self.build_query_signature(query, dim);
+        self.distance_with_signature(&query_signature, idx, dim)
+    }
+
+    /// Build query signature once and reuse across candidate distance evaluations.
+    fn build_query_signature(&self, query: &[f32], dim: usize) -> Vec<f32> {
+        if self.dims == 0 {
+            return Vec::new();
+        }
+
         let num_subdims = self.dims.min(dim);
         let subdim_size = dim / num_subdims;
-        let mut dist = 0.0f32;
+        let mut signature = Vec::with_capacity(num_subdims);
 
         for i in 0..num_subdims {
             let start = i * subdim_size;
             let end = start + subdim_size;
             let subvec = &query[start..end.min(dim)];
-
             let mean = subvec.iter().sum::<f32>() / subvec.len() as f32;
-            let code_val = self.codes[idx * num_subdims + i] as f32 / 127.5 - 1.0;
+            signature.push(mean);
+        }
 
-            dist += (mean - code_val).powi(2);
+        signature
+    }
+
+    /// Distance using precomputed query signature to avoid repeated mean computation.
+    fn distance_with_signature(&self, query_signature: &[f32], idx: usize, dim: usize) -> f32 {
+        if self.dims == 0 || self.codes.is_empty() {
+            return f32::MAX;
+        }
+
+        let num_subdims = self.dims.min(dim);
+        let mut dist = 0.0f32;
+
+        for (i, mean) in query_signature.iter().enumerate().take(num_subdims) {
+            let code_val = self.codes[idx * num_subdims + i] as f32 / 127.5 - 1.0;
+            dist += (*mean - code_val).powi(2);
         }
 
         dist
@@ -620,6 +644,13 @@ impl DiskAnnIndex {
         let mut visited = vec![false; n];
         let mut candidates: BinaryHeap<ReverseOrderedFloat> = BinaryHeap::new();
         let mut results: Vec<(f32, usize)> = Vec::new();
+        let pq_query_signature = self.pq_codes.as_ref().and_then(|pq| {
+            if pq.dims > 0 {
+                Some(pq.build_query_signature(query, self.dim))
+            } else {
+                None
+            }
+        });
 
         // Start from entry point or node 0
         let start = self.entry_point.unwrap_or(0);
@@ -659,7 +690,11 @@ impl DiskAnnIndex {
                         // Use PQ distance if available and node is not cached
                         let d = if let Some(pq_codes) = &self.pq_codes {
                             if !self.cached_nodes.contains(&n_idx) {
-                                pq_codes.distance(query, n_idx, self.dim)
+                                if let Some(signature) = &pq_query_signature {
+                                    pq_codes.distance_with_signature(signature, n_idx, self.dim)
+                                } else {
+                                    pq_codes.distance(query, n_idx, self.dim)
+                                }
                             } else {
                                 self.compute_dist(query, n_idx)
                             }
@@ -1195,6 +1230,7 @@ mod tests {
             max_degree: Some(64),
             search_list_size: Some(200),
             beamwidth: Some(16),
+            disk_pq_dims: Some(2),
             ..Default::default()
         };
 
@@ -1211,6 +1247,25 @@ mod tests {
         assert_eq!(index.dann_config.max_degree, 64);
         assert_eq!(index.dann_config.search_list_size, 200);
         assert_eq!(index.dann_config.beamwidth, 16);
+        assert_eq!(index.dann_config.disk_pq_dims, 2);
+    }
+
+    #[test]
+    fn test_diskann_pq_signature_distance_matches_direct_distance() {
+        let mut pq = PQCode::new(2);
+        let vectors = vec![
+            0.1f32, -0.2, 0.3, -0.4, //
+            0.5, -0.6, 0.7, -0.8,
+        ];
+        let dim = 4usize;
+        pq.encode(&vectors, dim);
+
+        let query = vec![0.11f32, -0.19, 0.29, -0.41];
+        let sig = pq.build_query_signature(&query, dim);
+        let direct = pq.distance(&query, 0, dim);
+        let cached = pq.distance_with_signature(&sig, 0, dim);
+
+        assert!((direct - cached).abs() < 1e-6);
     }
 
     #[test]

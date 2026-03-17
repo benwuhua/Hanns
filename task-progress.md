@@ -22,6 +22,21 @@
 
 ## Session Log
 
+### Session 175 - 2026-03-17
+- Focus: `diskann-pq-hotpath-signature-reuse-and-config-wiring`
+- Completed:
+  - added `disk_pq_dims` to `IndexParams` and wired it into `DiskAnnConfig::from_index_config`.
+  - optimized DiskANN PQ search hot path by precomputing query PQ signature once per query and reusing it for candidate distance evaluation.
+  - added regression test `test_diskann_pq_signature_distance_matches_direct_distance`.
+- Verification:
+  - `cargo test --lib diskann::tests::test_diskann_config -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_pq_signature_distance_matches_direct_distance -- --nocapture` -> `ok`
+  - `cargo test --lib -q` -> `ok`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - this is a DiskANN/PQ runtime-path optimization and config completeness slice; authority perf verdict is still required before any production performance claim.
+
 ### Session 174 - 2026-03-17
 - Focus: `gate-profile-command-mapping-regression-lock`
 - Completed:
