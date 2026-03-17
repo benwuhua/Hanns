@@ -19,6 +19,7 @@ struct Row {
     saturate_after_prune: bool,
     intra_batch_candidates: usize,
     num_entry_points: usize,
+    build_degree_slack_pct: usize,
     construction_l: usize,
     search_list_size: usize,
     base_size: usize,
@@ -127,10 +128,11 @@ fn build_index_cache_path(
     saturate_after_prune: bool,
     intra_batch_candidates: usize,
     num_entry_points: usize,
+    build_degree_slack_pct: usize,
 ) -> Option<PathBuf> {
     cache_dir.map(|dir| {
         dir.join(format!(
-            "diskann_pq{}_b{}_d{}_r{}_cl{}_sat{}_intra{}_entry{}.dann",
+            "diskann_pq{}_b{}_d{}_r{}_cl{}_sat{}_intra{}_entry{}_slack{}.dann",
             pq_dims,
             base_size,
             dim,
@@ -138,7 +140,8 @@ fn build_index_cache_path(
             construction_l,
             if saturate_after_prune { 1 } else { 0 },
             intra_batch_candidates,
-            num_entry_points
+            num_entry_points,
+            build_degree_slack_pct
         ))
     })
 }
@@ -157,6 +160,7 @@ fn main() {
     let saturate_after_prune = parse_bool_arg("saturate-after-prune", true);
     let intra_batch_candidates = parse_usize_arg("intra-batch-candidates", 8);
     let num_entry_points = parse_usize_arg("num-entry-points", 1);
+    let build_degree_slack_pct = parse_usize_arg("build-degree-slack-pct", 100);
     let output = parse_string_arg("output", "benchmark_results/diskann_pq_ab.local.json");
     let pq_dims_list = parse_pq_dims_arg(&[0, 2, 4]);
     let reuse_index = parse_bool_arg("reuse-index", false);
@@ -204,6 +208,7 @@ fn main() {
                 disk_saturate_after_prune: Some(saturate_after_prune),
                 disk_intra_batch_candidates: Some(intra_batch_candidates),
                 disk_num_entry_points: Some(num_entry_points),
+                disk_build_degree_slack_pct: Some(build_degree_slack_pct),
                 ..Default::default()
             },
         };
@@ -222,6 +227,7 @@ fn main() {
                 saturate_after_prune,
                 intra_batch_candidates,
                 num_entry_points,
+                build_degree_slack_pct,
             );
         let build_mode = if reuse_index && cache_path.as_ref().map(|p| p.exists()).unwrap_or(false)
         {
@@ -258,6 +264,7 @@ fn main() {
             saturate_after_prune,
             intra_batch_candidates,
             num_entry_points,
+            build_degree_slack_pct,
             construction_l,
             search_list_size,
             base_size,
@@ -315,11 +322,12 @@ mod tests {
             true,
             8,
             1,
+            100,
         )
         .expect("path");
         assert_eq!(
             p.to_string_lossy(),
-            "tmp/diskann_pq4_b30000_d128_r48_cl128_sat1_intra8_entry1.dann"
+            "tmp/diskann_pq4_b30000_d128_r48_cl128_sat1_intra8_entry1_slack100.dann"
         );
     }
 }

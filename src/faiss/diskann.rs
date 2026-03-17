@@ -44,6 +44,8 @@ pub struct DiskAnnConfig {
     pub intra_batch_candidates: usize,
     /// Number of entry points for search-start seeding (medoid-like), default 1
     pub num_entry_points: usize,
+    /// Temporary build-degree slack percentage (100 = no slack, 130 = 1.3x)
+    pub build_degree_slack_pct: usize,
     /// Beamwidth for search (IO parallelism), default 8
     pub beamwidth: usize,
     /// Cache DRAM budget in GB
@@ -74,6 +76,7 @@ impl Default for DiskAnnConfig {
             saturate_after_prune: true,
             intra_batch_candidates: 8,
             num_entry_points: 1,
+            build_degree_slack_pct: 100,
             beamwidth: 8,
             cache_dram_budget_gb: 0.0,
             warm_up: false,
@@ -105,6 +108,10 @@ impl DiskAnnConfig {
             saturate_after_prune: params.disk_saturate_after_prune.unwrap_or(true),
             intra_batch_candidates: params.disk_intra_batch_candidates.unwrap_or(8).min(256),
             num_entry_points: params.disk_num_entry_points.unwrap_or(1).clamp(1, 64),
+            build_degree_slack_pct: params
+                .disk_build_degree_slack_pct
+                .unwrap_or(100)
+                .clamp(100, 200),
             cache_dram_budget_gb: 0.0,
             warm_up: false,
             filter_threshold: -1.0,
@@ -443,6 +450,7 @@ impl DiskAnnIndex {
 
         let L = self.dann_config.construction_l;
         let R = self.dann_config.max_degree;
+        let build_r = self.compute_build_degree_limit(R);
 
         // Sort vectors by first dimension for better entry point selection
         let mut indices: Vec<usize> = (0..n).collect();
@@ -465,7 +473,7 @@ impl DiskAnnIndex {
             let query = &self.vectors[i * self.dim..(i + 1) * self.dim];
 
             // Search for neighbors using current graph
-            let neighbors = self.vamana_search(query, L, R, &current_graph);
+            let neighbors = self.vamana_search(query, L, build_r, &current_graph);
             let mut merged_neighbors = neighbors;
             if self.dann_config.intra_batch_candidates > 0 {
                 merged_neighbors.extend(self.collect_intra_batch_candidates(i));
@@ -480,7 +488,7 @@ impl DiskAnnIndex {
                 .collect();
 
             // Prune to max_degree using Vamana pruning
-            node_neighbors = self.prune_neighbors(i, &node_neighbors, R);
+            node_neighbors = self.prune_neighbors(i, &node_neighbors, build_r);
 
             current_graph.push(node_neighbors);
 
@@ -489,7 +497,7 @@ impl DiskAnnIndex {
                 if idx < current_graph.len() {
                     current_graph[idx].push((self.ids[i], dist));
                     // Prune reverse edges too
-                    current_graph[idx] = self.prune_neighbors(idx, &current_graph[idx], R);
+                    current_graph[idx] = self.prune_neighbors(idx, &current_graph[idx], build_r);
                 }
             }
         }
@@ -500,8 +508,24 @@ impl DiskAnnIndex {
         if !self.dann_config.accelerate_build {
             self.refine_graph();
         }
+        self.finalize_graph_degree(R);
 
         self.refresh_entry_points();
+    }
+
+    fn compute_build_degree_limit(&self, max_degree: usize) -> usize {
+        max_degree
+            .saturating_mul(self.dann_config.build_degree_slack_pct)
+            .saturating_add(99)
+            / 100
+    }
+
+    fn finalize_graph_degree(&mut self, max_degree: usize) {
+        for i in 0..self.graph.len() {
+            if self.graph[i].len() > max_degree {
+                self.graph[i] = self.prune_neighbors(i, &self.graph[i], max_degree);
+            }
+        }
     }
 
     fn refresh_entry_points(&mut self) {
@@ -769,12 +793,13 @@ impl DiskAnnIndex {
     fn refine_graph(&mut self) {
         let n = self.ids.len();
         let R = self.dann_config.max_degree;
+        let build_r = self.compute_build_degree_limit(R);
 
         // For each node, search again and update edges
         for i in 0..n {
             let query = &self.vectors[i * self.dim..(i + 1) * self.dim];
             let neighbors =
-                self.vamana_search(query, self.dann_config.construction_l, R, &self.graph);
+                self.vamana_search(query, self.dann_config.construction_l, build_r, &self.graph);
 
             let new_neighbors: Vec<(i64, f32)> = neighbors
                 .iter()
@@ -783,7 +808,7 @@ impl DiskAnnIndex {
                 .collect();
 
             if !new_neighbors.is_empty() {
-                self.graph[i] = self.prune_neighbors(i, &new_neighbors, R);
+                self.graph[i] = self.prune_neighbors(i, &new_neighbors, build_r);
             }
         }
     }
@@ -1620,6 +1645,7 @@ mod tests {
             disk_saturate_after_prune: Some(false),
             disk_intra_batch_candidates: Some(7),
             disk_num_entry_points: Some(3),
+            disk_build_degree_slack_pct: Some(130),
             ..Default::default()
         };
 
@@ -1643,6 +1669,7 @@ mod tests {
         assert!(!index.dann_config.saturate_after_prune);
         assert_eq!(index.dann_config.intra_batch_candidates, 7);
         assert_eq!(index.dann_config.num_entry_points, 3);
+        assert_eq!(index.dann_config.build_degree_slack_pct, 130);
     }
 
     #[test]
@@ -1685,6 +1712,23 @@ mod tests {
 
         let index = DiskAnnIndex::new(&config).unwrap();
         assert_eq!(index.dann_config.rerank_expand_pct, 100);
+    }
+
+    #[test]
+    fn test_diskann_build_degree_slack_limit_computation() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                max_degree: Some(48),
+                disk_build_degree_slack_pct: Some(130),
+                ..Default::default()
+            },
+        };
+        let index = DiskAnnIndex::new(&config).unwrap();
+        assert_eq!(index.compute_build_degree_limit(48), 63);
     }
 
     #[test]

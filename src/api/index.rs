@@ -247,6 +247,9 @@ pub struct IndexParams {
     /// For DiskANN PQ search: rerank pool expansion percentage (100 = disabled)
     #[serde(default)]
     pub disk_rerank_expand_pct: Option<usize>,
+    /// For DiskANN build: temporary degree slack percentage (100 = no slack)
+    #[serde(default)]
+    pub disk_build_degree_slack_pct: Option<usize>,
     /// For PRQ: number of subquantizer splits (m)
     #[serde(default)]
     pub prq_m: Option<usize>,

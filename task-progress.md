@@ -22,6 +22,36 @@
 
 ## Session Log
 
+### Session 200 - 2026-03-17
+- Focus: `diskann-build-degree-slack-capability`
+- Completed:
+  - implemented DiskANN build-degree slack capability:
+    - new API knob `disk_build_degree_slack_pct` (default `100`, clamp `100..=200`)
+    - build/refine prune now use temporary degree limit `R_build = ceil(R * slack_pct / 100)`
+    - final graph is always collapsed back to target `R` after build (`finalize_graph_degree`) to preserve runtime/storage boundary
+  - benchmark harness extended with `--build-degree-slack-pct`; cache key and output rows include this knob for replay-safe A/B.
+  - added tests:
+    - config mapping assertion in `test_diskann_config`
+    - limit computation lock in `test_diskann_build_degree_slack_limit_computation`
+- Verification:
+  - `cargo test --lib diskann::tests::test_diskann_config -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_build_degree_slack_limit_computation -- --nocapture` -> `ok`
+  - `cargo test --bin bench_diskann_pq_ab -- --nocapture` -> `ok`
+  - local screen (`base=5000`, `query=200`, `lsearch=128`, rerank=100):
+    - `slack=100`: `qps=23064.17`, `recall=0.6205`, `build=12.95s`
+    - `slack=130`: `qps=23824.53`, `recall=0.6165`, `build=20.78s`
+  - authority A/B (`base=2000`, `query=40`, `lsearch=128`, `intra=8`, `entry=1`, `construction_l=128`, `beamwidth=8`, `pq_expand_pct=125`, `rerank=100`, `saturate=on`):
+    - `slack=100`: `qps=12667.87`, `recall=0.7825`, `build=6.04s` (`run_id=20260317T080437Z_74440`)
+    - `slack=130`: `qps=12372.88`, `recall=0.7925`, `build=9.84s` (`run_id=20260317T080556Z_74631`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - authority classifies this knob as recall-first profile:
+    - recall `+0.0100` absolute
+    - qps `-2.33%`
+    - build time `+3.80s`
+  - default remains `100`; `130` is retained as optional recall-first build profile.
+
 ### Session 199 - 2026-03-17
 - Focus: `diskann-rerank-capability-closure`
 - Completed:

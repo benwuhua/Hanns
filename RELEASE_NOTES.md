@@ -15,6 +15,12 @@
 - DiskANN lsearch/recall-band matrix utility [scripts/diskann_lsearch_recall_band_matrix.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/scripts/diskann_lsearch_recall_band_matrix.py) plus regression test [tests/test_diskann_lsearch_recall_band_matrix.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/tests/test_diskann_lsearch_recall_band_matrix.py), which report both `same-lsearch` deltas and fixed-recall-band picks for each baseline lsearch row.
 
 ### Changed
+- DiskANN build path now supports temporary degree slack via `disk_build_degree_slack_pct` in [src/api/index.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/api/index.rs) and [src/faiss/diskann.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/faiss/diskann.rs): build/refine can use `R_build > R`, while final graph is pruned back to target `R` before serving.
+- [src/bin/bench_diskann_pq_ab.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/bin/bench_diskann_pq_ab.rs) adds `--build-degree-slack-pct` and includes it in cache key/report rows.
+- Authority A/B (`2026-03-17`, `base=2000`, `query=40`, `lsearch=128`, `intra=8`, `entry=1`, `rerank=100`) shows build-degree slack is a recall-first tradeoff:
+  - `slack=100`: `12667.87 qps / 0.7825 recall / 6.04s build`
+  - `slack=130`: `12372.88 qps / 0.7925 recall / 9.84s build`
+  - delta: `-2.33%` qps, `+0.0100` recall, `+3.80s` build
 - DiskANN PQ search now supports an explicit rerank stage in [src/faiss/diskann.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/faiss/diskann.rs): neighbors are screened by PQ distance, then exact-distance reranked on an expanded pool controlled by `disk_rerank_expand_pct` (`100` disables, default `100`), improving capability parity with native reorder-style paths.
 - [src/api/index.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/api/index.rs) adds `disk_rerank_expand_pct`, and [src/bin/bench_diskann_pq_ab.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/bin/bench_diskann_pq_ab.rs) adds `--rerank-expand-pct` for repeatable A/B evidence.
 - Authority A/B (`2026-03-17`, `base=2000`, `query=40`, `lsearch=128`, `intra=8`, `entry=1`) confirms rerank tradeoff:
