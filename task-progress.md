@@ -22,6 +22,22 @@
 
 ## Session Log
 
+### Session 187 - 2026-03-17
+- Focus: `diskann-search-list-size-secondary-sweep`
+- Completed:
+  - ran a local `search_list_size` narrow sweep (`96/112/128/160`) on current tuned profile.
+  - promoted `112` for authority comparison against baseline `128`.
+  - completed authority comparison and archived artifacts locally.
+- Verification:
+  - authority (`base=2000`, `query=40`, `dim=128`, `top_k=10`, `construction_l=128`, `beamwidth=8`, `pq_dims=4`, `pq_expand_pct=125`, `saturate=on`, `intra=8`):
+    - `Lsearch=112`: `qps=12721.22`, `recall=0.7775` (load run)
+    - `Lsearch=128`: `qps=11579.42`, `recall=0.8100` (load run)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - `search_list_size=112` is a qps-first profile (`+9.86%`) with recall cost (`-3.25` absolute points).
+  - keep default `128` (recall-first baseline) and retain `112` as optional throughput profile.
+
 ### Session 186 - 2026-03-17
 - Focus: `diskann-max-degree-secondary-sweep`
 - Completed:
