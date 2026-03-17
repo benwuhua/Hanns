@@ -22,6 +22,29 @@
 
 ## Session Log
 
+### Session 193 - 2026-03-17
+- Focus: `diskann-lsearch-recall-band-authority-stabilization-q200`
+- Completed:
+  - reran the lsearch recall-band matrix on a less noisy authority lane (`base=5000`, `query=200`) with fixed build/search knobs:
+    - `max_degree=48`, `construction_l=128`, `beamwidth=8`, `pq_dims=4`, `pq_expand_pct=125`, `saturate=on`
+  - produced baseline (`intra=0`) and current (`intra=8`) profile rows for `lsearch=120/128/144/160`.
+  - detected one transient qps outlier on baseline `lsearch=144`, then immediately reran both baseline/current `lsearch=144` and regenerated a stable matrix artifact using rerun rows.
+  - generated stable artifact:
+    - `benchmark_results/diskann_lsearch_recall_band_matrix_20260317_q200_stable.json`
+- Verification:
+  - authority runs via `bash scripts/remote/test.sh --command "cargo run --release --bin bench_diskann_pq_ab ..."`:
+    - base: `20260317T065206Z_65252`, `20260317T065237Z_65327`, `20260317T065258Z_65383`, `20260317T065316Z_65435`
+    - current: `20260317T065336Z_65490`, `20260317T065407Z_65565`, `20260317T065427Z_65622`, `20260317T065447Z_65674`
+    - l144 stabilization reruns: `20260317T065611Z_65832`, `20260317T065630Z_65886`
+  - matrix generation:
+    - `python3 scripts/diskann_lsearch_recall_band_matrix.py ... --output-json benchmark_results/diskann_lsearch_recall_band_matrix_20260317_q200_stable.json` -> `ok`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - on this lane, baseline recall is stable at `0.5780` and current recall is stable at `0.5635` across all lsearch points (gap `-0.0145`).
+  - with tolerance `±0.005`, no in-band candidate exists; all recall-band picks are `nearest_recall_fallback`.
+  - implication: this round confirms a quality gap between profile families (`intra=0` vs `intra=8`) on the sampled lane; tuning `lsearch` alone cannot close it.
+
 ### Session 192 - 2026-03-17
 - Focus: `diskann-lsearch-recall-band-matrix-and-cache-key-hardening`
 - Completed:
