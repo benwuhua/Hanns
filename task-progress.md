@@ -22,6 +22,24 @@
 
 ## Session Log
 
+### Session 196 - 2026-03-17
+- Focus: `diskann-random-init-candidates-screen`
+- Completed:
+  - screened a new DiskANN build hypothesis: add pseudo-random historical candidates during insertion (`random_init_candidates`) to improve connectivity/quality.
+  - implemented parameter wiring and benchmark support locally, then ran both local and authority A/B.
+  - authority result showed no quality gain and qps regression; experimental code was rolled back to keep mainline clean.
+- Verification:
+  - local screen (`base=5000`, `query=200`, `lsearch=128`, `intra=8`, `entry=1`):
+    - `rand=0`: `qps=13649.31`, `recall=0.6120`
+    - `rand=8`: `qps=22364.28`, `recall=0.5980` (local-only positive/negative mix, marked untrusted)
+  - authority A/B (`base=2000`, `query=40`, `lsearch=128`, `intra=8`, `entry=1`, `construction_l=128`, `beamwidth=8`, `pq_expand_pct=125`, `saturate=on`):
+    - `rand=0`: `qps=12431.10`, `recall=0.8225` (`run_id=20260317T073050Z_69877`)
+    - `rand=8`: `qps=11955.08`, `recall=0.8225` (`run_id=20260317T073209Z_70084`)
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - authority shows `-3.83%` qps with recall parity, so this direction is rejected and not kept in code.
+
 ### Session 195 - 2026-03-17
 - Focus: `diskann-multi-entry-seeding-screen-and-authority-ab`
 - Completed:
