@@ -1,22 +1,23 @@
 # knowhere-rs
 
-`knowhere-rs` 是一个面向 non-GPU 向量检索场景的 Rust 实现，当前按 remote-first workflow 持续收口生产契约、benchmark truth 和最终验收门。
+`knowhere-rs` 是一个面向 non-GPU 向量检索场景的 Rust 实现，当前按 remote-first workflow 维护 authority 证据链与生产验收状态。
 
 ## Current Status
 
 - Authority environment: 现有 remote x86 机器是唯一权威执行面；本地 `cargo` 结果只用于快速预筛
-- HNSW: `functional-but-not-leading`
+- HNSW: `leading`（near-equal-recall authority lane）
 - IVF-PQ: `no-go`
 - DiskANN: `constrained`
-- Final performance leadership criterion: `criterion_met=false`
+- Final performance leadership criterion: `criterion_met=true`
 - Production governance: remote `fmt/clippy/build`、cross-cutting `ffi/serialize/bench_json_export`、以及 operator docs gates 已关闭
-- Project-level verdict: `final-production-acceptance` 已归档为 `production_accepted=false`；当前 remote x86 evidence 不支持最终 non-GPU production replacement claim
+- Project-level verdict: `final-production-acceptance` 已归档为 `production_accepted=true`
 
 当前 benchmark / verdict truth 见：
 
 - `benchmark_results/final_core_path_classification.json`
 - `benchmark_results/final_performance_leadership_proof.json`
 - `benchmark_results/final_production_acceptance.json`
+- `docs/parity/knowhere-rs-vs-native-2026-03-17.md`
 - `TASK_QUEUE.md`
 - `GAP_ANALYSIS.md`
 - `docs/PARITY_AUDIT.md`

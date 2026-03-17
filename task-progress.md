@@ -22,6 +22,19 @@
 
 ## Session Log
 
+### Session 170 - 2026-03-17
+- Focus: `durable-governance-doc-current-state-sync`
+- Completed:
+  - synchronized current-state wording in `README.md`, `TASK_QUEUE.md`, `DEV_ROADMAP.md`, and `GAP_ANALYSIS.md` to the latest accepted rollup state.
+  - preserved historical reopen trails while fixing entry-state contradictions (`criterion_met=true`, `production_accepted=true`, HNSW `leading`).
+- Verification:
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+  - `python3 -m unittest tests/test_validate_features.py` -> `ok`
+- Result:
+  - `durable_closure=pass`
+- Notes:
+  - this session changes governance/doc state only; no runtime/index behavior changed.
+
 ### Session 169 - 2026-03-17
 - Focus: `parity-doc-hardening-and-terminology-lock`
 - Completed:

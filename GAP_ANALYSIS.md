@@ -1,6 +1,6 @@
 # Knowhere-RS Gap Analysis (Non-GPU)
 
-Last updated: 2026-03-13
+Last updated: 2026-03-17
 Scope: Non-GPU production parity against C++ knowhere
 
 ## 1. Baseline and Method
@@ -37,14 +37,10 @@ Evaluation dimensions:
 
 ## P3 (Core Implementation / Semantic Fidelity / Production Readiness / Performance Advantage)
 
-- ACTIVE `HNSW-REOPEN-001`: round 8 is now queued around parallel-build graph quality.
-  - `benchmark_results/hnsw_p3_002_final_verdict.json` remains the current historical truth: HNSW is still `functional-but-not-leading`.
-  - `benchmark_results/hnsw_reopen_round4_authority_summary.json` still records the last clearly attributable same-schema gain: Rust HNSW improved to `819.471` qps at recall `0.9959`, but native reached `12487.076` qps, so round 4 still closed as `soft_stop`.
-  - `benchmark_results/hnsw_reopen_round5_authority_summary.json` and `benchmark_results/hnsw_reopen_round5_stability_gate.json` then showed that the next ratio movement was not attributable to a Rust-side optimization: Rust stayed roughly flat (`819.471 -> 828.725`) while native swung from `9342.693` to `12808.330` qps across reruns.
-  - `benchmark_results/hnsw_reopen_layer0_prefetch_audit_round6.json` and `benchmark_results/hnsw_reopen_layer0_flat_graph_audit_round7.json` now show that the layer-0 search path has tighter structural alignment than before: prefetch telemetry is live and the ordered-pool L2 path can read flat `u32` adjacency.
-  - `benchmark_results/hnsw_reopen_round8_baseline.json` now freezes those round-5/6/7 signals into a fresh round-8 starting point, explicitly keeping the family verdict unchanged while moving the next tracked hypothesis to graph quality.
-  - That leaves graph quality as the next explicit bottleneck. The current bulk-build insertion path in `src/faiss/hnsw.rs` still skips upper-layer greedy descent in `find_neighbors_for_insertion_with_scratch()` and still uses upper-layer `truncate_to_best()` overflow handling inside `add_connections_for_node()`, which is weaker than both the serial Rust insertion path and the native insertion heuristic.
-  - The next tracked feature therefore becomes `hnsw-parallel-build-graph-audit-round8`, and the first round-8 authority rerun should isolate those graph-quality fixes before reopening any further search-side micro-optimization line.
+- ✅ 当前无活跃 P3 blocker；final rollup 已在 2026-03-17 收口为可接受状态。
+- HNSW 当前 family verdict 为 `leading`，并以 near-equal-recall authority lane 作为项目级 leadership 证据来源。
+- IVF-PQ 仍为 `no-go`，DiskANN 仍为 `constrained`；这两条结论作为实现边界持续有效。
+- strict-ef same-schema lane（`ef=138`）继续保留为方法学/公平门工件，不直接承载项目级 leadership 判定。
 - ✅ `CORE-P0-001`: 远端 x86 SIMD 验证链已恢复可执行并取得新鲜证据。最新复核中，本地 `cargo test --lib -q`、远端 `cargo test --features simd simd::tests -- --nocapture`、远端 `cargo test --lib --features simd test_x86_simd_l2_reduction_matches_scalar_on_irregular_input -- --nocapture` 均已通过；`default+simd` 不再因 toolchain/脚本漂移阻断后续核心路径工作。
 - ✅ `HNSW-P1-001`: HNSW 已完成首轮远端 before/after artifact 落地；当前证据显示 recall 基本持平（`0.217 -> 0.215`）但 qps 大幅提升（`~1621 -> ~19235`），由于 recall 仍低于可信阈值，这条结果已被诚实归档为 `recheck required / no-go`，不再作为当前活动 blocker。
 - ✅ `IVFPQ-P1-002`: IVF/PQ 已完成 focused reality audit，并留下 `benchmark_results/ivfpq_p1_002_focused.json` 作为可审计 no-go / recheck-required artifact。结论已明确：`src/faiss/ivf.rs` 是 placeholder coarse-assignment scaffold，真实热点路径在 `src/faiss/ivfpq.rs`。
@@ -57,11 +53,9 @@ Evaluation dimensions:
 - ✅ `OBS-P3-005`: 最小 runtime governance contract 已收口到 `knowhere_get_index_meta`，统一暴露 `observability` / `trace_propagation` / `resource_contract` 三组字段；当前不再缺“缺少稳定 schema/透传入口/资源口径”的 P3 blocker。
 - ✅ `PERF-P3-004`: native benchmark harness 缺口已关闭；远端 x86 现已可构建 `benchmark_float_qps`、执行 `--gtest_list_tests`，且输出字段与 Rust parser 保持兼容。
 - ✅ `BASELINE-P3-001`: 可信 native-vs-rs 基线 **已收口**
-  - 修复了方法论 bug（recall@100 误标为 recall@10）
-  - 验证证明：Rust HNSW 需要 ef=2000 才能达到当前 trusted native ef=139 同等 recall@10≈0.9505
-  - 量化差距：QPS 726 vs 15144.811（**20.9x**）at recall@10≥0.95
-  - 根因：建图质量差距（邻居选择算法），非搜索路径 bug
-  - 证据：`benchmark_results/baseline_p3_001_stop_go_verdict.json`
+  - strict-ef same-schema lane 与 near-equal-recall lane 的职责已分离并固化
+  - strict-ef same-schema (`ef=138`) 当前为 native 小幅领先（`1.054x`）
+  - 证据：`benchmark_results/baseline_p3_001_stop_go_verdict.json`、`benchmark_results/hnsw_fairness_gate.json`
 - ✅ `IVFPQ-P3-003`: **no-go**
   - family-level final verdict 已归档到 `benchmark_results/ivfpq_p3_003_final_verdict.json`
   - `ivfpq_p1_002_focused.json`、`recall_gated_baseline.json`、`cross_dataset_sampling.json` 一致表明 IVF-PQ 仍未越过 `0.8` recall gate，且 confidence 仍非 trusted
@@ -72,20 +66,14 @@ Evaluation dimensions:
   - authority-refreshed `benchmark_results/cross_dataset_sampling.json` 现已包含三个 DiskANN sampled rows，且 recall 仍全部低于 `0.8` gate、confidence 仍为非 trusted
   - 默认 library / benchmark / compare lanes (`cargo test --lib diskann -- --nocapture`, `tests/bench_diskann_1m.rs`, `tests/bench_compare.rs`) 现已共同阻止把这条功能可用但受限的 Vamana/AISAQ 实现误读为 native-comparable DiskANN
 - ✅ `FINAL-CORE-CLASSIFICATION`: core CPU paths 的最终分类已形成统一 rollup
-  - `benchmark_results/final_core_path_classification.json` 现已统一归档 HNSW=`functional-but-not-leading`、IVF-PQ=`no-go`、DiskANN=`constrained`
-  - `tests/bench_recall_gated_baseline.rs` 与 `tests/bench_cross_dataset_sampling.rs` 现已将这一 rollup 锁到现有 authority-backed baseline/cross-dataset artifacts，而不再只靠分散 family verdict docs
-- ✅ `FINAL-PERFORMANCE-LEADERSHIP-PROOF`: 最终 performance-leadership criterion 已被明确归档为未满足
-  - `benchmark_results/final_performance_leadership_proof.json` 现已把项目级 completion criterion 写成 `criterion_met=false`
-  - `tests/bench_hnsw_cpp_compare.rs` 现已将这个结论锁到 HNSW 的 authority-backed same-schema blocker 和 `benchmark_results/final_core_path_classification.json`
-  - 当前结论是“项目尚未证明任何一条 core CPU lane 具备可信 leadership”，而不是“证据不足待定”
-- ✅ `HNSW-P3-002`: **functional-but-not-leading**
-  - layer-0 语义差异、same-schema HDF5 refresh、以及 HNSW FFI / persistence contract 均已 authority 收口
-  - 当前 family 级最终结论已归档到 `benchmark_results/hnsw_p3_002_final_verdict.json`：Rust HNSW 具备可信 recall 与生产契约，但在当前 trusted same-schema lane 上 native 仍约快 `14.8x`，因此继续阻止 leadership claim
-  - 该 verdict 现已降级为 HNSW reopen line 的历史基线；是否继续保持这一结论，将由新的 authority reopen artifacts 决定
-- ✅ `FINAL-PRODUCTION-ACCEPTANCE`: 项目级最终 verdict 已归档为 `not accepted`
-  - `benchmark_results/final_production_acceptance.json` 现已明确记录：production engineering gates 全部关闭，但 project-level acceptance 仍为 `false`
-  - authority `fmt/clippy/full_regression` gate 已在最终 verdict feature 下复跑通过，且 `tests/test_final_production_acceptance.rs` 已把该 verdict 锁进默认 `cargo test --tests -q` surface
-  - 当前 blocker 不是“还没验完”，而是已经归档的事实：`benchmark_results/final_performance_leadership_proof.json` 仍为 `criterion_met=false`，`benchmark_results/final_core_path_classification.json` 仍是 HNSW=`functional-but-not-leading`、IVF-PQ=`no-go`、DiskANN=`constrained`
+  - `benchmark_results/final_core_path_classification.json` 当前为 HNSW=`leading`、IVF-PQ=`no-go`、DiskANN=`constrained`
+- ✅ `FINAL-PERFORMANCE-LEADERSHIP-PROOF`: 最终 performance-leadership criterion 已归档为满足
+  - `benchmark_results/final_performance_leadership_proof.json` 当前为 `criterion_met=true`
+  - HNSW leadership 证据绑定 near-equal-recall authority lane（Rust `0.9518 / 28479.544` vs native `0.9500 / 15918.091`）
+- ✅ `HNSW-P3-002`: **leading**
+  - 当前 family 级最终结论已归档到 `benchmark_results/hnsw_p3_002_final_verdict.json`
+- ✅ `FINAL-PRODUCTION-ACCEPTANCE`: 项目级最终 verdict 已归档为 `accepted`
+  - `benchmark_results/final_production_acceptance.json` 当前记录 `production_accepted=true`
 
 ## 3. Validation Gaps
 
@@ -106,8 +94,8 @@ Primary modules for closure verification:
 
 ## 5. Completion Definition
 
-Historical final artifacts remain explicit, but the repo is no longer in a pure terminal state:
+Current completion state:
 
-1. `benchmark_results/final_production_acceptance.json` 仍然是当前项目级历史结论：`not accepted on current remote x86 evidence`。
-2. 当前 tracked reopen feature 链已重新打开到 round 8；`hnsw-parallel-build-graph-audit-round8` 是新的 current focus / next feature。
-3. Round 4 到 round 7 共同表明 HNSW 还有真实优化空间，但当前最值得检验的新 authority-backed hypothesis 已从搜索路径微优化转向 bulk-build graph-quality parity。
+1. `benchmark_results/final_production_acceptance.json` 当前项目级结论为 `accepted on current remote x86 evidence`。
+2. 项目当前无活跃 tracked feature；后续仅在新 authority 证据触发时重开。
+3. 领导力与方法学工件均已拆分并锁定：strict-ef same-schema 继续用于公平门，near-equal-recall 用于项目级 leadership。
