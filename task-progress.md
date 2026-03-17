@@ -22,6 +22,20 @@
 
 ## Session Log
 
+### Session 174 - 2026-03-17
+- Focus: `gate-profile-command-mapping-regression-lock`
+- Completed:
+  - added `tests/test_gate_profile_runner.py` to lock `scripts/gate_profile_runner.sh` command mapping via `--print-checks`.
+  - explicitly locked `default_regression`, `full_regression` (including governance locks), and `long_regression` command sets.
+- Verification:
+  - `python3 -m unittest tests/test_gate_profile_runner.py` -> `ok`
+  - `python3 -m unittest tests/test_governance_current_state_lock.py tests/test_parity_report_lock.py tests/test_baseline_methodology_lock.py` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+- Result:
+  - `durable_closure=pass`
+- Notes:
+  - test/governance-only change; no runtime/index behavior changes.
+
 ### Session 173 - 2026-03-17
 - Focus: `full-regression-gate-governance-lock-integration`
 - Completed:
