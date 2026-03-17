@@ -253,6 +253,9 @@ pub struct IndexParams {
     /// For DiskANN build: number of random initial candidate edges per inserted node (0 = disabled)
     #[serde(default)]
     pub disk_random_init_edges: Option<usize>,
+    /// For DiskANN parallel build: batch size for parallel candidate search
+    #[serde(default)]
+    pub disk_build_parallel_batch_size: Option<usize>,
     /// For DiskANN build: DRAM budget in GB (0 = disabled)
     #[serde(default)]
     pub disk_build_dram_budget_gb: Option<f32>,

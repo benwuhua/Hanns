@@ -22,6 +22,27 @@
 
 ## Session Log
 
+### Session 214 - 2026-03-17
+- Focus: `diskann-build-parallel-pipeline`
+- Completed:
+  - added DiskANN build-path parallel pipeline (feature-gated): when `parallel` feature enabled and `num_threads > 1`, build now uses batched parallel candidate search on graph snapshots followed by deterministic serial merge/apply.
+  - added new API/config control `disk_build_parallel_batch_size` for parallel candidate batch sizing.
+  - refactored build candidate collection into shared helper (`gather_build_candidates`) and made random-init candidate sampling deterministic per-node (`random_seed` + node id mix), with upper-bound controls for batch snapshot safety.
+  - extended config regression coverage for `disk_build_parallel_batch_size`.
+- Verification:
+  - local:
+    - `cargo test --lib test_diskann_collect_random_initial_candidates_is_seeded_and_bounded -- --nocapture` -> `ok`
+    - `cargo test --lib test_diskann_config -- --nocapture` -> `ok`
+    - `cargo test --lib diskann::tests:: -- --nocapture` -> `ok` (`34 passed`)
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib test_diskann_config -- --nocapture"` -> `ok` (`run_id=20260317T110428Z_95857`)
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T110458Z_95973`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the “parallel build pipeline” capability slice with default behavior unchanged for non-parallel builds.
+
 ### Session 213 - 2026-03-17
 - Focus: `diskann-build-random-initial-connectivity`
 - Completed:

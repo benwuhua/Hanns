@@ -55,6 +55,8 @@ pub struct DiskAnnConfig {
     pub build_degree_slack_pct: usize,
     /// Random initial candidate edges for build-time insertion (0 = disabled)
     pub random_init_edges: usize,
+    /// Batch size used by parallel candidate search in build path.
+    pub build_parallel_batch_size: usize,
     /// Beamwidth for search (IO parallelism), default 8
     pub beamwidth: usize,
     /// Cache DRAM budget in GB
@@ -93,6 +95,7 @@ impl Default for DiskAnnConfig {
             num_entry_points: 1,
             build_degree_slack_pct: 100,
             random_init_edges: 0,
+            build_parallel_batch_size: 64,
             beamwidth: 8,
             cache_dram_budget_gb: 0.0,
             enable_flash_layout: false,
@@ -132,6 +135,10 @@ impl DiskAnnConfig {
                 .unwrap_or(100)
                 .clamp(100, 200),
             random_init_edges: params.disk_random_init_edges.unwrap_or(0).min(64),
+            build_parallel_batch_size: params
+                .disk_build_parallel_batch_size
+                .unwrap_or(64)
+                .clamp(1, 1024),
             cache_dram_budget_gb: params.disk_search_cache_budget_gb.unwrap_or(0.0).max(0.0),
             enable_flash_layout: params.disk_enable_flash_layout.unwrap_or(false),
             flash_mmap_mode: params.disk_flash_mmap_mode.unwrap_or(false),
@@ -996,28 +1003,66 @@ impl DiskAnnIndex {
 
         // Build graph incrementally (Vamana style)
         let mut current_graph: Vec<Vec<(i64, f32)>> = Vec::with_capacity(n);
-        let mut rng = StdRng::seed_from_u64(self.config.params.random_seed.unwrap_or(42));
 
         // First node is entry point
         self.entry_point = Some(0);
         self.entry_points = vec![0];
         current_graph.push(Vec::new());
 
+        #[cfg(feature = "parallel")]
+        if self.config.params.num_threads.unwrap_or(1) > 1 && n > 2 {
+            let batch_size = self.dann_config.build_parallel_batch_size.min(n - 1).max(1);
+            let mut batch_start = 1usize;
+            while batch_start < n {
+                let batch_end = (batch_start + batch_size).min(n);
+                let snapshot = current_graph.clone();
+                let snapshot_len = snapshot.len();
+                let mut batch_results: Vec<(usize, Vec<(usize, f32)>)> = (batch_start..batch_end)
+                    .into_par_iter()
+                    .map(|node_idx| {
+                        let merged = self.gather_build_candidates(
+                            node_idx,
+                            L,
+                            build_r,
+                            &snapshot,
+                            snapshot_len,
+                        );
+                        (node_idx, merged)
+                    })
+                    .collect();
+                batch_results.sort_by_key(|(node_idx, _)| *node_idx);
+
+                for (node_idx, merged_neighbors) in batch_results {
+                    let mut node_neighbors: Vec<(i64, f32)> = merged_neighbors
+                        .iter()
+                        .map(|&(idx, dist)| (self.ids[idx], dist))
+                        .collect();
+                    node_neighbors = self.prune_neighbors(node_idx, &node_neighbors, build_r);
+                    current_graph.push(node_neighbors);
+
+                    for &(idx, dist) in &merged_neighbors {
+                        if idx < current_graph.len() {
+                            current_graph[idx].push((self.ids[node_idx], dist));
+                            current_graph[idx] =
+                                self.prune_neighbors(idx, &current_graph[idx], build_r);
+                        }
+                    }
+                }
+                batch_start = batch_end;
+            }
+
+            self.graph = current_graph;
+            if !self.dann_config.accelerate_build {
+                self.refine_graph();
+            }
+            self.finalize_graph_degree(R);
+            self.refresh_entry_points();
+            return;
+        }
+
         // Insert remaining nodes one by one
         for i in 1..n {
-            let query = &self.vectors[i * self.dim..(i + 1) * self.dim];
-
-            // Search for neighbors using current graph
-            let neighbors = self.vamana_search(query, L, build_r, &current_graph);
-            let mut merged_neighbors = neighbors;
-            if self.dann_config.intra_batch_candidates > 0 {
-                merged_neighbors.extend(self.collect_intra_batch_candidates(i));
-            }
-            if self.dann_config.random_init_edges > 0 {
-                merged_neighbors.extend(self.collect_random_initial_candidates(i, &mut rng));
-            }
-            merged_neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
-            merged_neighbors.dedup_by(|a, b| a.0 == b.0);
+            let merged_neighbors = self.gather_build_candidates(i, L, build_r, &current_graph, i);
 
             // Add bidirectional edges
             let mut node_neighbors: Vec<(i64, f32)> = merged_neighbors
@@ -1051,19 +1096,50 @@ impl DiskAnnIndex {
         self.refresh_entry_points();
     }
 
-    fn collect_random_initial_candidates(
+    fn gather_build_candidates(
         &self,
         node_idx: usize,
-        rng: &mut StdRng,
+        l: usize,
+        build_r: usize,
+        graph: &[Vec<(i64, f32)>],
+        upper_bound: usize,
     ) -> Vec<(usize, f32)> {
-        if self.dann_config.random_init_edges == 0 || node_idx == 0 {
+        let query = &self.vectors[node_idx * self.dim..(node_idx + 1) * self.dim];
+        let mut merged_neighbors = self.vamana_search(query, l, build_r, graph);
+        if self.dann_config.intra_batch_candidates > 0 {
+            merged_neighbors.extend(self.collect_intra_batch_candidates_with_upper(
+                node_idx,
+                upper_bound,
+            ));
+        }
+        if self.dann_config.random_init_edges > 0 {
+            merged_neighbors.extend(self.collect_random_initial_candidates_with_upper(
+                node_idx,
+                upper_bound,
+            ));
+        }
+        merged_neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+        merged_neighbors.dedup_by(|a, b| a.0 == b.0);
+        merged_neighbors
+    }
+
+    fn collect_random_initial_candidates_with_upper(
+        &self,
+        node_idx: usize,
+        upper_bound: usize,
+    ) -> Vec<(usize, f32)> {
+        let limit = upper_bound.min(node_idx);
+        if self.dann_config.random_init_edges == 0 || limit == 0 {
             return Vec::new();
         }
 
-        let sample = self.dann_config.random_init_edges.min(node_idx);
+        let sample = self.dann_config.random_init_edges.min(limit);
         let query = &self.vectors[node_idx * self.dim..(node_idx + 1) * self.dim];
-        let mut pool: Vec<usize> = (0..node_idx).collect();
-        pool.shuffle(rng);
+        let base_seed = self.config.params.random_seed.unwrap_or(42);
+        let seed = base_seed ^ ((node_idx as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut pool: Vec<usize> = (0..limit).collect();
+        pool.shuffle(&mut rng);
         pool.into_iter()
             .take(sample)
             .map(|idx| (idx, self.compute_dist(query, idx)))
@@ -1200,15 +1276,24 @@ impl DiskAnnIndex {
 
     /// Add temporal candidates from recent inserted nodes.
     fn collect_intra_batch_candidates(&self, i: usize) -> Vec<(usize, f32)> {
-        let window = self.dann_config.intra_batch_candidates.min(i);
+        self.collect_intra_batch_candidates_with_upper(i, i)
+    }
+
+    fn collect_intra_batch_candidates_with_upper(
+        &self,
+        i: usize,
+        upper_bound: usize,
+    ) -> Vec<(usize, f32)> {
+        let limit = upper_bound.min(i);
+        let window = self.dann_config.intra_batch_candidates.min(limit);
         if window == 0 {
             return Vec::new();
         }
 
-        let start = i - window;
+        let start = limit - window;
         let query = &self.vectors[i * self.dim..(i + 1) * self.dim];
         let mut out = Vec::with_capacity(window);
-        for idx in start..i {
+        for idx in start..limit {
             let d = self.compute_dist(query, idx);
             out.push((idx, d));
         }
@@ -2599,6 +2684,7 @@ mod tests {
             disk_num_entry_points: Some(3),
             disk_build_degree_slack_pct: Some(130),
             disk_random_init_edges: Some(5),
+            disk_build_parallel_batch_size: Some(96),
             disk_build_dram_budget_gb: Some(2.5),
             disk_search_cache_budget_gb: Some(1.25),
             disk_enable_flash_layout: Some(true),
@@ -2629,6 +2715,7 @@ mod tests {
         assert_eq!(index.dann_config.num_entry_points, 3);
         assert_eq!(index.dann_config.build_degree_slack_pct, 130);
         assert_eq!(index.dann_config.random_init_edges, 5);
+        assert_eq!(index.dann_config.build_parallel_batch_size, 96);
         assert_eq!(index.dann_config.build_dram_budget_gb, 2.5);
         assert_eq!(index.dann_config.cache_dram_budget_gb, 1.25);
         assert!(index.dann_config.enable_flash_layout);
@@ -2790,16 +2877,18 @@ mod tests {
         ];
         index.ids = vec![0, 1, 2, 3, 4];
 
-        let mut rng1 = StdRng::seed_from_u64(7);
-        let mut rng2 = StdRng::seed_from_u64(7);
-        let c1 = index.collect_random_initial_candidates(4, &mut rng1);
-        let c2 = index.collect_random_initial_candidates(4, &mut rng2);
+        let c1 = index.collect_random_initial_candidates_with_upper(4, 4);
+        let c2 = index.collect_random_initial_candidates_with_upper(4, 4);
 
         assert_eq!(c1, c2);
         assert_eq!(c1.len(), 3);
         let picked: HashSet<usize> = c1.iter().map(|(idx, _)| *idx).collect();
         assert_eq!(picked.len(), 3);
         assert!(picked.iter().all(|&idx| idx < 4));
+
+        let c_limited = index.collect_random_initial_candidates_with_upper(4, 2);
+        assert_eq!(c_limited.len(), 2);
+        assert!(c_limited.iter().all(|(idx, _)| *idx < 2));
     }
 
     #[test]
