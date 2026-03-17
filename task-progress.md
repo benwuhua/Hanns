@@ -22,6 +22,33 @@
 
 ## Session Log
 
+### Session 182 - 2026-03-17
+- Focus: `diskann-build-prune-robustness-and-saturation-toggle`
+- Completed:
+  - aligned DiskANN build prune closer to official robust-prune semantics in `src/faiss/diskann.rs`:
+    - iterative alpha gating (`current_alpha` from `1.0` up to configured `alpha`)
+    - optional post-prune saturation to fill adjacency toward `R`
+  - added configurable `disk_saturate_after_prune` from API to runtime config:
+    - `IndexParams.disk_saturate_after_prune` in `src/api/index.rs`
+    - mapped into `DiskAnnConfig.saturate_after_prune` (default `true`)
+  - extended benchmark harness `bench_diskann_pq_ab` with `--saturate-after-prune` and row-level output field for reproducible A/B screening.
+  - added/updated regressions for saturation-enabled and saturation-disabled prune behavior.
+- Verification:
+  - `cargo fmt --all` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_config -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_prune_neighbors_uses_alpha_occlusion -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_prune_neighbors_can_disable_saturation -- --nocapture` -> `ok`
+  - `cargo test --bin bench_diskann_pq_ab -- --nocapture` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+  - authority A/B (`base=2000`, `query=40`, `dim=128`, `pq_dims=4`, `pq_expand_pct=125`):
+    - saturate `on`: `qps=12935.63`, `recall=0.7950`
+    - saturate `off`: `qps=12369.56`, `recall=0.8150`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - remote confirms a clear recall/QPS tradeoff for build-prune saturation: enabling saturation is qps-first (`+4.58%`) with modest recall cost (`-2.0` points absolute) on this lane.
+  - keep default `saturate_after_prune=true` for performance-first path; use `false` as recall-first option for tighter quality targets.
+
 ### Session 181 - 2026-03-17
 - Focus: `diskann-pq-expand-pct-authority-sweep`
 - Completed:

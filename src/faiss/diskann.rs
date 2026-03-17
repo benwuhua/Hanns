@@ -34,6 +34,8 @@ pub struct DiskAnnConfig {
     pub disk_pq_dims: usize,
     /// Candidate pool expansion ratio for PQ path (100 = off, 125 = +25%)
     pub pq_candidate_expand_pct: usize,
+    /// Whether to saturate adjacency to max degree after alpha pruning
+    pub saturate_after_prune: bool,
     /// Beamwidth for search (IO parallelism), default 8
     pub beamwidth: usize,
     /// Cache DRAM budget in GB
@@ -59,6 +61,7 @@ impl Default for DiskAnnConfig {
             build_dram_budget_gb: 0.0,
             disk_pq_dims: 0,
             pq_candidate_expand_pct: 125,
+            saturate_after_prune: true,
             beamwidth: 8,
             cache_dram_budget_gb: 0.0,
             warm_up: false,
@@ -84,6 +87,7 @@ impl DiskAnnConfig {
                 .disk_pq_candidate_expand_pct
                 .unwrap_or(125)
                 .clamp(100, 300),
+            saturate_after_prune: params.disk_saturate_after_prune.unwrap_or(true),
             cache_dram_budget_gb: 0.0,
             warm_up: false,
             filter_threshold: -1.0,
@@ -534,35 +538,61 @@ impl DiskAnnIndex {
         let mut sorted: Vec<(i64, f32)> = neighbors.to_vec();
         sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
-        // Vamana-style alpha pruning (triangle inequality occlusion):
-        // keep candidate k only when max_j(distance(i,k) / distance(j,k)) <= alpha.
+        // Robust-prune style alpha occlusion:
+        // - iterate with increasing current_alpha (1.0 -> alpha)
+        // - then optionally saturate back to R with nearest remaining neighbors.
         let mut selected: Vec<(i64, f32)> = Vec::new();
+        let mut selected_ids = HashSet::new();
+        let final_alpha = self.alpha.max(1.0);
+        let alpha_step = final_alpha.min(1.2);
+        let mut current_alpha = 1.0f32;
 
-        for &(id, dist) in &sorted {
-            if selected.len() >= R {
-                break;
-            }
+        while selected.len() < R {
+            for &(id, dist) in &sorted {
+                if selected.len() >= R {
+                    break;
+                }
+                if selected_ids.contains(&id) {
+                    continue;
+                }
 
-            let idx = id as usize;
-            if idx >= self.vectors.len() / self.dim {
-                continue;
-            }
+                let idx = id as usize;
+                if idx >= self.vectors.len() / self.dim {
+                    continue;
+                }
 
-            let mut occluded = false;
-
-            for &(sel_id, _) in &selected {
-                let sel_idx = sel_id as usize;
-                if sel_idx < self.vectors.len() / self.dim {
-                    let d_jk = self.distance_between_nodes(sel_idx, idx);
-                    if d_jk <= f32::EPSILON || dist / d_jk > self.alpha {
-                        occluded = true;
-                        break;
+                let mut occluded = false;
+                for &(sel_id, _) in &selected {
+                    let sel_idx = sel_id as usize;
+                    if sel_idx < self.vectors.len() / self.dim {
+                        let d_jk = self.distance_between_nodes(sel_idx, idx);
+                        if d_jk <= f32::EPSILON || dist / d_jk > current_alpha {
+                            occluded = true;
+                            break;
+                        }
                     }
+                }
+
+                if !occluded {
+                    selected.push((id, dist));
+                    selected_ids.insert(id);
                 }
             }
 
-            if !occluded {
-                selected.push((id, dist));
+            if current_alpha >= final_alpha {
+                break;
+            }
+            current_alpha = (current_alpha * alpha_step).min(final_alpha);
+        }
+
+        if self.dann_config.saturate_after_prune && final_alpha > 1.0 {
+            for &(id, dist) in &sorted {
+                if selected.len() >= R {
+                    break;
+                }
+                if selected_ids.insert(id) {
+                    selected.push((id, dist));
+                }
             }
         }
 
@@ -1408,6 +1438,7 @@ mod tests {
             beamwidth: Some(16),
             disk_pq_dims: Some(2),
             disk_pq_candidate_expand_pct: Some(150),
+            disk_saturate_after_prune: Some(false),
             ..Default::default()
         };
 
@@ -1426,6 +1457,7 @@ mod tests {
         assert_eq!(index.dann_config.beamwidth, 16);
         assert_eq!(index.dann_config.disk_pq_dims, 2);
         assert_eq!(index.dann_config.pq_candidate_expand_pct, 150);
+        assert!(!index.dann_config.saturate_after_prune);
     }
 
     #[test]
@@ -1475,6 +1507,33 @@ mod tests {
             dim: 2,
             data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams::default(),
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        index.vectors = vec![
+            0.0, 0.0, // node 0
+            1.0, 0.0, // node 1
+            2.0, 0.0, // node 2
+            3.0, 0.0, // node 3
+        ];
+        index.ids = vec![0, 1, 2, 3];
+
+        let pruned = index.prune_neighbors(0, &[(1, 1.0), (2, 4.0), (3, 9.0)], 2);
+        assert_eq!(pruned.len(), 2);
+        assert_eq!(pruned[0].0, 1);
+        assert_eq!(pruned[1].0, 2);
+    }
+
+    #[test]
+    fn test_diskann_prune_neighbors_can_disable_saturation() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_saturate_after_prune: Some(false),
+                ..Default::default()
+            },
         };
         let mut index = DiskAnnIndex::new(&config).unwrap();
         index.vectors = vec![

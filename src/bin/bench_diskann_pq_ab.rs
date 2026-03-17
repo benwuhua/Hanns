@@ -15,6 +15,7 @@ use std::time::Instant;
 struct Row {
     pq_dims: usize,
     pq_expand_pct: usize,
+    saturate_after_prune: bool,
     base_size: usize,
     query_size: usize,
     dim: usize,
@@ -134,6 +135,7 @@ fn main() {
     let search_list_size = parse_usize_arg("search-list-size", 128);
     let beamwidth = parse_usize_arg("beamwidth", 8);
     let pq_expand_pct = parse_usize_arg("pq-expand-pct", 125);
+    let saturate_after_prune = parse_bool_arg("saturate-after-prune", true);
     let output = parse_string_arg("output", "benchmark_results/diskann_pq_ab.local.json");
     let pq_dims_list = parse_pq_dims_arg(&[0, 2, 4]);
     let reuse_index = parse_bool_arg("reuse-index", false);
@@ -176,6 +178,7 @@ fn main() {
                 beamwidth: Some(beamwidth),
                 disk_pq_dims: Some(pq_dims),
                 disk_pq_candidate_expand_pct: Some(pq_expand_pct),
+                disk_saturate_after_prune: Some(saturate_after_prune),
                 ..Default::default()
             },
         };
@@ -216,6 +219,7 @@ fn main() {
         rows.push(Row {
             pq_dims,
             pq_expand_pct,
+            saturate_after_prune,
             base_size,
             query_size,
             dim,

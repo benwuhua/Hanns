@@ -235,6 +235,9 @@ pub struct IndexParams {
     /// For DiskANN PQ path: candidate pool expansion percentage (100 = off, 125 = +25%)
     #[serde(default)]
     pub disk_pq_candidate_expand_pct: Option<usize>,
+    /// For DiskANN build prune: fill adjacency to max_degree after alpha pruning
+    #[serde(default)]
+    pub disk_saturate_after_prune: Option<bool>,
     /// For PRQ: number of subquantizer splits (m)
     #[serde(default)]
     pub prq_m: Option<usize>,
