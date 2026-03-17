@@ -11,6 +11,7 @@
 - Automated bootstrap test for `init.sh` injection hooks
 
 ### Changed
+- Added a fair-compare evidence slice for DiskANN profiles (`2026-03-17`) with both `same-params` and `near-same-recall` views: under identical knobs at `lsearch=128`, baseline (`intra=0`) is `11666.53 qps / 0.7850` and current (`intra=8`) is `11431.02 qps / 0.7875`; current profile can recover throughput advantage in a nearby recall band at `lsearch=120` (`11987.35 qps / 0.7775`).
 - Search list size secondary authority sweep (`2026-03-17`) confirms `search_list_size` is also a strong throughput/recall knob under the tuned DiskANN profile: `Lsearch=112` load `12721.22 qps / 0.7775 recall` vs `Lsearch=128` load `11579.42 qps / 0.8100 recall`; default remains `128`, with `112` retained as qps-first override.
 - DiskANN `max_degree` secondary sweep (`2026-03-17`) rejected `R=56` after authority verification: on the tuned lane (`construction_l=128`, `beamwidth=8`, `pq_expand_pct=125`, `saturate=on`, `intra=8`), `R=56` was worse than `R=48` on both load qps and recall (`10516.41/0.7650` vs `11123.88/0.8350`), so default remains `48`.
 - Beamwidth secondary authority sweep (`2026-03-17`) on the tuned DiskANN profile (`construction_l=128`, `pq_expand_pct=125`, `saturate=on`, `intra=8`) confirms `beamwidth` is a strong throughput/recall tradeoff: `bw=8` load `11399.58 qps / 0.8725 recall` vs `bw=10` load `11800.21 qps / 0.8275 recall`; default remains `8`, with `10` exposed as qps-first override.

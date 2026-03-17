@@ -22,6 +22,26 @@
 
 ## Session Log
 
+### Session 188 - 2026-03-17
+- Focus: `diskann-fair-compare-same-lsearch-and-same-recall`
+- Completed:
+  - established a direct fair-compare slice between baseline profile (`intra=0`) and current profile (`intra=8`) under identical search knobs.
+  - added a recall-aligned comparison point by sweeping current profile to `lsearch=120` and `160`.
+  - produced load-lane compare artifacts for both `same-params` and `near-same-recall` views.
+- Verification:
+  - authority load results (`base=2000`, `query=40`, `dim=128`, `top_k=10`, `max_degree=48`, `construction_l=128`, `beamwidth=8`, `pq_dims=4`, `pq_expand_pct=125`, `saturate=on`):
+    - baseline, same params (`intra=0`, `lsearch=128`): `qps=11666.53`, `recall=0.7850`
+    - current, same params (`intra=8`, `lsearch=128`): `qps=11431.02`, `recall=0.7875`
+    - current, near-same-recall point (`intra=8`, `lsearch=120`): `qps=11987.35`, `recall=0.7775`
+    - baseline high-recall reference (`intra=0`, `lsearch=160`): `qps=10198.75`, `recall=0.8525`
+    - current high-recall reference (`intra=8`, `lsearch=160`): `qps=10281.63`, `recall=0.8275`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - strict same-params view shows current profile slightly higher recall but slightly lower qps.
+  - near-same-recall view shows current profile can reach comparable recall band with higher qps by lowering `lsearch` to `120`.
+  - future optimization claims should include both views (`same-params` + `near-same-recall`) as standard evidence.
+
 ### Session 187 - 2026-03-17
 - Focus: `diskann-search-list-size-secondary-sweep`
 - Completed:
