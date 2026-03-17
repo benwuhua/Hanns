@@ -2654,10 +2654,14 @@ pub extern "C" fn knowhere_free_result(result: *mut CSearchResult) {
         unsafe {
             let r = &mut *result;
             if !r.ids.is_null() {
-                Vec::from_raw_parts(r.ids, r.num_results, r.num_results);
+                drop(Vec::from_raw_parts(r.ids, r.num_results, r.num_results));
             }
             if !r.distances.is_null() {
-                Vec::from_raw_parts(r.distances, r.num_results, r.num_results);
+                drop(Vec::from_raw_parts(
+                    r.distances,
+                    r.num_results,
+                    r.num_results,
+                ));
             }
             let _ = Box::from_raw(result);
         }
@@ -2791,10 +2795,14 @@ pub extern "C" fn knowhere_free_vector_result(result: *mut CVectorResult) {
         unsafe {
             let r = &mut *result;
             if !r.vectors.is_null() && r.num_vectors > 0 && r.dim > 0 {
-                Vec::from_raw_parts(r.vectors, r.num_vectors * r.dim, r.num_vectors * r.dim);
+                drop(Vec::from_raw_parts(
+                    r.vectors,
+                    r.num_vectors * r.dim,
+                    r.num_vectors * r.dim,
+                ));
             }
             if !r.ids.is_null() && r.num_vectors > 0 {
-                Vec::from_raw_parts(r.ids, r.num_vectors, r.num_vectors);
+                drop(Vec::from_raw_parts(r.ids, r.num_vectors, r.num_vectors));
             }
             let _ = Box::from_raw(result);
         }
@@ -2817,11 +2825,15 @@ pub extern "C" fn knowhere_free_get_vector_result(result: *mut CGetVectorResult)
             let r = &mut *result;
             // 释放 vectors 数组
             if !r.vectors.is_null() && r.num_ids > 0 && r.dim > 0 {
-                Vec::from_raw_parts(r.vectors as *mut f32, r.num_ids * r.dim, r.num_ids * r.dim);
+                drop(Vec::from_raw_parts(
+                    r.vectors as *mut f32,
+                    r.num_ids * r.dim,
+                    r.num_ids * r.dim,
+                ));
             }
             // 释放 ids 数组
             if !r.ids.is_null() && r.num_ids > 0 {
-                Vec::from_raw_parts(r.ids, r.num_ids, r.num_ids);
+                drop(Vec::from_raw_parts(r.ids, r.num_ids, r.num_ids));
             }
             // 释放结果结构体本身
             let _ = Box::from_raw(result);
@@ -3323,6 +3335,7 @@ use crate::bitset::BitsetView;
 pub struct CBitset {
     pub data: *mut u64,
     pub len: usize,
+    cap_words: usize,
 }
 
 impl From<&BitsetView> for CBitset {
@@ -3331,11 +3344,13 @@ impl From<&BitsetView> for CBitset {
         let mut vec = slice.to_vec();
         vec.shrink_to_fit();
         let ptr = vec.as_mut_ptr();
+        let cap_words = vec.capacity();
         std::mem::forget(vec);
 
         Self {
             data: ptr,
             len: bitset.len(),
+            cap_words,
         }
     }
 }
@@ -3344,7 +3359,7 @@ impl Drop for CBitset {
     fn drop(&mut self) {
         if !self.data.is_null() {
             unsafe {
-                Vec::from_raw_parts(self.data, 0, self.len / 64 + 1);
+                drop(Vec::from_raw_parts(self.data, 0, self.cap_words));
             }
         }
     }

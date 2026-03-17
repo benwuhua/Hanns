@@ -22,6 +22,26 @@
 
 ## Session Log
 
+### Session 177 - 2026-03-17
+- Focus: `hnsw-and-ffi-memory-safety-hardening`
+- Completed:
+  - hardened HNSW index/id and distance hot paths against invalid indices in release mode (replaced debug-only assumptions with runtime bounds/overflow guards).
+  - fixed HNSW `get_idx_from_id_fast` sequential-id path to validate bounds instead of raw `id as usize`.
+  - added HNSW load-time integrity checks: reject invalid `dim=0`, size overflows, duplicate IDs, dangling neighbor IDs, missing/invalid entry point IDs, and restore `use_sequential_ids` from serialized IDs.
+  - hardened FFI free paths to explicit ownership drop semantics and fixed `CBitset` deallocation to use real captured capacity.
+  - added regressions for custom-ID load behavior and corrupted-entry-point rejection.
+- Verification:
+  - `cargo test --lib test_load_sets_use_sequential_ids_false_for_custom_ids -- --nocapture` -> `ok`
+  - `cargo test --lib test_load_rejects_invalid_entry_point_id -- --nocapture` -> `ok`
+  - `cargo test --lib test_get_idx_from_id_fast_sequential_invalid_id_falls_back_safely -- --nocapture` -> `ok`
+  - `cargo test --lib test_distance_returns_infinity_for_out_of_bounds_idx -- --nocapture` -> `ok`
+  - `cargo test --lib test_bitset_create -- --nocapture` -> `ok`
+  - `cargo test --lib test_bitset_or_different_sizes -- --nocapture` -> `ok`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - this session closes a concrete set of memory-safety/UB risks on hot paths and deserialization boundaries; remaining performance-path refactors can build on this safer baseline.
+
 ### Session 176 - 2026-03-17
 - Focus: `diskann-pq-ab-benchmark-harness-and-fast-reuse-mode`
 - Completed:

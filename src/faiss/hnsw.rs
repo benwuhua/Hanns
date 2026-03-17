@@ -1254,14 +1254,18 @@ impl HnswIndex {
 
     #[inline(always)]
     fn distance_to_idx_ip_dispatch(index: &HnswIndex, query: &[f32], idx: usize) -> f32 {
-        let start = idx * index.dim;
+        let Some(start) = index.vector_start_offset(index.vectors.len(), idx) else {
+            return f32::INFINITY;
+        };
         let stored = &index.vectors[start..start + index.dim];
         -simd::inner_product(query, stored)
     }
 
     #[inline(always)]
     fn distance_to_idx_cosine_dispatch(index: &HnswIndex, query: &[f32], idx: usize) -> f32 {
-        let start = idx * index.dim;
+        let Some(start) = index.vector_start_offset(index.vectors.len(), idx) else {
+            return f32::INFINITY;
+        };
         let stored = &index.vectors[start..start + index.dim];
         let ip = simd::inner_product(query, stored);
         let q_norm_sq = simd::inner_product(query, query);
@@ -3283,8 +3287,8 @@ impl HnswIndex {
     #[inline]
     fn get_idx_from_id_fast(&self, id: i64) -> usize {
         if self.use_sequential_ids {
-            // Fast path: idx == id for sequential IDs
-            id as usize
+            // Fast path: idx == id for sequential IDs with bounds validation.
+            self.get_idx_from_id(id).unwrap_or(0)
         } else {
             // Fallback: linear search for custom IDs
             self.get_idx_from_id(id).unwrap_or(0)
@@ -3320,7 +3324,30 @@ impl HnswIndex {
     #[inline]
     fn distance(&self, query: &[f32], idx: usize) -> f32 {
         debug_assert_eq!(query.len(), self.dim);
+        if idx >= self.vector_count() {
+            return f32::INFINITY;
+        }
         (self.distance_to_idx_fn)(self, query, idx)
+    }
+
+    #[inline(always)]
+    fn vector_count(&self) -> usize {
+        if self.dim == 0 {
+            0
+        } else {
+            self.vectors.len() / self.dim
+        }
+    }
+
+    #[inline(always)]
+    fn vector_start_offset(&self, storage_len: usize, idx: usize) -> Option<usize> {
+        let start = idx.checked_mul(self.dim)?;
+        let end = start.checked_add(self.dim)?;
+        if end <= storage_len {
+            Some(start)
+        } else {
+            None
+        }
     }
 
     #[inline(always)]
@@ -3330,17 +3357,20 @@ impl HnswIndex {
         base_ptr: *const f32,
         idx: usize,
     ) -> f32 {
-        debug_assert!(idx < self.vectors.len() / self.dim);
+        let Some(start) = self.vector_start_offset(self.vectors.len(), idx) else {
+            return f32::INFINITY;
+        };
         if self.use_bf16_storage {
             return unsafe { self.l2_distance_to_idx_bf16_ptr(query_ptr, idx) };
         }
-        (self.l2_distance_sq_ptr_kernel)(query_ptr, base_ptr.add(idx * self.dim), self.dim)
+        (self.l2_distance_sq_ptr_kernel)(query_ptr, base_ptr.add(start), self.dim)
     }
 
     #[inline(always)]
     unsafe fn l2_distance_to_idx_bf16_ptr(&self, query_ptr: *const f32, idx: usize) -> f32 {
-        debug_assert!(idx < self.bf16_vectors.len() / self.dim);
-        let start = idx * self.dim;
+        let Some(start) = self.vector_start_offset(self.bf16_vectors.len(), idx) else {
+            return f32::INFINITY;
+        };
         let mut sum = 0.0f32;
         for offset in 0..self.dim {
             let q = Bf16::from_f32(unsafe { *query_ptr.add(offset) }).to_f32();
@@ -3354,7 +3384,9 @@ impl HnswIndex {
     #[inline(always)]
     fn l2_distance_to_idx_bf16_with_query_bits(&self, query_bf16: &[u16], idx: usize) -> f32 {
         debug_assert_eq!(query_bf16.len(), self.dim);
-        let start = idx * self.dim;
+        let Some(start) = self.vector_start_offset(self.bf16_vectors.len(), idx) else {
+            return f32::INFINITY;
+        };
         let mut sum = 0.0f32;
         for (offset, &q_bits) in query_bf16.iter().enumerate() {
             let q = Bf16::from_bits(q_bits).to_f32();
@@ -3372,10 +3404,24 @@ impl HnswIndex {
         idxs: [usize; 4],
     ) -> [f32; 4] {
         let starts = [
-            idxs[0] * self.dim,
-            idxs[1] * self.dim,
-            idxs[2] * self.dim,
-            idxs[3] * self.dim,
+            self.vector_start_offset(self.bf16_vectors.len(), idxs[0]),
+            self.vector_start_offset(self.bf16_vectors.len(), idxs[1]),
+            self.vector_start_offset(self.bf16_vectors.len(), idxs[2]),
+            self.vector_start_offset(self.bf16_vectors.len(), idxs[3]),
+        ];
+        if starts.iter().any(|s| s.is_none()) {
+            return [
+                self.l2_distance_to_idx_bf16_with_query_bits(query_bf16, idxs[0]),
+                self.l2_distance_to_idx_bf16_with_query_bits(query_bf16, idxs[1]),
+                self.l2_distance_to_idx_bf16_with_query_bits(query_bf16, idxs[2]),
+                self.l2_distance_to_idx_bf16_with_query_bits(query_bf16, idxs[3]),
+            ];
+        }
+        let starts = [
+            starts[0].unwrap_or(0),
+            starts[1].unwrap_or(0),
+            starts[2].unwrap_or(0),
+            starts[3].unwrap_or(0),
         ];
         bf16_l2_sq_batch_4(
             query_bf16,
@@ -3406,19 +3452,42 @@ impl HnswIndex {
                 unsafe { self.l2_distance_to_idx_bf16_ptr(query_ptr, idxs[3]) },
             ];
         }
+        let starts = [
+            self.vector_start_offset(self.vectors.len(), idxs[0]),
+            self.vector_start_offset(self.vectors.len(), idxs[1]),
+            self.vector_start_offset(self.vectors.len(), idxs[2]),
+            self.vector_start_offset(self.vectors.len(), idxs[3]),
+        ];
+        if starts.iter().any(|s| s.is_none()) {
+            return [
+                unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, idxs[0]) },
+                unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, idxs[1]) },
+                unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, idxs[2]) },
+                unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, idxs[3]) },
+            ];
+        }
+        let starts = [
+            starts[0].unwrap_or(0),
+            starts[1].unwrap_or(0),
+            starts[2].unwrap_or(0),
+            starts[3].unwrap_or(0),
+        ];
         simd::l2_batch_4_ptrs(
             query_ptr,
-            base_ptr.add(idxs[0] * self.dim),
-            base_ptr.add(idxs[1] * self.dim),
-            base_ptr.add(idxs[2] * self.dim),
-            base_ptr.add(idxs[3] * self.dim),
+            base_ptr.add(starts[0]),
+            base_ptr.add(starts[1]),
+            base_ptr.add(starts[2]),
+            base_ptr.add(starts[3]),
             self.dim,
         )
     }
 
     #[inline(always)]
     unsafe fn prefetch_l2_vector_idx(&self, base_ptr: *const f32, idx: usize) -> bool {
-        let vec_ptr = base_ptr.add(idx * self.dim);
+        let Some(start) = self.vector_start_offset(self.vectors.len(), idx) else {
+            return false;
+        };
+        let vec_ptr = base_ptr.add(start);
         #[cfg(target_arch = "x86_64")]
         {
             match x86_prefetch_hint() {
@@ -5543,6 +5612,7 @@ impl HnswIndex {
     }
 
     pub fn load(&mut self, path: &std::path::Path) -> Result<()> {
+        use std::collections::HashSet;
         use std::fs::File;
         use std::io::Read;
 
@@ -5571,6 +5641,11 @@ impl HnswIndex {
         let mut buf4 = [0u8; 4];
         file.read_exact(&mut buf4)?;
         self.dim = u32::from_le_bytes(buf4) as usize;
+        if self.dim == 0 {
+            return Err(crate::api::KnowhereError::Codec(
+                "invalid dimension: 0".to_string(),
+            ));
+        }
 
         file.read_exact(&mut buf4)?;
         self.m = u32::from_le_bytes(buf4) as usize;
@@ -5601,10 +5676,13 @@ impl HnswIndex {
         let mut buf8 = [0u8; 8];
         file.read_exact(&mut buf8)?;
         let count = u64::from_le_bytes(buf8) as usize;
+        let total_f32 = count
+            .checked_mul(self.dim)
+            .ok_or_else(|| crate::api::KnowhereError::Codec("vector size overflow".to_string()))?;
 
         // Vectors
-        self.vectors = vec![0.0f32; count * self.dim];
-        for i in 0..count * self.dim {
+        self.vectors = vec![0.0f32; total_f32];
+        for i in 0..total_f32 {
             let mut buf = [0u8; 4];
             file.read_exact(&mut buf)?;
             self.vectors[i] = f32::from_le_bytes(buf);
@@ -5613,14 +5691,26 @@ impl HnswIndex {
 
         // IDs
         self.ids = Vec::with_capacity(count);
+        let mut id_set = HashSet::with_capacity(count);
+        let mut using_sequential_ids = true;
         // OPT-021: Removed HashMap - IDs are stored in order
-        for _ in 0..count {
+        for i in 0..count {
             let mut buf = [0u8; 8];
             file.read_exact(&mut buf)?;
             let id = i64::from_le_bytes(buf);
+            if !id_set.insert(id) {
+                return Err(crate::api::KnowhereError::Codec(format!(
+                    "duplicate id in index file: {}",
+                    id
+                )));
+            }
+            if id < 0 || id as usize != i {
+                using_sequential_ids = false;
+            }
             self.ids.push(id);
             // OPT-021: No HashMap insert needed - idx = position in array
         }
+        self.use_sequential_ids = using_sequential_ids;
 
         // Node info
         self.node_info = Vec::with_capacity(count);
@@ -5642,6 +5732,12 @@ impl HnswIndex {
 
                     let nbr_id = i64::from_le_bytes(id_buf);
                     let dist = f32::from_le_bytes(dist_buf);
+                    if !id_set.contains(&nbr_id) {
+                        return Err(crate::api::KnowhereError::Codec(format!(
+                            "neighbor id {} not found in ids table",
+                            nbr_id
+                        )));
+                    }
                     node_info.layer_neighbors[layer_idx].push(nbr_id, dist);
                 }
             }
@@ -5654,9 +5750,21 @@ impl HnswIndex {
         if buf1[0] == 1 {
             let mut buf = [0u8; 8];
             file.read_exact(&mut buf)?;
-            self.entry_point = Some(i64::from_le_bytes(buf));
+            let entry = i64::from_le_bytes(buf);
+            if !id_set.contains(&entry) {
+                return Err(crate::api::KnowhereError::Codec(format!(
+                    "entry point id {} not found in ids table",
+                    entry
+                )));
+            }
+            self.entry_point = Some(entry);
         } else {
             self.entry_point = None;
+        }
+        if count > 0 && self.entry_point.is_none() {
+            return Err(crate::api::KnowhereError::Codec(
+                "missing entry point for non-empty index".to_string(),
+            ));
         }
 
         self.refresh_layer0_flat_graph();
@@ -7203,6 +7311,101 @@ mod tests {
         assert!(
             (d1 - 4.0).abs() < 1e-3,
             "BF16 path should preserve idx=1 distance"
+        );
+    }
+
+    #[test]
+    fn test_get_idx_from_id_fast_sequential_invalid_id_falls_back_safely() {
+        let index = deterministic_upper_layer_index();
+        let idx = index.get_idx_from_id_fast(-1);
+        assert_eq!(idx, 0);
+    }
+
+    #[test]
+    fn test_distance_returns_infinity_for_out_of_bounds_idx() {
+        let index = deterministic_upper_layer_index();
+        let query = [0.0, 0.0];
+        let invalid_idx = index.vector_count() + 1;
+        let d = index.distance(&query, invalid_idx);
+        assert!(d.is_infinite() && d.is_sign_positive());
+    }
+
+    #[test]
+    fn test_load_sets_use_sequential_ids_false_for_custom_ids() {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        };
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        let vectors = vec![0.0, 0.0, 1.0, 0.0, 2.0, 0.0];
+        let ids = vec![10, 20, 30];
+        index.train(&vectors).unwrap();
+        index.add(&vectors, Some(&ids)).unwrap();
+
+        let path = std::env::temp_dir().join(format!(
+            "hnsw_custom_ids_{}_{}.bin",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        index.save(&path).unwrap();
+
+        let mut loaded = HnswIndex::new(&config).unwrap();
+        loaded.load(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert!(
+            !loaded.use_sequential_ids,
+            "loaded index must not assume sequential ids when serialized ids are custom"
+        );
+        let got = loaded.get_vector_by_ids(&[20]).unwrap();
+        assert_eq!(got, vec![1.0, 0.0]);
+    }
+
+    #[test]
+    fn test_load_rejects_invalid_entry_point_id() {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        };
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        let vectors = vec![0.0, 0.0, 1.0, 0.0];
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        let path = std::env::temp_dir().join(format!(
+            "hnsw_invalid_entry_{}_{}.bin",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        index.save(&path).unwrap();
+
+        let mut bytes = std::fs::read(&path).unwrap();
+        let bytes_len = bytes.len();
+        assert_eq!(bytes[bytes_len - 9], 1u8);
+        let invalid_entry: i64 = 9_999_999;
+        bytes[bytes_len - 8..].copy_from_slice(&invalid_entry.to_le_bytes());
+        std::fs::write(&path, &bytes).unwrap();
+
+        let mut loaded = HnswIndex::new(&config).unwrap();
+        let load_err = loaded.load(&path).unwrap_err();
+        std::fs::remove_file(&path).ok();
+        assert!(
+            load_err.to_string().contains("entry point id"),
+            "load should reject corrupted entry-point id"
         );
     }
 
