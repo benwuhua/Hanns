@@ -22,6 +22,42 @@
 
 ## Session Log
 
+### Session 166 - 2026-03-17
+- Focus: `hnsw-fair-lane-throughput-opt56-revival-and-authority-promotion`
+- Completed:
+  - executed the agreed medium-lane recheck (`base=300k, query=300`) for both previously rejected ideas:
+    - `opt56` (TLS scratch reuse) flipped to stable positive on medium lane and was promoted.
+    - `opt57` (layer0 tail batch4 padding) stayed neutral/negative and remained rejected.
+  - promoted `opt56` to full authority lane (`base=1M, query=1000, ef=60`) and confirmed large uplift with recall parity.
+  - retained `opt56` code in working tree and added a deterministic repeated-call regression test.
+- Verification:
+  - local:
+    - `cargo fmt --all -- --check` -> `ok`
+    - `cargo test --lib test_search_single_l2_fast_matches_generic_and_filter_path_stays_stable -- --nocapture` -> `ok`
+    - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok`
+    - `cargo test --lib test_search_single_l2_unfiltered_repeated_calls_stay_deterministic -- --nocapture` -> `ok`
+  - medium-lane recheck (`300k/300`, cache):
+    - `opt56`:
+      - pre1 `/data/work/knowhere-rs-logs/rs_hnsw_opt56_pre_authscreen300k.json`: `qps=19253.204150`, `recall=0.9703`
+      - post1 `/data/work/knowhere-rs-logs/rs_hnsw_opt56_post_authscreen300k.json`: `qps=24722.035731`, `recall=0.9703`
+      - pre2 `/data/work/knowhere-rs-logs/rs_hnsw_opt56_pre_authscreen300k_rerun1.json`: `qps=18253.903399`, `recall=0.9703`
+      - post2 `/data/work/knowhere-rs-logs/rs_hnsw_opt56_post_authscreen300k_rerun1.json`: `qps=23395.483174`, `recall=0.9703`
+      - median delta: `+28.29%`
+    - `opt57`:
+      - pre `/data/work/knowhere-rs-logs/rs_hnsw_opt57_pre_authscreen300k.json`: `qps=18721.000001`, `recall=0.9703`
+      - post `/data/work/knowhere-rs-logs/rs_hnsw_opt57_post_authscreen300k.json`: `qps=18715.474628`, `recall=0.9703`
+      - delta: `-0.03%` (reject)
+  - full authority confirmation (`1M/1000`, cache):
+    - pre `/data/work/knowhere-rs-logs/rs_hnsw_opt56_pre_authority1m.json`: `qps=13406.232853`, `recall=0.9518`
+    - post `/data/work/knowhere-rs-logs/rs_hnsw_opt56_post_authority1m.json`: `qps=28574.170875`, `recall=0.9518`
+    - delta: `+113.14%`
+- Result:
+  - `opt56`: `authority_result=pass` (promoted and kept)
+  - `opt57`: `screen_result=reject` (kept closed)
+- Notes:
+  - this strongly indicates per-query scratch allocation/reinit was a dominant cost on the L2 unfiltered lane.
+  - next recommended step: run a same-day native anchor refresh and update the equal-recall gap after `opt56` before opening new micro-optimizations.
+
 ### Session 165 - 2026-03-17
 - Focus: `hnsw-fair-lane-throughput-screen-opt57-layer0-tail-batch4-padding`
 - Completed:

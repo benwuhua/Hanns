@@ -12,6 +12,7 @@ use rand::Rng;
 use rand::SeedableRng;
 use rayon::prelude::*;
 use serde::Serialize;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BinaryHeap};
 use std::sync::Arc;
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
@@ -42,6 +43,10 @@ type DistanceToIdxFn = fn(&HnswIndex, &[f32], usize) -> f32;
 const MAX_LAYERS: usize = 16;
 const HNSW_SEARCH_KNN_BF_FILTER_THRESHOLD: f32 = 0.93;
 const HNSW_SEARCH_BF_TOPK_THRESHOLD: f32 = 0.5;
+
+thread_local! {
+    static HNSW_SEARCH_SCRATCH_TLS: RefCell<SearchScratch> = RefCell::new(SearchScratch::new());
+}
 
 /// BUG-001 FIX: Reference M value for level multiplier calculation.
 /// Using a fixed reference M ensures consistent level distribution across different M values.
@@ -5108,12 +5113,17 @@ impl HnswIndex {
         final_results
     }
 
-    fn search_single_l2_unfiltered(&self, query: &[f32], ef: usize, k: usize) -> Vec<(i64, f32)> {
+    fn search_single_l2_unfiltered_with_scratch(
+        &self,
+        query: &[f32],
+        ef: usize,
+        k: usize,
+        scratch: &mut SearchScratch,
+    ) -> Vec<(i64, f32)> {
         if self.ids.is_empty() || self.entry_point.is_none() {
             return vec![];
         }
 
-        let mut scratch = SearchScratch::new();
         let mut curr_ep_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
         let mut best_ep_idx = curr_ep_idx;
         let mut curr_ep_dist = self.l2_distance_to_idx(query, curr_ep_idx);
@@ -5149,7 +5159,7 @@ impl HnswIndex {
             best_ep_idx,
             0,
             ef,
-            &mut scratch,
+            scratch,
             query_bf16.as_deref(),
         );
 
@@ -5162,6 +5172,13 @@ impl HnswIndex {
         }
 
         final_results
+    }
+
+    fn search_single_l2_unfiltered(&self, query: &[f32], ef: usize, k: usize) -> Vec<(i64, f32)> {
+        HNSW_SEARCH_SCRATCH_TLS.with(|scratch_cell| {
+            let mut scratch = scratch_cell.borrow_mut();
+            self.search_single_l2_unfiltered_with_scratch(query, ef, k, &mut scratch)
+        })
     }
 
     /// Search single query with bitset filtering
@@ -7267,6 +7284,20 @@ mod tests {
         assert_eq!(
             fast, generic,
             "BF16 fast unfiltered search must preserve generic unfiltered results"
+        );
+    }
+
+    #[test]
+    fn test_search_single_l2_unfiltered_repeated_calls_stay_deterministic() {
+        let index = deterministic_upper_layer_index();
+        let query = [11.8, 0.0];
+
+        let first = index.search_single_l2_unfiltered(&query, 32, 4);
+        let second = index.search_single_l2_unfiltered(&query, 32, 4);
+
+        assert_eq!(
+            second, first,
+            "thread-local scratch reuse must preserve deterministic L2 unfiltered results"
         );
     }
 
