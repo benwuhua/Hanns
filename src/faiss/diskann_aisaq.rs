@@ -93,6 +93,7 @@ impl AisaqConfig {
             rerank_expand_pct: params.disk_rerank_expand_pct.unwrap_or(200).clamp(100, 400),
             random_init_edges: params.disk_random_init_edges.unwrap_or(0).min(64),
             random_seed: params.random_seed.unwrap_or(42),
+            build_dram_budget_gb: params.disk_build_dram_budget_gb.unwrap_or(0.0),
             ..Self::default()
         }
     }
@@ -655,6 +656,7 @@ impl PQFlashIndex {
         }
 
         let num_vectors = vectors.len() / self.dim;
+        self.validate_build_dram_budget(num_vectors)?;
         for row in 0..num_vectors {
             let start = row * self.dim;
             let end = start + self.dim;
@@ -687,6 +689,24 @@ impl PQFlashIndex {
         self.refresh_entry_points();
         if self.config.warm_up {
             self.warm_up_cache();
+        }
+        Ok(())
+    }
+
+    fn validate_build_dram_budget(&self, additional_nodes: usize) -> Result<()> {
+        if self.config.build_dram_budget_gb <= 0.0 {
+            return Ok(());
+        }
+
+        let budget_bytes =
+            (self.config.build_dram_budget_gb as f64 * 1024.0 * 1024.0 * 1024.0) as usize;
+        let total_nodes = self.nodes.len().saturating_add(additional_nodes);
+        let projected_bytes = total_nodes.saturating_mul(self.flash_layout.node_bytes);
+        if projected_bytes > budget_bytes {
+            return Err(KnowhereError::InvalidArg(format!(
+                "disk_build_dram_budget_gb exceeded: projected={} bytes exceeds budget={} bytes",
+                projected_bytes, budget_bytes
+            )));
         }
         Ok(())
     }
@@ -1734,6 +1754,7 @@ mod tests {
                 disk_num_entry_points: Some(3),
                 disk_pq_dims: Some(4),
                 disk_random_init_edges: Some(5),
+                disk_build_dram_budget_gb: Some(1.25),
                 random_seed: Some(9),
                 ..Default::default()
             },
@@ -1744,6 +1765,7 @@ mod tests {
         assert_eq!(mapped.disk_pq_dims, 4);
         assert_eq!(mapped.random_init_edges, 5);
         assert_eq!(mapped.random_seed, 9);
+        assert_eq!(mapped.build_dram_budget_gb, 1.25);
     }
 
     #[test]
@@ -1932,5 +1954,44 @@ mod tests {
             !nbrs.contains(&1),
             "far neighbor should be evicted when reverse list overflows"
         );
+    }
+
+    #[test]
+    fn aisaq_add_fails_when_build_budget_too_small() {
+        let config = AisaqConfig {
+            max_degree: 4,
+            build_dram_budget_gb: 0.000_000_001,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, 4).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0,
+        ];
+
+        let err = index.add(&vectors).unwrap_err();
+        match err {
+            KnowhereError::InvalidArg(message) => {
+                assert!(message.contains("disk_build_dram_budget_gb exceeded"));
+            }
+            other => panic!("expected InvalidArg, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn aisaq_add_succeeds_when_build_budget_sufficient() {
+        let config = AisaqConfig {
+            max_degree: 4,
+            build_dram_budget_gb: 0.1,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, 4).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0,
+        ];
+
+        index.add(&vectors).unwrap();
+        assert_eq!(index.len(), 2);
     }
 }

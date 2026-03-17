@@ -22,6 +22,35 @@
 
 ## Session Log
 
+### Session 221 - 2026-03-17
+- Focus: `diskann-aisaq-build-dram-budget-enforcement`
+- Completed:
+  - mapped `IndexParams.disk_build_dram_budget_gb` into `AisaqConfig.build_dram_budget_gb` in `from_index_config`.
+  - added build-path DRAM budget enforcement in `PQFlashIndex::add(...)`:
+    - new `validate_build_dram_budget(additional_nodes)` checks projected build bytes (`(existing + incoming nodes) * flash_layout.node_bytes`) against configured `disk_build_dram_budget_gb`.
+    - returns `KnowhereError::InvalidArg` with explicit projected-vs-budget bytes when exceeded.
+  - added regressions:
+    - `aisaq_add_fails_when_build_budget_too_small`
+    - `aisaq_add_succeeds_when_build_budget_sufficient`
+  - extended config mapping regression (`aisaq_config_maps_rerank_expand_pct`) to assert `build_dram_budget_gb`.
+- Verification:
+  - local:
+    - `cargo test --lib aisaq_add_fails_when_build_budget_too_small -- --nocapture` -> `ok`
+    - `cargo test --lib aisaq_add_succeeds_when_build_budget_sufficient -- --nocapture` -> `ok`
+    - `cargo test --lib aisaq_config_maps_rerank_expand_pct -- --nocapture` -> `ok`
+    - `cargo test --lib diskann_aisaq::tests:: -- --nocapture` -> `ok` (`11 passed`)
+    - `cargo test --test test_diskann_aisaq -- --nocapture` -> `ok` (`10 passed`)
+    - `cargo test --features async-io --test test_diskann_aisaq -- --nocapture` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann_aisaq::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T113742Z_2751`)
+    - `bash scripts/remote/test.sh --command "cargo test --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T113800Z_2821`)
+    - `bash scripts/remote/test.sh --command "cargo test --features async-io --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T113817Z_2888`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the AISAQ build-memory-budget capability slice so `disk_build_dram_budget_gb` is now behaviorally enforced rather than metadata-only.
+
 ### Session 220 - 2026-03-17
 - Focus: `diskann-aisaq-random-init-and-reverse-link-quality`
 - Completed:
