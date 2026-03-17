@@ -1585,30 +1585,62 @@ impl DiskAnnIndex {
         let L = req.nprobe.max(self.dann_config.search_list_size / 2);
         let k = req.top_k;
 
-        let mut all_ids = Vec::new();
-        let mut all_dists = Vec::new();
-
-        for q_idx in 0..n_queries {
-            let q_start = q_idx * self.dim;
-            let query_vec = &query[q_start..q_start + self.dim];
-
-            // Use improved beam search
-            let results = self.beam_search(query_vec, L, req.filter.as_deref(), None);
-
-            for i in 0..k {
-                if i < results.len() {
-                    all_ids.push(results[i].0);
-                    // For L2: sqrt the squared distance; For IP: negate to get positive similarity
-                    let dist = match self.config.metric_type {
-                        MetricType::Ip => -results[i].1, // Convert back to positive similarity
-                        _ => results[i].1.sqrt(),
-                    };
-                    all_dists.push(dist);
-                } else {
-                    all_ids.push(-1);
-                    all_dists.push(f32::MAX);
+        #[cfg(feature = "parallel")]
+        let per_query: Vec<(Vec<i64>, Vec<f32>)> = (0..n_queries)
+            .into_par_iter()
+            .map(|q_idx| {
+                let q_start = q_idx * self.dim;
+                let query_vec = &query[q_start..q_start + self.dim];
+                let results = self.beam_search(query_vec, L, req.filter.as_deref(), None);
+                let mut ids = Vec::with_capacity(k);
+                let mut dists = Vec::with_capacity(k);
+                for i in 0..k {
+                    if i < results.len() {
+                        ids.push(results[i].0);
+                        let dist = match self.config.metric_type {
+                            MetricType::Ip => -results[i].1,
+                            _ => results[i].1.sqrt(),
+                        };
+                        dists.push(dist);
+                    } else {
+                        ids.push(-1);
+                        dists.push(f32::MAX);
+                    }
                 }
-            }
+                (ids, dists)
+            })
+            .collect();
+
+        #[cfg(not(feature = "parallel"))]
+        let per_query: Vec<(Vec<i64>, Vec<f32>)> = (0..n_queries)
+            .map(|q_idx| {
+                let q_start = q_idx * self.dim;
+                let query_vec = &query[q_start..q_start + self.dim];
+                let results = self.beam_search(query_vec, L, req.filter.as_deref(), None);
+                let mut ids = Vec::with_capacity(k);
+                let mut dists = Vec::with_capacity(k);
+                for i in 0..k {
+                    if i < results.len() {
+                        ids.push(results[i].0);
+                        let dist = match self.config.metric_type {
+                            MetricType::Ip => -results[i].1,
+                            _ => results[i].1.sqrt(),
+                        };
+                        dists.push(dist);
+                    } else {
+                        ids.push(-1);
+                        dists.push(f32::MAX);
+                    }
+                }
+                (ids, dists)
+            })
+            .collect();
+
+        let mut all_ids = Vec::with_capacity(n_queries * k);
+        let mut all_dists = Vec::with_capacity(n_queries * k);
+        for (ids, dists) in per_query {
+            all_ids.extend(ids);
+            all_dists.extend(dists);
         }
 
         Ok(SearchResult::new(all_ids, all_dists, 0.0))
@@ -1684,7 +1716,6 @@ impl DiskAnnIndex {
             candidates.push(ReverseOrderedFloat(*dist, *start));
             visited.insert(*start);
         }
-        Self::trim_frontier_keep_best(&mut candidates, effective_l);
 
         // Beam search loop
         while !candidates.is_empty() && explored.len() < effective_l {
@@ -1777,7 +1808,6 @@ impl DiskAnnIndex {
                     visited.insert(n_idx);
                     candidates.push(ReverseOrderedFloat(exact_d, n_idx));
                 }
-                Self::trim_frontier_keep_best(&mut candidates, effective_l);
             }
         }
 
@@ -1808,22 +1838,6 @@ impl DiskAnnIndex {
             .into_iter()
             .map(|(d, idx)| (self.ids[idx], d))
             .collect()
-    }
-
-    #[inline]
-    fn trim_frontier_keep_best(candidates: &mut BinaryHeap<ReverseOrderedFloat>, limit: usize) {
-        if candidates.len() <= limit {
-            return;
-        }
-        if limit == 0 {
-            candidates.clear();
-            return;
-        }
-
-        let mut keep: Vec<ReverseOrderedFloat> = candidates.drain().collect();
-        keep.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-        keep.truncate(limit);
-        *candidates = BinaryHeap::from(keep);
     }
 
     fn should_force_exact_filter_scan(&self, bitset: Option<&crate::bitset::BitsetView>) -> bool {
@@ -3760,26 +3774,62 @@ impl Index for DiskAnnIndex {
         let start = Instant::now();
         let n_queries = query_vec.len() / self.dim;
         let l = self.dann_config.search_list_size.max(top_k);
+        #[cfg(feature = "parallel")]
+        let per_query: Vec<(Vec<i64>, Vec<f32>)> = (0..n_queries)
+            .into_par_iter()
+            .map(|q_idx| {
+                let q_start = q_idx * self.dim;
+                let q = &query_vec[q_start..q_start + self.dim];
+                let results = self.beam_search(q, l, None, Some(bitset));
+                let mut ids = Vec::with_capacity(top_k);
+                let mut distances = Vec::with_capacity(top_k);
+                for i in 0..top_k {
+                    if i < results.len() {
+                        let dist = match self.config.metric_type {
+                            MetricType::Ip => -results[i].1,
+                            _ => results[i].1.sqrt(),
+                        };
+                        ids.push(results[i].0);
+                        distances.push(dist);
+                    } else {
+                        ids.push(-1);
+                        distances.push(f32::MAX);
+                    }
+                }
+                (ids, distances)
+            })
+            .collect();
+
+        #[cfg(not(feature = "parallel"))]
+        let per_query: Vec<(Vec<i64>, Vec<f32>)> = (0..n_queries)
+            .map(|q_idx| {
+                let q_start = q_idx * self.dim;
+                let q = &query_vec[q_start..q_start + self.dim];
+                let results = self.beam_search(q, l, None, Some(bitset));
+                let mut ids = Vec::with_capacity(top_k);
+                let mut distances = Vec::with_capacity(top_k);
+                for i in 0..top_k {
+                    if i < results.len() {
+                        let dist = match self.config.metric_type {
+                            MetricType::Ip => -results[i].1,
+                            _ => results[i].1.sqrt(),
+                        };
+                        ids.push(results[i].0);
+                        distances.push(dist);
+                    } else {
+                        ids.push(-1);
+                        distances.push(f32::MAX);
+                    }
+                }
+                (ids, distances)
+            })
+            .collect();
+
         let mut ids = Vec::with_capacity(n_queries * top_k);
         let mut distances = Vec::with_capacity(n_queries * top_k);
-
-        for q_idx in 0..n_queries {
-            let q_start = q_idx * self.dim;
-            let q = &query_vec[q_start..q_start + self.dim];
-            let results = self.beam_search(q, l, None, Some(bitset));
-            for i in 0..top_k {
-                if i < results.len() {
-                    let dist = match self.config.metric_type {
-                        MetricType::Ip => -results[i].1,
-                        _ => results[i].1.sqrt(),
-                    };
-                    ids.push(results[i].0);
-                    distances.push(dist);
-                } else {
-                    ids.push(-1);
-                    distances.push(f32::MAX);
-                }
-            }
+        for (query_ids, query_distances) in per_query {
+            ids.extend(query_ids);
+            distances.extend(query_distances);
         }
 
         Ok(crate::index::SearchResult::new(
