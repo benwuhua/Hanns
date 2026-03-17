@@ -22,6 +22,40 @@
 
 ## Session Log
 
+### Session 223 - 2026-03-17
+- Focus: `diskann-aisaq-build-degree-slack-capability`
+- Completed:
+  - added AISAQ build-degree slack support:
+    - new `AisaqConfig.build_degree_slack_pct` (default `100`)
+    - mapped from `IndexParams.disk_build_degree_slack_pct` (clamped to `100..=300`)
+  - build insertion path now uses temporary expanded degree limit:
+    - `compute_build_max_degree()` derives build-time degree from slack percentage
+    - `add(...)` inserts using the expanded limit for neighbor selection and reverse-link updates
+  - added final graph degree restoration:
+    - `prune_graph_to_target_degree()` trims per-node neighbors back to `max_degree` by exact distance after insertion
+  - converted `link_back` into test-only wrapper and routed production path through `link_back_with_limit(...)` to avoid dead-code warning.
+  - added regressions:
+    - `aisaq_build_degree_slack_computes_expanded_build_limit`
+    - `aisaq_add_with_degree_slack_prunes_back_to_target_degree`
+  - extended config mapping regression to assert `build_degree_slack_pct`.
+- Verification:
+  - local:
+    - `cargo test --lib aisaq_build_degree_slack_computes_expanded_build_limit -- --nocapture` -> `ok`
+    - `cargo test --lib aisaq_add_with_degree_slack_prunes_back_to_target_degree -- --nocapture` -> `ok`
+    - `cargo test --lib aisaq_config_maps_rerank_expand_pct -- --nocapture` -> `ok`
+    - `cargo test --lib diskann_aisaq::tests:: -- --nocapture` -> `ok` (`13 passed`)
+    - `cargo test --test test_diskann_aisaq -- --nocapture` -> `ok` (`10 passed`)
+    - `cargo test --features async-io --test test_diskann_aisaq -- --nocapture` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann_aisaq::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T114510Z_4444`)
+    - `bash scripts/remote/test.sh --command "cargo test --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T114528Z_4508`)
+    - `bash scripts/remote/test.sh --command "cargo test --features async-io --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T114548Z_4603`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the AISAQ build-degree-slack capability slice (temporary slack during build, strict degree target on serving graph).
+
 ### Session 222 - 2026-03-17
 - Focus: `diskann-aisaq-search-cache-budget-mapping`
 - Completed:

@@ -53,6 +53,8 @@ pub struct AisaqConfig {
     pub random_init_edges: usize,
     /// Seed for deterministic randomized build behavior.
     pub random_seed: u64,
+    /// Build-time temporary degree slack percentage (100 = disabled)
+    pub build_degree_slack_pct: usize,
     pub warm_up: bool,
     pub filter_threshold: f32,
 }
@@ -75,6 +77,7 @@ impl Default for AisaqConfig {
             rerank_expand_pct: 200,
             random_init_edges: 0,
             random_seed: 42,
+            build_degree_slack_pct: 100,
             warm_up: false,
             filter_threshold: -1.0,
         }
@@ -93,6 +96,7 @@ impl AisaqConfig {
             rerank_expand_pct: params.disk_rerank_expand_pct.unwrap_or(200).clamp(100, 400),
             random_init_edges: params.disk_random_init_edges.unwrap_or(0).min(64),
             random_seed: params.random_seed.unwrap_or(42),
+            build_degree_slack_pct: params.disk_build_degree_slack_pct.unwrap_or(100).clamp(100, 300),
             build_dram_budget_gb: params.disk_build_dram_budget_gb.unwrap_or(0.0),
             pq_read_page_cache_size: gb_to_bytes(params.disk_search_cache_budget_gb.unwrap_or(0.0)),
             ..Self::default()
@@ -123,6 +127,11 @@ impl AisaqConfig {
         if self.num_entry_points == 0 {
             return Err(KnowhereError::InvalidArg(
                 "num_entry_points must be greater than 0".to_string(),
+            ));
+        }
+        if self.build_degree_slack_pct < 100 {
+            return Err(KnowhereError::InvalidArg(
+                "build_degree_slack_pct must be at least 100".to_string(),
             ));
         }
         if self.disk_pq_dims > 0 && dim < 2 {
@@ -658,13 +667,14 @@ impl PQFlashIndex {
 
         let num_vectors = vectors.len() / self.dim;
         self.validate_build_dram_budget(num_vectors)?;
+        let build_max_degree = self.compute_build_max_degree();
         for row in 0..num_vectors {
             let start = row * self.dim;
             let end = start + self.dim;
             let vector = &vectors[start..end];
             let node_id = self.nodes.len() as u32;
             let neighbors =
-                self.select_neighbors_with_random(node_id as usize, vector, self.config.max_degree);
+                self.select_neighbors_with_random(node_id as usize, vector, build_max_degree);
             let vector_offset = self.vectors.len();
             self.vectors.extend_from_slice(vector);
             let inline_pq = self
@@ -682,9 +692,10 @@ impl PQFlashIndex {
             self.nodes.push(node);
 
             for neighbor in neighbors {
-                self.link_back(neighbor, node_id);
+                self.link_back_with_limit(neighbor, node_id, build_max_degree);
             }
         }
+        self.prune_graph_to_target_degree();
 
         self.node_count = self.nodes.len();
         self.refresh_entry_points();
@@ -710,6 +721,15 @@ impl PQFlashIndex {
             )));
         }
         Ok(())
+    }
+
+    fn compute_build_max_degree(&self) -> usize {
+        let slack = self.config.build_degree_slack_pct.max(100);
+        self.config
+            .max_degree
+            .saturating_mul(slack)
+            .div_ceil(100)
+            .max(self.config.max_degree)
     }
 
     pub fn save<P: AsRef<Path>>(&self, root: P) -> Result<FileGroup> {
@@ -1394,7 +1414,12 @@ impl PQFlashIndex {
         selected
     }
 
+    #[cfg(test)]
     fn link_back(&mut self, neighbor: u32, node_id: u32) {
+        self.link_back_with_limit(neighbor, node_id, self.config.max_degree);
+    }
+
+    fn link_back_with_limit(&mut self, neighbor: u32, node_id: u32, degree_limit: usize) {
         let neighbor_idx = neighbor as usize;
         if neighbor_idx >= self.nodes.len() {
             return;
@@ -1404,15 +1429,32 @@ impl PQFlashIndex {
         if !neighbor_list.contains(&node_id) {
             neighbor_list.push(node_id);
         }
-        if neighbor_list.len() > self.config.max_degree {
+        if neighbor_list.len() > degree_limit {
             let anchor = self.node_vector(neighbor_idx).to_vec();
             neighbor_list.sort_by(|&a, &b| {
                 self.exact_distance(&anchor, self.node_vector(a as usize))
                     .total_cmp(&self.exact_distance(&anchor, self.node_vector(b as usize)))
             });
-            neighbor_list.truncate(self.config.max_degree);
+            neighbor_list.truncate(degree_limit);
         }
         self.nodes[neighbor_idx].neighbors = neighbor_list;
+    }
+
+    fn prune_graph_to_target_degree(&mut self) {
+        let target_degree = self.config.max_degree;
+        for idx in 0..self.nodes.len() {
+            if self.nodes[idx].neighbors.len() <= target_degree {
+                continue;
+            }
+            let anchor = self.node_vector(idx).to_vec();
+            let mut neighbors = self.nodes[idx].neighbors.clone();
+            neighbors.sort_by(|&a, &b| {
+                self.exact_distance(&anchor, self.node_vector(a as usize))
+                    .total_cmp(&self.exact_distance(&anchor, self.node_vector(b as usize)))
+            });
+            neighbors.truncate(target_degree);
+            self.nodes[idx].neighbors = neighbors;
+        }
     }
 
     fn refresh_entry_points(&mut self) {
@@ -1765,6 +1807,7 @@ mod tests {
                 disk_random_init_edges: Some(5),
                 disk_build_dram_budget_gb: Some(1.25),
                 disk_search_cache_budget_gb: Some(0.01),
+                disk_build_degree_slack_pct: Some(130),
                 random_seed: Some(9),
                 ..Default::default()
             },
@@ -1777,6 +1820,7 @@ mod tests {
         assert_eq!(mapped.random_seed, 9);
         assert_eq!(mapped.build_dram_budget_gb, 1.25);
         assert_eq!(mapped.pq_read_page_cache_size, gb_to_bytes(0.01));
+        assert_eq!(mapped.build_degree_slack_pct, 130);
     }
 
     #[test]
@@ -2004,5 +2048,39 @@ mod tests {
 
         index.add(&vectors).unwrap();
         assert_eq!(index.len(), 2);
+    }
+
+    #[test]
+    fn aisaq_build_degree_slack_computes_expanded_build_limit() {
+        let config = AisaqConfig {
+            max_degree: 10,
+            build_degree_slack_pct: 130,
+            ..AisaqConfig::default()
+        };
+        let index = PQFlashIndex::new(config, MetricType::L2, 4).unwrap();
+        assert_eq!(index.compute_build_max_degree(), 13);
+    }
+
+    #[test]
+    fn aisaq_add_with_degree_slack_prunes_back_to_target_degree() {
+        let config = AisaqConfig {
+            max_degree: 2,
+            build_degree_slack_pct: 200,
+            search_list_size: 32,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, 2).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, //
+            1.0, 0.0, //
+            2.0, 0.0, //
+            3.0, 0.0, //
+            4.0, 0.0,
+        ];
+        index.add(&vectors).unwrap();
+        assert!(index
+            .nodes
+            .iter()
+            .all(|node| node.neighbors.len() <= index.config.max_degree));
     }
 }
