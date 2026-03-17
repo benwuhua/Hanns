@@ -22,6 +22,33 @@
 
 ## Session Log
 
+### Session 164 - 2026-03-17
+- Focus: `hnsw-fair-lane-throughput-screen-opt56-tls-search-scratch-reuse`
+- Completed:
+  - tested a structural hot-path hypothesis for L2 unfiltered search:
+    - replaced per-call local `SearchScratch::new()` in `search_single_l2_unfiltered` with thread-local scratch reuse.
+    - added a deterministic repeated-call regression test for this path.
+  - local correctness checks passed.
+  - remote cached quick-lane A/B (`base=100k, query=100, ef=60`) showed clear regression with recall parity.
+  - rejected the hypothesis and rolled back code.
+- Verification:
+  - local:
+    - `cargo fmt --all -- --check` -> `ok`
+    - `cargo test --lib test_search_single_l2_fast_matches_generic_and_filter_path_stays_stable -- --nocapture` -> `ok`
+    - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok`
+    - `cargo test --lib test_search_single_l2_unfiltered_repeated_calls_stay_deterministic -- --nocapture` -> `ok`
+  - remote quick-lane A/B (with index cache):
+    - pre: `/data/work/knowhere-rs-logs/rs_hnsw_opt56_pre_quicklane.json` -> `qps=20923.995261`, `recall_at_10=0.9880`
+    - post: `/data/work/knowhere-rs-logs/rs_hnsw_opt56_post_quicklane.json` -> `qps=16087.878427`, `recall_at_10=0.9880`
+    - delta: `-23.11%`
+  - rollback:
+    - `git restore src/faiss/hnsw.rs` -> `ok`
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - interpretation: TLS scratch borrow/reuse design introduces net overhead in current hot path; this direction is closed.
+  - next recommended step: avoid runtime borrow/indirection in per-query core; prioritize direct data-layout/access-path hypotheses instead.
+
 ### Session 163 - 2026-03-16
 - Focus: `hnsw-benchmark-workflow-index-cache-acceleration`
 - Completed:
