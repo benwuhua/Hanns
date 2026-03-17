@@ -94,6 +94,7 @@ impl AisaqConfig {
             random_init_edges: params.disk_random_init_edges.unwrap_or(0).min(64),
             random_seed: params.random_seed.unwrap_or(42),
             build_dram_budget_gb: params.disk_build_dram_budget_gb.unwrap_or(0.0),
+            pq_read_page_cache_size: gb_to_bytes(params.disk_search_cache_budget_gb.unwrap_or(0.0)),
             ..Self::default()
         }
     }
@@ -1677,6 +1678,14 @@ fn resolve_pq_centroids(num_vectors: usize) -> usize {
     power.max(2)
 }
 
+fn gb_to_bytes(gb: f32) -> usize {
+    if gb <= 0.0 {
+        return 0;
+    }
+    let bytes = gb as f64 * 1024.0 * 1024.0 * 1024.0;
+    bytes.clamp(0.0, usize::MAX as f64) as usize
+}
+
 fn dot(left: &[f32], right: &[f32]) -> f32 {
     left.iter().zip(right).map(|(a, b)| a * b).sum()
 }
@@ -1755,6 +1764,7 @@ mod tests {
                 disk_pq_dims: Some(4),
                 disk_random_init_edges: Some(5),
                 disk_build_dram_budget_gb: Some(1.25),
+                disk_search_cache_budget_gb: Some(0.01),
                 random_seed: Some(9),
                 ..Default::default()
             },
@@ -1766,6 +1776,7 @@ mod tests {
         assert_eq!(mapped.random_init_edges, 5);
         assert_eq!(mapped.random_seed, 9);
         assert_eq!(mapped.build_dram_budget_gb, 1.25);
+        assert_eq!(mapped.pq_read_page_cache_size, gb_to_bytes(0.01));
     }
 
     #[test]

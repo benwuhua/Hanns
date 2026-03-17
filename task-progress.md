@@ -22,6 +22,29 @@
 
 ## Session Log
 
+### Session 222 - 2026-03-17
+- Focus: `diskann-aisaq-search-cache-budget-mapping`
+- Completed:
+  - mapped `IndexParams.disk_search_cache_budget_gb` into AISAQ page-cache bytes:
+    - `AisaqConfig::from_index_config` now fills `pq_read_page_cache_size` via `gb_to_bytes(...)`.
+  - added `gb_to_bytes(gb: f32) -> usize` conversion helper with non-negative clamp and saturation to `usize::MAX`.
+  - extended config mapping regression (`aisaq_config_maps_rerank_expand_pct`) to assert `pq_read_page_cache_size`.
+- Verification:
+  - local:
+    - `cargo test --lib aisaq_config_maps_rerank_expand_pct -- --nocapture` -> `ok`
+    - `cargo test --lib diskann_aisaq::tests:: -- --nocapture` -> `ok` (`11 passed`)
+    - `cargo test --test test_diskann_aisaq -- --nocapture` -> `ok` (`10 passed`)
+    - `cargo test --features async-io --test test_diskann_aisaq -- --nocapture` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann_aisaq::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T114042Z_3526`)
+    - `bash scripts/remote/test.sh --command "cargo test --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T114102Z_3599`)
+    - `bash scripts/remote/test.sh --command "cargo test --features async-io --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T114121Z_3668`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the AISAQ search-cache budget parameter wiring gap; `disk_search_cache_budget_gb` now has concrete effect on page-cache sizing in the AISAQ load path.
+
 ### Session 221 - 2026-03-17
 - Focus: `diskann-aisaq-build-dram-budget-enforcement`
 - Completed:
