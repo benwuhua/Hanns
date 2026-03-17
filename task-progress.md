@@ -22,6 +22,39 @@
 
 ## Session Log
 
+### Session 225 - 2026-03-17
+- Focus: `diskann-aisaq-pq-candidate-expand-semantics`
+- Completed:
+  - added AISAQ config support for `disk_pq_candidate_expand_pct`:
+    - new `AisaqConfig.pq_candidate_expand_pct` (default `100`)
+    - mapped from `IndexParams.disk_pq_candidate_expand_pct` with clamp `100..=300`
+  - wired PQ candidate expansion into search visit budget:
+    - added `compute_max_visit(k)` and applied it in both sync/async search loops
+    - behavior:
+      - no PQ encoder: keep base `search_list_size.max(k)` budget
+      - with PQ encoder: expand visit budget by `pq_candidate_expand_pct` (ceil-div), capped by index size
+  - added regressions:
+    - `aisaq_compute_max_visit_without_pq_ignores_candidate_expand_pct`
+    - `aisaq_compute_max_visit_with_pq_applies_candidate_expand_pct`
+  - extended config mapping regression to assert `pq_candidate_expand_pct`.
+- Verification:
+  - local:
+    - `cargo test --lib aisaq_compute_max_visit_without_pq_ignores_candidate_expand_pct -- --nocapture` -> `ok`
+    - `cargo test --lib aisaq_compute_max_visit_with_pq_applies_candidate_expand_pct -- --nocapture` -> `ok`
+    - `cargo test --lib aisaq_config_maps_rerank_expand_pct -- --nocapture` -> `ok`
+    - `cargo test --lib diskann_aisaq::tests:: -- --nocapture` -> `ok` (`17 passed`)
+    - `cargo test --test test_diskann_aisaq -- --nocapture` -> `ok` (`10 passed`)
+    - `cargo test --features async-io --test test_diskann_aisaq -- --nocapture` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann_aisaq::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T115342Z_6019`)
+    - `bash scripts/remote/test.sh --command "cargo test --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T115359Z_6074`)
+    - `bash scripts/remote/test.sh --command "cargo test --features async-io --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T115417Z_6132`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the AISAQ PQ-candidate-expansion parameter gap and aligns visit-budget semantics with DiskANN-side PQ screening strategy.
+
 ### Session 224 - 2026-03-17
 - Focus: `diskann-aisaq-vectors-beamwidth-search-semantics`
 - Completed:

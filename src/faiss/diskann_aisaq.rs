@@ -49,6 +49,8 @@ pub struct AisaqConfig {
     pub num_entry_points: usize,
     /// Exact rerank pool expansion percentage over top-k.
     pub rerank_expand_pct: usize,
+    /// PQ candidate expansion percentage for search visit budget (100 = disabled)
+    pub pq_candidate_expand_pct: usize,
     /// Random initial candidate edges per inserted node (0 = disabled)
     pub random_init_edges: usize,
     /// Seed for deterministic randomized build behavior.
@@ -75,6 +77,7 @@ impl Default for AisaqConfig {
             inline_pq: 0,
             num_entry_points: 1,
             rerank_expand_pct: 200,
+            pq_candidate_expand_pct: 100,
             random_init_edges: 0,
             random_seed: 42,
             build_degree_slack_pct: 100,
@@ -94,6 +97,10 @@ impl AisaqConfig {
             disk_pq_dims: params.disk_pq_dims.unwrap_or(0),
             num_entry_points: params.disk_num_entry_points.unwrap_or(1).clamp(1, 64),
             rerank_expand_pct: params.disk_rerank_expand_pct.unwrap_or(200).clamp(100, 400),
+            pq_candidate_expand_pct: params
+                .disk_pq_candidate_expand_pct
+                .unwrap_or(100)
+                .clamp(100, 300),
             random_init_edges: params.disk_random_init_edges.unwrap_or(0).min(64),
             random_seed: params.random_seed.unwrap_or(42),
             build_degree_slack_pct: params.disk_build_degree_slack_pct.unwrap_or(100).clamp(100, 300),
@@ -876,7 +883,7 @@ impl PQFlashIndex {
             frontier.push(candidate);
         }
 
-        let max_visit = self.config.search_list_size.max(k).min(self.len());
+        let max_visit = self.compute_max_visit(k);
 
         while expanded.len() < max_visit {
             let candidate = match frontier.pop() {
@@ -997,7 +1004,7 @@ impl PQFlashIndex {
             frontier.push(candidate);
         }
 
-        let max_visit = self.config.search_list_size.max(k).min(self.len());
+        let max_visit = self.compute_max_visit(k);
         while expanded.len() < max_visit {
             let candidate = match frontier.pop() {
                 Some(candidate) => candidate,
@@ -1070,6 +1077,20 @@ impl PQFlashIndex {
             .saturating_add(99)
             / 100;
         target.max(k).min(expanded_len).max(1)
+    }
+
+    #[inline]
+    fn compute_max_visit(&self, k: usize) -> usize {
+        let base = self.config.search_list_size.max(k);
+        if self.pq_encoder.is_some() {
+            let expanded = base
+                .saturating_mul(self.config.pq_candidate_expand_pct)
+                .saturating_add(99)
+                / 100;
+            expanded.max(base).min(self.len())
+        } else {
+            base.min(self.len())
+        }
     }
 
     #[inline]
@@ -1807,6 +1828,7 @@ mod tests {
             data_type: DataType::Float,
             params: IndexParams {
                 disk_rerank_expand_pct: Some(250),
+                disk_pq_candidate_expand_pct: Some(150),
                 disk_num_entry_points: Some(3),
                 disk_pq_dims: Some(4),
                 disk_random_init_edges: Some(5),
@@ -1819,6 +1841,7 @@ mod tests {
         };
         let mapped = AisaqConfig::from_index_config(&config);
         assert_eq!(mapped.rerank_expand_pct, 250);
+        assert_eq!(mapped.pq_candidate_expand_pct, 150);
         assert_eq!(mapped.num_entry_points, 3);
         assert_eq!(mapped.disk_pq_dims, 4);
         assert_eq!(mapped.random_init_edges, 5);
@@ -2111,5 +2134,51 @@ mod tests {
         let index = PQFlashIndex::new(config, MetricType::L2, 4).unwrap();
         let io = BeamSearchIO::new(&index.flash_layout, &index.config);
         assert_eq!(index.compute_expand_limit(&io), 3);
+    }
+
+    #[test]
+    fn aisaq_compute_max_visit_without_pq_ignores_candidate_expand_pct() {
+        let config = AisaqConfig {
+            search_list_size: 10,
+            pq_candidate_expand_pct: 200,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, 2).unwrap();
+        index.trained = true;
+        index.node_count = 100;
+        index.nodes = vec![
+            FlashNode {
+                id: 0,
+                vector_offset: 0,
+                neighbors: vec![],
+                inline_pq: vec![],
+            };
+            100
+        ];
+        assert_eq!(index.compute_max_visit(5), 10);
+    }
+
+    #[test]
+    fn aisaq_compute_max_visit_with_pq_applies_candidate_expand_pct() {
+        let config = AisaqConfig {
+            search_list_size: 10,
+            pq_candidate_expand_pct: 150,
+            disk_pq_dims: 2,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, 2).unwrap();
+        let train = vec![0.0f32, 0.0, 1.0, 0.0, 2.0, 0.0, 3.0, 0.0];
+        index.train(&train).unwrap();
+        index.node_count = 100;
+        index.nodes = vec![
+            FlashNode {
+                id: 0,
+                vector_offset: 0,
+                neighbors: vec![],
+                inline_pq: vec![],
+            };
+            100
+        ];
+        assert_eq!(index.compute_max_visit(5), 15);
     }
 }
