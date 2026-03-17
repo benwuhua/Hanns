@@ -36,6 +36,8 @@ pub struct AisaqConfig {
     pub rearrange: bool,
     pub inline_pq: usize,
     pub num_entry_points: usize,
+    /// Exact rerank pool expansion percentage over top-k.
+    pub rerank_expand_pct: usize,
     pub warm_up: bool,
     pub filter_threshold: f32,
 }
@@ -55,6 +57,7 @@ impl Default for AisaqConfig {
             rearrange: false,
             inline_pq: 0,
             num_entry_points: 1,
+            rerank_expand_pct: 200,
             warm_up: false,
             filter_threshold: -1.0,
         }
@@ -68,6 +71,9 @@ impl AisaqConfig {
             max_degree: params.max_degree.unwrap_or(48),
             search_list_size: params.search_list_size.unwrap_or(128),
             beamwidth: params.beamwidth.unwrap_or(8),
+            disk_pq_dims: params.disk_pq_dims.unwrap_or(0),
+            num_entry_points: params.disk_num_entry_points.unwrap_or(1).clamp(1, 64),
+            rerank_expand_pct: params.disk_rerank_expand_pct.unwrap_or(200).clamp(100, 400),
             ..Self::default()
         }
     }
@@ -807,7 +813,7 @@ impl PQFlashIndex {
                 continue;
             }
 
-            expanded.push(candidate.node_id);
+            expanded.push(candidate);
 
             let node = self.load_node(candidate.node_id, NodeAccessMode::Node, &mut io)?;
             let mut neighbor_scores = Vec::with_capacity(node.neighbors.len());
@@ -831,10 +837,13 @@ impl PQFlashIndex {
             }
         }
 
+        let rerank_pool = self.compute_rerank_pool_size(k, expanded.len());
+        expanded.sort_by(|left, right| left.score.total_cmp(&right.score));
         let mut scored: Vec<(i64, f32)> = expanded
-            .into_iter()
-            .map(|node_id| {
-                let node = self.load_node(node_id, NodeAccessMode::None, &mut io)?;
+            .iter()
+            .take(rerank_pool)
+            .map(|candidate| {
+                let node = self.load_node(candidate.node_id, NodeAccessMode::None, &mut io)?;
                 let distance = self.exact_distance(query, &node.vector);
                 Ok((node.id, distance))
             })
@@ -849,6 +858,18 @@ impl PQFlashIndex {
         );
         result.num_visited = io.stats().nodes_visited;
         Ok(result)
+    }
+
+    #[inline]
+    fn compute_rerank_pool_size(&self, k: usize, expanded_len: usize) -> usize {
+        if expanded_len == 0 {
+            return 0;
+        }
+        let target = k
+            .saturating_mul(self.config.rerank_expand_pct)
+            .saturating_add(99)
+            / 100;
+        target.max(k).min(expanded_len).max(1)
     }
 
     pub fn scope_audit(&self) -> AisaqScopeAudit {
@@ -1200,6 +1221,7 @@ fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::{DataType, IndexParams, IndexType};
 
     #[test]
     fn beam_io_tracks_reads() {
@@ -1217,5 +1239,60 @@ mod tests {
         assert_eq!(io.stats().nodes_visited, 2);
         assert_eq!(io.stats().nodes_loaded, 1);
         assert_eq!(io.stats().node_cache_hits, 1);
+    }
+
+    #[test]
+    fn aisaq_config_maps_rerank_expand_pct() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 8,
+            data_type: DataType::Float,
+            params: IndexParams {
+                disk_rerank_expand_pct: Some(250),
+                disk_num_entry_points: Some(3),
+                disk_pq_dims: Some(4),
+                ..Default::default()
+            },
+        };
+        let mapped = AisaqConfig::from_index_config(&config);
+        assert_eq!(mapped.rerank_expand_pct, 250);
+        assert_eq!(mapped.num_entry_points, 3);
+        assert_eq!(mapped.disk_pq_dims, 4);
+    }
+
+    #[test]
+    fn aisaq_rerank_pool_size_is_bounded() {
+        let index = PQFlashIndex::new(AisaqConfig::default(), MetricType::L2, 8).unwrap();
+        assert_eq!(index.compute_rerank_pool_size(10, 0), 0);
+        assert_eq!(index.compute_rerank_pool_size(10, 5), 5);
+        assert_eq!(index.compute_rerank_pool_size(10, 30), 20);
+    }
+
+    #[test]
+    fn aisaq_search_runs_with_rerank_stage() {
+        let config = AisaqConfig {
+            max_degree: 4,
+            search_list_size: 16,
+            beamwidth: 4,
+            disk_pq_dims: 2,
+            rerank_expand_pct: 200,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, 4).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            2.0, 0.0, 0.0, 0.0, //
+            3.0, 0.0, 0.0, 0.0, //
+            4.0, 0.0, 0.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+
+        let result = index.search(&[0.9, 0.0, 0.0, 0.0], 2).unwrap();
+        assert_eq!(result.ids.len(), 2);
+        assert_eq!(result.distances.len(), 2);
+        assert!(result.ids.iter().all(|&id| id >= 0));
     }
 }

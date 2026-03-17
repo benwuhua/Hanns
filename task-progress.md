@@ -22,6 +22,33 @@
 
 ## Session Log
 
+### Session 215 - 2026-03-17
+- Focus: `diskann-aisaq-rerank-stage`
+- Completed:
+  - implemented explicit AISAQ two-stage search rerank path in `PQFlashIndex::search`:
+    - coarse candidate expansion by PQ score
+    - exact-distance rerank on a bounded candidate pool
+  - added AISAQ config field `rerank_expand_pct` and mapped `IndexParams.disk_rerank_expand_pct` into AISAQ config (with clamp).
+  - added focused regressions:
+    - `aisaq_config_maps_rerank_expand_pct`
+    - `aisaq_rerank_pool_size_is_bounded`
+    - `aisaq_search_runs_with_rerank_stage`
+- Verification:
+  - local:
+    - `cargo test --lib aisaq_config_maps_rerank_expand_pct -- --nocapture` -> `ok`
+    - `cargo test --lib aisaq_rerank_pool_size_is_bounded -- --nocapture` -> `ok`
+    - `cargo test --lib aisaq_search_runs_with_rerank_stage -- --nocapture` -> `ok`
+    - `cargo test --lib diskann_aisaq::tests:: -- --nocapture` -> `ok` (`4 passed`)
+    - `cargo test --lib diskann::tests:: -- --nocapture` -> `ok` (`34 passed`)
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann_aisaq::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T110819Z_96483`)
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T110845Z_96590`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the “post-candidate exact reorder path” capability item on the AISAQ search path.
+
 ### Session 214 - 2026-03-17
 - Focus: `diskann-build-parallel-pipeline`
 - Completed:
