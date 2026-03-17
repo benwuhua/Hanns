@@ -13,10 +13,14 @@ use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 use std::future::Future;
+#[cfg(all(feature = "async-io", target_os = "linux"))]
+use std::os::fd::AsRawFd;
 
 use crate::api::{IndexConfig, KnowhereError, MetricType, Result, SearchResult};
 use crate::faiss::pq::PqEncoder;
 use crate::simd;
+#[cfg(all(feature = "async-io", target_os = "linux"))]
+use io_uring::{opcode, types, IoUring};
 use memmap2::Mmap;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -1028,9 +1032,32 @@ impl PQFlashIndex {
         access_mode: NodeAccessMode,
         io: &mut BeamSearchIO,
     ) -> Result<LoadedNode> {
-        // For now, delegate to sync implementation
-        // Full io_uring implementation would use IoUring::submit() here
-        self.load_node(node_id, access_mode, io)
+        if node_id as usize >= self.len() {
+            return Err(KnowhereError::InvalidArg(format!(
+                "node_id {} out of bounds for {} nodes",
+                node_id,
+                self.len()
+            )));
+        }
+
+        if self.storage.is_none() {
+            return self.load_node(node_id, access_mode, io);
+        }
+
+        let (bytes, pages_loaded) = self.read_node_bytes_io_uring(node_id)?;
+        let loaded = self.deserialize_node(node_id, &bytes)?;
+        match access_mode {
+            NodeAccessMode::None => {}
+            NodeAccessMode::Node => {
+                io.record_node_access(node_id, self.flash_layout.node_bytes, pages_loaded)
+            }
+            NodeAccessMode::Pq => {
+                if !loaded.inline_pq.is_empty() {
+                    io.record_pq_access(node_id, loaded.inline_pq.len(), pages_loaded);
+                }
+            }
+        }
+        Ok(loaded)
     }
 
     #[cfg(not(all(feature = "async-io", target_os = "linux")))]
@@ -1042,6 +1069,62 @@ impl PQFlashIndex {
     ) -> Result<LoadedNode> {
         // Fallback to sync on non-Linux platforms
         self.load_node(node_id, access_mode, io)
+    }
+
+    #[cfg(all(feature = "async-io", target_os = "linux"))]
+    fn read_node_bytes_io_uring(&self, node_id: u32) -> Result<(Vec<u8>, usize)> {
+        let storage = self
+            .storage
+            .as_ref()
+            .ok_or_else(|| KnowhereError::Storage("missing disk storage".to_string()))?;
+        let data_path = storage.file_group.data_path();
+        let file = OpenOptions::new().read(true).open(data_path)?;
+        let offset = node_id as usize * self.flash_layout.node_bytes;
+        let mut bytes = vec![0u8; self.flash_layout.node_bytes];
+
+        let mut ring = IoUring::new(2)
+            .map_err(|e| KnowhereError::Storage(format!("io_uring init failed: {e}")))?;
+        let entry = opcode::Read::new(
+            types::Fd(file.as_raw_fd()),
+            bytes.as_mut_ptr(),
+            bytes.len() as u32,
+        )
+        .offset(offset as u64)
+        .build()
+        .user_data(1);
+
+        unsafe {
+            ring.submission().push(&entry).map_err(|_| {
+                KnowhereError::Storage("io_uring submission queue full".to_string())
+            })?;
+        }
+
+        ring.submit_and_wait(1)
+            .map_err(|e| KnowhereError::Storage(format!("io_uring submit failed: {e}")))?;
+
+        let cqe = ring
+            .completion()
+            .next()
+            .ok_or_else(|| KnowhereError::Storage("io_uring completion missing".to_string()))?;
+        let res = cqe.result();
+        if res < 0 {
+            return Err(KnowhereError::Storage(format!(
+                "io_uring read failed errno={}",
+                -res
+            )));
+        }
+        if res as usize != self.flash_layout.node_bytes {
+            return Err(KnowhereError::Storage(format!(
+                "io_uring short read: got {} expected {}",
+                res, self.flash_layout.node_bytes
+            )));
+        }
+
+        let pages_loaded = self
+            .flash_layout
+            .node_bytes
+            .div_ceil(self.flash_layout.page_size.max(1));
+        Ok((bytes, pages_loaded))
     }
 
     fn validate_vectors(&self, vectors: &[f32]) -> Result<()> {

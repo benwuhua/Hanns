@@ -1,8 +1,36 @@
 use std::fs;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 use knowhere_rs::faiss::diskann_aisaq::AisaqConfig;
 use knowhere_rs::{MetricType, PQFlashIndex, SearchResult};
 use tempfile::tempdir;
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    fn raw_waker() -> RawWaker {
+        fn clone(_: *const ()) -> RawWaker {
+            raw_waker()
+        }
+        fn wake(_: *const ()) {}
+        fn wake_by_ref(_: *const ()) {}
+        fn drop(_: *const ()) {}
+        RawWaker::new(
+            std::ptr::null(),
+            &RawWakerVTable::new(clone, wake, wake_by_ref, drop),
+        )
+    }
+
+    let waker = unsafe { Waker::from_raw(raw_waker()) };
+    let mut ctx = Context::from_waker(&waker);
+    let mut future = Box::pin(future);
+    loop {
+        match Pin::as_mut(&mut future).poll(&mut ctx) {
+            Poll::Ready(out) => return out,
+            Poll::Pending => std::thread::yield_now(),
+        }
+    }
+}
 
 fn build_index() -> PQFlashIndex {
     let config = AisaqConfig {
@@ -140,4 +168,24 @@ fn scope_audit_reports_real_flash_skeleton_but_not_native_diskann_parity() {
     assert!(loaded_audit.uses_mmap_backed_pages);
     assert!(loaded_audit.has_page_cache);
     assert!(!loaded_audit.native_comparable);
+}
+
+#[test]
+fn async_search_matches_sync_on_loaded_index() {
+    let index = build_index();
+    let dir = tempdir().expect("tempdir should build");
+    index.save(dir.path()).expect("save should succeed");
+    let loaded = PQFlashIndex::load(dir.path()).expect("load should succeed");
+
+    let sync = loaded
+        .search(&[0.1, 0.1, 0.1, 0.1], 2)
+        .expect("sync search should succeed");
+    let async_res = block_on(loaded.search_async(&[0.1, 0.1, 0.1, 0.1], 2))
+        .expect("async search should succeed");
+
+    assert_eq!(sync.ids, async_res.ids);
+    assert_eq!(sync.distances.len(), async_res.distances.len());
+    for (a, b) in sync.distances.iter().zip(async_res.distances.iter()) {
+        assert!((a - b).abs() < 1e-6);
+    }
 }

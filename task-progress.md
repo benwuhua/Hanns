@@ -22,6 +22,32 @@
 
 ## Session Log
 
+### Session 217 - 2026-03-17
+- Focus: `diskann-aisaq-io-uring-read-path`
+- Completed:
+  - replaced Linux `async-io` placeholder in `PQFlashIndex::load_node_async` with a real `io_uring` read path:
+    - submits node-byte read with `io_uring::opcode::Read`
+    - validates completion and full-length read
+    - deserializes node payload and feeds IO accounting (`record_node_access` / `record_pq_access`)
+  - added `read_node_bytes_io_uring(...)` helper for the storage-backed async read path.
+  - added/extended async behavior coverage:
+    - unit: `aisaq_search_async_matches_sync`
+    - integration: `async_search_matches_sync_on_loaded_index`
+- Verification:
+  - local:
+    - `cargo test --lib diskann_aisaq::tests:: -- --nocapture` -> `ok` (`5 passed`)
+    - `cargo test --test test_diskann_aisaq -- --nocapture` -> `ok` (`8 passed`)
+    - `cargo test --features async-io --test test_diskann_aisaq -- --nocapture` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann_aisaq::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T111708Z_98163`)
+    - `bash scripts/remote/test.sh --command "cargo test --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T111735Z_98280`)
+    - `bash scripts/remote/test.sh --command "cargo test --features async-io --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T111756Z_98345`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the “async I/O abstraction has executable backend path” slice for current AISAQ scope on Linux + `async-io`; remaining work is performance-level scheduling/caching optimization, not capability absence.
+
 ### Session 216 - 2026-03-17
 - Focus: `diskann-aisaq-async-search-path`
 - Completed:
