@@ -22,6 +22,31 @@
 
 ## Session Log
 
+### Session 209 - 2026-03-17
+- Focus: `diskann-flash-prefetch-executor-parallel`
+- Completed:
+  - refactored mmap prefetch into reusable batch executor:
+    - added `prefetch_vectors_batch_map(neighbor_ids, total_nodes)` shared helper.
+    - both `beam_search` and `range_search` now reuse this helper for query-time prefetch cache.
+  - enabled parallel batch decode under `parallel` feature:
+    - mmap prefetch batch decoding now uses rayon parallel iterator in `prefetch_vectors_batch_map` when available.
+    - non-`parallel` builds keep serial fallback.
+- Verification:
+  - local:
+    - `cargo test --lib test_diskann_config -- --nocapture` -> `ok`
+    - `cargo test --lib test_diskann_search_can_run_from_flash_sidecar_mmap_mode -- --nocapture` -> `ok`
+    - `cargo test --lib test_diskann_flash_mmap_runtime_cache_respects_budget -- --nocapture` -> `ok`
+    - `cargo test --lib diskann::tests:: -- --nocapture` -> `ok` (`32 passed`)
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib test_diskann_search_can_run_from_flash_sidecar_mmap_mode -- --nocapture"` -> `ok` (`run_id=20260317T094003Z_87857`)
+    - `bash scripts/remote/test.sh --command "cargo test --lib test_diskann_flash_mmap_runtime_cache_respects_budget -- --nocapture"` -> `ok` (`run_id=20260317T093945Z_87761`)
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T094021Z_87916`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this introduces a reusable prefetch execution layer and parallel decode path, preparing the code for later true async I/O backend integration.
+
 ### Session 208 - 2026-03-17
 - Focus: `diskann-flash-mmap-prefetch-batch`
 - Completed:

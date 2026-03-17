@@ -14,6 +14,9 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
+
 use crate::api::search::Predicate;
 use crate::api::{IndexConfig, MetricType, Result, SearchRequest, SearchResult};
 use crate::quantization::kmeans::KMeans;
@@ -679,6 +682,62 @@ impl DiskAnnIndex {
             vec.push(self.flash_mmap_vector_component(idx, d)?);
         }
         Some(vec.into_boxed_slice())
+    }
+
+    fn prefetch_vectors_batch_map(
+        &self,
+        neighbor_ids: &[usize],
+        total_nodes: usize,
+    ) -> Option<HashMap<usize, Box<[f32]>>> {
+        if self.flash_sidecar_mmap.is_none()
+            || self.flash_vectors.is_some()
+            || self.dann_config.flash_prefetch_batch == 0
+        {
+            return None;
+        }
+
+        let mut selected = Vec::new();
+        let mut seen = HashSet::new();
+        for &n_idx in neighbor_ids {
+            if n_idx >= total_nodes || !seen.insert(n_idx) {
+                continue;
+            }
+            selected.push(n_idx);
+            if selected.len() >= self.dann_config.flash_prefetch_batch {
+                break;
+            }
+        }
+        if selected.is_empty() {
+            return None;
+        }
+
+        #[cfg(feature = "parallel")]
+        {
+            let items: Vec<(usize, Box<[f32]>)> = selected
+                .par_iter()
+                .filter_map(|&idx| self.flash_mmap_read_vector(idx).map(|v| (idx, v)))
+                .collect();
+            if items.is_empty() {
+                None
+            } else {
+                Some(items.into_iter().collect())
+            }
+        }
+
+        #[cfg(not(feature = "parallel"))]
+        {
+            let mut cache = HashMap::new();
+            for idx in selected {
+                if let Some(v) = self.flash_mmap_read_vector(idx) {
+                    cache.insert(idx, v);
+                }
+            }
+            if cache.is_empty() {
+                None
+            } else {
+                Some(cache)
+            }
+        }
     }
 
     fn build_flash_runtime_cache_from_budget(&mut self) {
@@ -1487,22 +1546,7 @@ impl DiskAnnIndex {
             // Explore neighbors with beamwidth limit
             {
                 let neighbor_ids = self.neighbor_indices(idx);
-                let prefetched_vectors = if self.flash_sidecar_mmap.is_some()
-                    && self.flash_vectors.is_none()
-                    && self.dann_config.flash_prefetch_batch > 0
-                {
-                    let mut cache = HashMap::new();
-                    for &n_idx in neighbor_ids.iter().take(self.dann_config.flash_prefetch_batch) {
-                        if n_idx < n {
-                            if let Some(vec) = self.flash_mmap_read_vector(n_idx) {
-                                cache.insert(n_idx, vec);
-                            }
-                        }
-                    }
-                    Some(cache)
-                } else {
-                    None
-                };
+                let prefetched_vectors = self.prefetch_vectors_batch_map(&neighbor_ids, n);
                 let mut nbr_dists: Vec<(f32, usize)> = Vec::new();
 
                 for n_idx in neighbor_ids {
@@ -1632,22 +1676,7 @@ impl DiskAnnIndex {
             // Explore neighbors
             {
                 let neighbor_ids = self.neighbor_indices(idx);
-                let prefetched_vectors = if self.flash_sidecar_mmap.is_some()
-                    && self.flash_vectors.is_none()
-                    && self.dann_config.flash_prefetch_batch > 0
-                {
-                    let mut cache = HashMap::new();
-                    for &n_idx in neighbor_ids.iter().take(self.dann_config.flash_prefetch_batch) {
-                        if n_idx < n {
-                            if let Some(vec) = self.flash_mmap_read_vector(n_idx) {
-                                cache.insert(n_idx, vec);
-                            }
-                        }
-                    }
-                    Some(cache)
-                } else {
-                    None
-                };
+                let prefetched_vectors = self.prefetch_vectors_batch_map(&neighbor_ids, n);
                 let mut nbr_dists: Vec<(f32, usize)> = Vec::new();
 
                 for n_idx in neighbor_ids {
