@@ -36,6 +36,8 @@ pub struct DiskAnnConfig {
     pub disk_pq_dims: usize,
     /// Candidate pool expansion ratio for PQ path (100 = off, 125 = +25%)
     pub pq_candidate_expand_pct: usize,
+    /// Neighbor rerank pool expansion ratio for PQ path (100 = off, 200 = 2x beamwidth)
+    pub rerank_expand_pct: usize,
     /// Whether to saturate adjacency to max degree after alpha pruning
     pub saturate_after_prune: bool,
     /// Additional temporal candidates during build (0 = disabled)
@@ -68,6 +70,7 @@ impl Default for DiskAnnConfig {
             build_dram_budget_gb: 0.0,
             disk_pq_dims: 0,
             pq_candidate_expand_pct: 125,
+            rerank_expand_pct: 100,
             saturate_after_prune: true,
             intra_batch_candidates: 8,
             num_entry_points: 1,
@@ -98,6 +101,7 @@ impl DiskAnnConfig {
                 .disk_pq_candidate_expand_pct
                 .unwrap_or(125)
                 .clamp(100, 300),
+            rerank_expand_pct: params.disk_rerank_expand_pct.unwrap_or(100).clamp(100, 400),
             saturate_after_prune: params.disk_saturate_after_prune.unwrap_or(true),
             intra_batch_candidates: params.disk_intra_batch_candidates.unwrap_or(8).min(256),
             num_entry_points: params.disk_num_entry_points.unwrap_or(1).clamp(1, 64),
@@ -976,17 +980,30 @@ impl DiskAnnIndex {
                     }
                 }
 
-                // Sort and add best beamwidth neighbors
+                // Phase-1: PQ/approx screening order.
                 nbr_dists.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-                for (d, n_idx) in nbr_dists.into_iter().take(beamwidth) {
+
+                // Phase-2: optional exact rerank on a wider candidate pool.
+                let rerank_width = if self.pq_codes.is_some() {
+                    beamwidth
+                        .saturating_mul(self.dann_config.rerank_expand_pct)
+                        .saturating_add(99)
+                        / 100
+                } else {
+                    beamwidth
+                }
+                .max(beamwidth)
+                .min(nbr_dists.len());
+
+                let mut reranked: Vec<(f32, usize)> = nbr_dists
+                    .into_iter()
+                    .take(rerank_width)
+                    .map(|(_screen_d, n_idx)| (self.compute_dist(query, n_idx), n_idx))
+                    .collect();
+                reranked.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+                for (exact_d, n_idx) in reranked.into_iter().take(beamwidth) {
                     visited[n_idx] = true;
-                    // Keep PQ as screening score, but use exact distance for frontier updates
-                    // so candidate ordering and final ranking stay faithful to the true metric.
-                    let exact_d = if self.pq_codes.is_some() {
-                        self.compute_dist(query, n_idx)
-                    } else {
-                        d
-                    };
                     candidates.push(ReverseOrderedFloat(exact_d, n_idx));
                 }
             }
@@ -1599,6 +1616,7 @@ mod tests {
             beamwidth: Some(16),
             disk_pq_dims: Some(2),
             disk_pq_candidate_expand_pct: Some(150),
+            disk_rerank_expand_pct: Some(220),
             disk_saturate_after_prune: Some(false),
             disk_intra_batch_candidates: Some(7),
             disk_num_entry_points: Some(3),
@@ -1621,6 +1639,7 @@ mod tests {
         assert_eq!(index.dann_config.beamwidth, 16);
         assert_eq!(index.dann_config.disk_pq_dims, 2);
         assert_eq!(index.dann_config.pq_candidate_expand_pct, 150);
+        assert_eq!(index.dann_config.rerank_expand_pct, 220);
         assert!(!index.dann_config.saturate_after_prune);
         assert_eq!(index.dann_config.intra_batch_candidates, 7);
         assert_eq!(index.dann_config.num_entry_points, 3);
@@ -1645,6 +1664,27 @@ mod tests {
 
         let index = DiskAnnIndex::new(&config).unwrap();
         assert_eq!(index.dann_config.pq_candidate_expand_pct, 100);
+    }
+
+    #[test]
+    fn test_diskann_config_clamps_rerank_expand_pct() {
+        use crate::api::IndexParams;
+
+        let params = IndexParams {
+            disk_rerank_expand_pct: Some(20),
+            ..Default::default()
+        };
+
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params,
+        };
+
+        let index = DiskAnnIndex::new(&config).unwrap();
+        assert_eq!(index.dann_config.rerank_expand_pct, 100);
     }
 
     #[test]

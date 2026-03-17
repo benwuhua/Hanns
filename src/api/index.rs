@@ -244,6 +244,9 @@ pub struct IndexParams {
     /// For DiskANN search: number of entry points (medoid-like starts), default 1
     #[serde(default)]
     pub disk_num_entry_points: Option<usize>,
+    /// For DiskANN PQ search: rerank pool expansion percentage (100 = disabled)
+    #[serde(default)]
+    pub disk_rerank_expand_pct: Option<usize>,
     /// For PRQ: number of subquantizer splits (m)
     #[serde(default)]
     pub prq_m: Option<usize>,

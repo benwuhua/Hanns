@@ -22,6 +22,33 @@
 
 ## Session Log
 
+### Session 199 - 2026-03-17
+- Focus: `diskann-rerank-capability-closure`
+- Completed:
+  - implemented DiskANN rerank capability for PQ search path:
+    - new API knob `disk_rerank_expand_pct` (default `100`, clamp `100..=400`)
+    - beam search now applies two-phase neighbor selection when PQ is enabled:
+      - phase-1 screening by PQ/approx distance
+      - phase-2 exact-distance rerank on an expanded pool (`beamwidth * rerank_expand_pct / 100`), then frontier push by top `beamwidth`
+  - wired benchmark harness with `--rerank-expand-pct` and row output field.
+  - added regression coverage for config mapping and clamp behavior.
+- Verification:
+  - `cargo test --lib diskann::tests::test_diskann_config -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_config_clamps_rerank_expand_pct -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_beam_search_with_pq_returns_exact_final_distances -- --nocapture` -> `ok`
+  - `cargo test --bin bench_diskann_pq_ab -- --nocapture` -> `ok`
+  - local screen (`base=5000`, `query=200`, `lsearch=128`, `intra=8`, `entry=1`):
+    - `rerank=100`: `qps=21610.72`, `recall=0.6160`
+    - `rerank=200`: `qps=20710.54`, `recall=0.7335`
+  - authority A/B (`base=2000`, `query=40`, `lsearch=128`, `intra=8`, `entry=1`, `construction_l=128`, `beamwidth=8`, `pq_expand_pct=125`, `saturate=on`):
+    - `rerank=100`: `qps=12522.15`, `recall=0.8150` (`run_id=20260317T075753Z_73287`)
+    - `rerank=200`: `qps=12086.13`, `recall=0.8875` (`run_id=20260317T075912Z_73468`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - rerank is a clear quality lever: recall `+0.0725` absolute at `-3.48%` qps on authority lane.
+  - default remains `100` for compatibility/qps-first; `200` is a recall-first profile.
+
 ### Session 198 - 2026-03-17
 - Focus: `strategy-pivot-capability-closure-first`
 - Completed:

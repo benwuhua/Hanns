@@ -15,6 +15,7 @@ use std::time::Instant;
 struct Row {
     pq_dims: usize,
     pq_expand_pct: usize,
+    rerank_expand_pct: usize,
     saturate_after_prune: bool,
     intra_batch_candidates: usize,
     num_entry_points: usize,
@@ -152,6 +153,7 @@ fn main() {
     let construction_l = parse_usize_arg("construction-l", search_list_size);
     let beamwidth = parse_usize_arg("beamwidth", 8);
     let pq_expand_pct = parse_usize_arg("pq-expand-pct", 125);
+    let rerank_expand_pct = parse_usize_arg("rerank-expand-pct", 100);
     let saturate_after_prune = parse_bool_arg("saturate-after-prune", true);
     let intra_batch_candidates = parse_usize_arg("intra-batch-candidates", 8);
     let num_entry_points = parse_usize_arg("num-entry-points", 1);
@@ -198,6 +200,7 @@ fn main() {
                 beamwidth: Some(beamwidth),
                 disk_pq_dims: Some(pq_dims),
                 disk_pq_candidate_expand_pct: Some(pq_expand_pct),
+                disk_rerank_expand_pct: Some(rerank_expand_pct),
                 disk_saturate_after_prune: Some(saturate_after_prune),
                 disk_intra_batch_candidates: Some(intra_batch_candidates),
                 disk_num_entry_points: Some(num_entry_points),
@@ -251,6 +254,7 @@ fn main() {
         rows.push(Row {
             pq_dims,
             pq_expand_pct,
+            rerank_expand_pct,
             saturate_after_prune,
             intra_batch_candidates,
             num_entry_points,

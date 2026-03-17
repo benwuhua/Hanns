@@ -15,6 +15,12 @@
 - DiskANN lsearch/recall-band matrix utility [scripts/diskann_lsearch_recall_band_matrix.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/scripts/diskann_lsearch_recall_band_matrix.py) plus regression test [tests/test_diskann_lsearch_recall_band_matrix.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/tests/test_diskann_lsearch_recall_band_matrix.py), which report both `same-lsearch` deltas and fixed-recall-band picks for each baseline lsearch row.
 
 ### Changed
+- DiskANN PQ search now supports an explicit rerank stage in [src/faiss/diskann.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/faiss/diskann.rs): neighbors are screened by PQ distance, then exact-distance reranked on an expanded pool controlled by `disk_rerank_expand_pct` (`100` disables, default `100`), improving capability parity with native reorder-style paths.
+- [src/api/index.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/api/index.rs) adds `disk_rerank_expand_pct`, and [src/bin/bench_diskann_pq_ab.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/bin/bench_diskann_pq_ab.rs) adds `--rerank-expand-pct` for repeatable A/B evidence.
+- Authority A/B (`2026-03-17`, `base=2000`, `query=40`, `lsearch=128`, `intra=8`, `entry=1`) confirms rerank tradeoff:
+  - `rerank=100`: `12522.15 qps / 0.8150 recall`
+  - `rerank=200`: `12086.13 qps / 0.8875 recall`
+  - delta: `-3.48%` qps, `+0.0725` recall
 - DiskANN entry-point construction in [src/faiss/diskann.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/faiss/diskann.rs) now uses deterministic representative selection (centroid-nearest first seed + farthest-point expansion over a bounded quantile pool) instead of naive first-dimension bucket medians, while keeping the same `disk_num_entry_points` API and default profile.
 - Authority A/B (`2026-03-17`, `base=5000`, `query=200`, `lsearch=128`, `intra=8`) shows the new selector improves throughput with near-stable recall:
   - `entry=1`: `10240.55/0.6150 -> 11513.03/0.6140` (`+12.43%` qps, `-0.0010` recall)
