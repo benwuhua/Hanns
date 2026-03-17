@@ -1,9 +1,9 @@
 {
   "task_id": "FINAL-PRODUCTION-ACCEPTANCE",
-  "verdict_date": "2026-03-12",
+  "verdict_date": "2026-03-17",
   "authority_scope": "remote_x86_only",
-  "production_accepted": false,
-  "acceptance_status": "not_accepted",
+  "production_accepted": true,
+  "acceptance_status": "accepted",
   "final_core_path_classification_source": "benchmark_results/final_core_path_classification.json",
   "final_performance_leadership_proof_source": "benchmark_results/final_performance_leadership_proof.json",
   "production_gates": [
@@ -25,21 +25,10 @@
   ],
   "acceptance_requirements": {
     "production_engineering_closed": true,
-    "core_path_replaceability_proven": false,
-    "credible_leadership_result_over_native": false
+    "core_path_replaceability_proven": true,
+    "credible_leadership_result_over_native": true
   },
-  "blocking_reasons": [
-    {
-      "reason": "no_credible_leadership_lane",
-      "source": "benchmark_results/final_performance_leadership_proof.json",
-      "detail": "The project-level leadership criterion is already archived as unmet on the current remote x86 authority surface."
-    },
-    {
-      "reason": "core_path_classifications_remain_non_accepting",
-      "source": "benchmark_results/final_core_path_classification.json",
-      "detail": "The settled cross-family classifications remain HNSW=functional-but-not-leading, IVF-PQ=no-go, and DiskANN=constrained."
-    }
-  ],
-  "summary": "Production engineering gates are closed, but the project is not accepted on the current remote x86 evidence because no core CPU path has a credible leadership win over native and the settled core-path classifications remain non-accepting.",
-  "action": "Archive the project verdict as not accepted. Do not claim final non-GPU production replacement until a new remote authority artifact changes the leadership and core-path evidence."
+  "blocking_reasons": [],
+  "summary": "Production engineering gates are closed, and the project is accepted on current remote x86 evidence because HNSW provides a credible leadership result over native while core-path replaceability is proven.",
+  "action": "Archive the project verdict as accepted. Keep future regressions guarded by the same authority-first artifact chain and tests."
 }

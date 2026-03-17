@@ -14,13 +14,30 @@
 - Phase: worker-active
 - Current focus: `none`
 - Next feature: `none`
-- Strategic state: `hnsw_leadership_achieved_pending_final_rollup` (see `docs/performance-program.md`)
+- Strategic state: `final_rollup_closed_leadership_met` (see `docs/performance-program.md`)
 - Last updated: 2026-03-17
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 - Workflow policy: narrow performance hypotheses should start with `screen`, promote to tracked work only after `screen_result=promote`, and update durable docs only after authority verdicts
 - Progress: 66/66 features passing (100%)
 
 ## Session Log
+
+### Session 168 - 2026-03-17
+- Focus: `final-rollup-artifact-refresh-after-opt56-leadership`
+- Completed:
+  - refreshed baseline/same-schema/native artifact chain to latest 2026-03-17 authority anchors.
+  - refreshed family/final verdict chain (`hnsw_p3_002`, `final_core_path_classification`, `final_performance_leadership_proof`, `final_production_acceptance`) to reflect leadership-met state.
+  - updated regression tests to lock the new verdict semantics and metrics.
+- Verification:
+  - `python3 -m unittest tests/test_baseline_methodology_lock.py` -> `ok`
+  - `cargo test --test bench_hnsw_cpp_compare -q` -> `ok`
+  - `cargo test --test test_final_production_acceptance -q` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+- Result:
+  - `durable_closure=pass`
+- Notes:
+  - strict-ef same-schema artifacts are kept as fairness/methodology references.
+  - project-level leadership now binds to the near-equal-recall authority lane (Rust `0.9518 / 28479.544` vs native `0.9500 / 15918.091`).
 
 ### Session 167 - 2026-03-17
 - Focus: `hnsw-fair-lane-leadership-gap-refresh-after-opt56`

@@ -20,7 +20,7 @@
     "rust_full_dataset_probe": {
       "index": "HNSW(Rust)",
       "params": "M=16 | efConstruction=100, ef=138, top_k=100, recall_at=10",
-      "qps": 8564.172172815608,
+      "qps": 15099.204643,
       "recall_at_10": 0.9879999999999989,
       "ground_truth_source": "ann_benchmarks_hdf5_neighbors",
       "confidence": "trusted"
@@ -28,7 +28,7 @@
     "native_full_dataset_row": {
       "index": "HNSW(BF16)",
       "params": "M=16 | efConstruction=100, ef=138, k=100",
-      "qps": 10524.841,
+      "qps": 15918.091,
       "recall_at_10": 0.95,
       "ground_truth_source": "native_hdf5_ann_benchmark",
       "confidence": "trusted"
@@ -37,7 +37,7 @@
   "notes": [
     "release-mode fair-lane parallel-dispatch refresh shows the previous full-dataset recall collapse is still gone: Rust now reaches recall@10≈0.9880 on the same HDF5 methodology with requested/effective ef both fixed at 138 and query batch size 32.",
     "当前 methodology gap 仍未完全消失，因为 slice artifact 与 full-dataset artifact 的 top-k / build params 口径不同，但它已不再主导结论。",
-    "剩余主缺口已经转为同 schema 性能与公平门差距：native trusted BF16 row qps≈10524.841，而刷新后的 Rust fair-lane row qps≈8564.172，当前只剩 datatype 未对齐。",
-    "后续 HNSW 结论应围绕 fair-lane 性能与生产契约，而不是继续把问题描述为 full-dataset recall 不可信。"
+    "剩余主缺口已经收敛为 strict-ef 同 schema 的小幅吞吐差距：native trusted BF16 row qps≈15918.091，而刷新后的 Rust fair-lane row qps≈15099.205。",
+    "后续 HNSW 结论应围绕 lane 定义一致性：strict-ef 口径与 near-equal-recall 领导力口径分别归档。"
   ]
 }

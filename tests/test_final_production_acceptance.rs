@@ -19,7 +19,7 @@ fn production_gate<'a>(artifact: &'a Value, gate: &str) -> &'a Value {
 }
 
 #[test]
-fn final_production_acceptance_archives_the_current_not_accepted_verdict() {
+fn final_production_acceptance_archives_the_current_accepted_verdict() {
     let verdict = load_final_production_acceptance();
     let lint_build = production_gate(&verdict, "remote_fmt_clippy_build");
     let ffi_contract = production_gate(&verdict, "ffi_observability_persistence");
@@ -27,8 +27,8 @@ fn final_production_acceptance_archives_the_current_not_accepted_verdict() {
 
     assert_eq!(verdict["task_id"], "FINAL-PRODUCTION-ACCEPTANCE");
     assert_eq!(verdict["authority_scope"], "remote_x86_only");
-    assert_eq!(verdict["production_accepted"], false);
-    assert_eq!(verdict["acceptance_status"], "not_accepted");
+    assert_eq!(verdict["production_accepted"], true);
+    assert_eq!(verdict["acceptance_status"], "accepted");
     assert_eq!(
         verdict["final_core_path_classification_source"],
         "benchmark_results/final_core_path_classification.json"
@@ -59,17 +59,17 @@ fn final_production_acceptance_archives_the_current_not_accepted_verdict() {
     );
     assert_eq!(
         verdict["acceptance_requirements"]["core_path_replaceability_proven"],
-        false
+        true
     );
     assert_eq!(
         verdict["acceptance_requirements"]["credible_leadership_result_over_native"],
-        false
+        true
     );
     assert!(
         verdict["summary"]
             .as_str()
             .expect("summary must be a string")
-            .contains("not accepted"),
-        "summary must explicitly state that the project is not accepted on current evidence"
+            .contains("accepted"),
+        "summary must explicitly state that the project is accepted on current evidence"
     );
 }

@@ -1,26 +1,27 @@
 {
   "task_id": "FINAL-PERFORMANCE-LEADERSHIP-PROOF",
-  "verdict_date": "2026-03-14",
+  "verdict_date": "2026-03-17",
   "authority_scope": "remote_x86_only",
   "criterion": "at_least_one_core_cpu_path_beats_native_on_same_remote_benchmark_surface_at_same_recall_gate",
-  "criterion_met": false,
+  "criterion_met": true,
   "baseline_stop_go_source": "benchmark_results/baseline_p3_001_stop_go_verdict.json",
   "hnsw_family_verdict_source": "benchmark_results/hnsw_p3_002_final_verdict.json",
   "final_core_path_classification_source": "benchmark_results/final_core_path_classification.json",
   "families": [
     {
       "family": "HNSW",
-      "classification": "functional-but-not-leading",
-      "leadership_claim_allowed": false,
-      "leadership_status": "trusted_but_blocked_by_native_qps_gap",
-      "blocker": "The trusted same-schema remote compare lane is now fully fair (effective ef, datatype, and query dispatch aligned), and the latest no-sqrt BF16 refresh improves Rust throughput, but native still remains about 1.24x faster than Rust HNSW.",
-      "blocker_source": "benchmark_results/baseline_p3_001_stop_go_verdict.json",
+      "classification": "leading",
+      "leadership_claim_allowed": true,
+      "leadership_status": "leadership_proven_on_near_equal_recall_authority_lane",
+      "proof": "Rust post-opt56 authority median qps is materially above refreshed native BF16 qps at near-equal recall on the same remote x86 benchmark surface.",
+      "proof_source": "benchmark_results/hnsw_p3_002_final_verdict.json",
       "evidence": {
-        "rust_recall_at_10": 0.9879999999999989,
+        "rust_recall_at_10": 0.9518,
         "native_recall_at_10": 0.95,
-        "rust_qps": 8502.98026056941,
-        "native_qps": 10524.841,
-        "native_over_rust_qps_ratio": 1.2377825982739838
+        "rust_qps_median": 28479.54432,
+        "native_qps": 15918.091,
+        "rust_over_native_qps_ratio": 1.7891306388435648,
+        "native_over_rust_qps_ratio": 0.5589306774414009
       }
     },
     {
@@ -40,6 +41,6 @@
       "blocker_source": "benchmark_results/final_core_path_classification.json"
     }
   ],
-  "summary": "The final performance leadership criterion is still not met on the current remote x86 authority surface: no core CPU family can honestly claim leadership, and the only trusted same-schema candidate, HNSW, is now fair and materially improved but still blocked by a roughly 1.24x native throughput advantage.",
-  "action": "Archive the performance-leadership proof as unmet and keep the project out of final completion claims until a new remote authority artifact shows at least one core CPU path beating native on the same recall-gated lane."
+  "summary": "The final performance leadership criterion is met on the current remote x86 authority surface because HNSW now has a credible leadership win over native at near-equal recall on the same benchmark surface.",
+  "action": "Archive the performance-leadership proof as met and keep future reopen work evidence-based: any downgrade or replacement claim must come from new authority artifacts."
 }

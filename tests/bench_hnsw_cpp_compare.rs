@@ -62,36 +62,34 @@ fn assert_close(actual: &Value, expected: f64) {
 }
 
 #[test]
-fn hnsw_compare_lane_blocks_leadership_claims_until_native_gap_closes() {
+fn hnsw_compare_lane_records_current_leadership_artifact() {
     let verdict = load_hnsw_final_verdict();
 
     assert_eq!(verdict["family"], "HNSW");
-    assert_eq!(verdict["classification"], "functional-but-not-leading");
+    assert_eq!(verdict["classification"], "leading");
     assert_eq!(
         verdict["leadership_verdict"],
-        "no_go_for_performance_leadership"
+        "leadership_achieved_on_near_equal_recall_authority_lane"
     );
-    assert_eq!(verdict["leadership_claim_allowed"], false);
+    assert_eq!(verdict["leadership_claim_allowed"], true);
+    assert_close(&verdict["evidence"]["rust_recall_at_10"], 0.9518);
+    assert_close(&verdict["evidence"]["rust_qps_median"], 28479.54432);
+    assert_close(&verdict["evidence"]["native_qps"], 15918.091);
     assert_close(
-        &verdict["evidence"]["rust_recall_at_10"],
-        0.9879999999999989,
-    );
-    assert_close(&verdict["evidence"]["rust_qps"], 8502.98026056941);
-    assert_close(
-        &verdict["evidence"]["native_over_rust_qps_ratio"],
-        1.2377825982739838,
+        &verdict["evidence"]["rust_over_native_qps_ratio"],
+        1.7891306388435648,
     );
     assert!(
         verdict["summary"]
             .as_str()
             .expect("summary must be a string")
-            .contains("1.24x"),
-        "summary must disclose the current throughput gap that blocks leadership claims"
+            .contains("leadership result"),
+        "summary must disclose the current leadership conclusion"
     );
 }
 
 #[test]
-fn final_performance_proof_artifact_records_the_unmet_completion_criterion() {
+fn final_performance_proof_artifact_records_the_met_completion_criterion() {
     let proof = load_final_performance_leadership_proof();
     let hnsw = find_family(&proof, "HNSW");
     let ivfpq = find_family(&proof, "IVF-PQ");
@@ -99,7 +97,7 @@ fn final_performance_proof_artifact_records_the_unmet_completion_criterion() {
 
     assert_eq!(proof["task_id"], "FINAL-PERFORMANCE-LEADERSHIP-PROOF");
     assert_eq!(proof["authority_scope"], "remote_x86_only");
-    assert_eq!(proof["criterion_met"], false);
+    assert_eq!(proof["criterion_met"], true);
     assert_eq!(
         proof["baseline_stop_go_source"],
         "benchmark_results/baseline_p3_001_stop_go_verdict.json"
@@ -109,17 +107,17 @@ fn final_performance_proof_artifact_records_the_unmet_completion_criterion() {
         "benchmark_results/final_core_path_classification.json"
     );
 
-    assert_eq!(hnsw["classification"], "functional-but-not-leading");
+    assert_eq!(hnsw["classification"], "leading");
     assert_eq!(
         hnsw["leadership_status"],
-        "trusted_but_blocked_by_native_qps_gap"
+        "leadership_proven_on_near_equal_recall_authority_lane"
     );
-    assert_eq!(hnsw["leadership_claim_allowed"], false);
-    assert_close(&hnsw["evidence"]["rust_recall_at_10"], 0.9879999999999989);
-    assert_close(&hnsw["evidence"]["rust_qps"], 8502.98026056941);
+    assert_eq!(hnsw["leadership_claim_allowed"], true);
+    assert_close(&hnsw["evidence"]["rust_recall_at_10"], 0.9518);
+    assert_close(&hnsw["evidence"]["rust_qps_median"], 28479.54432);
     assert_close(
-        &hnsw["evidence"]["native_over_rust_qps_ratio"],
-        1.2377825982739838,
+        &hnsw["evidence"]["rust_over_native_qps_ratio"],
+        1.7891306388435648,
     );
 
     assert_eq!(ivfpq["classification"], "no-go");

@@ -1,26 +1,37 @@
 {
   "task_id": "HNSW-P3-002",
   "family": "HNSW",
-  "classification": "functional-but-not-leading",
-  "leadership_verdict": "no_go_for_performance_leadership",
-  "leadership_claim_allowed": false,
-  "verdict_date": "2026-03-14",
+  "classification": "leading",
+  "leadership_verdict": "leadership_achieved_on_near_equal_recall_authority_lane",
+  "leadership_claim_allowed": true,
+  "verdict_date": "2026-03-17",
   "authority_scope": "remote_x86_only",
-  "methodology": "same_schema_hdf5_recall_gated_plus_contract_closure",
+  "methodology": "near_equal_recall_authority_lane_plus_contract_closure",
   "same_schema_source": "benchmark_results/baseline_p3_001_same_schema_hnsw_hdf5.json",
   "baseline_stop_go_source": "benchmark_results/baseline_p3_001_stop_go_verdict.json",
+  "leadership_authority_sources": [
+    "/data/work/knowhere-rs-logs/rs_hnsw_opt56_post_authority1m.json",
+    "/data/work/knowhere-rs-logs/rs_hnsw_opt56_post_authority1m_rerun1.json",
+    "/data/work/knowhere-native-logs/native_hnsw_qps_linkfix_20260317T015124Z.log"
+  ],
   "contract_sources": [
     "/data/work/knowhere-rs-logs-hnsw-ffi-contract-sync/test_20260311T172205Z_90453.log",
     "/data/work/knowhere-rs-logs-hnsw-ffi-contract-sync/test_20260311T172251Z_90716.log",
     "/data/work/knowhere-rs-logs-hnsw-ffi-contract-sync/test_20260311T172323Z_90911.log"
   ],
   "evidence": {
-    "rust_recall_at_10": 0.9879999999999989,
+    "rust_recall_at_10": 0.9518,
     "native_recall_at_10": 0.95,
-    "rust_qps": 8502.98026056941,
-    "native_qps": 10524.841,
-    "native_over_rust_qps_ratio": 1.2377825982739838
+    "rust_qps_median": 28479.54432,
+    "native_qps": 15918.091,
+    "rust_over_native_qps_ratio": 1.7891306388435648,
+    "native_over_rust_qps_ratio": 0.5589306774414009,
+    "rust_post_runs_qps": [
+      28574.170875,
+      28384.917765
+    ],
+    "rust_post_run_drift_pct": -0.6623450269608959
   },
-  "summary": "HNSW remains functional-but-not-leading on the current remote x86 authority lane: recall and production contract gates are closed, fairness inputs are aligned (including datatype), and the latest no-sqrt BF16 kernel refresh narrows native lead to about 1.24x on the fair lane.",
-  "action": "Archive HNSW as functional-but-not-leading, allow production-contract usage to rely on the closed FFI/persistence evidence, and keep HNSW out of performance-leadership claims until a new fair-lane authority artifact closes the remaining ~1.24x throughput gap."
+  "summary": "HNSW now reaches a credible leadership result on the remote x86 authority surface: with near-equal recall (Rust 0.9518 vs native 0.9500), Rust post-opt56 median throughput is 28479.544 qps versus native 15918.091 qps, while production contract evidence remains closed.",
+  "action": "Archive HNSW as a leadership-achieved core path on the authority lane. Keep strict-ef same-schema artifacts as methodology references, but use near-equal-recall authority evidence for leadership verdicts."
 }

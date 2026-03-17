@@ -4,11 +4,11 @@
 
 - Final criterion source: `benchmark_results/final_performance_leadership_proof.json`
 - Fairness gate source: `benchmark_results/hnsw_fairness_gate.json`
-- Final criterion status: `unmet` (artifact chain pending refresh; HNSW lane evidence now leadership-positive)
-- Program state: `hnsw_leadership_achieved_pending_final_rollup`
-- Next strategic track: `final-rollup-artifact-refresh`
+- Final criterion status: `met` (rollup artifacts refreshed on 2026-03-17)
+- Program state: `final_rollup_closed_leadership_met`
+- Next strategic track: `none`
 - North star lane: `HNSW same-schema remote x86`
-- Blocker summary: the previous HNSW leadership blocker is closed by same-day authority evidence after `opt56`; Rust now leads the refreshed native BF16 anchor at near-equal recall on the fair lane.
+- Blocker summary: no active project-level leadership blocker; HNSW now leads the refreshed native BF16 anchor at near-equal recall on authority.
 
 ## Fairness Gate
 

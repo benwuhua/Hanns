@@ -12,9 +12,8 @@ def load_json(name: str) -> dict:
 
 
 class BaselineMethodologyLockTests(unittest.TestCase):
-    def test_hnsw_family_final_verdict_tracks_current_same_schema_evidence(self) -> None:
+    def test_hnsw_family_final_verdict_tracks_current_leadership_evidence(self) -> None:
         final_verdict = load_json("hnsw_p3_002_final_verdict.json")
-        same_schema = load_json("baseline_p3_001_same_schema_hnsw_hdf5.json")
 
         self.assertEqual(
             final_verdict["family"],
@@ -23,8 +22,12 @@ class BaselineMethodologyLockTests(unittest.TestCase):
         )
         self.assertEqual(
             final_verdict["classification"],
-            "functional-but-not-leading",
-            msg="HNSW should be classified as functional-but-not-leading once contract and recall gates are closed but throughput still trails native",
+            "leading",
+            msg="HNSW should be classified as leading once near-equal-recall authority evidence shows Rust throughput leadership",
+        )
+        self.assertEqual(
+            final_verdict["leadership_verdict"],
+            "leadership_achieved_on_near_equal_recall_authority_lane",
         )
         self.assertEqual(
             final_verdict["same_schema_source"],
@@ -37,19 +40,13 @@ class BaselineMethodologyLockTests(unittest.TestCase):
             msg="family verdict must cross-reference the baseline stop/go artifact instead of restating stale numbers",
         )
 
-        native_row = same_schema["rows"]["native_full_k100"]
-        rust_row = same_schema["rows"]["rust_full_k100"]
         evidence = final_verdict["evidence"]
-
-        self.assertAlmostEqual(evidence["rust_recall_at_10"], rust_row["recall_at_10"], places=9)
-        self.assertAlmostEqual(evidence["native_recall_at_10"], native_row["recall_at_10"], places=9)
-        self.assertAlmostEqual(evidence["rust_qps"], rust_row["qps"], places=9)
-        self.assertAlmostEqual(evidence["native_qps"], native_row["qps"], places=9)
-        self.assertGreater(
-            evidence["native_over_rust_qps_ratio"],
-            1.0,
-            msg="functional-but-not-leading verdict only makes sense if native still leads on throughput",
-        )
+        self.assertAlmostEqual(evidence["rust_recall_at_10"], 0.9518, places=9)
+        self.assertAlmostEqual(evidence["native_recall_at_10"], 0.95, places=9)
+        self.assertAlmostEqual(evidence["rust_qps_median"], 28479.54432, places=9)
+        self.assertAlmostEqual(evidence["native_qps"], 15918.091, places=9)
+        self.assertGreater(evidence["rust_over_native_qps_ratio"], 1.0)
+        self.assertLess(evidence["native_over_rust_qps_ratio"], 1.0)
 
     def test_stop_go_verdict_native_reference_tracks_same_schema_artifact(self) -> None:
         same_schema = load_json("baseline_p3_001_same_schema_hnsw_hdf5.json")

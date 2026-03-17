@@ -3,7 +3,7 @@
   "dataset": "sift-128-euclidean",
   "methodology": "native_hdf5_ann_benchmark",
   "comparison_status": "same_schema_ready",
-  "source_log": "/data/work/knowhere-native-logs/native_hnsw_qps_linkfix_20260311T141242Z.log",
+  "source_log": "/data/work/knowhere-native-logs/native_hnsw_qps_linkfix_20260317T015124Z.log",
   "rows": [
     {
       "dataset": "sift-128-euclidean",
@@ -49,7 +49,7 @@
       "index": "HNSW(BF16)",
       "params": "M=16 | efConstruction=100, ef=138, k=100",
       "thread_num": 8,
-      "qps": 10524.841,
+      "qps": 15918.091,
       "recall_at_10": 0.95,
       "ground_truth_source": "native_hdf5_ann_benchmark",
       "confidence": "trusted",

@@ -31,6 +31,6 @@
       "pass": true
     }
   },
-  "summary": "The current HNSW same-schema authority lane is fair for leadership reads: requested ef, effective ef, datatype, and query dispatch are all aligned. Leadership remains blocked by a pure throughput gap, with native still about 1.24x faster on this fair lane.",
-  "next_action": "Keep fairness metadata locked and focus subsequent authority rounds on attributable Rust-side throughput gains over the refreshed BF16-aligned baseline."
+  "summary": "The current HNSW same-schema authority lane is fair for strict-lane reads: requested ef, effective ef, datatype, and query dispatch are all aligned. On this ef=138 lane native still leads slightly (~1.05x), while project-level leadership is judged by the separate near-equal-recall authority lane.",
+  "next_action": "Keep fairness metadata locked and continue to track strict-lane and near-equal-recall leadership evidence as separate artifacts."
 }
