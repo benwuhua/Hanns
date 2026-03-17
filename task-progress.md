@@ -22,6 +22,20 @@
 
 ## Session Log
 
+### Session 173 - 2026-03-17
+- Focus: `full-regression-gate-governance-lock-integration`
+- Completed:
+  - integrated governance/parity lock tests into `full_regression` gate profile in `scripts/gate_profile_runner.sh`.
+  - updated `scripts/README_GATE_PROFILES.md` profile mapping docs accordingly.
+- Verification:
+  - `bash scripts/gate_profile_runner.sh --profile full_regression --print-checks` -> `ok`
+  - `python3 -m unittest tests/test_validate_features.py tests/test_baseline_methodology_lock.py tests/test_parity_report_lock.py tests/test_governance_current_state_lock.py` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+- Result:
+  - `durable_closure=pass`
+- Notes:
+  - gate orchestration/docs only; no runtime/index behavior changes.
+
 ### Session 172 - 2026-03-17
 - Focus: `governance-current-state-regression-lock`
 - Completed:

@@ -37,7 +37,7 @@ Usage:
 
 Profiles:
   default_regression -> cargo test -q
-  full_regression    -> cargo test --lib -q; cargo test --tests -q; cargo test --doc -q
+  full_regression    -> cargo test --lib -q; cargo test --tests -q; cargo test --doc -q; governance/python locks
   long_regression    -> cargo test --tests --features long-tests -q; plus long-tests smoke subset
 
 Notes:
@@ -89,6 +89,10 @@ case "$PROFILE" in
       "cargo test --lib -q"
       "cargo test --tests -q"
       "cargo test --doc -q"
+      "python3 -m unittest tests/test_validate_features.py"
+      "python3 -m unittest tests/test_baseline_methodology_lock.py"
+      "python3 -m unittest tests/test_parity_report_lock.py"
+      "python3 -m unittest tests/test_governance_current_state_lock.py"
     )
     ;;
   long_regression)

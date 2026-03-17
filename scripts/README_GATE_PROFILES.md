@@ -9,6 +9,10 @@
   - `cargo test --lib -q`
   - `cargo test --tests -q`
   - `cargo test --doc -q`
+  - `python3 -m unittest tests/test_validate_features.py`
+  - `python3 -m unittest tests/test_baseline_methodology_lock.py`
+  - `python3 -m unittest tests/test_parity_report_lock.py`
+  - `python3 -m unittest tests/test_governance_current_state_lock.py`
 - `long_regression` ->
   - `cargo test --tests --features long-tests -q`
   - `cargo test --test opt_p2_stable_regression_matrix -q` (smoke)
