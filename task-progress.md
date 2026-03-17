@@ -14,13 +14,40 @@
 - Phase: worker-active
 - Current focus: `none`
 - Next feature: `none`
-- Strategic state: `blocked_on_hnsw_leadership_gap` (see `docs/performance-program.md`)
-- Last updated: 2026-03-16
+- Strategic state: `hnsw_leadership_achieved_pending_final_rollup` (see `docs/performance-program.md`)
+- Last updated: 2026-03-17
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 - Workflow policy: narrow performance hypotheses should start with `screen`, promote to tracked work only after `screen_result=promote`, and update durable docs only after authority verdicts
 - Progress: 66/66 features passing (100%)
 
 ## Session Log
+
+### Session 167 - 2026-03-17
+- Focus: `hnsw-fair-lane-leadership-gap-refresh-after-opt56`
+- Completed:
+  - refreshed native HNSW anchor on remote x86 for the same fair lane (`Benchmark_float_qps.TEST_HNSW`, BF16 row at recall target).
+  - parsed native log with `native_benchmark_qps_parser` and aligned compare point to Rust post-`opt56` authority runs.
+  - added a second Rust `1M/1000` load-only rerun for stability after `opt56`.
+  - confirmed low drift and large Rust lead at near-equal recall.
+- Verification:
+  - native refresh:
+    - `bash scripts/remote/native_hnsw_qps_capture.sh --gtest-filter Benchmark_float_qps.TEST_HNSW` -> `ok`
+    - log: `/data/work/knowhere-native-logs/native_hnsw_qps_linkfix_20260317T015124Z.log`
+    - parser (`native_benchmark_qps_parser --all`) selected BF16 thread-8 row nearest Rust recall:
+      - `recall_at_10=0.9500`, `qps=15918.091`
+  - Rust authority:
+    - `/data/work/knowhere-rs-logs/rs_hnsw_opt56_post_authority1m.json` -> `qps=28574.170875`, `recall=0.9518`
+    - `/data/work/knowhere-rs-logs/rs_hnsw_opt56_post_authority1m_rerun1.json` -> `qps=28384.917765`, `recall=0.9518`
+    - post drift: `-0.66%`
+    - post median: `28479.544320`
+  - equal-recall compare (Rust `0.9518` vs Native `0.9500`):
+    - Rust/Native ratio: `1.789x`
+    - Rust lead: `+78.91%`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - the prior strategic blocker `blocked_on_hnsw_leadership_gap` is now closed by same-day authority evidence.
+  - next recommended step: update final rollup artifacts (same-schema/gap/final-proof chain) to reflect the new leadership state.
 
 ### Session 166 - 2026-03-17
 - Focus: `hnsw-fair-lane-throughput-opt56-revival-and-authority-promotion`

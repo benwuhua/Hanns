@@ -4,11 +4,11 @@
 
 - Final criterion source: `benchmark_results/final_performance_leadership_proof.json`
 - Fairness gate source: `benchmark_results/hnsw_fairness_gate.json`
-- Final criterion status: `unmet`
-- Program state: `blocked_on_hnsw_leadership_gap`
-- Next strategic track: `hnsw-fair-lane-throughput`
+- Final criterion status: `unmet` (artifact chain pending refresh; HNSW lane evidence now leadership-positive)
+- Program state: `hnsw_leadership_achieved_pending_final_rollup`
+- Next strategic track: `final-rollup-artifact-refresh`
 - North star lane: `HNSW same-schema remote x86`
-- Blocker summary: the current trusted final proof still ends with `criterion_met=false`; the latest authority hot-path round improves Rust equal-recall throughput on `ef=60`, but after refreshing the native BF16 anchor on the same day native still remains about `1.06x` faster on this fair lane.
+- Blocker summary: the previous HNSW leadership blocker is closed by same-day authority evidence after `opt56`; Rust now leads the refreshed native BF16 anchor at near-equal recall on the fair lane.
 
 ## Fairness Gate
 
@@ -54,3 +54,4 @@
 - opt53 authority closure (2026-03-16): adding dim=128 AVX-512 specialized kernels (`l2_avx512_sq_ptr_128` and `l2_batch_4_avx512_128`) delivered clean-window authority uplift at `ef=60` (`14111.214 -> 14423.421`, recall parity, `+2.21%`), so this optimization is kept.
 - opt54 authority closure (2026-03-16): a follow-up dim=128 AVX-512 dual-accumulator micro-tuning regressed slightly on authority at equal recall (`14460.505 -> 14407.721`, recall parity, `-0.37%`), so this round is rejected and production stays on the opt53 specialization baseline.
 - opt56 authority closure (2026-03-17): reusing thread-local `SearchScratch` for L2 unfiltered hot path survived medium-lane recheck and then passed full authority confirmation at equal recall (`1M/1000`, `ef=60`: `13406.233 -> 28574.171`, recall parity `0.9518`, `+113.14%`), so this optimization is kept and becomes the new Rust fair-lane baseline.
+- native anchor refresh closure (2026-03-17): latest parsed native BF16 row on the same lane is `recall_at_10=0.9500`, `qps=15918.091` (`thread_num=8`), while Rust `opt56` post median is `qps=28479.544` at `recall_at_10=0.9518` (post drift `-0.66%`), yielding about `1.789x` Rust-over-native at near-equal recall.
