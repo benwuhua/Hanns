@@ -232,6 +232,9 @@ pub struct IndexParams {
     /// For DiskANN: number of PQ sub-dimensions (0 = disabled)
     #[serde(default)]
     pub disk_pq_dims: Option<usize>,
+    /// For DiskANN PQ path: candidate pool expansion percentage (100 = off, 125 = +25%)
+    #[serde(default)]
+    pub disk_pq_candidate_expand_pct: Option<usize>,
     /// For PRQ: number of subquantizer splits (m)
     #[serde(default)]
     pub prq_m: Option<usize>,

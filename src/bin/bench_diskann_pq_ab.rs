@@ -14,6 +14,7 @@ use std::time::Instant;
 #[derive(Debug, Serialize)]
 struct Row {
     pq_dims: usize,
+    pq_expand_pct: usize,
     base_size: usize,
     query_size: usize,
     dim: usize,
@@ -132,6 +133,7 @@ fn main() {
     let max_degree = parse_usize_arg("max-degree", 48);
     let search_list_size = parse_usize_arg("search-list-size", 128);
     let beamwidth = parse_usize_arg("beamwidth", 8);
+    let pq_expand_pct = parse_usize_arg("pq-expand-pct", 125);
     let output = parse_string_arg("output", "benchmark_results/diskann_pq_ab.local.json");
     let pq_dims_list = parse_pq_dims_arg(&[0, 2, 4]);
     let reuse_index = parse_bool_arg("reuse-index", false);
@@ -173,6 +175,7 @@ fn main() {
                 search_list_size: Some(search_list_size),
                 beamwidth: Some(beamwidth),
                 disk_pq_dims: Some(pq_dims),
+                disk_pq_candidate_expand_pct: Some(pq_expand_pct),
                 ..Default::default()
             },
         };
@@ -212,6 +215,7 @@ fn main() {
 
         rows.push(Row {
             pq_dims,
+            pq_expand_pct,
             base_size,
             query_size,
             dim,

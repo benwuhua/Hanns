@@ -32,6 +32,8 @@ pub struct DiskAnnConfig {
     pub build_dram_budget_gb: f32,
     /// Disk PQ dimensions (0 = uncompressed)
     pub disk_pq_dims: usize,
+    /// Candidate pool expansion ratio for PQ path (100 = off, 125 = +25%)
+    pub pq_candidate_expand_pct: usize,
     /// Beamwidth for search (IO parallelism), default 8
     pub beamwidth: usize,
     /// Cache DRAM budget in GB
@@ -56,6 +58,7 @@ impl Default for DiskAnnConfig {
             pq_code_budget_gb: 0.0,
             build_dram_budget_gb: 0.0,
             disk_pq_dims: 0,
+            pq_candidate_expand_pct: 125,
             beamwidth: 8,
             cache_dram_budget_gb: 0.0,
             warm_up: false,
@@ -77,6 +80,10 @@ impl DiskAnnConfig {
             pq_code_budget_gb: 0.0, // Not exposed in IndexParams yet
             build_dram_budget_gb: 0.0,
             disk_pq_dims: params.disk_pq_dims.unwrap_or(0),
+            pq_candidate_expand_pct: params
+                .disk_pq_candidate_expand_pct
+                .unwrap_or(125)
+                .clamp(100, 300),
             cache_dram_budget_gb: 0.0,
             warm_up: false,
             filter_threshold: -1.0,
@@ -702,7 +709,11 @@ impl DiskAnnIndex {
 
         let beamwidth = self.dann_config.beamwidth;
         let effective_l = if self.pq_codes.is_some() {
-            (L + L / 4).min(n)
+            let expanded = L
+                .saturating_mul(self.dann_config.pq_candidate_expand_pct)
+                .saturating_add(99)
+                / 100;
+            expanded.max(L).min(n)
         } else {
             L
         };
@@ -1396,6 +1407,7 @@ mod tests {
             search_list_size: Some(200),
             beamwidth: Some(16),
             disk_pq_dims: Some(2),
+            disk_pq_candidate_expand_pct: Some(150),
             ..Default::default()
         };
 
@@ -1413,6 +1425,28 @@ mod tests {
         assert_eq!(index.dann_config.search_list_size, 200);
         assert_eq!(index.dann_config.beamwidth, 16);
         assert_eq!(index.dann_config.disk_pq_dims, 2);
+        assert_eq!(index.dann_config.pq_candidate_expand_pct, 150);
+    }
+
+    #[test]
+    fn test_diskann_config_clamps_pq_candidate_expand_pct() {
+        use crate::api::IndexParams;
+
+        let params = IndexParams {
+            disk_pq_candidate_expand_pct: Some(20),
+            ..Default::default()
+        };
+
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params,
+        };
+
+        let index = DiskAnnIndex::new(&config).unwrap();
+        assert_eq!(index.dann_config.pq_candidate_expand_pct, 100);
     }
 
     #[test]

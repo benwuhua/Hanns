@@ -22,6 +22,29 @@
 
 ## Session Log
 
+### Session 180 - 2026-03-17
+- Focus: `diskann-pq-expand-pct-parameterization`
+- Completed:
+  - finished wiring `disk_pq_candidate_expand_pct` through API params -> `DiskAnnConfig` -> `beam_search` effective candidate pool sizing.
+  - replaced hardcoded PQ mode expansion (`L + L/4`) with configurable percentage formula and sane clamp (`100..=300`).
+  - extended benchmark harness `bench_diskann_pq_ab` with `--pq-expand-pct` and persisted the chosen value in output rows.
+  - added/updated regressions for config mapping and clamp behavior.
+  - ran local quick-screen sweep (small lane) with cache reuse to verify monotonic recall/QPS tradeoff behavior.
+- Verification:
+  - `cargo fmt --all` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_config -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_config_clamps_pq_candidate_expand_pct -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_beam_search_with_pq_returns_exact_final_distances -- --nocapture` -> `ok`
+  - `cargo test --bin bench_diskann_pq_ab -- --nocapture` -> `ok`
+  - local quick-screen (`base=5000`, `query=50`, `dim=128`, `pq_dims=4`, cache reused):
+    - `pct=100`: `qps=25246.15`, `recall=0.5800`
+    - `pct=125`: `qps=20762.68`, `recall=0.6120`
+    - `pct=150`: `qps=17726.05`, `recall=0.6660`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - parameterization is now complete; next authority step is to run the same 100/125/150 sweep on remote x86 and select default profile by lane objective.
+
 ### Session 179 - 2026-03-17
 - Focus: `diskann-pq-candidate-pool-tradeoff-tuning`
 - Completed:
