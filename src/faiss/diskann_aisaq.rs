@@ -24,6 +24,9 @@ use crate::simd;
 use io_uring::{opcode, types, IoUring};
 use memmap2::Mmap;
 use parking_lot::Mutex;
+use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
+use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_PAGE_SIZE: usize = 4096;
@@ -46,6 +49,10 @@ pub struct AisaqConfig {
     pub num_entry_points: usize,
     /// Exact rerank pool expansion percentage over top-k.
     pub rerank_expand_pct: usize,
+    /// Random initial candidate edges per inserted node (0 = disabled)
+    pub random_init_edges: usize,
+    /// Seed for deterministic randomized build behavior.
+    pub random_seed: u64,
     pub warm_up: bool,
     pub filter_threshold: f32,
 }
@@ -66,6 +73,8 @@ impl Default for AisaqConfig {
             inline_pq: 0,
             num_entry_points: 1,
             rerank_expand_pct: 200,
+            random_init_edges: 0,
+            random_seed: 42,
             warm_up: false,
             filter_threshold: -1.0,
         }
@@ -82,6 +91,8 @@ impl AisaqConfig {
             disk_pq_dims: params.disk_pq_dims.unwrap_or(0),
             num_entry_points: params.disk_num_entry_points.unwrap_or(1).clamp(1, 64),
             rerank_expand_pct: params.disk_rerank_expand_pct.unwrap_or(200).clamp(100, 400),
+            random_init_edges: params.disk_random_init_edges.unwrap_or(0).min(64),
+            random_seed: params.random_seed.unwrap_or(42),
             ..Self::default()
         }
     }
@@ -648,11 +659,11 @@ impl PQFlashIndex {
             let start = row * self.dim;
             let end = start + self.dim;
             let vector = &vectors[start..end];
-            let neighbors = self.select_neighbors(vector, self.config.max_degree);
+            let node_id = self.nodes.len() as u32;
+            let neighbors =
+                self.select_neighbors_with_random(node_id as usize, vector, self.config.max_degree);
             let vector_offset = self.vectors.len();
             self.vectors.extend_from_slice(vector);
-
-            let node_id = self.nodes.len() as u32;
             let inline_pq = self
                 .pq_encoder
                 .as_ref()
@@ -1325,15 +1336,62 @@ impl PQFlashIndex {
         scored.into_iter().map(|(node_id, _)| node_id).collect()
     }
 
+    fn select_neighbors_with_random(
+        &self,
+        node_id: usize,
+        vector: &[f32],
+        max_degree: usize,
+    ) -> Vec<u32> {
+        let mut selected = self.select_neighbors(vector, max_degree);
+        if self.config.random_init_edges == 0 || node_id == 0 || self.nodes.is_empty() {
+            return selected;
+        }
+
+        let limit = node_id.min(self.nodes.len());
+        if limit == 0 {
+            return selected;
+        }
+
+        let sample = self.config.random_init_edges.min(limit);
+        let seed = self.config.random_seed ^ ((node_id as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut pool: Vec<usize> = (0..limit).collect();
+        pool.shuffle(&mut rng);
+
+        for idx in pool.into_iter().take(sample) {
+            let rid = idx as u32;
+            if !selected.contains(&rid) {
+                selected.push(rid);
+            }
+        }
+
+        selected.sort_by(|&a, &b| {
+            self.exact_distance(vector, self.node_vector(a as usize))
+                .total_cmp(&self.exact_distance(vector, self.node_vector(b as usize)))
+        });
+        selected.truncate(max_degree.min(selected.len()));
+        selected
+    }
+
     fn link_back(&mut self, neighbor: u32, node_id: u32) {
-        let neighbor_list = &mut self.nodes[neighbor as usize].neighbors;
+        let neighbor_idx = neighbor as usize;
+        if neighbor_idx >= self.nodes.len() {
+            return;
+        }
+
+        let mut neighbor_list = self.nodes[neighbor_idx].neighbors.clone();
         if !neighbor_list.contains(&node_id) {
             neighbor_list.push(node_id);
         }
         if neighbor_list.len() > self.config.max_degree {
-            neighbor_list.sort_unstable();
+            let anchor = self.node_vector(neighbor_idx).to_vec();
+            neighbor_list.sort_by(|&a, &b| {
+                self.exact_distance(&anchor, self.node_vector(a as usize))
+                    .total_cmp(&self.exact_distance(&anchor, self.node_vector(b as usize)))
+            });
             neighbor_list.truncate(self.config.max_degree);
         }
+        self.nodes[neighbor_idx].neighbors = neighbor_list;
     }
 
     fn refresh_entry_points(&mut self) {
@@ -1675,6 +1733,8 @@ mod tests {
                 disk_rerank_expand_pct: Some(250),
                 disk_num_entry_points: Some(3),
                 disk_pq_dims: Some(4),
+                disk_random_init_edges: Some(5),
+                random_seed: Some(9),
                 ..Default::default()
             },
         };
@@ -1682,6 +1742,8 @@ mod tests {
         assert_eq!(mapped.rerank_expand_pct, 250);
         assert_eq!(mapped.num_entry_points, 3);
         assert_eq!(mapped.disk_pq_dims, 4);
+        assert_eq!(mapped.random_init_edges, 5);
+        assert_eq!(mapped.random_seed, 9);
     }
 
     #[test]
@@ -1792,6 +1854,83 @@ mod tests {
         assert_eq!(
             index.entry_points[1], 3,
             "second entry should be a far diverse seed from the centroid anchor"
+        );
+    }
+
+    #[test]
+    fn aisaq_random_initial_neighbors_are_seeded() {
+        let config = AisaqConfig {
+            max_degree: 4,
+            random_init_edges: 2,
+            random_seed: 7,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, 2).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, //
+            1.0, 0.0, //
+            2.0, 0.0, //
+            3.0, 0.0, //
+            4.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+        index.add(&vectors[..8]).unwrap(); // add first 4 nodes
+        let query = [4.0f32, 0.0f32];
+
+        let n1 = index.select_neighbors_with_random(4, &query, 4);
+        let n2 = index.select_neighbors_with_random(4, &query, 4);
+        assert_eq!(n1, n2, "random init neighbors should be deterministic under seed");
+    }
+
+    #[test]
+    fn aisaq_link_back_keeps_closer_reverse_neighbors() {
+        let config = AisaqConfig {
+            max_degree: 2,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, 2).unwrap();
+        index.vectors = vec![
+            0.0f32, 0.0, // node 0
+            100.0, 0.0, // node 1 (far)
+            1.0, 0.0, // node 2 (near)
+            2.0, 0.0, // node 3 (near)
+        ];
+        index.nodes = vec![
+            FlashNode {
+                id: 0,
+                vector_offset: 0,
+                neighbors: vec![1, 2],
+                inline_pq: Vec::new(),
+            },
+            FlashNode {
+                id: 1,
+                vector_offset: 2,
+                neighbors: vec![0],
+                inline_pq: Vec::new(),
+            },
+            FlashNode {
+                id: 2,
+                vector_offset: 4,
+                neighbors: vec![0],
+                inline_pq: Vec::new(),
+            },
+            FlashNode {
+                id: 3,
+                vector_offset: 6,
+                neighbors: vec![],
+                inline_pq: Vec::new(),
+            },
+        ];
+        index.node_count = 4;
+
+        index.link_back(0, 3);
+        let nbrs = &index.nodes[0].neighbors;
+        assert_eq!(nbrs.len(), 2);
+        assert!(nbrs.contains(&2));
+        assert!(nbrs.contains(&3));
+        assert!(
+            !nbrs.contains(&1),
+            "far neighbor should be evicted when reverse list overflows"
         );
     }
 }

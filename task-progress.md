@@ -22,6 +22,40 @@
 
 ## Session Log
 
+### Session 220 - 2026-03-17
+- Focus: `diskann-aisaq-random-init-and-reverse-link-quality`
+- Completed:
+  - added AISAQ build controls in `AisaqConfig` / `from_index_config`:
+    - `random_init_edges`
+    - `random_seed`
+  - build insertion path now uses deterministic random initial candidates through `select_neighbors_with_random(...)`:
+    - keeps baseline nearest-neighbor candidates
+    - injects bounded random candidates sampled from existing node IDs
+    - deduplicates and distance-sorts before truncation
+  - improved reverse-link overflow policy in `link_back(...)`:
+    - reverse adjacency trimming now keeps closest neighbors by exact distance instead of node-id order.
+  - added/extended regressions:
+    - `aisaq_random_initial_neighbors_are_seeded`
+    - `aisaq_link_back_keeps_closer_reverse_neighbors`
+    - `aisaq_config_maps_rerank_expand_pct` (extended mapping assertions for random-init fields)
+- Verification:
+  - local:
+    - `cargo test --lib aisaq_random_initial_neighbors_are_seeded -- --nocapture` -> `ok` (after red compile-fail on missing config/method)
+    - `cargo test --lib aisaq_link_back_keeps_closer_reverse_neighbors -- --nocapture` -> `ok`
+    - `cargo test --lib aisaq_config_maps_rerank_expand_pct -- --nocapture` -> `ok`
+    - `cargo test --lib diskann_aisaq::tests:: -- --nocapture` -> `ok` (`9 passed`)
+    - `cargo test --test test_diskann_aisaq -- --nocapture` -> `ok` (`10 passed`)
+    - `cargo test --features async-io --test test_diskann_aisaq -- --nocapture` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann_aisaq::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T113328Z_1682`)
+    - `bash scripts/remote/test.sh --command "cargo test --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T113349Z_1745`)
+    - `bash scripts/remote/test.sh --command "cargo test --features async-io --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T113411Z_1842`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the AISAQ build-quality parity slice for deterministic random initialization and distance-aware reverse-link retention.
+
 ### Session 219 - 2026-03-17
 - Focus: `diskann-aisaq-filter-sync-async-unification`
 - Completed:
