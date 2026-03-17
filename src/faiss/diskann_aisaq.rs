@@ -17,6 +17,7 @@ use std::future::Future;
 use std::os::fd::AsRawFd;
 
 use crate::api::{IndexConfig, KnowhereError, MetricType, Result, SearchResult};
+use crate::bitset::BitsetView;
 use crate::faiss::pq::PqEncoder;
 use crate::simd;
 #[cfg(all(feature = "async-io", target_os = "linux"))]
@@ -770,6 +771,24 @@ impl PQFlashIndex {
     }
 
     pub fn search(&self, query: &[f32], k: usize) -> Result<SearchResult> {
+        self.search_internal(query, k, None)
+    }
+
+    pub fn search_with_bitset(
+        &self,
+        query: &[f32],
+        k: usize,
+        bitset: &BitsetView,
+    ) -> Result<SearchResult> {
+        self.search_internal(query, k, Some(bitset))
+    }
+
+    fn search_internal(
+        &self,
+        query: &[f32],
+        k: usize,
+        bitset: Option<&BitsetView>,
+    ) -> Result<SearchResult> {
         if !self.trained {
             return Err(KnowhereError::IndexNotTrained(
                 "AISAQ index is not trained".to_string(),
@@ -799,6 +818,7 @@ impl PQFlashIndex {
         let mut frontier = BinaryHeap::new();
         let mut seen = HashSet::new();
         let mut expanded = Vec::new();
+        let mut accepted = Vec::new();
 
         for candidate in self.rank_entry_candidates(query, pq_table.as_ref(), &mut io)? {
             frontier.push(candidate);
@@ -817,6 +837,9 @@ impl PQFlashIndex {
             }
 
             expanded.push(candidate);
+            if self.node_allowed(candidate.node_id, bitset) {
+                accepted.push(candidate);
+            }
 
             let node = self.load_node(candidate.node_id, NodeAccessMode::Node, &mut io)?;
             let mut neighbor_scores = Vec::with_capacity(node.neighbors.len());
@@ -840,9 +863,13 @@ impl PQFlashIndex {
             }
         }
 
-        let rerank_pool = self.compute_rerank_pool_size(k, expanded.len());
-        expanded.sort_by(|left, right| left.score.total_cmp(&right.score));
-        let mut scored: Vec<(i64, f32)> = expanded
+        if accepted.len() < k {
+            self.fill_from_allowed_exact(query, bitset, &seen, k, &mut accepted, &mut io)?;
+        }
+
+        let rerank_pool = self.compute_rerank_pool_size(k, accepted.len());
+        accepted.sort_by(|left, right| left.score.total_cmp(&right.score));
+        let mut scored: Vec<(i64, f32)> = accepted
             .iter()
             .take(rerank_pool)
             .map(|candidate| {
@@ -864,6 +891,24 @@ impl PQFlashIndex {
     }
 
     pub async fn search_async(&self, query: &[f32], k: usize) -> Result<SearchResult> {
+        self.search_async_internal(query, k, None).await
+    }
+
+    pub async fn search_async_with_bitset(
+        &self,
+        query: &[f32],
+        k: usize,
+        bitset: &BitsetView,
+    ) -> Result<SearchResult> {
+        self.search_async_internal(query, k, Some(bitset)).await
+    }
+
+    async fn search_async_internal(
+        &self,
+        query: &[f32],
+        k: usize,
+        bitset: Option<&BitsetView>,
+    ) -> Result<SearchResult> {
         if !self.trained {
             return Err(KnowhereError::IndexNotTrained(
                 "AISAQ index is not trained".to_string(),
@@ -893,6 +938,7 @@ impl PQFlashIndex {
         let mut frontier = BinaryHeap::new();
         let mut seen = HashSet::new();
         let mut expanded = Vec::new();
+        let mut accepted = Vec::new();
 
         for candidate in self
             .rank_entry_candidates_async(query, pq_table.as_ref(), &mut io)
@@ -911,6 +957,9 @@ impl PQFlashIndex {
                 continue;
             }
             expanded.push(candidate);
+            if self.node_allowed(candidate.node_id, bitset) {
+                accepted.push(candidate);
+            }
 
             let node = self
                 .load_node_async(candidate.node_id, NodeAccessMode::Node, &mut io)
@@ -937,10 +986,14 @@ impl PQFlashIndex {
             }
         }
 
-        let rerank_pool = self.compute_rerank_pool_size(k, expanded.len());
-        expanded.sort_by(|left, right| left.score.total_cmp(&right.score));
+        if accepted.len() < k {
+            self.fill_from_allowed_exact(query, bitset, &seen, k, &mut accepted, &mut io)?;
+        }
+
+        let rerank_pool = self.compute_rerank_pool_size(k, accepted.len());
+        accepted.sort_by(|left, right| left.score.total_cmp(&right.score));
         let mut scored = Vec::with_capacity(rerank_pool);
-        for candidate in expanded.iter().take(rerank_pool) {
+        for candidate in accepted.iter().take(rerank_pool) {
             let node = self
                 .load_node_async(candidate.node_id, NodeAccessMode::None, &mut io)
                 .await?;
@@ -969,6 +1022,46 @@ impl PQFlashIndex {
             .saturating_add(99)
             / 100;
         target.max(k).min(expanded_len).max(1)
+    }
+
+    #[inline]
+    fn node_allowed(&self, node_id: u32, bitset: Option<&BitsetView>) -> bool {
+        !bitset.is_some_and(|b| (node_id as usize) < b.len() && b.get(node_id as usize))
+    }
+
+    fn fill_from_allowed_exact(
+        &self,
+        query: &[f32],
+        bitset: Option<&BitsetView>,
+        seen: &HashSet<u32>,
+        k: usize,
+        accepted: &mut Vec<Candidate>,
+        io: &mut BeamSearchIO,
+    ) -> Result<()> {
+        if accepted.len() >= k {
+            return Ok(());
+        }
+
+        let mut in_accepted = HashSet::with_capacity(accepted.len() * 2 + 1);
+        for c in accepted.iter() {
+            in_accepted.insert(c.node_id);
+        }
+
+        for node_id in 0..self.len() as u32 {
+            if seen.contains(&node_id) || in_accepted.contains(&node_id) {
+                continue;
+            }
+            if !self.node_allowed(node_id, bitset) {
+                continue;
+            }
+            let node = self.load_node(node_id, NodeAccessMode::None, io)?;
+            let score = self.exact_distance(query, &node.vector);
+            accepted.push(Candidate { node_id, score });
+            if accepted.len() >= k {
+                break;
+            }
+        }
+        Ok(())
     }
 
     fn rank_entry_candidates(

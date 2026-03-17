@@ -22,6 +22,36 @@
 
 ## Session Log
 
+### Session 219 - 2026-03-17
+- Focus: `diskann-aisaq-filter-sync-async-unification`
+- Completed:
+  - added AISAQ bitset-filter search APIs on `PQFlashIndex`:
+    - `search_with_bitset(...)`
+    - `search_async_with_bitset(...)`
+  - unified filter semantics between sync/async paths:
+    - candidate expansion still traverses graph
+    - accepted set only keeps bitset-allowed nodes
+    - if accepted results are insufficient, exact fallback fill from allowed nodes ensures stable top-k completion behavior
+  - added integration regressions:
+    - `search_with_bitset_filters_candidates`
+    - `async_search_with_bitset_matches_sync`
+- Verification:
+  - local:
+    - `cargo test --test test_diskann_aisaq search_with_bitset_filters_candidates -- --nocapture` -> `ok` (after red compile-fail on missing methods)
+    - `cargo test --test test_diskann_aisaq async_search_with_bitset_matches_sync -- --nocapture` -> `ok`
+    - `cargo test --lib diskann_aisaq::tests:: -- --nocapture` -> `ok` (`7 passed`)
+    - `cargo test --test test_diskann_aisaq -- --nocapture` -> `ok` (`10 passed`)
+    - `cargo test --features async-io --test test_diskann_aisaq -- --nocapture` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann_aisaq::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T112655Z_249`)
+    - `bash scripts/remote/test.sh --command "cargo test --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T112724Z_378`)
+    - `bash scripts/remote/test.sh --command "cargo test --features async-io --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T112742Z_524`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the “filter behavior parity for constrained search” slice for AISAQ sync/async search paths.
+
 ### Session 218 - 2026-03-17
 - Focus: `diskann-aisaq-medoid-entry-seeding`
 - Completed:

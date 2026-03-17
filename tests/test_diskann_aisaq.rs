@@ -3,6 +3,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
+use knowhere_rs::bitset::BitsetView;
 use knowhere_rs::faiss::diskann_aisaq::AisaqConfig;
 use knowhere_rs::{MetricType, PQFlashIndex, SearchResult};
 use tempfile::tempdir;
@@ -188,4 +189,32 @@ fn async_search_matches_sync_on_loaded_index() {
     for (a, b) in sync.distances.iter().zip(async_res.distances.iter()) {
         assert!((a - b).abs() < 1e-6);
     }
+}
+
+#[test]
+fn search_with_bitset_filters_candidates() {
+    let index = build_index();
+    let mut bitset = BitsetView::new(index.len());
+    bitset.set(0, true); // filter the nearest id=0
+
+    let result = index
+        .search_with_bitset(&[0.1, 0.1, 0.1, 0.1], 2, &bitset)
+        .expect("search_with_bitset should succeed");
+    assert_eq!(result.ids.len(), 2);
+    assert!(result.ids.iter().all(|&id| id != 0));
+}
+
+#[test]
+fn async_search_with_bitset_matches_sync() {
+    let index = build_index();
+    let mut bitset = BitsetView::new(index.len());
+    bitset.set(2, true); // filter far id
+
+    let sync = index
+        .search_with_bitset(&[0.1, 0.1, 0.1, 0.1], 2, &bitset)
+        .expect("sync bitset search should succeed");
+    let async_res = block_on(index.search_async_with_bitset(&[0.1, 0.1, 0.1, 0.1], 2, &bitset))
+        .expect("async bitset search should succeed");
+    assert_eq!(sync.ids, async_res.ids);
+    assert_eq!(sync.distances.len(), async_res.distances.len());
 }
