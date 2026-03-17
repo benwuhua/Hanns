@@ -1103,10 +1103,9 @@ impl PQFlashIndex {
         let rerank_pool = self.compute_rerank_pool_size(k, accepted.len());
         accepted.sort_by(|left, right| left.score.total_cmp(&right.score));
         let mut scored = Vec::with_capacity(rerank_pool);
+        // TODO: true concurrent IO rerank requires refactoring BeamSearchIO to not require &mut
         for candidate in accepted.iter().take(rerank_pool) {
-            let node = self
-                .load_node_async(candidate.node_id, NodeAccessMode::None, &mut io)
-                .await?;
+            let node = self.load_node(candidate.node_id, NodeAccessMode::None, &mut io)?;
             let distance = self.exact_distance(query, &node.vector);
             scored.push((node.id, distance));
         }
