@@ -143,8 +143,8 @@ impl DiskAnnConfig {
             enable_flash_layout: params.disk_enable_flash_layout.unwrap_or(false),
             flash_mmap_mode: params.disk_flash_mmap_mode.unwrap_or(false),
             flash_prefetch_batch: params.disk_flash_prefetch_batch.unwrap_or(0).min(256),
-            warm_up: false,
-            filter_threshold: -1.0,
+            warm_up: params.disk_warm_up.unwrap_or(false),
+            filter_threshold: params.disk_filter_threshold.unwrap_or(-1.0).clamp(-1.0, 1.0),
             accelerate_build: false,
             min_k: 100,
             max_k: usize::MAX,
@@ -2690,6 +2690,7 @@ mod tests {
             disk_pq_dims: Some(2),
             disk_pq_code_budget_gb: Some(0.5),
             disk_pq_candidate_expand_pct: Some(150),
+            disk_pq_cache_size: Some(32),
             disk_rerank_expand_pct: Some(220),
             disk_saturate_after_prune: Some(false),
             disk_intra_batch_candidates: Some(7),
@@ -2702,6 +2703,8 @@ mod tests {
             disk_enable_flash_layout: Some(true),
             disk_flash_mmap_mode: Some(true),
             disk_flash_prefetch_batch: Some(16),
+            disk_warm_up: Some(true),
+            disk_filter_threshold: Some(0.25),
             ..Default::default()
         };
 
@@ -2734,6 +2737,8 @@ mod tests {
         assert!(index.dann_config.enable_flash_layout);
         assert!(index.dann_config.flash_mmap_mode);
         assert_eq!(index.dann_config.flash_prefetch_batch, 16);
+        assert!(index.dann_config.warm_up);
+        assert_eq!(index.dann_config.filter_threshold, 0.25);
     }
 
     #[test]

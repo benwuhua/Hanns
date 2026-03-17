@@ -96,6 +96,7 @@ impl AisaqConfig {
             beamwidth: params.beamwidth.unwrap_or(8),
             disk_pq_dims: params.disk_pq_dims.unwrap_or(0),
             pq_code_budget_gb: params.disk_pq_code_budget_gb.unwrap_or(0.0).max(0.0),
+            pq_cache_size: params.disk_pq_cache_size.unwrap_or(0),
             num_entry_points: params.disk_num_entry_points.unwrap_or(1).clamp(1, 64),
             rerank_expand_pct: params.disk_rerank_expand_pct.unwrap_or(200).clamp(100, 400),
             pq_candidate_expand_pct: params
@@ -107,6 +108,8 @@ impl AisaqConfig {
             build_degree_slack_pct: params.disk_build_degree_slack_pct.unwrap_or(100).clamp(100, 300),
             build_dram_budget_gb: params.disk_build_dram_budget_gb.unwrap_or(0.0),
             pq_read_page_cache_size: gb_to_bytes(params.disk_search_cache_budget_gb.unwrap_or(0.0)),
+            warm_up: params.disk_warm_up.unwrap_or(false),
+            filter_threshold: params.disk_filter_threshold.unwrap_or(-1.0).clamp(-1.0, 1.0),
             ..Self::default()
         }
     }
@@ -135,6 +138,11 @@ impl AisaqConfig {
         if self.num_entry_points == 0 {
             return Err(KnowhereError::InvalidArg(
                 "num_entry_points must be greater than 0".to_string(),
+            ));
+        }
+        if !(-1.0..=1.0).contains(&self.filter_threshold) {
+            return Err(KnowhereError::InvalidArg(
+                "filter_threshold must be in [-1.0, 1.0]".to_string(),
             ));
         }
         if self.build_degree_slack_pct < 100 {
@@ -1975,10 +1983,13 @@ mod tests {
                 disk_num_entry_points: Some(3),
                 disk_pq_dims: Some(4),
                 disk_pq_code_budget_gb: Some(0.5),
+                disk_pq_cache_size: Some(64),
                 disk_random_init_edges: Some(5),
                 disk_build_dram_budget_gb: Some(1.25),
                 disk_search_cache_budget_gb: Some(0.01),
                 disk_build_degree_slack_pct: Some(130),
+                disk_warm_up: Some(true),
+                disk_filter_threshold: Some(0.25),
                 random_seed: Some(9),
                 ..Default::default()
             },
@@ -1989,11 +2000,14 @@ mod tests {
         assert_eq!(mapped.num_entry_points, 3);
         assert_eq!(mapped.disk_pq_dims, 4);
         assert_eq!(mapped.pq_code_budget_gb, 0.5);
+        assert_eq!(mapped.pq_cache_size, 64);
         assert_eq!(mapped.random_init_edges, 5);
         assert_eq!(mapped.random_seed, 9);
         assert_eq!(mapped.build_dram_budget_gb, 1.25);
         assert_eq!(mapped.pq_read_page_cache_size, gb_to_bytes(0.01));
         assert_eq!(mapped.build_degree_slack_pct, 130);
+        assert!(mapped.warm_up);
+        assert_eq!(mapped.filter_threshold, 0.25);
     }
 
     #[test]

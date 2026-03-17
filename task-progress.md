@@ -22,6 +22,43 @@
 
 ## Session Log
 
+### Session 229 - 2026-03-17
+- Focus: `diskann-aisaq-api-mapping-warmup-filter-pqcache`
+- Completed:
+  - expanded API param surface in `IndexParams`:
+    - `disk_pq_cache_size`
+    - `disk_warm_up`
+    - `disk_filter_threshold`
+  - wired config mapping:
+    - DiskANN `from_index_config` now maps:
+      - `warm_up <- disk_warm_up`
+      - `filter_threshold <- disk_filter_threshold` (clamped `[-1.0, 1.0]`)
+    - AISAQ `from_index_config` now maps:
+      - `pq_cache_size <- disk_pq_cache_size`
+      - `warm_up <- disk_warm_up`
+      - `filter_threshold <- disk_filter_threshold` (clamped `[-1.0, 1.0]`)
+  - hardened AISAQ validation:
+    - `filter_threshold` range check (`[-1.0, 1.0]`).
+  - extended existing config regressions (`test_diskann_config`, `aisaq_config_maps_rerank_expand_pct`) to assert all newly mapped fields.
+- Verification:
+  - local:
+    - `cargo test --lib test_diskann_config -- --nocapture` -> `ok`
+    - `cargo test --lib aisaq_config_maps_rerank_expand_pct -- --nocapture` -> `ok`
+    - `cargo test --lib diskann::tests:: -- --nocapture` -> `ok` (`35 passed`)
+    - `cargo test --lib diskann_aisaq::tests:: -- --nocapture` -> `ok` (`21 passed`)
+    - `cargo test --test test_diskann_aisaq -- --nocapture` -> `ok` (`10 passed`)
+    - `cargo test --features async-io --test test_diskann_aisaq -- --nocapture` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T121119Z_9937`)
+    - `bash scripts/remote/test.sh --command "cargo test --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T121137Z_10007`)
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann_aisaq::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T121159Z_10116`)
+    - `bash scripts/remote/test.sh --command "cargo test --features async-io --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T121220Z_10187`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the API-to-runtime wiring gap for warm-up/filter-threshold/PQ-cache controls across DiskANN and AISAQ configuration paths.
+
 ### Session 228 - 2026-03-17
 - Focus: `diskann-aisaq-filter-threshold-exact-fallback`
 - Completed:

@@ -235,6 +235,9 @@ pub struct IndexParams {
     /// For DiskANN/AISAQ PQ path: compressed code budget in GB (0 = disabled)
     #[serde(default)]
     pub disk_pq_code_budget_gb: Option<f32>,
+    /// For AISAQ: in-memory PQ cache entry capacity (0 = unbounded)
+    #[serde(default)]
+    pub disk_pq_cache_size: Option<usize>,
     /// For DiskANN PQ path: candidate pool expansion percentage (100 = off, 125 = +25%)
     #[serde(default)]
     pub disk_pq_candidate_expand_pct: Option<usize>,
@@ -274,6 +277,12 @@ pub struct IndexParams {
     /// For DiskANN flash mmap path: per-expansion prefetch batch size (0 = disabled)
     #[serde(default)]
     pub disk_flash_prefetch_batch: Option<usize>,
+    /// For DiskANN/AISAQ: warm-up query-time cache state after build/load
+    #[serde(default)]
+    pub disk_warm_up: Option<bool>,
+    /// For DiskANN/AISAQ filtered search: threshold gate for exact fallback (-1 = disabled)
+    #[serde(default)]
+    pub disk_filter_threshold: Option<f32>,
     /// For PRQ: number of subquantizer splits (m)
     #[serde(default)]
     pub prq_m: Option<usize>,
