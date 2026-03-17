@@ -22,6 +22,19 @@
 
 ## Session Log
 
+### Session 169 - 2026-03-17
+- Focus: `parity-doc-hardening-and-terminology-lock`
+- Completed:
+  - added a durable parity comparison note at `docs/parity/knowhere-rs-vs-native-2026-03-17.md`.
+  - explicitly separated strict-ef same-schema lane from near-equal-recall leadership lane in durable wording.
+  - added a lock test `tests/test_parity_report_lock.py` to freeze date/lane/metric/caveat terminology.
+- Verification:
+  - `python3 -m unittest tests/test_parity_report_lock.py` -> `ok`
+- Result:
+  - `durable_closure=pass`
+- Notes:
+  - this is a documentation and governance lock only; no runtime/search kernel behavior changed.
+
 ### Session 168 - 2026-03-17
 - Focus: `final-rollup-artifact-refresh-after-opt56-leadership`
 - Completed:
