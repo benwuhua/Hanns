@@ -22,6 +22,32 @@
 
 ## Session Log
 
+### Session 226 - 2026-03-17
+- Focus: `diskann-aisaq-pq-cache-capacity-enforcement`
+- Completed:
+  - implemented bounded PQ cache semantics in `BeamSearchIO`:
+    - added `pq_cache_capacity` (derived from `AisaqConfig.pq_cache_size`)
+    - added `pq_lru` tracking and eviction in `cache_pq_vector(...)`
+    - behavior:
+      - `pq_cache_size=0` keeps unbounded cache behavior
+      - `pq_cache_size>0` enforces capacity with LRU-style eviction
+  - added regression `beam_io_pq_cache_respects_capacity` to lock bounded behavior.
+- Verification:
+  - local:
+    - `cargo test --lib beam_io_pq_cache_respects_capacity -- --nocapture` -> `ok`
+    - `cargo test --lib diskann_aisaq::tests:: -- --nocapture` -> `ok` (`18 passed`)
+    - `cargo test --test test_diskann_aisaq -- --nocapture` -> `ok` (`10 passed`)
+    - `cargo test --features async-io --test test_diskann_aisaq -- --nocapture` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann_aisaq::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T115651Z_6699`)
+    - `bash scripts/remote/test.sh --command "cargo test --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T115711Z_6761`)
+    - `bash scripts/remote/test.sh --command "cargo test --features async-io --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T115730Z_6857`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the AISAQ `pq_cache_size` behavior gap by turning it into enforced runtime cache capacity.
+
 ### Session 225 - 2026-03-17
 - Focus: `diskann-aisaq-pq-candidate-expand-semantics`
 - Completed:

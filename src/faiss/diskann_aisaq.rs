@@ -263,8 +263,10 @@ impl AsyncReadEngine {
 pub struct BeamSearchIO {
     page_size: usize,
     max_reads_per_iteration: usize,
+    pq_cache_capacity: Option<usize>,
     cached_nodes: HashSet<u32>,
     cached_pq_vectors: HashSet<u32>,
+    pq_lru: VecDeque<u32>,
     stats: BeamSearchStats,
 }
 
@@ -273,8 +275,10 @@ impl BeamSearchIO {
         Self {
             page_size: layout.page_size.max(1),
             max_reads_per_iteration: config.beamwidth.max(1),
+            pq_cache_capacity: (config.pq_cache_size > 0).then_some(config.pq_cache_size),
             cached_nodes: HashSet::new(),
             cached_pq_vectors: HashSet::new(),
+            pq_lru: VecDeque::new(),
             stats: BeamSearchStats::default(),
         }
     }
@@ -292,7 +296,22 @@ impl BeamSearchIO {
     }
 
     pub fn cache_pq_vector(&mut self, node_id: u32) {
-        self.cached_pq_vectors.insert(node_id);
+        if self.cached_pq_vectors.insert(node_id) {
+            self.pq_lru.push_back(node_id);
+        } else {
+            self.pq_lru.retain(|&id| id != node_id);
+            self.pq_lru.push_back(node_id);
+        }
+
+        if let Some(capacity) = self.pq_cache_capacity {
+            while self.cached_pq_vectors.len() > capacity {
+                if let Some(evicted) = self.pq_lru.pop_front() {
+                    self.cached_pq_vectors.remove(&evicted);
+                } else {
+                    break;
+                }
+            }
+        }
     }
 
     pub fn record_node_read(&mut self, node_id: u32, bytes: usize) {
@@ -1817,6 +1836,27 @@ mod tests {
         assert_eq!(io.stats().nodes_visited, 2);
         assert_eq!(io.stats().nodes_loaded, 1);
         assert_eq!(io.stats().node_cache_hits, 1);
+    }
+
+    #[test]
+    fn beam_io_pq_cache_respects_capacity() {
+        let config = AisaqConfig {
+            beamwidth: 4,
+            pq_cache_size: 2,
+            ..AisaqConfig::default()
+        };
+        let layout = FlashLayout::new(8, &config);
+        let mut io = BeamSearchIO::new(&layout, &config);
+
+        io.cache_pq_vector(1);
+        io.cache_pq_vector(2);
+        io.cache_pq_vector(3); // evicts 1 under capacity=2
+
+        io.record_pq_read(2, 16);
+        io.record_pq_read(1, 16);
+
+        assert_eq!(io.stats().pq_cache_hits, 1);
+        assert_eq!(io.stats().bytes_read, 16);
     }
 
     #[test]
