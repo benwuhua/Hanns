@@ -18,6 +18,7 @@ struct Row {
     saturate_after_prune: bool,
     intra_batch_candidates: usize,
     construction_l: usize,
+    search_list_size: usize,
     base_size: usize,
     query_size: usize,
     dim: usize,
@@ -119,11 +120,21 @@ fn build_index_cache_path(
     pq_dims: usize,
     base_size: usize,
     dim: usize,
+    max_degree: usize,
+    construction_l: usize,
+    saturate_after_prune: bool,
+    intra_batch_candidates: usize,
 ) -> Option<PathBuf> {
     cache_dir.map(|dir| {
         dir.join(format!(
-            "diskann_pq{}_b{}_d{}.dann",
-            pq_dims, base_size, dim
+            "diskann_pq{}_b{}_d{}_r{}_cl{}_sat{}_intra{}.dann",
+            pq_dims,
+            base_size,
+            dim,
+            max_degree,
+            construction_l,
+            if saturate_after_prune { 1 } else { 0 },
+            intra_batch_candidates
         ))
     })
 }
@@ -193,7 +204,16 @@ fn main() {
 
         let build_start = Instant::now();
         let cache_path =
-            build_index_cache_path(index_cache_dir.as_deref(), pq_dims, base_size, dim);
+            build_index_cache_path(
+                index_cache_dir.as_deref(),
+                pq_dims,
+                base_size,
+                dim,
+                max_degree,
+                construction_l,
+                saturate_after_prune,
+                intra_batch_candidates,
+            );
         let build_mode = if reuse_index && cache_path.as_ref().map(|p| p.exists()).unwrap_or(false)
         {
             index
@@ -228,6 +248,7 @@ fn main() {
             saturate_after_prune,
             intra_batch_candidates,
             construction_l,
+            search_list_size,
             base_size,
             query_size,
             dim,
@@ -273,8 +294,20 @@ mod tests {
 
     #[test]
     fn build_index_cache_path_has_stable_name() {
-        let p = build_index_cache_path(Some(PathBuf::from("tmp").as_path()), 4, 30000, 128)
-            .expect("path");
-        assert_eq!(p.to_string_lossy(), "tmp/diskann_pq4_b30000_d128.dann");
+        let p = build_index_cache_path(
+            Some(PathBuf::from("tmp").as_path()),
+            4,
+            30000,
+            128,
+            48,
+            128,
+            true,
+            8,
+        )
+        .expect("path");
+        assert_eq!(
+            p.to_string_lossy(),
+            "tmp/diskann_pq4_b30000_d128_r48_cl128_sat1_intra8.dann"
+        );
     }
 }

@@ -22,6 +22,31 @@
 
 ## Session Log
 
+### Session 192 - 2026-03-17
+- Focus: `diskann-lsearch-recall-band-matrix-and-cache-key-hardening`
+- Completed:
+  - added `scripts/diskann_lsearch_recall_band_matrix.py` to standardize two compare views for each baseline `lsearch` row:
+    - `same_lsearch` candidate compare
+    - `fixed recall band` candidate compare (absolute tolerance, with nearest-recall fallback)
+  - added regression test `tests/test_diskann_lsearch_recall_band_matrix.py` for both `within_tolerance` and fallback modes.
+  - hardened DiskANN A/B benchmark cache key in `src/bin/bench_diskann_pq_ab.rs`:
+    - cache filename now includes build-affecting params (`max_degree`, `construction_l`, `saturate_after_prune`, `intra_batch_candidates`) to prevent cross-config cache contamination.
+    - row JSON now explicitly includes `search_list_size` for direct lsearch-matrix processing without filename fallback.
+  - executed authority lsearch matrix on fixed lane (`base=2000`, `query=40`, `dim=128`, `top_k=10`, `max_degree=48`, `construction_l=128`, `beamwidth=8`, `pq_dims=4`, `pq_expand_pct=125`, `saturate=on`):
+    - baseline profile (`intra=0`): `lsearch=120/128/144/160`
+    - current profile (`intra=8`): `lsearch=120/128/144/160`
+- Verification:
+  - `cargo test --bin bench_diskann_pq_ab -- --nocapture` -> `ok`
+  - `python3 -m unittest tests/test_diskann_lsearch_recall_band_matrix.py tests/test_diskann_baseline_matrix.py tests/test_diskann_profile_compare.py` -> `ok`
+  - authority commands (8 runs) via `bash scripts/remote/test.sh --command "cargo run --release --bin bench_diskann_pq_ab ..."` -> all `ok` (run ids: `20260317T064410Z_63733`, `20260317T064533Z_63934`, `20260317T064533Z_63935`, `20260317T064555Z_64077`, `20260317T064806Z_64559`, `20260317T064615Z_64148`, `20260317T064634Z_64216`, `20260317T064653Z_64292`, `20260317T064712Z_64363`)
+  - matrix generation:
+    - `python3 scripts/diskann_lsearch_recall_band_matrix.py --baseline ... --candidate ... --recall-tolerance 0.005 --output-json benchmark_results/diskann_lsearch_recall_band_matrix_20260317.json` -> `ok`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this lane did not produce an in-tolerance recall-band match (`±0.005`) for current profile; all rows fell back to nearest-recall (`lsearch=120`) with recall gap about `-0.0175` vs baseline rows.
+  - same-lsearch view on this sample shows small qps variation but consistent recall drop for current profile on the chosen tiny-query lane; larger query set should be used for a stable recall-band verdict.
+
 ### Session 191 - 2026-03-17
 - Focus: `diskann-baseline-centered-matrix-automation`
 - Completed:
