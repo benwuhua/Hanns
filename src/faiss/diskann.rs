@@ -98,7 +98,7 @@ impl DiskAnnConfig {
             construction_l: params.construction_l.unwrap_or(search_list_size).max(16),
             beamwidth: params.beamwidth.unwrap_or(8),
             pq_code_budget_gb: 0.0, // Not exposed in IndexParams yet
-            build_dram_budget_gb: 0.0,
+            build_dram_budget_gb: params.disk_build_dram_budget_gb.unwrap_or(0.0).max(0.0),
             disk_pq_dims: params.disk_pq_dims.unwrap_or(0),
             pq_candidate_expand_pct: params
                 .disk_pq_candidate_expand_pct
@@ -112,12 +112,21 @@ impl DiskAnnConfig {
                 .disk_build_degree_slack_pct
                 .unwrap_or(100)
                 .clamp(100, 200),
-            cache_dram_budget_gb: 0.0,
+            cache_dram_budget_gb: params.disk_search_cache_budget_gb.unwrap_or(0.0).max(0.0),
             warm_up: false,
             filter_threshold: -1.0,
             accelerate_build: false,
             min_k: 100,
             max_k: usize::MAX,
+        }
+    }
+
+    #[inline]
+    fn budget_bytes(gb: f32) -> Option<usize> {
+        if gb <= 0.0 {
+            None
+        } else {
+            Some((gb as f64 * 1024.0 * 1024.0 * 1024.0) as usize)
         }
     }
 }
@@ -372,6 +381,18 @@ impl DiskAnnIndex {
 
         self.next_id = n as i64;
 
+        // Hard gate on build DRAM budget (in-memory implementation boundary).
+        if let Some(budget) = DiskAnnConfig::budget_bytes(self.dann_config.build_dram_budget_gb) {
+            let resident_floor = self.vectors.len() * std::mem::size_of::<f32>()
+                + self.ids.len() * std::mem::size_of::<i64>();
+            if resident_floor > budget {
+                return Err(crate::api::KnowhereError::InvalidArg(format!(
+                    "disk_build_dram_budget_gb exceeded: resident_floor_bytes={} budget_bytes={}",
+                    resident_floor, budget
+                )));
+            }
+        }
+
         // Build graph with Vamana algorithm
         self.build_vamana_graph();
 
@@ -386,6 +407,15 @@ impl DiskAnnIndex {
         }
 
         self.trained = true;
+        if let Some(budget) = DiskAnnConfig::budget_bytes(self.dann_config.build_dram_budget_gb) {
+            let used = self.get_stats().memory_usage_bytes;
+            if used > budget {
+                return Err(crate::api::KnowhereError::InvalidArg(format!(
+                    "disk_build_dram_budget_gb exceeded after build: used_bytes={} budget_bytes={}",
+                    used, budget
+                )));
+            }
+        }
         tracing::info!(
             "Built DiskANN graph with {} nodes, max_degree={}, search_list={}",
             n,
@@ -418,6 +448,12 @@ impl DiskAnnIndex {
 
     /// Warm-up: cache frequently accessed nodes
     fn warm_up(&mut self) {
+        let cache_budget = DiskAnnConfig::budget_bytes(self.dann_config.cache_dram_budget_gb);
+        let mut used_bytes = 0usize;
+        let node_bytes = |dim: usize, degree: usize| {
+            dim * std::mem::size_of::<f32>()
+                + degree * (std::mem::size_of::<i64>() + std::mem::size_of::<f32>())
+        };
         // Simple warm-up: cache entry points and their neighbors
         let mut starts = self.entry_points.clone();
         if starts.is_empty() {
@@ -429,11 +465,24 @@ impl DiskAnnIndex {
             if entry >= self.ids.len() {
                 continue;
             }
-            self.cached_nodes.insert(entry);
+            let entry_cost = node_bytes(self.dim, self.graph.get(entry).map_or(0, |v| v.len()));
+            if cache_budget.is_some_and(|b| used_bytes + entry_cost > b) {
+                break;
+            }
+            if self.cached_nodes.insert(entry) {
+                used_bytes += entry_cost;
+            }
             if let Some(nbrs) = self.graph.get(entry) {
                 for &(id, _) in nbrs {
                     if (id as usize) < self.ids.len() {
-                        self.cached_nodes.insert(id as usize);
+                        let n_idx = id as usize;
+                        let nbr_cost = node_bytes(self.dim, self.graph.get(n_idx).map_or(0, |v| v.len()));
+                        if cache_budget.is_some_and(|b| used_bytes + nbr_cost > b) {
+                            break;
+                        }
+                        if self.cached_nodes.insert(n_idx) {
+                            used_bytes += nbr_cost;
+                        }
                     }
                 }
             }
@@ -1646,6 +1695,8 @@ mod tests {
             disk_intra_batch_candidates: Some(7),
             disk_num_entry_points: Some(3),
             disk_build_degree_slack_pct: Some(130),
+            disk_build_dram_budget_gb: Some(2.5),
+            disk_search_cache_budget_gb: Some(1.25),
             ..Default::default()
         };
 
@@ -1670,6 +1721,8 @@ mod tests {
         assert_eq!(index.dann_config.intra_batch_candidates, 7);
         assert_eq!(index.dann_config.num_entry_points, 3);
         assert_eq!(index.dann_config.build_degree_slack_pct, 130);
+        assert_eq!(index.dann_config.build_dram_budget_gb, 2.5);
+        assert_eq!(index.dann_config.cache_dram_budget_gb, 1.25);
     }
 
     #[test]
@@ -1729,6 +1782,51 @@ mod tests {
         };
         let index = DiskAnnIndex::new(&config).unwrap();
         assert_eq!(index.compute_build_degree_limit(48), 63);
+    }
+
+    #[test]
+    fn test_diskann_train_respects_build_dram_budget() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_build_dram_budget_gb: Some(1e-9),
+                ..Default::default()
+            },
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, 0.0, 0.0, //
+            1.0, 1.0, 1.0, 1.0,
+        ];
+        let err = index.train(&vectors).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("disk_build_dram_budget_gb exceeded"));
+    }
+
+    #[test]
+    fn test_diskann_warm_up_respects_cache_budget() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            2.0, 0.0, 0.0, 0.0, //
+            3.0, 0.0, 0.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+        index.cached_nodes.clear();
+        index.dann_config.cache_dram_budget_gb = 1e-9;
+        index.warm_up();
+        assert!(index.cached_nodes.len() <= 1);
     }
 
     #[test]

@@ -250,6 +250,12 @@ pub struct IndexParams {
     /// For DiskANN build: temporary degree slack percentage (100 = no slack)
     #[serde(default)]
     pub disk_build_degree_slack_pct: Option<usize>,
+    /// For DiskANN build: DRAM budget in GB (0 = disabled)
+    #[serde(default)]
+    pub disk_build_dram_budget_gb: Option<f32>,
+    /// For DiskANN search cache: DRAM budget in GB (0 = disabled)
+    #[serde(default)]
+    pub disk_search_cache_budget_gb: Option<f32>,
     /// For PRQ: number of subquantizer splits (m)
     #[serde(default)]
     pub prq_m: Option<usize>,

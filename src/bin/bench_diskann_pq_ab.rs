@@ -31,6 +31,8 @@ struct Row {
     build_mode: String,
     build_seconds: f64,
     search_seconds: f64,
+    build_dram_budget_gb: f32,
+    search_cache_budget_gb: f32,
 }
 
 #[derive(Debug, Serialize)]
@@ -75,6 +77,20 @@ fn parse_bool_arg(name: &str, default: bool) -> bool {
         "0" | "false" | "no" | "n" | "off" => false,
         _ => default,
     }
+}
+
+fn parse_f32_arg(name: &str, default: f32) -> f32 {
+    let key = format!("--{name}");
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == key {
+            if let Some(v) = args.next() {
+                return v.parse::<f32>().unwrap_or(default);
+            }
+            break;
+        }
+    }
+    default
 }
 
 fn parse_pq_dims_csv(raw: &str, default: &[usize]) -> Vec<usize> {
@@ -161,6 +177,8 @@ fn main() {
     let intra_batch_candidates = parse_usize_arg("intra-batch-candidates", 8);
     let num_entry_points = parse_usize_arg("num-entry-points", 1);
     let build_degree_slack_pct = parse_usize_arg("build-degree-slack-pct", 100);
+    let build_dram_budget_gb = parse_f32_arg("build-dram-budget-gb", 0.0);
+    let search_cache_budget_gb = parse_f32_arg("search-cache-budget-gb", 0.0);
     let output = parse_string_arg("output", "benchmark_results/diskann_pq_ab.local.json");
     let pq_dims_list = parse_pq_dims_arg(&[0, 2, 4]);
     let reuse_index = parse_bool_arg("reuse-index", false);
@@ -209,6 +227,8 @@ fn main() {
                 disk_intra_batch_candidates: Some(intra_batch_candidates),
                 disk_num_entry_points: Some(num_entry_points),
                 disk_build_degree_slack_pct: Some(build_degree_slack_pct),
+                disk_build_dram_budget_gb: Some(build_dram_budget_gb),
+                disk_search_cache_budget_gb: Some(search_cache_budget_gb),
                 ..Default::default()
             },
         };
@@ -276,6 +296,8 @@ fn main() {
             build_mode,
             build_seconds,
             search_seconds,
+            build_dram_budget_gb,
+            search_cache_budget_gb,
         });
     }
 

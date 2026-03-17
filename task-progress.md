@@ -22,6 +22,43 @@
 
 ## Session Log
 
+### Session 201 - 2026-03-17
+- Focus: `diskann-budget-controls-capability`
+- Completed:
+  - implemented DiskANN budget controls aligned to capability closure:
+    - new API params:
+      - `disk_build_dram_budget_gb` (build resident budget, `0` disables)
+      - `disk_search_cache_budget_gb` (warm-up cache budget, `0` disables)
+    - mapped into `DiskAnnConfig.build_dram_budget_gb` and `DiskAnnConfig.cache_dram_budget_gb`.
+    - build-time hard gate:
+      - pre-build resident-floor check (vectors + ids)
+      - post-build memory check against `get_stats().memory_usage_bytes`
+    - warm-up cache gate:
+      - cache population now budget-aware and stops when configured cache budget would be exceeded.
+  - benchmark harness `bench_diskann_pq_ab` now supports:
+    - `--build-dram-budget-gb`
+    - `--search-cache-budget-gb`
+    - row output fields for both budgets.
+  - added regressions:
+    - config mapping includes budget fields
+    - tiny build budget triggers deterministic training failure
+    - tiny cache budget limits warm-up cache size
+- Verification:
+  - `cargo test --lib diskann::tests::test_diskann_config -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_train_respects_build_dram_budget -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_warm_up_respects_cache_budget -- --nocapture` -> `ok`
+  - `cargo test --bin bench_diskann_pq_ab -- --nocapture` -> `ok`
+  - authority positive run (`run_id=20260317T081102Z_75517`):
+    - `--build-dram-budget-gb 1.0 --search-cache-budget-gb 0.25`
+    - result artifact: `benchmark_results/diskann_pq_ab.remote.budget_ok_l128_q40.json`
+  - authority negative run (`run_id=20260317T081247Z_75786`):
+    - `--build-dram-budget-gb 1e-9 --reuse-index 0`
+    - expected failure observed: `disk_build_dram_budget_gb exceeded`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the in-memory budget control capability gap for current DiskANN scope (without SSD I/O path yet).
+
 ### Session 200 - 2026-03-17
 - Focus: `diskann-build-degree-slack-capability`
 - Completed:

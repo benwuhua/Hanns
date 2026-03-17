@@ -15,6 +15,14 @@
 - DiskANN lsearch/recall-band matrix utility [scripts/diskann_lsearch_recall_band_matrix.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/scripts/diskann_lsearch_recall_band_matrix.py) plus regression test [tests/test_diskann_lsearch_recall_band_matrix.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/tests/test_diskann_lsearch_recall_band_matrix.py), which report both `same-lsearch` deltas and fixed-recall-band picks for each baseline lsearch row.
 
 ### Changed
+- DiskANN now supports explicit in-memory budget controls via [src/api/index.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/api/index.rs):
+  - `disk_build_dram_budget_gb`
+  - `disk_search_cache_budget_gb`
+  These are enforced in [src/faiss/diskann.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/faiss/diskann.rs) as build-time memory gates and warm-up cache-budget-aware admission.
+- [src/bin/bench_diskann_pq_ab.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/bin/bench_diskann_pq_ab.rs) adds `--build-dram-budget-gb` and `--search-cache-budget-gb`, and reports both values in output rows.
+- Authority verification (`2026-03-17`) confirms both positive and negative budget paths:
+  - positive: `build_budget=1.0GB`, `cache_budget=0.25GB` passes (`run_id=20260317T081102Z_75517`)
+  - negative: `build_budget=1e-9GB` with forced rebuild fails as expected with `disk_build_dram_budget_gb exceeded` (`run_id=20260317T081247Z_75786`)
 - DiskANN build path now supports temporary degree slack via `disk_build_degree_slack_pct` in [src/api/index.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/api/index.rs) and [src/faiss/diskann.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/faiss/diskann.rs): build/refine can use `R_build > R`, while final graph is pruned back to target `R` before serving.
 - [src/bin/bench_diskann_pq_ab.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/bin/bench_diskann_pq_ab.rs) adds `--build-degree-slack-pct` and includes it in cache key/report rows.
 - Authority A/B (`2026-03-17`, `base=2000`, `query=40`, `lsearch=128`, `intra=8`, `entry=1`, `rerank=100`) shows build-degree slack is a recall-first tradeoff:
