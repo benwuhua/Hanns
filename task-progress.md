@@ -22,6 +22,35 @@
 
 ## Session Log
 
+### Session 203 - 2026-03-17
+- Focus: `diskann-filter-lane-authority-verification`
+- Completed:
+  - authority-verified the new DiskANN filtering semantics tests on remote x86:
+    - `test_diskann_search_respects_predicate_filter`
+    - `test_diskann_index_search_with_bitset_fills_topk_from_allowed_set`
+  - authority-verified DiskANN unit suite stability after the filtering change:
+    - `cargo test --lib diskann::tests:: -- --nocapture` (`28 passed`)
+  - extended benchmark binary capability for filtered lanes:
+    - [src/bin/bench_diskann_pq_ab.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/bin/bench_diskann_pq_ab.rs) now supports `--filter-ratio` and emits `filter_ratio` in row JSON.
+  - produced authority A/B sample artifacts on the same lane (`base=2000`, `query=40`, `pq_dims=4`, `lsearch=128`):
+    - `benchmark_results/diskann_pq_ab.remote.filter0.v4.json`
+    - `benchmark_results/diskann_pq_ab.remote.filter50.v4.json`
+- Verification:
+  - `bash init.sh` -> `ok`
+  - `bash scripts/remote/test.sh --command "cargo test --lib test_diskann_search_respects_predicate_filter -- --nocapture"` -> `ok` (`run_id=20260317T082626Z_77599`)
+  - `bash scripts/remote/test.sh --command "cargo test --lib test_diskann_index_search_with_bitset_fills_topk_from_allowed_set -- --nocapture"` -> `ok` (`run_id=20260317T082544Z_77464`)
+  - `bash scripts/remote/test.sh --command "cargo test --lib diskann::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T082702Z_77669`)
+  - `bash scripts/remote/test.sh --command "cargo run --release --bin bench_diskann_pq_ab ... --filter-ratio 0.0 ... --output benchmark_results/diskann_pq_ab.remote.filter0.v4.json"` -> `ok` (`run_id=20260317T083742Z_80223`)
+  - `bash scripts/remote/test.sh --command "cargo run --release --bin bench_diskann_pq_ab ... --filter-ratio 0.5 ... --output benchmark_results/diskann_pq_ab.remote.filter50.v4.json"` -> `ok` (`run_id=20260317T083606Z_79998`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - on this sample lane, `filter_ratio=0.5` vs `0.0` shows a modest qps cost with stable recall:
+    - `filter=0.0`: `qps=5512.94`, `recall@10=1.0000`
+    - `filter=0.5`: `qps=5399.86`, `recall@10=1.0000`
+    - delta: `-2.05%` qps
+  - remote `cargo` cache can reuse stale bench binaries after rsync sync; forcing `cargo clean` before authority reruns fixed this and restored `filter_ratio` field in output schema.
+
 ### Session 202 - 2026-03-17
 - Focus: `diskann-filtering-semantics-closure-local`
 - Completed:
