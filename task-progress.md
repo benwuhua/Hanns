@@ -22,6 +22,25 @@
 
 ## Session Log
 
+### Session 189 - 2026-03-17
+- Focus: `diskann-fair-compare-template-automation`
+- Completed:
+  - added reusable compare utility `scripts/diskann_profile_compare.py` to standardize DiskANN profile evaluation into:
+    - `same-params@lsearch=<L>`
+    - `near-same-recall` (closest candidate point to baseline recall)
+  - added unit tests `tests/test_diskann_profile_compare.py` to lock parser/selection behavior, including filename fallback when historical rows omit `search_list_size`.
+  - generated compare artifact from current authority profile files:
+    - `benchmark_results/diskann_profile_compare_20260317.json`
+- Verification:
+  - `python3 -m unittest tests/test_diskann_profile_compare.py` -> `ok`
+  - `python3 scripts/diskann_profile_compare.py --baseline benchmark_results/diskann_pq_ab.remote.cmp.base_l128.load.json --baseline benchmark_results/diskann_pq_ab.remote.cmp.base_l160.load.json --candidate benchmark_results/diskann_pq_ab.remote.cmp.cur_l120.load.json --candidate benchmark_results/diskann_pq_ab.remote.cmp.cur_l128.load.json --candidate benchmark_results/diskann_pq_ab.remote.cmp.cur_l160.load.json --same-lsearch 128 --output-json benchmark_results/diskann_profile_compare_20260317.json` -> `ok`
+- Result:
+  - `durable_closure=pass`
+- Notes:
+  - current generated compare artifact reports:
+    - same-params (`lsearch=128`): candidate `-2.02%` qps, `+0.0025` recall vs baseline
+    - near-same-recall: nearest candidate is also `lsearch=128` on current evidence set
+
 ### Session 188 - 2026-03-17
 - Focus: `diskann-fair-compare-same-lsearch-and-same-recall`
 - Completed:

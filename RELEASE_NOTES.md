@@ -9,6 +9,7 @@
 - First-pass feature inventory covering baseline, HNSW, IVF-PQ, DiskANN, production, and final acceptance
 - Remote-first worker guide and bootstrap entrypoint
 - Automated bootstrap test for `init.sh` injection hooks
+- DiskANN profile compare utility [scripts/diskann_profile_compare.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/scripts/diskann_profile_compare.py) plus regression test [tests/test_diskann_profile_compare.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/tests/test_diskann_profile_compare.py), which standardize `same-lsearch` and `near-same-recall` comparisons from benchmark JSON files and produce reusable compare artifacts (for example [benchmark_results/diskann_profile_compare_20260317.json](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/benchmark_results/diskann_profile_compare_20260317.json)).
 
 ### Changed
 - Added a fair-compare evidence slice for DiskANN profiles (`2026-03-17`) with both `same-params` and `near-same-recall` views: under identical knobs at `lsearch=128`, baseline (`intra=0`) is `11666.53 qps / 0.7850` and current (`intra=8`) is `11431.02 qps / 0.7875`; current profile can recover throughput advantage in a nearby recall band at `lsearch=120` (`11987.35 qps / 0.7775`).
