@@ -15,6 +15,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet, VecDeque};
 
 use crate::api::{IndexConfig, MetricType, Result, SearchRequest, SearchResult};
+use crate::quantization::kmeans::KMeans;
 use crate::simd;
 
 /// DiskANN configuration parameters
@@ -121,6 +122,9 @@ pub struct DiskAnnScopeAudit {
 struct PQCode {
     codes: Vec<u8>,
     dims: usize,
+    ksub: usize,
+    subdim_size: usize,
+    codebooks: Vec<f32>, // [num_subdims][ksub][subdim_size]
 }
 
 impl PQCode {
@@ -128,6 +132,9 @@ impl PQCode {
         Self {
             codes: Vec::new(),
             dims,
+            ksub: 0,
+            subdim_size: 0,
+            codebooks: Vec::new(),
         }
     }
 
@@ -136,66 +143,129 @@ impl PQCode {
             return; // No compression
         }
 
-        // Simplified PQ: just quantize to u8 per sub-dimension
+        self.codes.clear();
+        self.codebooks.clear();
+
+        let n = vectors.len() / dim;
+        if n == 0 {
+            return;
+        }
+
         let num_subdims = self.dims.min(dim);
         let subdim_size = dim / num_subdims;
+        let ksub = n.min(256).max(1);
 
+        self.ksub = ksub;
+        self.subdim_size = subdim_size;
+        self.codebooks = vec![0.0; num_subdims * ksub * subdim_size];
+
+        // Train one codebook per sub-dimension.
+        for sub_q in 0..num_subdims {
+            let mut sub_vectors = Vec::with_capacity(n * subdim_size);
+            for vec in vectors.chunks(dim) {
+                let start = sub_q * subdim_size;
+                let end = (start + subdim_size).min(dim);
+                sub_vectors.extend_from_slice(&vec[start..end]);
+            }
+
+            let mut kmeans = KMeans::new(ksub, subdim_size);
+            kmeans.set_max_iter(16);
+            kmeans.train(&sub_vectors);
+            let centroid_base = sub_q * ksub * subdim_size;
+            self.codebooks[centroid_base..centroid_base + ksub * subdim_size]
+                .copy_from_slice(&kmeans.centroids);
+        }
+
+        // Encode vectors with nearest centroid id for each sub-dimension.
         for vec in vectors.chunks(dim) {
-            for i in 0..num_subdims {
-                let start = i * subdim_size;
-                let end = start + subdim_size;
-                let subvec = &vec[start..end.min(dim)];
-
-                // Simple mean quantization
-                let mean = subvec.iter().sum::<f32>() / subvec.len() as f32;
-                let code = ((mean + 1.0) * 127.5).clamp(0.0, 255.0) as u8;
+            for sub_q in 0..num_subdims {
+                let start = sub_q * subdim_size;
+                let end = (start + subdim_size).min(dim);
+                let subvec = &vec[start..end];
+                let code = self.find_nearest_centroid(sub_q, subvec) as u8;
                 self.codes.push(code);
             }
         }
     }
 
+    fn find_nearest_centroid(&self, sub_q: usize, subvec: &[f32]) -> usize {
+        if self.ksub == 0 || self.subdim_size == 0 {
+            return 0;
+        }
+
+        let mut best_idx = 0usize;
+        let mut best_dist = f32::MAX;
+        let centroid_base = sub_q * self.ksub * self.subdim_size;
+        for c in 0..self.ksub {
+            let centroid_start = centroid_base + c * self.subdim_size;
+            let centroid = &self.codebooks[centroid_start..centroid_start + self.subdim_size];
+            let mut dist = 0.0f32;
+            for d in 0..self.subdim_size {
+                let diff = subvec[d] - centroid[d];
+                dist += diff * diff;
+            }
+            if dist < best_dist {
+                best_dist = dist;
+                best_idx = c;
+            }
+        }
+        best_idx
+    }
+
     fn distance(&self, query: &[f32], idx: usize, dim: usize) -> f32 {
-        if self.dims == 0 || self.codes.is_empty() {
+        if self.dims == 0 || self.codes.is_empty() || self.codebooks.is_empty() {
             return f32::MAX; // Fallback to full distance
         }
 
-        let query_signature = self.build_query_signature(query, dim);
-        self.distance_with_signature(&query_signature, idx, dim)
+        let query_table = self.build_query_distance_table(query, dim);
+        self.distance_with_table(&query_table, idx, dim)
     }
 
-    /// Build query signature once and reuse across candidate distance evaluations.
-    fn build_query_signature(&self, query: &[f32], dim: usize) -> Vec<f32> {
-        if self.dims == 0 {
+    /// Build ADC table once per query.
+    fn build_query_distance_table(&self, query: &[f32], dim: usize) -> Vec<f32> {
+        if self.dims == 0 || self.ksub == 0 || self.subdim_size == 0 || self.codebooks.is_empty() {
             return Vec::new();
         }
 
         let num_subdims = self.dims.min(dim);
-        let subdim_size = dim / num_subdims;
-        let mut signature = Vec::with_capacity(num_subdims);
+        let mut table = vec![0.0f32; num_subdims * self.ksub];
 
-        for i in 0..num_subdims {
-            let start = i * subdim_size;
-            let end = start + subdim_size;
-            let subvec = &query[start..end.min(dim)];
-            let mean = subvec.iter().sum::<f32>() / subvec.len() as f32;
-            signature.push(mean);
+        for sub_q in 0..num_subdims {
+            let start = sub_q * self.subdim_size;
+            let end = (start + self.subdim_size).min(dim);
+            let query_sub = &query[start..end];
+            let centroid_base = sub_q * self.ksub * self.subdim_size;
+            let table_base = sub_q * self.ksub;
+
+            for c in 0..self.ksub {
+                let centroid_start = centroid_base + c * self.subdim_size;
+                let centroid = &self.codebooks[centroid_start..centroid_start + self.subdim_size];
+                let mut dist = 0.0f32;
+                for d in 0..self.subdim_size {
+                    let diff = query_sub[d] - centroid[d];
+                    dist += diff * diff;
+                }
+                table[table_base + c] = dist;
+            }
         }
 
-        signature
+        table
     }
 
-    /// Distance using precomputed query signature to avoid repeated mean computation.
-    fn distance_with_signature(&self, query_signature: &[f32], idx: usize, dim: usize) -> f32 {
-        if self.dims == 0 || self.codes.is_empty() {
+    /// Distance using precomputed ADC table.
+    fn distance_with_table(&self, query_table: &[f32], idx: usize, dim: usize) -> f32 {
+        if self.dims == 0 || self.codes.is_empty() || self.ksub == 0 || self.codebooks.is_empty() {
             return f32::MAX;
         }
 
         let num_subdims = self.dims.min(dim);
         let mut dist = 0.0f32;
 
-        for (i, mean) in query_signature.iter().enumerate().take(num_subdims) {
-            let code_val = self.codes[idx * num_subdims + i] as f32 / 127.5 - 1.0;
-            dist += (*mean - code_val).powi(2);
+        for sub_q in 0..num_subdims {
+            let code_idx = self.codes[idx * num_subdims + sub_q] as usize;
+            let table_row = sub_q * self.ksub;
+            let centroid_idx = code_idx.min(self.ksub - 1);
+            dist += query_table[table_row + centroid_idx];
         }
 
         dist
@@ -644,9 +714,9 @@ impl DiskAnnIndex {
         let mut visited = vec![false; n];
         let mut candidates: BinaryHeap<ReverseOrderedFloat> = BinaryHeap::new();
         let mut results: Vec<(f32, usize)> = Vec::new();
-        let pq_query_signature = self.pq_codes.as_ref().and_then(|pq| {
-            if pq.dims > 0 {
-                Some(pq.build_query_signature(query, self.dim))
+        let pq_query_table = self.pq_codes.as_ref().and_then(|pq| {
+            if pq.dims > 0 && pq.ksub > 0 {
+                Some(pq.build_query_distance_table(query, self.dim))
             } else {
                 None
             }
@@ -690,8 +760,8 @@ impl DiskAnnIndex {
                         // Use PQ distance if available and node is not cached
                         let d = if let Some(pq_codes) = &self.pq_codes {
                             if !self.cached_nodes.contains(&n_idx) {
-                                if let Some(signature) = &pq_query_signature {
-                                    pq_codes.distance_with_signature(signature, n_idx, self.dim)
+                                if let Some(table) = &pq_query_table {
+                                    pq_codes.distance_with_table(table, n_idx, self.dim)
                                 } else {
                                     pq_codes.distance(query, n_idx, self.dim)
                                 }
@@ -817,10 +887,15 @@ impl DiskAnnIndex {
         };
 
         // Estimate memory usage
+        let pq_memory = self
+            .pq_codes
+            .as_ref()
+            .map(|p| p.codes.len() + p.codebooks.len() * 4)
+            .unwrap_or(0);
         let memory = self.vectors.len() * 4  // vectors
-            + self.ids.len() * 8              // ids
-            + num_edges * 12                  // graph edges (8 byte id + 4 byte dist)
-            + self.pq_codes.as_ref().map(|p| p.codes.len()).unwrap_or(0); // PQ codes
+            + self.ids.len() * 8             // ids
+            + num_edges * 12                 // graph edges (8 byte id + 4 byte dist)
+            + pq_memory;
 
         DiskAnnStats {
             num_nodes: n,
@@ -844,7 +919,7 @@ impl DiskAnnIndex {
         let mut file = File::create(path)?;
 
         file.write_all(b"DANN")?;
-        file.write_all(&2u32.to_le_bytes())?; // Version 2
+        file.write_all(&3u32.to_le_bytes())?; // Version 3
         file.write_all(&(self.dim as u32).to_le_bytes())?;
         file.write_all(&(self.ids.len() as u64).to_le_bytes())?;
 
@@ -873,8 +948,14 @@ impl DiskAnnIndex {
         file.write_all(&has_pq.to_le_bytes())?;
         if let Some(pq) = &self.pq_codes {
             file.write_all(&(pq.dims as u32).to_le_bytes())?;
+            file.write_all(&(pq.ksub as u32).to_le_bytes())?;
+            file.write_all(&(pq.subdim_size as u32).to_le_bytes())?;
             file.write_all(&(pq.codes.len() as u64).to_le_bytes())?;
             file.write_all(&pq.codes)?;
+            file.write_all(&(pq.codebooks.len() as u64).to_le_bytes())?;
+            for &v in &pq.codebooks {
+                file.write_all(&v.to_le_bytes())?;
+            }
         }
 
         Ok(())
@@ -971,6 +1052,16 @@ impl DiskAnnIndex {
                 file.read_exact(&mut dims_bytes)?;
                 let dims = u32::from_le_bytes(dims_bytes) as usize;
 
+                let mut ksub = 0usize;
+                let mut subdim_size = 0usize;
+                if version >= 3 {
+                    let mut val = [0u8; 4];
+                    file.read_exact(&mut val)?;
+                    ksub = u32::from_le_bytes(val) as usize;
+                    file.read_exact(&mut val)?;
+                    subdim_size = u32::from_le_bytes(val) as usize;
+                }
+
                 let mut len_bytes = [0u8; 8];
                 file.read_exact(&mut len_bytes)?;
                 let len = u64::from_le_bytes(len_bytes) as usize;
@@ -978,7 +1069,26 @@ impl DiskAnnIndex {
                 let mut codes = vec![0u8; len];
                 file.read_exact(&mut codes)?;
 
-                self.pq_codes = Some(PQCode { codes, dims });
+                let mut codebooks = Vec::new();
+                if version >= 3 {
+                    let mut cb_len_bytes = [0u8; 8];
+                    file.read_exact(&mut cb_len_bytes)?;
+                    let cb_len = u64::from_le_bytes(cb_len_bytes) as usize;
+                    codebooks = vec![0.0f32; cb_len];
+                    for item in codebooks.iter_mut().take(cb_len) {
+                        let mut f_bytes = [0u8; 4];
+                        file.read_exact(&mut f_bytes)?;
+                        *item = f32::from_le_bytes(f_bytes);
+                    }
+                }
+
+                self.pq_codes = Some(PQCode {
+                    codes,
+                    dims,
+                    ksub,
+                    subdim_size,
+                    codebooks,
+                });
             }
         }
 
@@ -1149,6 +1259,59 @@ mod tests {
     }
 
     #[test]
+    fn test_diskann_save_load_preserves_pq_codebook() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_pq_dims: Some(2),
+                ..Default::default()
+            },
+        };
+
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0, 0.0, 0.0, 1.0, //
+            0.0, 0.0, 1.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            1.0, 1.0, 1.0, 1.0,
+        ];
+        index.train(&vectors).unwrap();
+        assert!(index.pq_codes.is_some());
+        let before_pq = index.pq_codes.as_ref().unwrap();
+        assert!(!before_pq.codebooks.is_empty());
+
+        let temp_path = std::env::temp_dir().join("diskann_test_pq_v3.bin");
+        index.save(&temp_path).unwrap();
+
+        let mut index2 = DiskAnnIndex::new(&config).unwrap();
+        index2.load(&temp_path).unwrap();
+        let after_pq = index2.pq_codes.as_ref().unwrap();
+        assert_eq!(before_pq.dims, after_pq.dims);
+        assert_eq!(before_pq.ksub, after_pq.ksub);
+        assert_eq!(before_pq.subdim_size, after_pq.subdim_size);
+        assert_eq!(before_pq.codebooks.len(), after_pq.codebooks.len());
+        assert_eq!(before_pq.codes.len(), after_pq.codes.len());
+
+        let query = vec![0.1, 0.1, 0.1, 0.1];
+        let req = SearchRequest {
+            top_k: 2,
+            nprobe: 10,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let result1 = index.search(&query, &req).unwrap();
+        let result2 = index2.search(&query, &req).unwrap();
+        assert_eq!(result1.ids, result2.ids);
+
+        std::fs::remove_file(temp_path).ok();
+    }
+
+    #[test]
     fn test_diskann_range_search() {
         let config = IndexConfig {
             index_type: IndexType::DiskAnn,
@@ -1251,7 +1414,7 @@ mod tests {
     }
 
     #[test]
-    fn test_diskann_pq_signature_distance_matches_direct_distance() {
+    fn test_diskann_pq_table_distance_matches_direct_distance() {
         let mut pq = PQCode::new(2);
         let vectors = vec![
             0.1f32, -0.2, 0.3, -0.4, //
@@ -1261,9 +1424,9 @@ mod tests {
         pq.encode(&vectors, dim);
 
         let query = vec![0.11f32, -0.19, 0.29, -0.41];
-        let sig = pq.build_query_signature(&query, dim);
+        let table = pq.build_query_distance_table(&query, dim);
         let direct = pq.distance(&query, 0, dim);
-        let cached = pq.distance_with_signature(&sig, 0, dim);
+        let cached = pq.distance_with_table(&table, 0, dim);
 
         assert!((direct - cached).abs() < 1e-6);
     }
@@ -1331,17 +1494,19 @@ mod tests {
     }
 
     #[test]
-    fn test_diskann_pqcode_is_explicit_mean_quantization_placeholder() {
+    fn test_diskann_pqcode_builds_codebook_and_codes() {
         let mut pq = PQCode::new(2);
         let vectors = vec![
-            0.0, 2.0, 4.0, 6.0, // subvector means: 1.0, 5.0
-            1.0, 1.0, 3.0, 7.0, // subvector means: 1.0, 5.0
+            0.0, 2.0, 4.0, 6.0, //
+            1.0, 1.0, 3.0, 7.0, //
+            -1.0, -2.0, 2.0, 1.0,
         ];
         pq.encode(&vectors, 4);
 
-        assert_eq!(pq.codes.len(), 4);
-        assert_eq!(pq.codes[0], pq.codes[2]);
-        assert_eq!(pq.codes[1], pq.codes[3]);
+        assert_eq!(pq.codes.len(), 6);
+        assert!(pq.ksub > 0);
+        assert_eq!(pq.subdim_size, 2);
+        assert!(!pq.codebooks.is_empty());
     }
 
     #[test]

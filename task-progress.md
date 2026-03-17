@@ -26,11 +26,14 @@
 - Focus: `diskann-pq-hotpath-signature-reuse-and-config-wiring`
 - Completed:
   - added `disk_pq_dims` to `IndexParams` and wired it into `DiskAnnConfig::from_index_config`.
-  - optimized DiskANN PQ search hot path by precomputing query PQ signature once per query and reusing it for candidate distance evaluation.
-  - added regression test `test_diskann_pq_signature_distance_matches_direct_distance`.
+  - replaced DiskANN mean-quantization placeholder with per-subspace KMeans codebooks and ADC lookup table evaluation.
+  - optimized DiskANN PQ search hot path by precomputing query ADC tables once per query and reusing them for candidate distance evaluation.
+  - extended DiskANN save/load PQ payload (format version 3) to persist `ksub/subdim_size/codebooks`.
+  - added regressions `test_diskann_pq_table_distance_matches_direct_distance` and `test_diskann_pqcode_builds_codebook_and_codes`.
 - Verification:
   - `cargo test --lib diskann::tests::test_diskann_config -- --nocapture` -> `ok`
-  - `cargo test --lib diskann::tests::test_diskann_pq_signature_distance_matches_direct_distance -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_pq_table_distance_matches_direct_distance -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_pqcode_builds_codebook_and_codes -- --nocapture` -> `ok`
   - `cargo test --lib -q` -> `ok`
 - Result:
   - `screen_result=promote`
