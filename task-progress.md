@@ -22,6 +22,28 @@
 
 ## Session Log
 
+### Session 211 - 2026-03-17
+- Focus: `diskann-flash-prefetch-authority-matrix`
+- Completed:
+  - executed authority matrix for `flash_prefetch_batch` on fixed flash-mmap lane and imported artifacts to local repo:
+    - `benchmark_results/diskann_pq_ab.remote.flash_prefetch0.json`
+    - `benchmark_results/diskann_pq_ab.remote.flash_prefetch8.json`
+    - `benchmark_results/diskann_pq_ab.remote.flash_prefetch16.json`
+    - `benchmark_results/diskann_pq_ab.remote.flash_prefetch32.json`
+  - generated consolidated matrix summary:
+    - `benchmark_results/diskann_flash_prefetch_matrix_20260317.json`
+- Verification:
+  - authority runs:
+    - `prefetch=0` (`run_id=20260317T094850Z_89135`) -> `qps=5370.70`, `recall@10=1.0000`
+    - `prefetch=8` (`run_id=20260317T094921Z_89211`) -> `qps=834.65`, `recall@10=1.0000`
+    - `prefetch=16` (`run_id=20260317T094943Z_89266`) -> `qps=734.23`, `recall@10=1.0000`
+    - `prefetch=32` (`run_id=20260317T095004Z_89322`) -> `qps=583.50`, `recall@10=1.0000`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - current query-time prefetch implementation is strongly negative on this lane (allocation/decode overhead dominates).
+  - default recommendation remains `disk_flash_prefetch_batch=0`; keep knob for future backend optimization.
+
 ### Session 210 - 2026-03-17
 - Focus: `diskann-bench-flash-prefetch-observability`
 - Completed:

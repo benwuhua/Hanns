@@ -15,6 +15,12 @@
 - DiskANN lsearch/recall-band matrix utility [scripts/diskann_lsearch_recall_band_matrix.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/scripts/diskann_lsearch_recall_band_matrix.py) plus regression test [tests/test_diskann_lsearch_recall_band_matrix.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/tests/test_diskann_lsearch_recall_band_matrix.py), which report both `same-lsearch` deltas and fixed-recall-band picks for each baseline lsearch row.
 
 ### Changed
+- Authority matrix for DiskANN `flash_prefetch_batch` is now archived in [benchmark_results/diskann_flash_prefetch_matrix_20260317.json](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/benchmark_results/diskann_flash_prefetch_matrix_20260317.json) with per-batch source rows:
+  - [benchmark_results/diskann_pq_ab.remote.flash_prefetch0.json](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/benchmark_results/diskann_pq_ab.remote.flash_prefetch0.json)
+  - [benchmark_results/diskann_pq_ab.remote.flash_prefetch8.json](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/benchmark_results/diskann_pq_ab.remote.flash_prefetch8.json)
+  - [benchmark_results/diskann_pq_ab.remote.flash_prefetch16.json](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/benchmark_results/diskann_pq_ab.remote.flash_prefetch16.json)
+  - [benchmark_results/diskann_pq_ab.remote.flash_prefetch32.json](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/benchmark_results/diskann_pq_ab.remote.flash_prefetch32.json)
+  On the recorded authority lane, recall stayed flat (`1.0000`) while qps degraded sharply as prefetch batch increased (`0 -> 8 -> 16 -> 32`), so current recommended default remains `flash_prefetch_batch=0`.
 - DiskANN benchmark harness [src/bin/bench_diskann_pq_ab.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/bin/bench_diskann_pq_ab.rs) now exposes flash-path knobs and schema fields for authority matrixing:
   - new args: `--flash-mmap-mode`, `--flash-prefetch-batch`
   - new row fields: `flash_mmap_mode`, `flash_prefetch_batch`
