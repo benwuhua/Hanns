@@ -1684,6 +1684,7 @@ impl DiskAnnIndex {
             candidates.push(ReverseOrderedFloat(*dist, *start));
             visited.insert(*start);
         }
+        Self::trim_frontier_keep_best(&mut candidates, effective_l);
 
         // Beam search loop
         while !candidates.is_empty() && explored.len() < effective_l {
@@ -1776,6 +1777,7 @@ impl DiskAnnIndex {
                     visited.insert(n_idx);
                     candidates.push(ReverseOrderedFloat(exact_d, n_idx));
                 }
+                Self::trim_frontier_keep_best(&mut candidates, effective_l);
             }
         }
 
@@ -1806,6 +1808,22 @@ impl DiskAnnIndex {
             .into_iter()
             .map(|(d, idx)| (self.ids[idx], d))
             .collect()
+    }
+
+    #[inline]
+    fn trim_frontier_keep_best(candidates: &mut BinaryHeap<ReverseOrderedFloat>, limit: usize) {
+        if candidates.len() <= limit {
+            return;
+        }
+        if limit == 0 {
+            candidates.clear();
+            return;
+        }
+
+        let mut keep: Vec<ReverseOrderedFloat> = candidates.drain().collect();
+        keep.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+        keep.truncate(limit);
+        *candidates = BinaryHeap::from(keep);
     }
 
     fn should_force_exact_filter_scan(&self, bitset: Option<&crate::bitset::BitsetView>) -> bool {
