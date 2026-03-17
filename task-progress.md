@@ -22,6 +22,28 @@
 
 ## Session Log
 
+### Session 184 - 2026-03-17
+- Focus: `diskann-construction-l-decouple-and-authority-sweep`
+- Completed:
+  - decoupled DiskANN build-time search window from query-time search window:
+    - `DiskAnnConfig` now has `construction_l` (defaults to `search_list_size`)
+    - `build_vamana_graph` and `refine_graph` now use `construction_l` instead of `search_list_size`
+  - extended benchmark harness with `--construction-l` and row output field for deterministic A/B.
+  - kept default behavior compatible (`construction_l` falls back to current `search_list_size` unless overridden).
+- Verification:
+  - `cargo fmt --all` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_config -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_collect_intra_batch_candidates_respects_window -- --nocapture` -> `ok`
+  - `cargo test --bin bench_diskann_pq_ab -- --nocapture` -> `ok`
+  - authority A/B (`base=2000`, `query=40`, `dim=128`, `pq_dims=4`, `pq_expand_pct=125`, `saturate=on`, `intra=8`):
+    - `construction_l=128`: `qps=11856.58`, `recall=0.7950`
+    - `construction_l=160`: `qps=11703.11`, `recall=0.8150`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this is a clean recall/QPS tradeoff knob: `construction_l=160` improves recall (+2.0 points absolute) at a modest QPS cost (~1.3%).
+  - keep default `construction_l=search_list_size` (current qps-first baseline), and use higher `construction_l` for recall-first lanes.
+
 ### Session 183 - 2026-03-17
 - Focus: `diskann-intra-batch-candidates-build-alignment`
 - Completed:

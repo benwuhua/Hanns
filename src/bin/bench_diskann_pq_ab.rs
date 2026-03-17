@@ -17,6 +17,7 @@ struct Row {
     pq_expand_pct: usize,
     saturate_after_prune: bool,
     intra_batch_candidates: usize,
+    construction_l: usize,
     base_size: usize,
     query_size: usize,
     dim: usize,
@@ -134,6 +135,7 @@ fn main() {
     let top_k = parse_usize_arg("top-k", 10);
     let max_degree = parse_usize_arg("max-degree", 48);
     let search_list_size = parse_usize_arg("search-list-size", 128);
+    let construction_l = parse_usize_arg("construction-l", search_list_size);
     let beamwidth = parse_usize_arg("beamwidth", 8);
     let pq_expand_pct = parse_usize_arg("pq-expand-pct", 125);
     let saturate_after_prune = parse_bool_arg("saturate-after-prune", true);
@@ -177,6 +179,7 @@ fn main() {
             params: IndexParams {
                 max_degree: Some(max_degree),
                 search_list_size: Some(search_list_size),
+                construction_l: Some(construction_l),
                 beamwidth: Some(beamwidth),
                 disk_pq_dims: Some(pq_dims),
                 disk_pq_candidate_expand_pct: Some(pq_expand_pct),
@@ -224,6 +227,7 @@ fn main() {
             pq_expand_pct,
             saturate_after_prune,
             intra_batch_candidates,
+            construction_l,
             base_size,
             query_size,
             dim,

@@ -26,6 +26,8 @@ pub struct DiskAnnConfig {
     pub max_degree: usize,
     /// Search list size (L parameter for Vamana), typically 75-200
     pub search_list_size: usize,
+    /// Build-time search list size (Lbuild). Defaults to search_list_size.
+    pub construction_l: usize,
     /// PQ code budget in GB (for compression)
     pub pq_code_budget_gb: f32,
     /// Build DRAM budget in GB
@@ -59,6 +61,7 @@ impl Default for DiskAnnConfig {
         Self {
             max_degree: 48,
             search_list_size: 128,
+            construction_l: 128,
             pq_code_budget_gb: 0.0,
             build_dram_budget_gb: 0.0,
             disk_pq_dims: 0,
@@ -79,9 +82,11 @@ impl Default for DiskAnnConfig {
 impl DiskAnnConfig {
     pub fn from_index_config(config: &IndexConfig) -> Self {
         let params = &config.params;
+        let search_list_size = params.search_list_size.unwrap_or(128);
         Self {
             max_degree: params.max_degree.unwrap_or(48),
-            search_list_size: params.search_list_size.unwrap_or(128),
+            search_list_size,
+            construction_l: params.construction_l.unwrap_or(search_list_size).max(16),
             beamwidth: params.beamwidth.unwrap_or(8),
             pq_code_budget_gb: 0.0, // Not exposed in IndexParams yet
             build_dram_budget_gb: 0.0,
@@ -419,7 +424,7 @@ impl DiskAnnIndex {
             return;
         }
 
-        let L = self.dann_config.search_list_size;
+        let L = self.dann_config.construction_l;
         let R = self.dann_config.max_degree;
 
         // Sort vectors by first dimension for better entry point selection
@@ -636,7 +641,7 @@ impl DiskAnnIndex {
         for i in 0..n {
             let query = &self.vectors[i * self.dim..(i + 1) * self.dim];
             let neighbors =
-                self.vamana_search(query, self.dann_config.search_list_size, R, &self.graph);
+                self.vamana_search(query, self.dann_config.construction_l, R, &self.graph);
 
             let new_neighbors: Vec<(i64, f32)> = neighbors
                 .iter()
@@ -1462,6 +1467,7 @@ mod tests {
         let params = IndexParams {
             max_degree: Some(64),
             search_list_size: Some(200),
+            construction_l: Some(240),
             beamwidth: Some(16),
             disk_pq_dims: Some(2),
             disk_pq_candidate_expand_pct: Some(150),
@@ -1482,6 +1488,7 @@ mod tests {
 
         assert_eq!(index.dann_config.max_degree, 64);
         assert_eq!(index.dann_config.search_list_size, 200);
+        assert_eq!(index.dann_config.construction_l, 240);
         assert_eq!(index.dann_config.beamwidth, 16);
         assert_eq!(index.dann_config.disk_pq_dims, 2);
         assert_eq!(index.dann_config.pq_candidate_expand_pct, 150);
