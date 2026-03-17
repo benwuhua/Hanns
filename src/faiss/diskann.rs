@@ -1637,6 +1637,9 @@ impl DiskAnnIndex {
         if n == 0 {
             return vec![];
         }
+        if self.should_force_exact_filter_scan(bitset) {
+            return self.exact_scan_allowed(query, L, filter, bitset);
+        }
 
         let beamwidth = self.dann_config.beamwidth;
         let effective_l = if self.pq_codes.is_some() {
@@ -1799,6 +1802,47 @@ impl DiskAnnIndex {
         accepted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
         accepted.truncate(L);
 
+        accepted
+            .into_iter()
+            .map(|(d, idx)| (self.ids[idx], d))
+            .collect()
+    }
+
+    fn should_force_exact_filter_scan(&self, bitset: Option<&crate::bitset::BitsetView>) -> bool {
+        let bitset = match bitset {
+            Some(bitset) => bitset,
+            None => return false,
+        };
+        if self.dann_config.filter_threshold < 0.0 {
+            return false;
+        }
+        let total = self.ids.len();
+        if total == 0 {
+            return false;
+        }
+        let filtered = bitset.count().min(total);
+        let allowed = total.saturating_sub(filtered);
+        let allowed_ratio = allowed as f32 / total as f32;
+        let threshold = self.dann_config.filter_threshold.clamp(0.0, 1.0);
+        allowed_ratio <= threshold
+    }
+
+    fn exact_scan_allowed(
+        &self,
+        query: &[f32],
+        l: usize,
+        filter: Option<&dyn Predicate>,
+        bitset: Option<&crate::bitset::BitsetView>,
+    ) -> Vec<(i64, f32)> {
+        let mut accepted = Vec::new();
+        for idx in 0..self.ids.len() {
+            if !self.node_allowed(idx, filter, bitset) {
+                continue;
+            }
+            accepted.push((self.compute_dist(query, idx), idx));
+        }
+        accepted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+        accepted.truncate(l.min(accepted.len()));
         accepted
             .into_iter()
             .map(|(d, idx)| (self.ids[idx], d))
@@ -3175,6 +3219,59 @@ mod tests {
         let result = Index::search_with_bitset(&index, &query, 2, &bitset).unwrap();
         assert_eq!(result.ids, vec![3, 4]);
         assert_eq!(result.distances.len(), 2);
+    }
+
+    #[test]
+    fn test_diskann_filter_threshold_gate_defaults_disabled() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        };
+        let index = DiskAnnIndex::new(&config).unwrap();
+        let mut bitset = crate::bitset::BitsetView::new(10);
+        bitset.set(0, true);
+        bitset.set(1, true);
+        assert!(!index.should_force_exact_filter_scan(Some(&bitset)));
+    }
+
+    #[test]
+    fn test_diskann_filter_threshold_triggers_exact_scan_for_heavy_filtering() {
+        use crate::dataset::Dataset;
+        use crate::index::Index;
+
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_filter_threshold: Some(0.4),
+                ..Default::default()
+            },
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            2.0, 0.0, 0.0, 0.0, //
+            3.0, 0.0, 0.0, 0.0, //
+            4.0, 0.0, 0.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+
+        let mut bitset = crate::bitset::BitsetView::new(index.ids.len());
+        bitset.set(0, true);
+        bitset.set(1, true);
+        bitset.set(2, true);
+        bitset.set(3, true);
+        assert!(index.should_force_exact_filter_scan(Some(&bitset)));
+
+        let query = Dataset::from_vectors(vec![4.1f32, 0.0, 0.0, 0.0], 4);
+        let result = Index::search_with_bitset(&index, &query, 1, &bitset).unwrap();
+        assert_eq!(result.ids, vec![4]);
     }
 
     #[test]

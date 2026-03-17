@@ -22,6 +22,37 @@
 
 ## Session Log
 
+### Session 230 - 2026-03-17
+- Focus: `diskann-filter-threshold-exact-fallback`
+- Completed:
+  - implemented DiskANN `filter_threshold` runtime semantics in `beam_search(...)`:
+    - added `should_force_exact_filter_scan(...)` gate (bitset allowed-ratio based)
+    - added `exact_scan_allowed(...)` path
+    - when gate triggers, search bypasses graph expansion and executes exact scan on allowed candidates.
+  - compatibility:
+    - default `filter_threshold=-1` keeps gate disabled (existing behavior unchanged).
+  - added regressions:
+    - `test_diskann_filter_threshold_gate_defaults_disabled`
+    - `test_diskann_filter_threshold_triggers_exact_scan_for_heavy_filtering`
+- Verification:
+  - local:
+    - `cargo test --lib test_diskann_filter_threshold_gate_defaults_disabled -- --nocapture` -> `ok`
+    - `cargo test --lib test_diskann_filter_threshold_triggers_exact_scan_for_heavy_filtering -- --nocapture` -> `ok`
+    - `cargo test --lib diskann::tests:: -- --nocapture` -> `ok` (`37 passed`)
+    - `cargo test --lib diskann_aisaq::tests:: -- --nocapture` -> `ok` (`21 passed`)
+    - `cargo test --test test_diskann_aisaq -- --nocapture` -> `ok` (`10 passed`)
+    - `cargo test --features async-io --test test_diskann_aisaq -- --nocapture` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann_aisaq::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T121638Z_10995`)
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T121656Z_11088`)
+    - `bash scripts/remote/test.sh --command "cargo test --features async-io --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T121717Z_11177`)
+    - `bash scripts/remote/test.sh --command "cargo test --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T121734Z_11242`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes DiskANN-side filter-threshold behavior gap and aligns high-filter fallback semantics with the AISAQ path.
+
 ### Session 229 - 2026-03-17
 - Focus: `diskann-aisaq-api-mapping-warmup-filter-pqcache`
 - Completed:
