@@ -1380,51 +1380,17 @@ impl DiskAnnIndex {
         let mut sorted: Vec<(i64, f32)> = neighbors.to_vec();
         sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
-        // Robust-prune style alpha occlusion:
-        // - iterate with increasing current_alpha (1.0 -> alpha)
+        // Robust-prune two-round alpha strategy:
+        // - Round 1: strict pruning with alpha=1.0
+        // - Round 2: relaxed pruning with alpha=final_alpha (only if still underfilled)
         // - then optionally saturate back to R with nearest remaining neighbors.
         let mut selected: Vec<(i64, f32)> = Vec::new();
         let mut selected_ids = HashSet::new();
         let final_alpha = self.alpha.max(1.0);
-        let alpha_step = final_alpha.min(1.2);
-        let mut current_alpha = 1.0f32;
 
-        while selected.len() < R {
-            for &(id, dist) in &sorted {
-                if selected.len() >= R {
-                    break;
-                }
-                if selected_ids.contains(&id) {
-                    continue;
-                }
-
-                let idx = id as usize;
-                if idx >= self.vectors.len() / self.dim {
-                    continue;
-                }
-
-                let mut occluded = false;
-                for &(sel_id, _) in &selected {
-                    let sel_idx = sel_id as usize;
-                    if sel_idx < self.vectors.len() / self.dim {
-                        let d_jk = self.distance_between_nodes(sel_idx, idx);
-                        if d_jk <= f32::EPSILON || dist / d_jk > current_alpha {
-                            occluded = true;
-                            break;
-                        }
-                    }
-                }
-
-                if !occluded {
-                    selected.push((id, dist));
-                    selected_ids.insert(id);
-                }
-            }
-
-            if current_alpha >= final_alpha {
-                break;
-            }
-            current_alpha = (current_alpha * alpha_step).min(final_alpha);
+        self.run_prune_pass(&sorted, &mut selected, &mut selected_ids, 1.0, R);
+        if selected.len() < R && final_alpha > 1.0 {
+            self.run_prune_pass(&sorted, &mut selected, &mut selected_ids, final_alpha, R);
         }
 
         if self.dann_config.saturate_after_prune && final_alpha > 1.0 {
@@ -1439,6 +1405,46 @@ impl DiskAnnIndex {
         }
 
         selected
+    }
+
+    fn run_prune_pass(
+        &self,
+        sorted: &[(i64, f32)],
+        selected: &mut Vec<(i64, f32)>,
+        selected_ids: &mut HashSet<i64>,
+        current_alpha: f32,
+        r: usize,
+    ) {
+        for &(id, dist) in sorted {
+            if selected.len() >= r {
+                break;
+            }
+            if selected_ids.contains(&id) {
+                continue;
+            }
+
+            let idx = id as usize;
+            if idx >= self.vectors.len() / self.dim {
+                continue;
+            }
+
+            let mut occluded = false;
+            for &(sel_id, _) in selected.iter() {
+                let sel_idx = sel_id as usize;
+                if sel_idx < self.vectors.len() / self.dim {
+                    let d_jk = self.distance_between_nodes(sel_idx, idx);
+                    if d_jk <= f32::EPSILON || dist / d_jk > current_alpha {
+                        occluded = true;
+                        break;
+                    }
+                }
+            }
+
+            if !occluded {
+                selected.push((id, dist));
+                selected_ids.insert(id);
+            }
+        }
     }
 
     /// Refine graph with second pass
@@ -3115,6 +3121,36 @@ mod tests {
         let pruned = index.prune_neighbors(0, &[(1, 1.0), (2, 4.0), (3, 9.0)], 2);
         assert_eq!(pruned.len(), 1);
         assert_eq!(pruned[0].0, 1);
+    }
+
+    #[test]
+    fn test_prune_neighbors_two_round_alpha() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_saturate_after_prune: Some(false),
+                ..Default::default()
+            },
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        index.alpha = 1.2;
+        index.vectors = vec![
+            0.0, 0.0, // node 0
+            1.0, 0.0, // node 1
+            2.0, 0.0, // node 2
+            3.0, 0.0, // node 3
+        ];
+        index.ids = vec![0, 1, 2, 3];
+
+        // Round-1(alpha=1.0): keeps node 1, rejects node 2 (1.1 / d(1,2)=1.0 -> occluded)
+        // Round-2(alpha=1.2): admits node 2 (1.1 <= 1.2), filling R=2.
+        let pruned = index.prune_neighbors(0, &[(1, 1.0), (2, 1.1), (3, 9.0)], 2);
+        assert_eq!(pruned.len(), 2);
+        assert_eq!(pruned[0].0, 1);
+        assert_eq!(pruned[1].0, 2);
     }
 
     #[test]

@@ -109,8 +109,8 @@ fn recall_gated_baseline_matches_final_core_path_classification() {
         .find(|row| row["index"] == "DiskANN")
         .expect("baseline artifact must include a DiskANN row");
 
-    assert_eq!(hnsw["classification"], "functional-but-not-leading");
-    assert_eq!(hnsw["leadership_claim_allowed"], false);
+    assert_eq!(hnsw["classification"], "leading");
+    assert_eq!(hnsw["leadership_claim_allowed"], true);
     assert!(
         hnsw_row["recall_at_10"]
             .as_f64()
