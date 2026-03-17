@@ -22,6 +22,26 @@
 
 ## Session Log
 
+### Session 176 - 2026-03-17
+- Focus: `diskann-pq-ab-benchmark-harness-and-fast-reuse-mode`
+- Completed:
+  - added a dedicated benchmark binary `src/bin/bench_diskann_pq_ab.rs` for DiskANN PQ A/B screening (`pq_dims` sweep) with JSON output.
+  - fixed benchmark harness integration against current index trait contracts (`Dataset` search path and recall ground-truth typing).
+  - added reusable index-cache mode (`--index-cache-dir`, `--reuse-index`) to avoid repeated DiskANN rebuilds during iterative screening.
+  - added harness regressions for argument parsing and cache-path naming stability.
+- Verification:
+  - `cargo test --bin bench_diskann_pq_ab -- --nocapture` -> `ok`
+  - `cargo build --release --bin bench_diskann_pq_ab` -> `ok`
+  - local run 1 (`train`): `cargo run --release --bin bench_diskann_pq_ab -- --base-size 10000 --query-size 10 --dim 128 --top-k 10 --pq-dims 0 --index-cache-dir benchmark_results/.diskann_cache --reuse-index 1 --output benchmark_results/diskann_pq_ab.local.cache_run1.json` -> `ok`
+  - local run 2 (`load`): `cargo run --release --bin bench_diskann_pq_ab -- --base-size 10000 --query-size 10 --dim 128 --top-k 10 --pq-dims 0 --index-cache-dir benchmark_results/.diskann_cache --reuse-index 1 --output benchmark_results/diskann_pq_ab.local.cache_run2.json` -> `ok`
+  - authority run 1 (`train`): `bash scripts/remote/test.sh --command "cargo run --release --bin bench_diskann_pq_ab -- --base-size 2000 --query-size 20 --dim 128 --top-k 10 --pq-dims 0 --index-cache-dir benchmark_results/.diskann_cache_v2 --reuse-index 1 --output benchmark_results/diskann_pq_ab.remote.cache_v2_run1.json"` -> `ok`
+  - authority run 2 (`load`): `bash scripts/remote/test.sh --command "cargo run --release --bin bench_diskann_pq_ab -- --base-size 2000 --query-size 20 --dim 128 --top-k 10 --pq-dims 0 --index-cache-dir benchmark_results/.diskann_cache_v2 --reuse-index 1 --output benchmark_results/diskann_pq_ab.remote.cache_v2_run2.json"` -> `ok`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - authority `build_seconds` dropped from `42.1206s` (`train`) to `0.0466s` (`load`) while qps/recall remained stable on the same lane, so subsequent DiskANN/PQ parameter sweeps can iterate much faster.
+  - this harness is a screening utility; production claims remain gated by full authority compare lanes.
+
 ### Session 175 - 2026-03-17
 - Focus: `diskann-pq-hotpath-signature-reuse-and-config-wiring`
 - Completed:
