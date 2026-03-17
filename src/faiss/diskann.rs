@@ -1685,10 +1685,6 @@ impl DiskAnnIndex {
             visited[*start] = true;
         }
 
-        // Early termination tracking
-        let mut no_progress_count = 0;
-        let mut best_dist = starts[0].1;
-
         // Beam search loop
         while !candidates.is_empty() && explored.len() < effective_l {
             let ReverseOrderedFloat(dist, idx) = candidates.pop().unwrap();
@@ -1697,17 +1693,15 @@ impl DiskAnnIndex {
                 accepted.push((dist, idx));
             }
 
-            // Check for early termination
-            if dist < best_dist * 0.99 {
-                best_dist = dist;
-                no_progress_count = 0;
-            } else {
-                no_progress_count += 1;
-            }
-
-            // Early termination: stop if no progress
-            if no_progress_count > effective_l / 4 {
-                break;
+            // Early termination: stop if frontier cannot improve accepted set.
+            if accepted.len() >= L {
+                let worst_accepted = accepted
+                    .iter()
+                    .map(|(d, _)| *d)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                if dist > worst_accepted {
+                    break;
+                }
             }
 
             // Explore neighbors with beamwidth limit
@@ -3186,6 +3180,50 @@ mod tests {
                 "beam-search final distance should be exact when PQ is enabled"
             );
         }
+    }
+
+    #[test]
+    fn test_beam_search_early_termination_ip_metric() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::Ip,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                beamwidth: Some(2),
+                disk_num_entry_points: Some(1),
+                ..Default::default()
+            },
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        index.ids = vec![0, 1, 2, 3, 4];
+        index.vectors = vec![
+            1.0, 0.0, // id 0, ip=1.0
+            0.9, 0.0, // id 1, ip=0.9
+            0.8, 0.0, // id 2, ip=0.8
+            0.2, 0.0, // id 3, ip=0.2
+            -0.5, 0.0, // id 4, ip=-0.5
+        ];
+        index.graph = vec![
+            vec![(1, 0.0), (2, 0.0), (3, 0.0)],
+            vec![(0, 0.0), (2, 0.0), (4, 0.0)],
+            vec![(0, 0.0), (1, 0.0), (3, 0.0)],
+            vec![(0, 0.0), (2, 0.0), (4, 0.0)],
+            vec![(1, 0.0), (3, 0.0)],
+        ];
+        index.entry_point = Some(0);
+        index.entry_points = vec![0];
+
+        let query = vec![1.0f32, 0.0];
+        let results = index.beam_search(&query, 2, None, None);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, 0);
+        assert_eq!(results[1].0, 1);
+        assert!(
+            results[0].1 <= results[1].1,
+            "beam_search must keep IP ordering in transformed distance space"
+        );
     }
 
     #[test]
