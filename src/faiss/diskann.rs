@@ -132,12 +132,10 @@ pub struct DiskAnnScopeAudit {
     pub comparability_reason: &'static str,
 }
 
-/// PQ-compressed vector placeholder.
+/// In-memory PQ-compressed vectors with per-subspace codebooks and ADC lookup.
 ///
-/// This is *not* native DiskANN's full PQ/SSD pipeline: it only stores a coarse
-/// per-subvector mean quantization so the Rust implementation can exercise a
-/// compressed-distance branch. Treat it as an explicit simplification rather than
-/// a performance-comparable implementation.
+/// This is still not native DiskANN's full SSD pipeline (graph/disk layout, I/O path,
+/// reorder on full vectors), so it should not be treated as native-comparable.
 #[derive(Clone)]
 struct PQCode {
     codes: Vec<u8>,
@@ -387,10 +385,10 @@ impl DiskAnnIndex {
             search_list_size: self.dann_config.search_list_size,
             beamwidth: self.dann_config.beamwidth,
             uses_vamana_graph: true,
-            uses_placeholder_pq: true,
+            uses_placeholder_pq: false,
             has_flash_layout: false,
             native_comparable: false,
-            comparability_reason: "DiskAnnIndex remains a simplified Vamana path with placeholder PQ rather than a native-comparable SSD DiskANN pipeline",
+            comparability_reason: "DiskAnnIndex remains an in-memory Vamana+PQ path without native DiskANN SSD pipeline, so it is not native-comparable",
         }
     }
 
@@ -1781,7 +1779,7 @@ mod tests {
     }
 
     #[test]
-    fn test_diskann_scope_audit_locks_placeholder_boundary() {
+    fn test_diskann_scope_audit_locks_non_native_boundary() {
         let config = IndexConfig {
             index_type: IndexType::DiskAnn,
             metric_type: MetricType::L2,
@@ -1803,11 +1801,11 @@ mod tests {
         assert_eq!(audit.search_list_size, 32);
         assert_eq!(audit.beamwidth, 4);
         assert!(audit.uses_vamana_graph);
-        assert!(audit.uses_placeholder_pq);
+        assert!(!audit.uses_placeholder_pq);
         assert!(!audit.has_flash_layout);
         assert!(!audit.native_comparable);
         assert!(
-            audit.comparability_reason.contains("placeholder PQ"),
+            audit.comparability_reason.contains("not native-comparable"),
             "audit should explain why DiskAnnIndex is not native-comparable"
         );
     }
@@ -1860,7 +1858,7 @@ mod tests {
         );
         assert_eq!(verdict["leadership_claim_allowed"], false);
         assert!(!diskann_audit.native_comparable);
-        assert!(diskann_audit.uses_placeholder_pq);
+        assert!(!diskann_audit.uses_placeholder_pq);
         assert!(!pqflash_audit.native_comparable);
         assert!(pqflash_audit.uses_flash_layout);
     }

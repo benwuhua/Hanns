@@ -22,6 +22,23 @@
 
 ## Session Log
 
+### Session 194 - 2026-03-17
+- Focus: `diskann-scope-audit-placeholder-flag-correction`
+- Completed:
+  - corrected `DiskAnnIndex::scope_audit()` in `src/faiss/diskann.rs`:
+    - `uses_placeholder_pq: true -> false`
+    - comparability reason updated to reflect current truth (`in-memory Vamana+PQ`, still non-native-comparable due to missing SSD pipeline), not legacy placeholder wording.
+  - updated DiskANN scope-audit regressions to lock the new semantics:
+    - `test_diskann_scope_audit_locks_non_native_boundary`
+    - `test_diskann_family_verdict_archives_constrained_classification`
+- Verification:
+  - `cargo test --lib diskann::tests::test_diskann_scope_audit_locks_non_native_boundary -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_family_verdict_archives_constrained_classification -- --nocapture` -> `ok`
+- Result:
+  - `durable_closure=pass`
+- Notes:
+  - this fixes governance-facing false positives where DiskANN PQ capability had been upgraded but scope-audit metadata still reported placeholder state.
+
 ### Session 193 - 2026-03-17
 - Focus: `diskann-lsearch-recall-band-authority-stabilization-q200`
 - Completed:
