@@ -22,6 +22,27 @@
 
 ## Session Log
 
+### Session 216 - 2026-03-17
+- Focus: `diskann-aisaq-async-search-path`
+- Completed:
+  - implemented `PQFlashIndex::search_async(...)` to execute AISAQ search through async node access (`load_node_async`) end-to-end (coarse candidate expansion + bounded exact rerank).
+  - added async coarse-distance helper `coarse_distance_async(...)`.
+  - added focused async regression `aisaq_search_async_matches_sync` (locks async/sync result equivalence on the same fixture).
+  - removed dead-code warning in DiskANN test helper by gating `collect_intra_batch_candidates` to test-only.
+- Verification:
+  - local:
+    - `cargo test --lib aisaq_search_async_matches_sync -- --nocapture` -> `ok`
+    - `cargo test --lib diskann_aisaq::tests:: -- --nocapture` -> `ok` (`5 passed`)
+    - `cargo test --test test_diskann_aisaq -- --nocapture` -> `ok` (`7 passed`)
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann_aisaq::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T111157Z_97242`)
+    - `bash scripts/remote/test.sh --command "cargo test --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T111225Z_97357`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the async-executable search-path capability slice for current AISAQ scope (execution path now has async API and verified behavior parity; low-level io_uring submission optimization remains a separate follow-up).
+
 ### Session 215 - 2026-03-17
 - Focus: `diskann-aisaq-rerank-stage`
 - Completed:

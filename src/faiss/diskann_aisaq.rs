@@ -11,6 +11,9 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+use std::future::Future;
+
 use crate::api::{IndexConfig, KnowhereError, MetricType, Result, SearchResult};
 use crate::faiss::pq::PqEncoder;
 use crate::simd;
@@ -860,6 +863,105 @@ impl PQFlashIndex {
         Ok(result)
     }
 
+    pub async fn search_async(&self, query: &[f32], k: usize) -> Result<SearchResult> {
+        if !self.trained {
+            return Err(KnowhereError::IndexNotTrained(
+                "AISAQ index is not trained".to_string(),
+            ));
+        }
+        if self.is_empty() {
+            return Err(KnowhereError::InternalError(
+                "AISAQ index has no vectors".to_string(),
+            ));
+        }
+        if query.len() != self.dim {
+            return Err(KnowhereError::InvalidArg(format!(
+                "query dimension {} does not match index dimension {}",
+                query.len(),
+                self.dim
+            )));
+        }
+
+        let mut io = self.io_template.clone();
+        io.reset_stats();
+
+        let pq_table = self
+            .pq_encoder
+            .as_ref()
+            .map(|encoder| encoder.build_distance_table(query));
+
+        let mut frontier = BinaryHeap::new();
+        let mut seen = HashSet::new();
+        let mut expanded = Vec::new();
+
+        for &entry in &self.entry_points {
+            let score = self
+                .coarse_distance_async(entry, query, pq_table.as_ref(), &mut io)
+                .await?;
+            frontier.push(Candidate {
+                node_id: entry,
+                score,
+            });
+        }
+
+        let max_visit = self.config.search_list_size.max(k).min(self.len());
+        while expanded.len() < max_visit {
+            let candidate = match frontier.pop() {
+                Some(candidate) => candidate,
+                None => break,
+            };
+            if !seen.insert(candidate.node_id) {
+                continue;
+            }
+            expanded.push(candidate);
+
+            let node = self
+                .load_node_async(candidate.node_id, NodeAccessMode::Node, &mut io)
+                .await?;
+            let mut neighbor_scores = Vec::with_capacity(node.neighbors.len());
+            for &neighbor in &node.neighbors {
+                if seen.contains(&neighbor) {
+                    continue;
+                }
+                let score = self
+                    .coarse_distance_async(neighbor, query, pq_table.as_ref(), &mut io)
+                    .await?;
+                neighbor_scores.push(Candidate {
+                    node_id: neighbor,
+                    score,
+                });
+            }
+            neighbor_scores.sort_by(|left, right| left.score.total_cmp(&right.score));
+            for neighbor in neighbor_scores
+                .into_iter()
+                .take(io.max_reads_per_iteration())
+            {
+                frontier.push(neighbor);
+            }
+        }
+
+        let rerank_pool = self.compute_rerank_pool_size(k, expanded.len());
+        expanded.sort_by(|left, right| left.score.total_cmp(&right.score));
+        let mut scored = Vec::with_capacity(rerank_pool);
+        for candidate in expanded.iter().take(rerank_pool) {
+            let node = self
+                .load_node_async(candidate.node_id, NodeAccessMode::None, &mut io)
+                .await?;
+            let distance = self.exact_distance(query, &node.vector);
+            scored.push((node.id, distance));
+        }
+
+        scored.sort_by(|left, right| left.1.total_cmp(&right.1));
+        scored.truncate(k.min(scored.len()));
+        let mut result = SearchResult::new(
+            scored.iter().map(|(id, _)| *id).collect(),
+            scored.iter().map(|(_, distance)| *distance).collect(),
+            0.0,
+        );
+        result.num_visited = io.stats().nodes_visited;
+        Ok(result)
+    }
+
     #[inline]
     fn compute_rerank_pool_size(&self, k: usize, expanded_len: usize) -> usize {
         if expanded_len == 0 {
@@ -968,6 +1070,23 @@ impl PQFlashIndex {
             }
         }
 
+        Ok(self.exact_distance(query, &node.vector))
+    }
+
+    async fn coarse_distance_async(
+        &self,
+        node_id: u32,
+        query: &[f32],
+        pq_table: Option<&Vec<Vec<f32>>>,
+        io: &mut BeamSearchIO,
+    ) -> Result<f32> {
+        let node = self.load_node_async(node_id, NodeAccessMode::Pq, io).await?;
+        if let (Some(encoder), Some(table)) = (&self.pq_encoder, pq_table) {
+            let pq = &node.inline_pq;
+            if !pq.is_empty() {
+                return Ok(encoder.compute_distance_with_table(table, pq));
+            }
+        }
         Ok(self.exact_distance(query, &node.vector))
     }
 
@@ -1219,6 +1338,35 @@ fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {
 }
 
 #[cfg(test)]
+fn block_on<F: Future>(future: F) -> F::Output {
+    use std::pin::Pin;
+    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+    fn raw_waker() -> RawWaker {
+        fn clone(_: *const ()) -> RawWaker {
+            raw_waker()
+        }
+        fn wake(_: *const ()) {}
+        fn wake_by_ref(_: *const ()) {}
+        fn drop(_: *const ()) {}
+        RawWaker::new(
+            std::ptr::null(),
+            &RawWakerVTable::new(clone, wake, wake_by_ref, drop),
+        )
+    }
+
+    let waker = unsafe { Waker::from_raw(raw_waker()) };
+    let mut ctx = Context::from_waker(&waker);
+    let mut future = Box::pin(future);
+    loop {
+        match Pin::as_mut(&mut future).poll(&mut ctx) {
+            Poll::Ready(out) => return out,
+            Poll::Pending => std::thread::yield_now(),
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::api::{DataType, IndexParams, IndexType};
@@ -1294,5 +1442,35 @@ mod tests {
         assert_eq!(result.ids.len(), 2);
         assert_eq!(result.distances.len(), 2);
         assert!(result.ids.iter().all(|&id| id >= 0));
+    }
+
+    #[test]
+    fn aisaq_search_async_matches_sync() {
+        let config = AisaqConfig {
+            max_degree: 4,
+            search_list_size: 16,
+            beamwidth: 4,
+            disk_pq_dims: 2,
+            rerank_expand_pct: 200,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, 4).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            2.0, 0.0, 0.0, 0.0, //
+            3.0, 0.0, 0.0, 0.0, //
+            4.0, 0.0, 0.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+
+        let sync = index.search(&[0.9, 0.0, 0.0, 0.0], 3).unwrap();
+        let async_res = block_on(index.search_async(&[0.9, 0.0, 0.0, 0.0], 3)).unwrap();
+        assert_eq!(sync.ids, async_res.ids);
+        assert_eq!(sync.distances.len(), async_res.distances.len());
+        for (a, b) in sync.distances.iter().zip(async_res.distances.iter()) {
+            assert!((a - b).abs() < 1e-6);
+        }
     }
 }

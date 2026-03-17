@@ -1275,6 +1275,7 @@ impl DiskAnnIndex {
     }
 
     /// Add temporal candidates from recent inserted nodes.
+    #[cfg(test)]
     fn collect_intra_batch_candidates(&self, i: usize) -> Vec<(usize, f32)> {
         self.collect_intra_batch_candidates_with_upper(i, i)
     }
