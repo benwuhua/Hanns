@@ -15,6 +15,7 @@
 - DiskANN lsearch/recall-band matrix utility [scripts/diskann_lsearch_recall_band_matrix.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/scripts/diskann_lsearch_recall_band_matrix.py) plus regression test [tests/test_diskann_lsearch_recall_band_matrix.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/tests/test_diskann_lsearch_recall_band_matrix.py), which report both `same-lsearch` deltas and fixed-recall-band picks for each baseline lsearch row.
 
 ### Changed
+- DiskANN filtering semantics were upgraded in [src/faiss/diskann.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/faiss/diskann.rs): `SearchRequest.filter` is now enforced during beam-search acceptance, `Index::search_with_bitset` is now DiskANN-specific (not trait-default post-filter only), and filtered searches now use exact-distance fallback fill to recover `top_k` from the allowed set when possible. Regression locks were added: `test_diskann_search_respects_predicate_filter` and `test_diskann_index_search_with_bitset_fills_topk_from_allowed_set`.
 - DiskANN now supports explicit in-memory budget controls via [src/api/index.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/api/index.rs):
   - `disk_build_dram_budget_gb`
   - `disk_search_cache_budget_gb`

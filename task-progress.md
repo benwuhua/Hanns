@@ -22,6 +22,25 @@
 
 ## Session Log
 
+### Session 202 - 2026-03-17
+- Focus: `diskann-filtering-semantics-closure-local`
+- Completed:
+  - completed DiskANN filtering semantics closure on the in-memory search path:
+    - `SearchRequest.filter` is now applied inside `beam_search` candidate acceptance.
+    - `Index::search_with_bitset` is now overridden by DiskANN (instead of using trait default post-filter-only behavior).
+    - when filtering causes insufficient candidates, DiskANN now performs exact-distance fallback fill from the allowed set to recover `top_k` whenever enough valid vectors exist.
+  - added regressions:
+    - `test_diskann_search_respects_predicate_filter`
+    - `test_diskann_index_search_with_bitset_fills_topk_from_allowed_set`
+- Verification:
+  - `cargo test --lib test_diskann_search_respects_predicate_filter -- --nocapture` -> `ok`
+  - `cargo test --lib test_diskann_index_search_with_bitset_fills_topk_from_allowed_set -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests:: -- --nocapture` -> `ok` (`28 passed`)
+- Result:
+  - `local_prefilter=pass`
+- Notes:
+  - this session closes the functional filter-gap in DiskANN behavior locally; authority verification is still required before any parity/perf claim.
+
 ### Session 201 - 2026-03-17
 - Focus: `diskann-budget-controls-capability`
 - Completed:

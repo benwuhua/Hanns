@@ -14,6 +14,7 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet, VecDeque};
 
+use crate::api::search::Predicate;
 use crate::api::{IndexConfig, MetricType, Result, SearchRequest, SearchResult};
 use crate::quantization::kmeans::KMeans;
 use crate::simd;
@@ -947,7 +948,7 @@ impl DiskAnnIndex {
             let query_vec = &query[q_start..q_start + self.dim];
 
             // Use improved beam search
-            let results = self.beam_search(query_vec, L);
+            let results = self.beam_search(query_vec, L, req.filter.as_deref(), None);
 
             for i in 0..k {
                 if i < results.len() {
@@ -970,7 +971,29 @@ impl DiskAnnIndex {
 
     /// Beam search with early termination
     #[allow(non_snake_case)]
-    fn beam_search(&self, query: &[f32], L: usize) -> Vec<(i64, f32)> {
+    fn node_allowed(
+        &self,
+        idx: usize,
+        filter: Option<&dyn Predicate>,
+        bitset: Option<&crate::bitset::BitsetView>,
+    ) -> bool {
+        if bitset.is_some_and(|b| idx < b.len() && b.get(idx)) {
+            return false;
+        }
+        if let Some(pred) = filter {
+            return pred.evaluate(self.ids[idx]);
+        }
+        true
+    }
+
+    #[allow(non_snake_case)]
+    fn beam_search(
+        &self,
+        query: &[f32],
+        L: usize,
+        filter: Option<&dyn Predicate>,
+        bitset: Option<&crate::bitset::BitsetView>,
+    ) -> Vec<(i64, f32)> {
         let n = self.ids.len();
         if n == 0 {
             return vec![];
@@ -988,7 +1011,8 @@ impl DiskAnnIndex {
         };
         let mut visited = vec![false; n];
         let mut candidates: BinaryHeap<ReverseOrderedFloat> = BinaryHeap::new();
-        let mut results: Vec<(f32, usize)> = Vec::new();
+        let mut explored: Vec<(f32, usize)> = Vec::new();
+        let mut accepted: Vec<(f32, usize)> = Vec::new();
         let pq_query_table = self.pq_codes.as_ref().and_then(|pq| {
             if pq.dims > 0 && pq.ksub > 0 {
                 Some(pq.build_query_distance_table(query, self.dim))
@@ -1012,9 +1036,12 @@ impl DiskAnnIndex {
         let mut best_dist = starts[0].1;
 
         // Beam search loop
-        while !candidates.is_empty() && results.len() < effective_l {
+        while !candidates.is_empty() && explored.len() < effective_l {
             let ReverseOrderedFloat(dist, idx) = candidates.pop().unwrap();
-            results.push((dist, idx));
+            explored.push((dist, idx));
+            if self.node_allowed(idx, filter, bitset) {
+                accepted.push((dist, idx));
+            }
 
             // Check for early termination
             if dist < best_dist * 0.99 {
@@ -1083,10 +1110,30 @@ impl DiskAnnIndex {
             }
         }
 
-        results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        results.truncate(L);
+        // If filtering shrinks candidate pool too much, fill with exact scan.
+        if accepted.len() < L {
+            let mut accepted_set: HashSet<usize> = accepted.iter().map(|(_, idx)| *idx).collect();
+            let mut fallback: Vec<(f32, usize)> = Vec::new();
+            for idx in 0..n {
+                if accepted_set.contains(&idx) || !self.node_allowed(idx, filter, bitset) {
+                    continue;
+                }
+                fallback.push((self.compute_dist(query, idx), idx));
+            }
+            fallback.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+            for (dist, idx) in fallback {
+                accepted.push((dist, idx));
+                accepted_set.insert(idx);
+                if accepted.len() >= L {
+                    break;
+                }
+            }
+        }
 
-        results
+        accepted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+        accepted.truncate(L);
+
+        accepted
             .into_iter()
             .map(|(d, idx)| (self.ids[idx], d))
             .collect()
@@ -1432,7 +1479,7 @@ pub struct DiskAnnIterator<'a> {
 impl<'a> DiskAnnIterator<'a> {
     #[allow(non_snake_case)]
     fn new(index: &'a DiskAnnIndex, query: &'a [f32], L: usize) -> Self {
-        let results = index.beam_search(query, L);
+        let results = index.beam_search(query, L, None, None);
         Self {
             index,
             results,
@@ -2014,7 +2061,7 @@ mod tests {
         index.train(&vectors).unwrap();
 
         let query = vec![0.9, 0.0, 0.0, 0.0];
-        let results = index.beam_search(&query, 4);
+        let results = index.beam_search(&query, 4, None, None);
 
         for (id, dist) in results {
             let idx = id as usize;
@@ -2024,6 +2071,75 @@ mod tests {
                 "beam-search final distance should be exact when PQ is enabled"
             );
         }
+    }
+
+    #[test]
+    fn test_diskann_search_respects_predicate_filter() {
+        use std::sync::Arc;
+
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0, 0.0, //
+            1.0, 0.0, //
+            2.0, 0.0, //
+            3.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+
+        let query = vec![0.1f32, 0.0];
+        let req = SearchRequest {
+            top_k: 3,
+            nprobe: 8,
+            filter: Some(Arc::new(crate::api::search::IdsPredicate { ids: vec![2, 3] })),
+            params: None,
+            radius: None,
+        };
+
+        let result = index.search(&query, &req).unwrap();
+        let kept: Vec<i64> = result.ids.into_iter().filter(|&id| id >= 0).collect();
+        assert_eq!(kept, vec![2, 3]);
+    }
+
+    #[test]
+    fn test_diskann_index_search_with_bitset_fills_topk_from_allowed_set() {
+        use crate::bitset::BitsetView;
+        use crate::dataset::Dataset;
+        use crate::index::Index;
+
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0, 0.0, //
+            1.0, 0.0, //
+            2.0, 0.0, //
+            3.0, 0.0, //
+            4.0, 0.0,
+        ];
+        let train = Dataset::from_vectors(vectors, 2);
+        Index::train(&mut index, &train).unwrap();
+
+        let mut bitset = BitsetView::new(index.ntotal());
+        bitset.set(0, true);
+        bitset.set(1, true);
+        bitset.set(2, true);
+
+        let query = Dataset::from_vectors(vec![0.0f32, 0.0], 2);
+        let result = Index::search_with_bitset(&index, &query, 2, &bitset).unwrap();
+        assert_eq!(result.ids, vec![3, 4]);
+        assert_eq!(result.distances.len(), 2);
     }
 
     #[test]
@@ -2399,8 +2515,54 @@ impl Index for DiskAnnIndex {
         _bitset: Option<&crate::bitset::BitsetView>,
     ) -> std::result::Result<Box<dyn AnnIterator>, IndexError> {
         let query_vec = query.vectors().to_vec();
-        let results = self.beam_search(&query_vec, self.dann_config.search_list_size);
+        let results = self.beam_search(&query_vec, self.dann_config.search_list_size, None, None);
         Ok(Box::new(DiskAnnIteratorWrapper::new(results)))
+    }
+
+    fn search_with_bitset(
+        &self,
+        query: &Dataset,
+        top_k: usize,
+        bitset: &crate::bitset::BitsetView,
+    ) -> std::result::Result<crate::index::SearchResult, IndexError> {
+        let query_vec = query.vectors().to_vec();
+        if self.vectors.is_empty() {
+            return Err(IndexError::Empty);
+        }
+        if query_vec.is_empty() || query_vec.len() % self.dim != 0 {
+            return Err(IndexError::DimMismatch);
+        }
+
+        let start = Instant::now();
+        let n_queries = query_vec.len() / self.dim;
+        let l = self.dann_config.search_list_size.max(top_k);
+        let mut ids = Vec::with_capacity(n_queries * top_k);
+        let mut distances = Vec::with_capacity(n_queries * top_k);
+
+        for q_idx in 0..n_queries {
+            let q_start = q_idx * self.dim;
+            let q = &query_vec[q_start..q_start + self.dim];
+            let results = self.beam_search(q, l, None, Some(bitset));
+            for i in 0..top_k {
+                if i < results.len() {
+                    let dist = match self.config.metric_type {
+                        MetricType::Ip => -results[i].1,
+                        _ => results[i].1.sqrt(),
+                    };
+                    ids.push(results[i].0);
+                    distances.push(dist);
+                } else {
+                    ids.push(-1);
+                    distances.push(f32::MAX);
+                }
+            }
+        }
+
+        Ok(crate::index::SearchResult::new(
+            ids,
+            distances,
+            start.elapsed().as_secs_f64() * 1000.0,
+        ))
     }
 
     fn save(&self, path: &str) -> std::result::Result<(), IndexError> {
