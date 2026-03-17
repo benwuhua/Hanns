@@ -527,7 +527,8 @@ impl DiskAnnIndex {
         let mut sorted: Vec<(i64, f32)> = neighbors.to_vec();
         sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
-        // Vamana pruning: keep diverse neighbors
+        // Vamana-style alpha pruning (triangle inequality occlusion):
+        // keep candidate k only when max_j(distance(i,k) / distance(j,k)) <= alpha.
         let mut selected: Vec<(i64, f32)> = Vec::new();
 
         for &(id, dist) in &sorted {
@@ -540,30 +541,22 @@ impl DiskAnnIndex {
                 continue;
             }
 
-            // Check angular diversity
-            let vec = &self.vectors[idx * self.dim..(idx + 1) * self.dim];
-            let mut is_diverse = true;
+            let mut occluded = false;
 
             for &(sel_id, _) in &selected {
                 let sel_idx = sel_id as usize;
                 if sel_idx < self.vectors.len() / self.dim {
-                    let sel_vec = &self.vectors[sel_idx * self.dim..(sel_idx + 1) * self.dim];
-                    let angle = self.cosine_similarity(vec, sel_vec);
-                    if angle > self.alpha {
-                        is_diverse = false;
+                    let d_jk = self.distance_between_nodes(sel_idx, idx);
+                    if d_jk <= f32::EPSILON || dist / d_jk > self.alpha {
+                        occluded = true;
                         break;
                     }
                 }
             }
 
-            if is_diverse {
+            if !occluded {
                 selected.push((id, dist));
             }
-        }
-
-        // If still not enough, just take closest
-        if selected.len() < R.min(neighbors.len()) {
-            selected = sorted.into_iter().take(R).collect();
         }
 
         selected
@@ -594,25 +587,22 @@ impl DiskAnnIndex {
     }
 
     #[inline]
-    fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
-        let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-        let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-
-        if norm_a < 1e-6 || norm_b < 1e-6 {
-            0.0
-        } else {
-            dot / (norm_a * norm_b)
-        }
-    }
-
-    #[inline]
     fn l2_sqr(&self, a: &[f32], b_idx: usize) -> f32 {
         let start = b_idx * self.dim;
         let b = &self.vectors[start..start + self.dim];
 
         // Search/range gate on squared L2 directly to avoid an unnecessary sqrt+square roundtrip.
         simd::l2_distance_sq(a, b)
+    }
+
+    #[inline]
+    fn distance_between_nodes(&self, a_idx: usize, b_idx: usize) -> f32 {
+        if a_idx >= self.ids.len() || b_idx >= self.ids.len() {
+            return f32::MAX;
+        }
+        let a_start = a_idx * self.dim;
+        let a = &self.vectors[a_start..a_start + self.dim];
+        self.compute_dist(a, b_idx)
     }
 
     #[inline]
@@ -779,7 +769,14 @@ impl DiskAnnIndex {
                 nbr_dists.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
                 for (d, n_idx) in nbr_dists.into_iter().take(beamwidth) {
                     visited[n_idx] = true;
-                    candidates.push(ReverseOrderedFloat(d, n_idx));
+                    // Keep PQ as screening score, but use exact distance for frontier updates
+                    // so candidate ordering and final ranking stay faithful to the true metric.
+                    let exact_d = if self.pq_codes.is_some() {
+                        self.compute_dist(query, n_idx)
+                    } else {
+                        d
+                    };
+                    candidates.push(ReverseOrderedFloat(exact_d, n_idx));
                 }
             }
         }
@@ -1429,6 +1426,64 @@ mod tests {
         let cached = pq.distance_with_table(&table, 0, dim);
 
         assert!((direct - cached).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_diskann_prune_neighbors_uses_alpha_occlusion() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        index.vectors = vec![
+            0.0, 0.0, // node 0
+            1.0, 0.0, // node 1
+            2.0, 0.0, // node 2
+            3.0, 0.0, // node 3
+        ];
+        index.ids = vec![0, 1, 2, 3];
+
+        let pruned = index.prune_neighbors(0, &[(1, 1.0), (2, 4.0), (3, 9.0)], 2);
+        assert_eq!(pruned.len(), 1);
+        assert_eq!(pruned[0].0, 1);
+    }
+
+    #[test]
+    fn test_diskann_beam_search_with_pq_returns_exact_final_distances() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_pq_dims: Some(2),
+                ..Default::default()
+            },
+        };
+
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            2.0, 0.0, 0.0, 0.0, //
+            3.0, 0.0, 0.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+
+        let query = vec![0.9, 0.0, 0.0, 0.0];
+        let results = index.beam_search(&query, 4);
+
+        for (id, dist) in results {
+            let idx = id as usize;
+            let exact = index.compute_dist(&query, idx);
+            assert!(
+                (dist - exact).abs() < 1e-6,
+                "beam-search final distance should be exact when PQ is enabled"
+            );
+        }
     }
 
     #[test]

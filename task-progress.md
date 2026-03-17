@@ -22,6 +22,29 @@
 
 ## Session Log
 
+### Session 178 - 2026-03-17
+- Focus: `diskann-official-rust-alignment-search-and-build`
+- Completed:
+  - audited Microsoft official Rust DiskANN repository (`microsoft/DiskANN`) search/build modules and extracted two directly applicable patterns:
+    - search-side rerank after PQ screening (`RerankAndFilter` style).
+    - build-side alpha-based occlusion pruning (triangle-inequality style).
+  - aligned local search path: DiskANN beam expansion now uses PQ for screening but promotes neighbors with exact distance before frontier insertion; final result distance remains exact.
+  - aligned local build path: replaced previous ineffective cosine-threshold prune with Vamana-style alpha occlusion prune using node-to-node distance ratio.
+  - added regressions:
+    - `test_diskann_beam_search_with_pq_returns_exact_final_distances`
+    - `test_diskann_prune_neighbors_uses_alpha_occlusion`
+- Verification:
+  - `cargo test --lib diskann::tests::test_diskann_beam_search_with_pq_returns_exact_final_distances -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_prune_neighbors_uses_alpha_occlusion -- --nocapture` -> `ok`
+  - authority warm/load A/B:
+    - `bash scripts/remote/test.sh --command "cargo run --release --bin bench_diskann_pq_ab -- --base-size 2000 --query-size 40 --dim 128 --top-k 10 --max-degree 48 --search-list-size 128 --beamwidth 8 --pq-dims 0,2,4 --index-cache-dir benchmark_results/.diskann_cache_ab_v5 --reuse-index 1 --output benchmark_results/diskann_pq_ab.remote.2k.v5.warm.json"` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo run --release --bin bench_diskann_pq_ab -- --base-size 2000 --query-size 40 --dim 128 --top-k 10 --max-degree 48 --search-list-size 128 --beamwidth 8 --pq-dims 0,2,4 --index-cache-dir benchmark_results/.diskann_cache_ab_v5 --reuse-index 1 --output benchmark_results/diskann_pq_ab.remote.2k.v5.load.json"` -> `ok`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - relative to prior load-only lane (`v3`), `pq_dims=4` improved from `qps=13410, recall=0.735` to `qps=15576, recall=0.770`.
+  - build cost on the same lane dropped from ~`42s` to ~`4.3s` (warm run), indicating the build prune path is now materially lighter.
+
 ### Session 177 - 2026-03-17
 - Focus: `hnsw-and-ffi-memory-safety-hardening`
 - Completed:
