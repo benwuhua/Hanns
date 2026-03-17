@@ -22,6 +22,25 @@
 
 ## Session Log
 
+### Session 186 - 2026-03-17
+- Focus: `diskann-max-degree-secondary-sweep`
+- Completed:
+  - screened `max_degree` candidates on local lane (`40/48/56/64`) and selected `56` for authority promotion.
+  - ran authority A/B (`48` vs `56`) on train+load lanes with current tuned profile (`construction_l=128`, `beamwidth=8`, `pq_expand_pct=125`, `saturate=on`, `intra=8`).
+- Verification:
+  - authority (`base=2000`, `query=40`, `dim=128`, `top_k=10`, `pq_dims=4`):
+    - train:
+      - `R=48`: `qps=10913.74`, `recall=0.8350`
+      - `R=56`: `qps=10674.44`, `recall=0.7650`
+    - load:
+      - `R=48`: `qps=11123.88`, `recall=0.8350`
+      - `R=56`: `qps=10516.41`, `recall=0.7650`
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - this round is a clear local/authority divergence case; `R=56` is a local false positive and is rejected.
+  - keep default `max_degree=48`; no runtime default change.
+
 ### Session 185 - 2026-03-17
 - Focus: `diskann-beamwidth-secondary-sweep`
 - Completed:

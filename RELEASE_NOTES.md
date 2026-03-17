@@ -11,6 +11,7 @@
 - Automated bootstrap test for `init.sh` injection hooks
 
 ### Changed
+- DiskANN `max_degree` secondary sweep (`2026-03-17`) rejected `R=56` after authority verification: on the tuned lane (`construction_l=128`, `beamwidth=8`, `pq_expand_pct=125`, `saturate=on`, `intra=8`), `R=56` was worse than `R=48` on both load qps and recall (`10516.41/0.7650` vs `11123.88/0.8350`), so default remains `48`.
 - Beamwidth secondary authority sweep (`2026-03-17`) on the tuned DiskANN profile (`construction_l=128`, `pq_expand_pct=125`, `saturate=on`, `intra=8`) confirms `beamwidth` is a strong throughput/recall tradeoff: `bw=8` load `11399.58 qps / 0.8725 recall` vs `bw=10` load `11800.21 qps / 0.8275 recall`; default remains `8`, with `10` exposed as qps-first override.
 - DiskANN now decouples build-time and query-time search windows: [src/faiss/diskann.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/faiss/diskann.rs) adds `DiskAnnConfig.construction_l` and routes build/refine search through this parameter, while [src/bin/bench_diskann_pq_ab.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/bin/bench_diskann_pq_ab.rs) adds `--construction-l` and row output for reproducible sweeps; default remains backward-compatible (`construction_l = search_list_size`).
 - Authority sweep on `2026-03-17` (`base=2000/query=40`, `pq_dims=4`, `pq_expand_pct=125`, `saturate=on`, `intra=8`) shows `construction_l` as a recall/QPS tradeoff knob: `128` -> `11856.58 qps / 0.7950 recall`, `160` -> `11703.11 qps / 0.8150 recall`.
