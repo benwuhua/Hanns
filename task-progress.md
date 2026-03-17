@@ -22,6 +22,27 @@
 
 ## Session Log
 
+### Session 181 - 2026-03-17
+- Focus: `diskann-pq-expand-pct-authority-sweep`
+- Completed:
+  - ran authority sweep for DiskANN PQ candidate expansion profiles on the same lane (`base=2000`, `query=40`, `dim=128`, `top_k=10`, `pq_dims=4`, cache enabled).
+  - verified monotonic tradeoff on remote x86 for `pq_expand_pct=100/125/150`.
+  - synced resulting authority JSON artifacts back to local workspace for durable comparison records.
+- Verification:
+  - `bash init.sh` -> `ok`
+  - authority commands:
+    - `bash scripts/remote/test.sh --command "cargo run --release --bin bench_diskann_pq_ab -- --base-size 2000 --query-size 40 --dim 128 --top-k 10 --max-degree 48 --search-list-size 128 --beamwidth 8 --pq-dims 4 --pq-expand-pct 100 --index-cache-dir benchmark_results/.diskann_cache_ab_pct_remote --reuse-index 1 --output benchmark_results/diskann_pq_ab.remote.2k.pct100.json"` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo run --release --bin bench_diskann_pq_ab -- --base-size 2000 --query-size 40 --dim 128 --top-k 10 --max-degree 48 --search-list-size 128 --beamwidth 8 --pq-dims 4 --pq-expand-pct 125 --index-cache-dir benchmark_results/.diskann_cache_ab_pct_remote --reuse-index 1 --output benchmark_results/diskann_pq_ab.remote.2k.pct125.json"` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo run --release --bin bench_diskann_pq_ab -- --base-size 2000 --query-size 40 --dim 128 --top-k 10 --max-degree 48 --search-list-size 128 --beamwidth 8 --pq-dims 4 --pq-expand-pct 150 --index-cache-dir benchmark_results/.diskann_cache_ab_pct_remote --reuse-index 1 --output benchmark_results/diskann_pq_ab.remote.2k.pct150.json"` -> `ok`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - remote lane results:
+    - `pct=100`: `qps=12690.46`, `recall=0.7525` (`build_mode=train`, `build_seconds=4.3267`)
+    - `pct=125`: `qps=11831.97`, `recall=0.7975` (`build_mode=load`, `build_seconds=0.0534`)
+    - `pct=150`: `qps=10883.37`, `recall=0.8350` (`build_mode=load`, `build_seconds=0.0535`)
+  - recommended default remains `125` as balanced profile; expose `100` as qps-first and `150` as recall-first runtime options.
+
 ### Session 180 - 2026-03-17
 - Focus: `diskann-pq-expand-pct-parameterization`
 - Completed:
