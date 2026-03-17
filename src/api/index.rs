@@ -256,6 +256,9 @@ pub struct IndexParams {
     /// For DiskANN search cache: DRAM budget in GB (0 = disabled)
     #[serde(default)]
     pub disk_search_cache_budget_gb: Option<f32>,
+    /// For DiskANN persistence: write/read fixed-stride flash layout sidecar
+    #[serde(default)]
+    pub disk_enable_flash_layout: Option<bool>,
     /// For PRQ: number of subquantizer splits (m)
     #[serde(default)]
     pub prq_m: Option<usize>,

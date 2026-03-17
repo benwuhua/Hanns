@@ -22,6 +22,36 @@
 
 ## Session Log
 
+### Session 204 - 2026-03-17
+- Focus: `diskann-flash-layout-sidecar-capability`
+- Completed:
+  - added DiskANN flash-layout sidecar capability for storage-path closure:
+    - new API param `disk_enable_flash_layout` in `IndexParams`.
+    - `DiskAnnConfig.enable_flash_layout` wiring.
+    - `save()` now writes a fixed-stride sidecar (`<index>.flash`) with per-node record:
+      - `degree`
+      - fixed `max_degree` neighbor-id slots
+      - raw vector payload
+    - `load()` now probes/validates the sidecar header/layout and marks runtime audit state.
+    - `scope_audit().has_flash_layout` now reflects actual loaded sidecar availability.
+  - added regression:
+    - `test_diskann_save_load_with_flash_layout_sidecar_sets_scope_audit`
+  - extended config mapping regression:
+    - `test_diskann_config` now locks `disk_enable_flash_layout -> dann_config.enable_flash_layout`.
+- Verification:
+  - local:
+    - `cargo test --lib test_diskann_save_load_with_flash_layout_sidecar_sets_scope_audit -- --nocapture` -> `ok`
+    - `cargo test --lib test_diskann_config -- --nocapture` -> `ok`
+    - `cargo test --lib diskann::tests:: -- --nocapture` -> `ok` (`29 passed`)
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib test_diskann_save_load_with_flash_layout_sidecar_sets_scope_audit -- --nocapture"` -> `ok` (`run_id=20260317T085005Z_81632`)
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T084922Z_81473`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this is a storage-capability step (flash layout persistence + audit visibility), not yet a full native-comparable SSD async I/O pipeline.
+
 ### Session 203 - 2026-03-17
 - Focus: `diskann-filter-lane-authority-verification`
 - Completed:

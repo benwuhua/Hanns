@@ -51,6 +51,8 @@ pub struct DiskAnnConfig {
     pub beamwidth: usize,
     /// Cache DRAM budget in GB
     pub cache_dram_budget_gb: f32,
+    /// Whether to persist/load fixed-stride flash layout sidecar
+    pub enable_flash_layout: bool,
     /// Warm-up before search
     pub warm_up: bool,
     /// Filter threshold for PQ+Refine (0.0-1.0, -1 = auto)
@@ -80,6 +82,7 @@ impl Default for DiskAnnConfig {
             build_degree_slack_pct: 100,
             beamwidth: 8,
             cache_dram_budget_gb: 0.0,
+            enable_flash_layout: false,
             warm_up: false,
             filter_threshold: -1.0,
             accelerate_build: false,
@@ -114,6 +117,7 @@ impl DiskAnnConfig {
                 .unwrap_or(100)
                 .clamp(100, 200),
             cache_dram_budget_gb: params.disk_search_cache_budget_gb.unwrap_or(0.0).max(0.0),
+            enable_flash_layout: params.disk_enable_flash_layout.unwrap_or(false),
             warm_up: false,
             filter_threshold: -1.0,
             accelerate_build: false,
@@ -332,6 +336,8 @@ pub struct DiskAnnIndex {
     pq_codes: Option<PQCode>,
     /// Cached nodes for faster search
     cached_nodes: HashSet<usize>,
+    /// Whether a flash-layout sidecar is available for this index snapshot.
+    has_flash_layout: bool,
 }
 
 impl DiskAnnIndex {
@@ -358,6 +364,7 @@ impl DiskAnnIndex {
             entry_points: Vec::new(),
             pq_codes: None,
             cached_nodes: HashSet::new(),
+            has_flash_layout: false,
         })
     }
 
@@ -434,10 +441,111 @@ impl DiskAnnIndex {
             beamwidth: self.dann_config.beamwidth,
             uses_vamana_graph: true,
             uses_placeholder_pq: false,
-            has_flash_layout: false,
+            has_flash_layout: self.has_flash_layout,
             native_comparable: false,
-            comparability_reason: "DiskAnnIndex remains an in-memory Vamana+PQ path without native DiskANN SSD pipeline, so it is not native-comparable",
+            comparability_reason: "DiskAnnIndex remains an in-memory Vamana+PQ path without native DiskANN SSD async I/O pipeline, so it is not native-comparable",
         }
+    }
+
+    fn flash_layout_sidecar_path(path: &std::path::Path) -> std::path::PathBuf {
+        let mut os = path.as_os_str().to_os_string();
+        os.push(".flash");
+        std::path::PathBuf::from(os)
+    }
+
+    fn write_flash_layout_sidecar(&self, sidecar: &std::path::Path) -> Result<()> {
+        use std::fs::File;
+        use std::io::Write;
+
+        let mut file = File::create(sidecar)?;
+        let n = self.ids.len();
+        let max_degree = self.dann_config.max_degree;
+
+        file.write_all(b"DNFL")?;
+        file.write_all(&1u32.to_le_bytes())?; // flash sidecar version
+        file.write_all(&(self.dim as u32).to_le_bytes())?;
+        file.write_all(&(max_degree as u32).to_le_bytes())?;
+        file.write_all(&(n as u64).to_le_bytes())?;
+
+        for idx in 0..n {
+            let neighbors = self.graph.get(idx).cloned().unwrap_or_default();
+            let degree = neighbors.len().min(max_degree);
+            file.write_all(&(degree as u32).to_le_bytes())?;
+
+            // Fixed-size neighbor slot for deterministic per-node stride.
+            for slot in 0..max_degree {
+                let id = if slot < degree { neighbors[slot].0 } else { -1i64 };
+                file.write_all(&id.to_le_bytes())?;
+            }
+
+            let start = idx * self.dim;
+            for &v in &self.vectors[start..start + self.dim] {
+                file.write_all(&v.to_le_bytes())?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn try_load_flash_layout_sidecar(&mut self, sidecar: &std::path::Path, count: usize) -> Result<bool> {
+        use std::fs::File;
+        use std::io::Read;
+
+        if !sidecar.exists() {
+            return Ok(false);
+        }
+        let mut file = File::open(sidecar)?;
+
+        let mut magic = [0u8; 4];
+        file.read_exact(&mut magic)?;
+        if &magic != b"DNFL" {
+            return Ok(false);
+        }
+
+        let mut ver = [0u8; 4];
+        file.read_exact(&mut ver)?;
+        let version = u32::from_le_bytes(ver);
+        if version != 1 {
+            return Ok(false);
+        }
+
+        let mut dim_bytes = [0u8; 4];
+        file.read_exact(&mut dim_bytes)?;
+        let dim = u32::from_le_bytes(dim_bytes) as usize;
+        if dim != self.dim {
+            return Ok(false);
+        }
+
+        let mut md_bytes = [0u8; 4];
+        file.read_exact(&mut md_bytes)?;
+        let max_degree = u32::from_le_bytes(md_bytes) as usize;
+        if max_degree != self.dann_config.max_degree {
+            // Keep current config as source of truth for in-memory graph behavior.
+            // Sidecar may come from older params; still considered invalid for this snapshot.
+            return Ok(false);
+        }
+
+        let mut count_bytes = [0u8; 8];
+        file.read_exact(&mut count_bytes)?;
+        let n = u64::from_le_bytes(count_bytes) as usize;
+        if n != count {
+            return Ok(false);
+        }
+
+        // Validate node records shape, but do not materialize data yet.
+        let mut scratch_i64 = [0u8; 8];
+        let mut scratch_f32 = [0u8; 4];
+        for _ in 0..n {
+            file.read_exact(&mut md_bytes)?; // degree
+            for _ in 0..max_degree {
+                file.read_exact(&mut scratch_i64)?;
+            }
+            for _ in 0..self.dim {
+                file.read_exact(&mut scratch_f32)?;
+            }
+        }
+
+        Ok(true)
     }
 
     /// Build PQ codes for compression
@@ -1302,6 +1410,11 @@ impl DiskAnnIndex {
             }
         }
 
+        if self.dann_config.enable_flash_layout {
+            let sidecar = Self::flash_layout_sidecar_path(path);
+            self.write_flash_layout_sidecar(&sidecar)?;
+        }
+
         Ok(())
     }
 
@@ -1437,6 +1550,8 @@ impl DiskAnnIndex {
         }
 
         self.refresh_entry_points();
+        let sidecar = Self::flash_layout_sidecar_path(path);
+        self.has_flash_layout = self.try_load_flash_layout_sidecar(&sidecar, count)?;
 
         self.trained = true;
         Ok(())
@@ -1653,6 +1768,44 @@ mod tests {
     }
 
     #[test]
+    fn test_diskann_save_load_with_flash_layout_sidecar_sets_scope_audit() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_enable_flash_layout: Some(true),
+                max_degree: Some(16),
+                ..Default::default()
+            },
+        };
+
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            2.0, 0.0, 0.0, 0.0, //
+            3.0, 0.0, 0.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+
+        let temp_path = std::env::temp_dir().join("diskann_flash_sidecar_test.bin");
+        let sidecar = DiskAnnIndex::flash_layout_sidecar_path(&temp_path);
+        index.save(&temp_path).unwrap();
+        assert!(sidecar.exists());
+
+        let mut loaded = DiskAnnIndex::new(&config).unwrap();
+        loaded.load(&temp_path).unwrap();
+        let audit = loaded.scope_audit();
+        assert!(audit.has_flash_layout);
+        assert!(!audit.native_comparable);
+
+        std::fs::remove_file(temp_path).ok();
+        std::fs::remove_file(sidecar).ok();
+    }
+
+    #[test]
     fn test_diskann_range_search() {
         let config = IndexConfig {
             index_type: IndexType::DiskAnn,
@@ -1744,6 +1897,7 @@ mod tests {
             disk_build_degree_slack_pct: Some(130),
             disk_build_dram_budget_gb: Some(2.5),
             disk_search_cache_budget_gb: Some(1.25),
+            disk_enable_flash_layout: Some(true),
             ..Default::default()
         };
 
@@ -1770,6 +1924,7 @@ mod tests {
         assert_eq!(index.dann_config.build_degree_slack_pct, 130);
         assert_eq!(index.dann_config.build_dram_budget_gb, 2.5);
         assert_eq!(index.dann_config.cache_dram_budget_gb, 1.25);
+        assert!(index.dann_config.enable_flash_layout);
     }
 
     #[test]

@@ -15,6 +15,8 @@
 - DiskANN lsearch/recall-band matrix utility [scripts/diskann_lsearch_recall_band_matrix.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/scripts/diskann_lsearch_recall_band_matrix.py) plus regression test [tests/test_diskann_lsearch_recall_band_matrix.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/tests/test_diskann_lsearch_recall_band_matrix.py), which report both `same-lsearch` deltas and fixed-recall-band picks for each baseline lsearch row.
 
 ### Changed
+- DiskANN storage capability now includes a flash-layout sidecar path in [src/faiss/diskann.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/faiss/diskann.rs): when `disk_enable_flash_layout=true` (new in [src/api/index.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/api/index.rs)), `save()` emits `<index>.flash` with fixed-stride per-node layout (`degree + max_degree neighbor id slots + raw vector payload`), and `load()` validates this sidecar and surfaces it through `scope_audit().has_flash_layout`.
+- Added regression lock `test_diskann_save_load_with_flash_layout_sidecar_sets_scope_audit`, and extended `test_diskann_config` mapping coverage for `disk_enable_flash_layout`.
 - DiskANN filtered-lane benchmarking is now first-class in [src/bin/bench_diskann_pq_ab.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/bin/bench_diskann_pq_ab.rs): new `--filter-ratio` applies bitset filtering during search and reports `filter_ratio` in output rows, with filtered ground-truth recall computed on the same mask for fair A/B.
 - Authority sample A/B (`2026-03-17`) on lane `base=2000/query=40/pq_dims=4/lsearch=128` shows filtered search overhead is measurable but small with stable quality:
   - `filter_ratio=0.0`: `5512.94 qps / 1.0000 recall@10`
