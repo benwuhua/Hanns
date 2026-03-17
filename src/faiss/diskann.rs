@@ -351,7 +351,12 @@ pub struct DiskAnnIndex {
     dim: usize,
     vectors: Vec<f32>,
     ids: Vec<i64>,
-    graph: Vec<Vec<(i64, f32)>>,
+    /// Flat neighbor id storage, stride = max_degree.
+    neighbor_ids: Vec<u32>,
+    /// Flat neighbor distance storage, stride = max_degree.
+    neighbor_dists: Vec<f32>,
+    /// Actual degree per node (<= max_degree).
+    neighbor_degrees: Vec<u32>,
     next_id: i64,
     trained: bool,
     alpha: f32,
@@ -393,7 +398,9 @@ impl DiskAnnIndex {
             dim: config.dim,
             vectors: Vec::new(),
             ids: Vec::new(),
-            graph: Vec::new(),
+            neighbor_ids: Vec::new(),
+            neighbor_dists: Vec::new(),
+            neighbor_degrees: Vec::new(),
             next_id: 0,
             trained: false,
             alpha: 1.2,
@@ -420,7 +427,9 @@ impl DiskAnnIndex {
         }
 
         self.vectors.reserve(n * self.dim);
-        self.graph.reserve(n);
+        self.neighbor_ids = vec![u32::MAX; n.saturating_mul(self.dann_config.max_degree)];
+        self.neighbor_dists = vec![f32::MAX; n.saturating_mul(self.dann_config.max_degree)];
+        self.neighbor_degrees = vec![0u32; n];
         self.has_flash_layout = false;
         self.flash_neighbor_ids = None;
         self.flash_max_degree = 0;
@@ -518,13 +527,17 @@ impl DiskAnnIndex {
         file.write_all(&(n as u64).to_le_bytes())?;
 
         for idx in 0..n {
-            let neighbors = self.graph.get(idx).cloned().unwrap_or_default();
+            let neighbors = self.graph_neighbors(idx);
             let degree = neighbors.len().min(max_degree);
             file.write_all(&(degree as u32).to_le_bytes())?;
 
             // Fixed-size neighbor slot for deterministic per-node stride.
             for slot in 0..max_degree {
-                let id = if slot < degree { neighbors[slot].0 } else { -1i64 };
+                let id = if slot < degree {
+                    neighbors[slot] as i64
+                } else {
+                    -1i64
+                };
                 file.write_all(&id.to_le_bytes())?;
             }
 
@@ -925,10 +938,90 @@ impl DiskAnnIndex {
             }
             return out;
         }
-        self.graph
-            .get(idx)
-            .map(|nbrs| nbrs.iter().map(|&(id, _)| id as usize).collect())
-            .unwrap_or_default()
+        self.graph_neighbors(idx)
+            .iter()
+            .map(|&id| id as usize)
+            .collect()
+    }
+
+    #[inline]
+    fn graph_neighbors(&self, node: usize) -> &[u32] {
+        let r = self.dann_config.max_degree;
+        let start = node.saturating_mul(r);
+        if r == 0 || node >= self.neighbor_degrees.len() || start >= self.neighbor_ids.len() {
+            return &[];
+        }
+        let deg = self.neighbor_degrees[node] as usize;
+        let end = (start + deg).min(start + r).min(self.neighbor_ids.len());
+        &self.neighbor_ids[start..end]
+    }
+
+    #[inline]
+    fn graph_neighbor_dist(&self, node: usize, slot: usize) -> f32 {
+        let idx = node
+            .saturating_mul(self.dann_config.max_degree)
+            .saturating_add(slot);
+        self.neighbor_dists.get(idx).copied().unwrap_or(f32::MAX)
+    }
+
+    fn graph_set_neighbors(&mut self, node: usize, neighbors: &[(u32, f32)]) {
+        let r = self.dann_config.max_degree;
+        if r == 0 || node >= self.neighbor_degrees.len() {
+            return;
+        }
+        let start = node * r;
+        if start + r > self.neighbor_ids.len() || start + r > self.neighbor_dists.len() {
+            return;
+        }
+        let count = neighbors.len().min(r);
+        for (i, &(id, dist)) in neighbors.iter().take(count).enumerate() {
+            self.neighbor_ids[start + i] = id;
+            self.neighbor_dists[start + i] = dist;
+        }
+        for i in count..r {
+            self.neighbor_ids[start + i] = u32::MAX;
+            self.neighbor_dists[start + i] = f32::MAX;
+        }
+        self.neighbor_degrees[node] = count as u32;
+    }
+
+    #[allow(dead_code)]
+    fn graph_push_neighbor(&mut self, node: usize, neighbor: u32, dist: f32) -> bool {
+        let r = self.dann_config.max_degree;
+        if r == 0 || node >= self.neighbor_degrees.len() {
+            return false;
+        }
+        let deg = self.neighbor_degrees[node] as usize;
+        if deg >= r {
+            return false;
+        }
+        let start = node * r;
+        if start + deg >= self.neighbor_ids.len() || start + deg >= self.neighbor_dists.len() {
+            return false;
+        }
+        self.neighbor_ids[start + deg] = neighbor;
+        self.neighbor_dists[start + deg] = dist;
+        self.neighbor_degrees[node] += 1;
+        true
+    }
+
+    fn local_graph_from_flat(&self) -> Vec<Vec<(u32, f32)>> {
+        let n = self.ids.len();
+        let mut out = Vec::with_capacity(n);
+        for node in 0..n {
+            let mut nbrs = Vec::with_capacity(self.neighbor_degrees.get(node).copied().unwrap_or(0) as usize);
+            for (slot, &id) in self.graph_neighbors(node).iter().enumerate() {
+                nbrs.push((id, self.graph_neighbor_dist(node, slot)));
+            }
+            out.push(nbrs);
+        }
+        out
+    }
+
+    fn replace_flat_graph_from_local(&mut self, graph: &[Vec<(u32, f32)>]) {
+        for (node, neighbors) in graph.iter().enumerate() {
+            self.graph_set_neighbors(node, neighbors);
+        }
     }
 
     /// Build PQ codes for compression
@@ -967,24 +1060,23 @@ impl DiskAnnIndex {
             if entry >= self.ids.len() {
                 continue;
             }
-            let entry_cost = node_bytes(self.dim, self.graph.get(entry).map_or(0, |v| v.len()));
+            let entry_cost = node_bytes(self.dim, self.graph_neighbors(entry).len());
             if cache_budget.is_some_and(|b| used_bytes + entry_cost > b) {
                 break;
             }
             if self.cached_nodes.insert(entry) {
                 used_bytes += entry_cost;
             }
-            if let Some(nbrs) = self.graph.get(entry) {
-                for &(id, _) in nbrs {
-                    if (id as usize) < self.ids.len() {
-                        let n_idx = id as usize;
-                        let nbr_cost = node_bytes(self.dim, self.graph.get(n_idx).map_or(0, |v| v.len()));
-                        if cache_budget.is_some_and(|b| used_bytes + nbr_cost > b) {
-                            break;
-                        }
-                        if self.cached_nodes.insert(n_idx) {
-                            used_bytes += nbr_cost;
-                        }
+            let entry_neighbors: Vec<u32> = self.graph_neighbors(entry).to_vec();
+            for id in entry_neighbors {
+                let n_idx = id as usize;
+                if n_idx < self.ids.len() {
+                    let nbr_cost = node_bytes(self.dim, self.graph_neighbors(n_idx).len());
+                    if cache_budget.is_some_and(|b| used_bytes + nbr_cost > b) {
+                        break;
+                    }
+                    if self.cached_nodes.insert(n_idx) {
+                        used_bytes += nbr_cost;
                     }
                 }
             }
@@ -1012,7 +1104,7 @@ impl DiskAnnIndex {
         });
 
         // Build graph incrementally (Vamana style)
-        let mut current_graph: Vec<Vec<(i64, f32)>> = Vec::with_capacity(n);
+        let mut current_graph: Vec<Vec<(u32, f32)>> = Vec::with_capacity(n);
 
         // First node is entry point
         self.entry_point = Some(0);
@@ -1043,16 +1135,16 @@ impl DiskAnnIndex {
                 batch_results.sort_by_key(|(node_idx, _)| *node_idx);
 
                 for (node_idx, merged_neighbors) in batch_results {
-                    let mut node_neighbors: Vec<(i64, f32)> = merged_neighbors
+                    let mut node_neighbors: Vec<(u32, f32)> = merged_neighbors
                         .iter()
-                        .map(|&(idx, dist)| (self.ids[idx], dist))
+                        .map(|&(idx, dist)| (idx as u32, dist))
                         .collect();
                     node_neighbors = self.prune_neighbors(node_idx, &node_neighbors, build_r);
                     current_graph.push(node_neighbors);
 
                     for &(idx, dist) in &merged_neighbors {
                         if idx < current_graph.len() {
-                            current_graph[idx].push((self.ids[node_idx], dist));
+                            current_graph[idx].push((node_idx as u32, dist));
                             current_graph[idx] =
                                 self.prune_neighbors(idx, &current_graph[idx], build_r);
                         }
@@ -1061,7 +1153,7 @@ impl DiskAnnIndex {
                 batch_start = batch_end;
             }
 
-            self.graph = current_graph;
+            self.replace_flat_graph_from_local(&current_graph);
             if !self.dann_config.accelerate_build {
                 self.refine_graph();
             }
@@ -1075,9 +1167,9 @@ impl DiskAnnIndex {
             let merged_neighbors = self.gather_build_candidates(i, L, build_r, &current_graph, i);
 
             // Add bidirectional edges
-            let mut node_neighbors: Vec<(i64, f32)> = merged_neighbors
+            let mut node_neighbors: Vec<(u32, f32)> = merged_neighbors
                 .iter()
-                .map(|&(idx, dist)| (self.ids[idx], dist))
+                .map(|&(idx, dist)| (idx as u32, dist))
                 .collect();
 
             // Prune to max_degree using Vamana pruning
@@ -1088,14 +1180,14 @@ impl DiskAnnIndex {
             // Add reverse edges
             for &(idx, dist) in &merged_neighbors {
                 if idx < current_graph.len() {
-                    current_graph[idx].push((self.ids[i], dist));
+                    current_graph[idx].push((i as u32, dist));
                     // Prune reverse edges too
                     current_graph[idx] = self.prune_neighbors(idx, &current_graph[idx], build_r);
                 }
             }
         }
 
-        self.graph = current_graph;
+        self.replace_flat_graph_from_local(&current_graph);
 
         // Second pass for better connectivity (unless accelerate_build)
         if !self.dann_config.accelerate_build {
@@ -1111,11 +1203,15 @@ impl DiskAnnIndex {
         node_idx: usize,
         l: usize,
         build_r: usize,
-        graph: &[Vec<(i64, f32)>],
+        graph: &[Vec<(u32, f32)>],
         upper_bound: usize,
     ) -> Vec<(usize, f32)> {
         let query = &self.vectors[node_idx * self.dim..(node_idx + 1) * self.dim];
-        let mut merged_neighbors = self.vamana_search(query, l, build_r, graph);
+        let mut merged_neighbors: Vec<(usize, f32)> = self
+            .vamana_search(query, l, build_r, graph)
+            .into_iter()
+            .map(|(idx, dist)| (idx as usize, dist))
+            .collect();
         if self.dann_config.intra_batch_candidates > 0 {
             merged_neighbors.extend(self.collect_intra_batch_candidates_with_upper(
                 node_idx,
@@ -1164,11 +1260,13 @@ impl DiskAnnIndex {
     }
 
     fn finalize_graph_degree(&mut self, max_degree: usize) {
-        for i in 0..self.graph.len() {
-            if self.graph[i].len() > max_degree {
-                self.graph[i] = self.prune_neighbors(i, &self.graph[i], max_degree);
+        let mut local = self.local_graph_from_flat();
+        for (i, nbrs) in local.iter_mut().enumerate() {
+            if nbrs.len() > max_degree {
+                *nbrs = self.prune_neighbors(i, nbrs, max_degree);
             }
         }
+        self.replace_flat_graph_from_local(&local);
     }
 
     fn refresh_entry_points(&mut self) {
@@ -1318,8 +1416,8 @@ impl DiskAnnIndex {
         query: &[f32],
         L: usize,
         _R: usize,
-        graph: &[Vec<(i64, f32)>],
-    ) -> Vec<(usize, f32)> {
+        graph: &[Vec<(u32, f32)>],
+    ) -> Vec<(u32, f32)> {
         let mut visited: HashSet<usize> = HashSet::with_capacity(L.saturating_mul(2));
         let mut candidates: BinaryHeap<ReverseOrderedFloat> = BinaryHeap::new();
         let mut results: Vec<(f32, usize)> = Vec::new();
@@ -1361,7 +1459,7 @@ impl DiskAnnIndex {
         }
 
         results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        results.into_iter().map(|(d, idx)| (idx, d)).collect()
+        results.into_iter().map(|(d, idx)| (idx as u32, d)).collect()
     }
 
     /// Prune neighbors using Vamana pruning strategy
@@ -1369,22 +1467,22 @@ impl DiskAnnIndex {
     fn prune_neighbors(
         &self,
         _node_idx: usize,
-        neighbors: &[(i64, f32)],
+        neighbors: &[(u32, f32)],
         R: usize,
-    ) -> Vec<(i64, f32)> {
+    ) -> Vec<(u32, f32)> {
         if neighbors.len() <= R {
             return neighbors.to_vec();
         }
 
         // Sort by distance
-        let mut sorted: Vec<(i64, f32)> = neighbors.to_vec();
+        let mut sorted: Vec<(u32, f32)> = neighbors.to_vec();
         sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
         // Robust-prune two-round alpha strategy:
         // - Round 1: strict pruning with alpha=1.0
         // - Round 2: relaxed pruning with alpha=final_alpha (only if still underfilled)
         // - then optionally saturate back to R with nearest remaining neighbors.
-        let mut selected: Vec<(i64, f32)> = Vec::new();
+        let mut selected: Vec<(u32, f32)> = Vec::new();
         let mut selected_ids = HashSet::new();
         let final_alpha = self.alpha.max(1.0);
 
@@ -1409,9 +1507,9 @@ impl DiskAnnIndex {
 
     fn run_prune_pass(
         &self,
-        sorted: &[(i64, f32)],
-        selected: &mut Vec<(i64, f32)>,
-        selected_ids: &mut HashSet<i64>,
+        sorted: &[(u32, f32)],
+        selected: &mut Vec<(u32, f32)>,
+        selected_ids: &mut HashSet<u32>,
         current_alpha: f32,
         r: usize,
     ) {
@@ -1453,23 +1551,29 @@ impl DiskAnnIndex {
         let n = self.ids.len();
         let R = self.dann_config.max_degree;
         let build_r = self.compute_build_degree_limit(R);
+        let mut current_graph = self.local_graph_from_flat();
 
         // For each node, search again and update edges
         for i in 0..n {
             let query = &self.vectors[i * self.dim..(i + 1) * self.dim];
-            let neighbors =
-                self.vamana_search(query, self.dann_config.construction_l, build_r, &self.graph);
+            let neighbors = self.vamana_search(
+                query,
+                self.dann_config.construction_l,
+                build_r,
+                &current_graph,
+            );
 
-            let new_neighbors: Vec<(i64, f32)> = neighbors
+            let new_neighbors: Vec<(u32, f32)> = neighbors
                 .iter()
-                .filter(|&&(idx, _)| idx != i)
-                .map(|&(idx, dist)| (self.ids[idx], dist))
+                .filter(|&&(idx, _)| idx as usize != i)
+                .map(|&(idx, dist)| (idx, dist))
                 .collect();
 
             if !new_neighbors.is_empty() {
-                self.graph[i] = self.prune_neighbors(i, &new_neighbors, build_r);
+                current_graph[i] = self.prune_neighbors(i, &new_neighbors, build_r);
             }
         }
+        self.replace_flat_graph_from_local(&current_graph);
     }
 
     #[inline]
@@ -1561,7 +1665,10 @@ impl DiskAnnIndex {
             let id = ids.map(|ids| ids[i]).unwrap_or(self.next_id);
             self.next_id += 1;
             self.ids.push(id);
-            self.graph.push(Vec::new());
+            let r = self.dann_config.max_degree;
+            self.neighbor_ids.extend(std::iter::repeat_n(u32::MAX, r));
+            self.neighbor_dists.extend(std::iter::repeat_n(f32::MAX, r));
+            self.neighbor_degrees.push(0);
         }
 
         Ok(n)
@@ -1973,8 +2080,8 @@ impl DiskAnnIndex {
         let mut max_deg = 0;
         let mut min_deg = usize::MAX;
 
-        for nbrs in &self.graph {
-            let deg = nbrs.len();
+        for &deg_u32 in &self.neighbor_degrees {
+            let deg = deg_u32 as usize;
             num_edges += deg;
             max_deg = max_deg.max(deg);
             min_deg = min_deg.min(deg);
@@ -1998,7 +2105,9 @@ impl DiskAnnIndex {
             .unwrap_or(0);
         let memory = self.vectors.len() * 4  // vectors
             + self.ids.len() * 8             // ids
-            + num_edges * 12                 // graph edges (8 byte id + 4 byte dist)
+            + self.neighbor_ids.len() * std::mem::size_of::<u32>()
+            + self.neighbor_dists.len() * std::mem::size_of::<f32>()
+            + self.neighbor_degrees.len() * std::mem::size_of::<u32>()
             + pq_memory;
 
         DiskAnnStats {
@@ -2023,7 +2132,7 @@ impl DiskAnnIndex {
         let mut file = File::create(path)?;
 
         file.write_all(b"DANN")?;
-        file.write_all(&3u32.to_le_bytes())?; // Version 3
+        file.write_all(&4u32.to_le_bytes())?; // Version 4
         file.write_all(&(self.dim as u32).to_le_bytes())?;
         file.write_all(&(self.ids.len() as u64).to_le_bytes())?;
 
@@ -2039,12 +2148,14 @@ impl DiskAnnIndex {
             file.write_all(&id.to_le_bytes())?;
         }
 
-        for neighbors in &self.graph {
-            file.write_all(&(neighbors.len() as u32).to_le_bytes())?;
-            for &(id, dist) in neighbors {
-                file.write_all(&id.to_le_bytes())?;
-                file.write_all(&dist.to_le_bytes())?;
-            }
+        for &deg in &self.neighbor_degrees {
+            file.write_all(&deg.to_le_bytes())?;
+        }
+        for &id in &self.neighbor_ids {
+            file.write_all(&id.to_le_bytes())?;
+        }
+        for &dist in &self.neighbor_dists {
+            file.write_all(&dist.to_le_bytes())?;
         }
 
         // Write PQ codes if present
@@ -2131,25 +2242,49 @@ impl DiskAnnIndex {
             self.ids.push(i64::from_le_bytes(id_bytes));
         }
 
-        self.graph.clear();
-        for _ in 0..count {
-            let mut nc_bytes = [0u8; 4];
-            file.read_exact(&mut nc_bytes)?;
-            let nc = u32::from_le_bytes(nc_bytes) as usize;
-
-            let mut neighbors = Vec::with_capacity(nc);
-            for _ in 0..nc {
-                let mut id_bytes = [0u8; 8];
+        self.neighbor_degrees = vec![0u32; count];
+        self.neighbor_ids = vec![u32::MAX; count.saturating_mul(self.dann_config.max_degree)];
+        self.neighbor_dists = vec![f32::MAX; count.saturating_mul(self.dann_config.max_degree)];
+        if version >= 4 {
+            for deg in &mut self.neighbor_degrees {
+                let mut nc_bytes = [0u8; 4];
+                file.read_exact(&mut nc_bytes)?;
+                *deg = u32::from_le_bytes(nc_bytes).min(self.dann_config.max_degree as u32);
+            }
+            for id in &mut self.neighbor_ids {
+                let mut id_bytes = [0u8; 4];
                 file.read_exact(&mut id_bytes)?;
-                let id = i64::from_le_bytes(id_bytes);
-
+                *id = u32::from_le_bytes(id_bytes);
+            }
+            for dist in &mut self.neighbor_dists {
                 let mut d_bytes = [0u8; 4];
                 file.read_exact(&mut d_bytes)?;
-                let dist = f32::from_le_bytes(d_bytes);
-
-                neighbors.push((id, dist));
+                *dist = f32::from_le_bytes(d_bytes);
             }
-            self.graph.push(neighbors);
+        } else {
+            let mut local: Vec<Vec<(u32, f32)>> = Vec::with_capacity(count);
+            for _ in 0..count {
+                let mut nc_bytes = [0u8; 4];
+                file.read_exact(&mut nc_bytes)?;
+                let nc = u32::from_le_bytes(nc_bytes) as usize;
+
+                let mut neighbors = Vec::with_capacity(nc);
+                for _ in 0..nc {
+                    let mut id_bytes = [0u8; 8];
+                    file.read_exact(&mut id_bytes)?;
+                    let id = i64::from_le_bytes(id_bytes);
+
+                    let mut d_bytes = [0u8; 4];
+                    file.read_exact(&mut d_bytes)?;
+                    let dist = f32::from_le_bytes(d_bytes);
+
+                    if id >= 0 {
+                        neighbors.push((id as u32, dist));
+                    }
+                }
+                local.push(neighbors);
+            }
+            self.replace_flat_graph_from_local(&local);
         }
 
         // Read PQ codes (version 2+)
@@ -2501,7 +2636,9 @@ mod tests {
         assert!(loaded.flash_vectors.is_some());
 
         // Force search path to rely on sidecar runtime data.
-        loaded.graph.clear();
+        loaded.neighbor_ids.clear();
+        loaded.neighbor_dists.clear();
+        loaded.neighbor_degrees.clear();
         loaded.vectors.clear();
 
         let query = vec![0.1f32, 0.0, 0.0, 0.0];
@@ -2557,7 +2694,9 @@ mod tests {
         assert!(loaded.flash_vectors.is_none());
         assert_eq!(loaded.dann_config.flash_prefetch_batch, 8);
 
-        loaded.graph.clear();
+        loaded.neighbor_ids.clear();
+        loaded.neighbor_dists.clear();
+        loaded.neighbor_degrees.clear();
         loaded.vectors.clear();
 
         let query = vec![0.1f32, 0.0, 0.0, 0.0];
@@ -3236,13 +3375,14 @@ mod tests {
             0.2, 0.0, // id 3, ip=0.2
             -0.5, 0.0, // id 4, ip=-0.5
         ];
-        index.graph = vec![
-            vec![(1, 0.0), (2, 0.0), (3, 0.0)],
-            vec![(0, 0.0), (2, 0.0), (4, 0.0)],
-            vec![(0, 0.0), (1, 0.0), (3, 0.0)],
-            vec![(0, 0.0), (2, 0.0), (4, 0.0)],
-            vec![(1, 0.0), (3, 0.0)],
-        ];
+        index.neighbor_ids = vec![u32::MAX; index.ids.len() * index.dann_config.max_degree];
+        index.neighbor_dists = vec![f32::MAX; index.ids.len() * index.dann_config.max_degree];
+        index.neighbor_degrees = vec![0; index.ids.len()];
+        index.graph_set_neighbors(0, &[(1, 0.0), (2, 0.0), (3, 0.0)]);
+        index.graph_set_neighbors(1, &[(0, 0.0), (2, 0.0), (4, 0.0)]);
+        index.graph_set_neighbors(2, &[(0, 0.0), (1, 0.0), (3, 0.0)]);
+        index.graph_set_neighbors(3, &[(0, 0.0), (2, 0.0), (4, 0.0)]);
+        index.graph_set_neighbors(4, &[(1, 0.0), (3, 0.0)]);
         index.entry_point = Some(0);
         index.entry_points = vec![0];
 
