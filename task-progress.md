@@ -22,6 +22,35 @@
 
 ## Session Log
 
+### Session 224 - 2026-03-17
+- Focus: `diskann-aisaq-vectors-beamwidth-search-semantics`
+- Completed:
+  - implemented AISAQ `vectors_beamwidth` execution semantics in sync/async search expansion:
+    - added `compute_expand_limit(&BeamSearchIO)` helper
+    - neighbor frontier push now uses `compute_expand_limit` instead of raw IO beamwidth only
+  - compatibility policy:
+    - `vectors_beamwidth <= 1` keeps previous behavior (no extra cap beyond IO beamwidth)
+    - `vectors_beamwidth > 1` applies an additional cap (`min(io_beamwidth, vectors_beamwidth)`)
+  - added regressions:
+    - `aisaq_vectors_beamwidth_default_keeps_io_beamwidth_limit`
+    - `aisaq_vectors_beamwidth_caps_neighbor_expansion_when_larger_than_one`
+- Verification:
+  - local:
+    - `cargo test --lib aisaq_vectors_beamwidth_default_keeps_io_beamwidth_limit -- --nocapture` -> `ok`
+    - `cargo test --lib aisaq_vectors_beamwidth_caps_neighbor_expansion_when_larger_than_one -- --nocapture` -> `ok`
+    - `cargo test --lib diskann_aisaq::tests:: -- --nocapture` -> `ok` (`15 passed`)
+    - `cargo test --test test_diskann_aisaq -- --nocapture` -> `ok` (`10 passed`)
+    - `cargo test --features async-io --test test_diskann_aisaq -- --nocapture` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann_aisaq::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T114912Z_5234`)
+    - `bash scripts/remote/test.sh --command "cargo test --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T114931Z_5292`)
+    - `bash scripts/remote/test.sh --command "cargo test --features async-io --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T114948Z_5351`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the AISAQ `vectors_beamwidth` parameter gap while preserving default behavior.
+
 ### Session 223 - 2026-03-17
 - Focus: `diskann-aisaq-build-degree-slack-capability`
 - Completed:

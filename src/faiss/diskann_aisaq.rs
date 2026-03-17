@@ -907,10 +907,8 @@ impl PQFlashIndex {
             }
 
             neighbor_scores.sort_by(|left, right| left.score.total_cmp(&right.score));
-            for neighbor in neighbor_scores
-                .into_iter()
-                .take(io.max_reads_per_iteration())
-            {
+            let expand_limit = self.compute_expand_limit(&io);
+            for neighbor in neighbor_scores.into_iter().take(expand_limit) {
                 frontier.push(neighbor);
             }
         }
@@ -1030,10 +1028,8 @@ impl PQFlashIndex {
                 });
             }
             neighbor_scores.sort_by(|left, right| left.score.total_cmp(&right.score));
-            for neighbor in neighbor_scores
-                .into_iter()
-                .take(io.max_reads_per_iteration())
-            {
+            let expand_limit = self.compute_expand_limit(&io);
+            for neighbor in neighbor_scores.into_iter().take(expand_limit) {
                 frontier.push(neighbor);
             }
         }
@@ -1074,6 +1070,15 @@ impl PQFlashIndex {
             .saturating_add(99)
             / 100;
         target.max(k).min(expanded_len).max(1)
+    }
+
+    #[inline]
+    fn compute_expand_limit(&self, io: &BeamSearchIO) -> usize {
+        let io_limit = io.max_reads_per_iteration();
+        if self.config.vectors_beamwidth <= 1 {
+            return io_limit;
+        }
+        io_limit.min(self.config.vectors_beamwidth)
     }
 
     #[inline]
@@ -2082,5 +2087,29 @@ mod tests {
             .nodes
             .iter()
             .all(|node| node.neighbors.len() <= index.config.max_degree));
+    }
+
+    #[test]
+    fn aisaq_vectors_beamwidth_default_keeps_io_beamwidth_limit() {
+        let config = AisaqConfig {
+            beamwidth: 8,
+            vectors_beamwidth: 1,
+            ..AisaqConfig::default()
+        };
+        let index = PQFlashIndex::new(config, MetricType::L2, 4).unwrap();
+        let io = BeamSearchIO::new(&index.flash_layout, &index.config);
+        assert_eq!(index.compute_expand_limit(&io), 8);
+    }
+
+    #[test]
+    fn aisaq_vectors_beamwidth_caps_neighbor_expansion_when_larger_than_one() {
+        let config = AisaqConfig {
+            beamwidth: 8,
+            vectors_beamwidth: 3,
+            ..AisaqConfig::default()
+        };
+        let index = PQFlashIndex::new(config, MetricType::L2, 4).unwrap();
+        let io = BeamSearchIO::new(&index.flash_layout, &index.config);
+        assert_eq!(index.compute_expand_limit(&io), 3);
     }
 }
