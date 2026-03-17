@@ -22,6 +22,26 @@
 
 ## Session Log
 
+### Session 213 - 2026-03-17
+- Focus: `diskann-build-random-initial-connectivity`
+- Completed:
+  - added DiskANN build capability `disk_random_init_edges` (with deterministic seed via existing `random_seed`) to inject bounded random initial candidates during node insertion in Vamana build.
+  - `DiskAnnConfig` now maps `disk_random_init_edges` and build path now uses seeded `StdRng` (`random_seed` default `42`) for reproducible sampling.
+  - added regression `test_diskann_collect_random_initial_candidates_is_seeded_and_bounded`.
+- Verification:
+  - local:
+    - `cargo test --lib test_diskann_collect_random_initial_candidates_is_seeded_and_bounded -- --nocapture` -> `ok`
+    - `cargo test --lib test_diskann_config -- --nocapture` -> `ok`
+    - `cargo test --lib diskann::tests:: -- --nocapture` -> `ok` (`34 passed`)
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib test_diskann_collect_random_initial_candidates_is_seeded_and_bounded -- --nocapture"` -> `ok` (`run_id=20260317T110031Z_95097`)
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T110058Z_95213`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the “randomized initial connectivity strategy with deterministic controls” capability slice for in-memory DiskANN build path.
+
 ### Session 212 - 2026-03-17
 - Focus: `diskann-flash-prefetch-query-cache-reuse`
 - Completed:

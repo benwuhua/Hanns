@@ -16,6 +16,9 @@ use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
+use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
+use rand::SeedableRng;
 
 use crate::api::search::Predicate;
 use crate::api::{IndexConfig, MetricType, Result, SearchRequest, SearchResult};
@@ -50,6 +53,8 @@ pub struct DiskAnnConfig {
     pub num_entry_points: usize,
     /// Temporary build-degree slack percentage (100 = no slack, 130 = 1.3x)
     pub build_degree_slack_pct: usize,
+    /// Random initial candidate edges for build-time insertion (0 = disabled)
+    pub random_init_edges: usize,
     /// Beamwidth for search (IO parallelism), default 8
     pub beamwidth: usize,
     /// Cache DRAM budget in GB
@@ -87,6 +92,7 @@ impl Default for DiskAnnConfig {
             intra_batch_candidates: 8,
             num_entry_points: 1,
             build_degree_slack_pct: 100,
+            random_init_edges: 0,
             beamwidth: 8,
             cache_dram_budget_gb: 0.0,
             enable_flash_layout: false,
@@ -125,6 +131,7 @@ impl DiskAnnConfig {
                 .disk_build_degree_slack_pct
                 .unwrap_or(100)
                 .clamp(100, 200),
+            random_init_edges: params.disk_random_init_edges.unwrap_or(0).min(64),
             cache_dram_budget_gb: params.disk_search_cache_budget_gb.unwrap_or(0.0).max(0.0),
             enable_flash_layout: params.disk_enable_flash_layout.unwrap_or(false),
             flash_mmap_mode: params.disk_flash_mmap_mode.unwrap_or(false),
@@ -989,6 +996,7 @@ impl DiskAnnIndex {
 
         // Build graph incrementally (Vamana style)
         let mut current_graph: Vec<Vec<(i64, f32)>> = Vec::with_capacity(n);
+        let mut rng = StdRng::seed_from_u64(self.config.params.random_seed.unwrap_or(42));
 
         // First node is entry point
         self.entry_point = Some(0);
@@ -1004,6 +1012,9 @@ impl DiskAnnIndex {
             let mut merged_neighbors = neighbors;
             if self.dann_config.intra_batch_candidates > 0 {
                 merged_neighbors.extend(self.collect_intra_batch_candidates(i));
+            }
+            if self.dann_config.random_init_edges > 0 {
+                merged_neighbors.extend(self.collect_random_initial_candidates(i, &mut rng));
             }
             merged_neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
             merged_neighbors.dedup_by(|a, b| a.0 == b.0);
@@ -1038,6 +1049,25 @@ impl DiskAnnIndex {
         self.finalize_graph_degree(R);
 
         self.refresh_entry_points();
+    }
+
+    fn collect_random_initial_candidates(
+        &self,
+        node_idx: usize,
+        rng: &mut StdRng,
+    ) -> Vec<(usize, f32)> {
+        if self.dann_config.random_init_edges == 0 || node_idx == 0 {
+            return Vec::new();
+        }
+
+        let sample = self.dann_config.random_init_edges.min(node_idx);
+        let query = &self.vectors[node_idx * self.dim..(node_idx + 1) * self.dim];
+        let mut pool: Vec<usize> = (0..node_idx).collect();
+        pool.shuffle(rng);
+        pool.into_iter()
+            .take(sample)
+            .map(|idx| (idx, self.compute_dist(query, idx)))
+            .collect()
     }
 
     fn compute_build_degree_limit(&self, max_degree: usize) -> usize {
@@ -2568,6 +2598,7 @@ mod tests {
             disk_intra_batch_candidates: Some(7),
             disk_num_entry_points: Some(3),
             disk_build_degree_slack_pct: Some(130),
+            disk_random_init_edges: Some(5),
             disk_build_dram_budget_gb: Some(2.5),
             disk_search_cache_budget_gb: Some(1.25),
             disk_enable_flash_layout: Some(true),
@@ -2597,6 +2628,7 @@ mod tests {
         assert_eq!(index.dann_config.intra_batch_candidates, 7);
         assert_eq!(index.dann_config.num_entry_points, 3);
         assert_eq!(index.dann_config.build_degree_slack_pct, 130);
+        assert_eq!(index.dann_config.random_init_edges, 5);
         assert_eq!(index.dann_config.build_dram_budget_gb, 2.5);
         assert_eq!(index.dann_config.cache_dram_budget_gb, 1.25);
         assert!(index.dann_config.enable_flash_layout);
@@ -2733,6 +2765,41 @@ mod tests {
         assert_eq!(cands.len(), 2);
         assert_eq!(cands[0].0, 1);
         assert_eq!(cands[1].0, 2);
+    }
+
+    #[test]
+    fn test_diskann_collect_random_initial_candidates_is_seeded_and_bounded() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_random_init_edges: Some(3),
+                random_seed: Some(7),
+                ..Default::default()
+            },
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        index.vectors = vec![
+            0.0, 0.0, //
+            1.0, 0.0, //
+            2.0, 0.0, //
+            3.0, 0.0, //
+            4.0, 0.0,
+        ];
+        index.ids = vec![0, 1, 2, 3, 4];
+
+        let mut rng1 = StdRng::seed_from_u64(7);
+        let mut rng2 = StdRng::seed_from_u64(7);
+        let c1 = index.collect_random_initial_candidates(4, &mut rng1);
+        let c2 = index.collect_random_initial_candidates(4, &mut rng2);
+
+        assert_eq!(c1, c2);
+        assert_eq!(c1.len(), 3);
+        let picked: HashSet<usize> = c1.iter().map(|(idx, _)| *idx).collect();
+        assert_eq!(picked.len(), 3);
+        assert!(picked.iter().all(|&idx| idx < 4));
     }
 
     #[test]
