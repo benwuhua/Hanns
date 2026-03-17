@@ -35,6 +35,8 @@ struct Row {
     build_dram_budget_gb: f32,
     search_cache_budget_gb: f32,
     filter_ratio: f32,
+    flash_mmap_mode: bool,
+    flash_prefetch_batch: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -204,6 +206,8 @@ fn main() {
     let build_dram_budget_gb = parse_f32_arg("build-dram-budget-gb", 0.0);
     let search_cache_budget_gb = parse_f32_arg("search-cache-budget-gb", 0.0);
     let filter_ratio = parse_f32_arg("filter-ratio", 0.0).clamp(0.0, 1.0);
+    let flash_mmap_mode = parse_bool_arg("flash-mmap-mode", false);
+    let flash_prefetch_batch = parse_usize_arg("flash-prefetch-batch", 0);
     let output = parse_string_arg("output", "benchmark_results/diskann_pq_ab.local.json");
     let pq_dims_list = parse_pq_dims_arg(&[0, 2, 4]);
     let reuse_index = parse_bool_arg("reuse-index", false);
@@ -261,6 +265,9 @@ fn main() {
                 disk_build_degree_slack_pct: Some(build_degree_slack_pct),
                 disk_build_dram_budget_gb: Some(build_dram_budget_gb),
                 disk_search_cache_budget_gb: Some(search_cache_budget_gb),
+                disk_enable_flash_layout: Some(flash_mmap_mode),
+                disk_flash_mmap_mode: Some(flash_mmap_mode),
+                disk_flash_prefetch_batch: Some(flash_prefetch_batch),
                 ..Default::default()
             },
         };
@@ -335,6 +342,8 @@ fn main() {
             build_dram_budget_gb,
             search_cache_budget_gb,
             filter_ratio,
+            flash_mmap_mode,
+            flash_prefetch_batch,
         });
     }
 

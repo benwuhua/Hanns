@@ -22,6 +22,35 @@
 
 ## Session Log
 
+### Session 210 - 2026-03-17
+- Focus: `diskann-bench-flash-prefetch-observability`
+- Completed:
+  - extended DiskANN benchmark harness observability for flash mmap path:
+    - [src/bin/bench_diskann_pq_ab.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/bin/bench_diskann_pq_ab.rs) now supports:
+      - `--flash-mmap-mode`
+      - `--flash-prefetch-batch`
+    - benchmark row schema now records:
+      - `flash_mmap_mode`
+      - `flash_prefetch_batch`
+    - benchmark config wiring now sets:
+      - `disk_enable_flash_layout`
+      - `disk_flash_mmap_mode`
+      - `disk_flash_prefetch_batch`
+- Verification:
+  - local:
+    - `cargo test --bin bench_diskann_pq_ab -- --nocapture` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --bin bench_diskann_pq_ab -- --nocapture"` -> `ok` (`run_id=20260317T094422Z_88432`)
+    - `bash scripts/remote/test.sh --command "cargo run --release --bin bench_diskann_pq_ab -- --base-size 2000 --query-size 40 --dim 128 --top-k 10 --pq-dims 4 --search-list-size 128 --construction-l 128 --beamwidth 8 --pq-expand-pct 125 --rerank-expand-pct 100 --saturate-after-prune 1 --intra-batch-candidates 8 --num-entry-points 1 --build-degree-slack-pct 100 --flash-mmap-mode 1 --flash-prefetch-batch 16 --search-cache-budget-gb 0.05 --reuse-index 1 --index-cache-dir benchmark_results/cache --output benchmark_results/diskann_pq_ab.remote.flash_prefetch16.json"` -> `ok` (`run_id=20260317T094454Z_88550`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - authority sample artifact confirms new fields are present and replayable:
+    - `flash_mmap_mode=true`
+    - `flash_prefetch_batch=16`
+    - sample lane result: `qps=5258.44`, `recall@10=1.0000`.
+
 ### Session 209 - 2026-03-17
 - Focus: `diskann-flash-prefetch-executor-parallel`
 - Completed:

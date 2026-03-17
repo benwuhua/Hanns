@@ -15,6 +15,10 @@
 - DiskANN lsearch/recall-band matrix utility [scripts/diskann_lsearch_recall_band_matrix.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/scripts/diskann_lsearch_recall_band_matrix.py) plus regression test [tests/test_diskann_lsearch_recall_band_matrix.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/tests/test_diskann_lsearch_recall_band_matrix.py), which report both `same-lsearch` deltas and fixed-recall-band picks for each baseline lsearch row.
 
 ### Changed
+- DiskANN benchmark harness [src/bin/bench_diskann_pq_ab.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/bin/bench_diskann_pq_ab.rs) now exposes flash-path knobs and schema fields for authority matrixing:
+  - new args: `--flash-mmap-mode`, `--flash-prefetch-batch`
+  - new row fields: `flash_mmap_mode`, `flash_prefetch_batch`
+  - config wiring now maps these into `disk_enable_flash_layout`, `disk_flash_mmap_mode`, and `disk_flash_prefetch_batch`.
 - DiskANN mmap prefetch now uses a reusable batch executor in [src/faiss/diskann.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/faiss/diskann.rs): `beam_search` and `range_search` share `prefetch_vectors_batch_map(...)`, and under `parallel` feature this prefetch batch decode runs with rayon parallel iterators (serial fallback remains for non-parallel builds).
 - DiskANN mmap runtime path now supports query-time prefetch batching in [src/faiss/diskann.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/faiss/diskann.rs) via new [src/api/index.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/api/index.rs) param `disk_flash_prefetch_batch`: each expansion can predecode a bounded first-neighbor batch into a local vector cache before distance evaluation.
 - DiskANN flash mmap mode now has a budgeted runtime cache in [src/faiss/diskann.rs](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/faiss/diskann.rs): on load, with `disk_flash_mmap_mode=true` and non-zero `disk_search_cache_budget_gb`, the index pre-decodes hotspot nodes (entry points + first-hop neighbors) under budget and search prioritizes cached nodes before mmap on-demand reads.
