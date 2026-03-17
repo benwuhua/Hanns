@@ -22,6 +22,24 @@
 
 ## Session Log
 
+### Session 179 - 2026-03-17
+- Focus: `diskann-pq-candidate-pool-tradeoff-tuning`
+- Completed:
+  - screened a new PQ-path candidate-pool tuning: keep exact frontier ordering, but increase `effective_l` by +25% only when PQ is enabled.
+  - rejected an intermediate v6 attempt (`PQ-led frontier + wider beam`) after authority regression, then reverted to stable exact-frontier path.
+  - authority-validated tuned variant (`v8`) on the same lane (`base=2000`, `query=40`, `dim=128`, `top_k=10`).
+- Verification:
+  - `cargo test --lib diskann::tests::test_diskann_beam_search_with_pq_returns_exact_final_distances -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_prune_neighbors_uses_alpha_occlusion -- --nocapture` -> `ok`
+  - authority warm/load:
+    - `bash scripts/remote/test.sh --command "cargo run --release --bin bench_diskann_pq_ab -- --base-size 2000 --query-size 40 --dim 128 --top-k 10 --max-degree 48 --search-list-size 128 --beamwidth 8 --pq-dims 0,2,4 --index-cache-dir benchmark_results/.diskann_cache_ab_v8 --reuse-index 1 --output benchmark_results/diskann_pq_ab.remote.2k.v8.warm.json"` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo run --release --bin bench_diskann_pq_ab -- --base-size 2000 --query-size 40 --dim 128 --top-k 10 --max-degree 48 --search-list-size 128 --beamwidth 8 --pq-dims 0,2,4 --index-cache-dir benchmark_results/.diskann_cache_ab_v8 --reuse-index 1 --output benchmark_results/diskann_pq_ab.remote.2k.v8.load.json"` -> `ok`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - load-lane `pq_dims=4` moved from prior stable mode (`~15075 qps, recall 0.7825`) to tuned mode (`12708 qps, recall 0.8450`): clear recall gain with expected QPS cost.
+  - this is a deliberate tradeoff mode and is closer to parity recall behavior; next step is to parameterize or auto-tune `effective_l` to recover part of the QPS loss.
+
 ### Session 178 - 2026-03-17
 - Focus: `diskann-official-rust-alignment-search-and-build`
 - Completed:

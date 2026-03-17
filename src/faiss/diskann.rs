@@ -701,6 +701,11 @@ impl DiskAnnIndex {
         }
 
         let beamwidth = self.dann_config.beamwidth;
+        let effective_l = if self.pq_codes.is_some() {
+            (L + L / 4).min(n)
+        } else {
+            L
+        };
         let mut visited = vec![false; n];
         let mut candidates: BinaryHeap<ReverseOrderedFloat> = BinaryHeap::new();
         let mut results: Vec<(f32, usize)> = Vec::new();
@@ -723,7 +728,7 @@ impl DiskAnnIndex {
         let mut best_dist = dist;
 
         // Beam search loop
-        while !candidates.is_empty() && results.len() < L {
+        while !candidates.is_empty() && results.len() < effective_l {
             let ReverseOrderedFloat(dist, idx) = candidates.pop().unwrap();
             results.push((dist, idx));
 
@@ -736,7 +741,7 @@ impl DiskAnnIndex {
             }
 
             // Early termination: stop if no progress
-            if no_progress_count > L / 4 {
+            if no_progress_count > effective_l / 4 {
                 break;
             }
 
