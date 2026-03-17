@@ -22,6 +22,29 @@
 
 ## Session Log
 
+### Session 212 - 2026-03-17
+- Focus: `diskann-flash-prefetch-query-cache-reuse`
+- Completed:
+  - reworked DiskANN flash-mmap query-time prefetch from per-expansion temporary maps to a per-query reusable cache in `beam_search` and `range_search`.
+  - added bounded query cache policy (`query_prefetch_cap`) to prevent unbounded growth while allowing cross-expansion reuse.
+  - replaced `prefetch_vectors_batch_map(...)` with `prefetch_vectors_batch_into_cache(...)` and added regression `test_diskann_prefetch_cache_reuses_across_expansions_with_cap`.
+- Verification:
+  - local:
+    - `cargo test --lib test_diskann_prefetch_cache_reuses_across_expansions_with_cap -- --nocapture` -> `ok`
+    - `cargo test --lib test_diskann_search_can_run_from_flash_sidecar_mmap_mode -- --nocapture` -> `ok`
+    - `cargo test --lib diskann::tests:: -- --nocapture` -> `ok` (`33 passed`)
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo run --release --bin bench_diskann_pq_ab -- --base-size 2000 --query-size 40 --dim 128 --top-k 10 --pq-dims 4 --search-list-size 128 --construction-l 128 --beamwidth 8 --pq-expand-pct 125 --rerank-expand-pct 100 --saturate-after-prune 1 --intra-batch-candidates 8 --num-entry-points 1 --build-degree-slack-pct 100 --flash-mmap-mode 1 --flash-prefetch-batch 0 --search-cache-budget-gb 0.05 --reuse-index 1 --index-cache-dir benchmark_results/cache --output benchmark_results/diskann_pq_ab.remote.flash_prefetch0.reuse_cache_v2.json"` -> `ok` (`run_id=20260317T095621Z_90270`)
+    - `bash scripts/remote/test.sh --command "cargo run --release --bin bench_diskann_pq_ab -- --base-size 2000 --query-size 40 --dim 128 --top-k 10 --pq-dims 4 --search-list-size 128 --construction-l 128 --beamwidth 8 --pq-expand-pct 125 --rerank-expand-pct 100 --saturate-after-prune 1 --intra-batch-candidates 8 --num-entry-points 1 --build-degree-slack-pct 100 --flash-mmap-mode 1 --flash-prefetch-batch 16 --search-cache-budget-gb 0.05 --reuse-index 1 --index-cache-dir benchmark_results/cache --output benchmark_results/diskann_pq_ab.remote.flash_prefetch16.reuse_cache_v2.json"` -> `ok` (`run_id=20260317T095739Z_90478`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - same authority lane now measures:
+    - `prefetch=0`: `qps=4966.16`, `recall@10=1.0000`
+    - `prefetch=16`: `qps=1293.27`, `recall@10=1.0000`
+  - query-level reuse reduced worst-case overhead versus the previous matrix but remains materially negative on this lane; default recommendation remains `disk_flash_prefetch_batch=0`.
+
 ### Session 211 - 2026-03-17
 - Focus: `diskann-flash-prefetch-authority-matrix`
 - Completed:

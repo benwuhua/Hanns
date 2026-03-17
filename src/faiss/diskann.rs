@@ -684,31 +684,59 @@ impl DiskAnnIndex {
         Some(vec.into_boxed_slice())
     }
 
-    fn prefetch_vectors_batch_map(
+    #[inline]
+    fn flash_prefetch_enabled(&self) -> bool {
+        self.flash_sidecar_mmap.is_some()
+            && self.flash_vectors.is_none()
+            && self.dann_config.flash_prefetch_batch > 0
+    }
+
+    #[inline]
+    fn query_prefetch_cap(&self, total_nodes: usize) -> usize {
+        if !self.flash_prefetch_enabled() || total_nodes == 0 {
+            return 0;
+        }
+        let batch = self.dann_config.flash_prefetch_batch.max(1);
+        let cap = batch
+            .saturating_mul(self.dann_config.beamwidth.max(1))
+            .max(batch)
+            .min(2048);
+        cap.min(total_nodes)
+    }
+
+    fn prefetch_vectors_batch_into_cache(
         &self,
         neighbor_ids: &[usize],
         total_nodes: usize,
-    ) -> Option<HashMap<usize, Box<[f32]>>> {
-        if self.flash_sidecar_mmap.is_none()
-            || self.flash_vectors.is_some()
-            || self.dann_config.flash_prefetch_batch == 0
+        query_prefetch_cap: usize,
+        cache: &mut HashMap<usize, Box<[f32]>>,
+    ) {
+        if !self.flash_prefetch_enabled()
+            || query_prefetch_cap == 0
+            || cache.len() >= query_prefetch_cap
         {
-            return None;
+            return;
+        }
+
+        let budget = query_prefetch_cap.saturating_sub(cache.len());
+        let batch = self.dann_config.flash_prefetch_batch.min(budget);
+        if batch == 0 {
+            return;
         }
 
         let mut selected = Vec::new();
         let mut seen = HashSet::new();
         for &n_idx in neighbor_ids {
-            if n_idx >= total_nodes || !seen.insert(n_idx) {
+            if n_idx >= total_nodes || cache.contains_key(&n_idx) || !seen.insert(n_idx) {
                 continue;
             }
             selected.push(n_idx);
-            if selected.len() >= self.dann_config.flash_prefetch_batch {
+            if selected.len() >= batch {
                 break;
             }
         }
         if selected.is_empty() {
-            return None;
+            return;
         }
 
         #[cfg(feature = "parallel")]
@@ -717,25 +745,23 @@ impl DiskAnnIndex {
                 .par_iter()
                 .filter_map(|&idx| self.flash_mmap_read_vector(idx).map(|v| (idx, v)))
                 .collect();
-            if items.is_empty() {
-                None
-            } else {
-                Some(items.into_iter().collect())
+            for (idx, vec) in items {
+                if cache.len() >= query_prefetch_cap {
+                    break;
+                }
+                cache.insert(idx, vec);
             }
         }
 
         #[cfg(not(feature = "parallel"))]
         {
-            let mut cache = HashMap::new();
             for idx in selected {
+                if cache.len() >= query_prefetch_cap {
+                    break;
+                }
                 if let Some(v) = self.flash_mmap_read_vector(idx) {
                     cache.insert(idx, v);
                 }
-            }
-            if cache.is_empty() {
-                None
-            } else {
-                Some(cache)
             }
         }
     }
@@ -1500,6 +1526,12 @@ impl DiskAnnIndex {
         let mut candidates: BinaryHeap<ReverseOrderedFloat> = BinaryHeap::new();
         let mut explored: Vec<(f32, usize)> = Vec::new();
         let mut accepted: Vec<(f32, usize)> = Vec::new();
+        let mut prefetched_vectors = if self.flash_prefetch_enabled() {
+            Some(HashMap::new())
+        } else {
+            None
+        };
+        let query_prefetch_cap = self.query_prefetch_cap(n);
         let pq_query_table = self.pq_codes.as_ref().and_then(|pq| {
             if pq.dims > 0 && pq.ksub > 0 {
                 Some(pq.build_query_distance_table(query, self.dim))
@@ -1546,7 +1578,14 @@ impl DiskAnnIndex {
             // Explore neighbors with beamwidth limit
             {
                 let neighbor_ids = self.neighbor_indices(idx);
-                let prefetched_vectors = self.prefetch_vectors_batch_map(&neighbor_ids, n);
+                if let Some(cache) = prefetched_vectors.as_mut() {
+                    self.prefetch_vectors_batch_into_cache(
+                        &neighbor_ids,
+                        n,
+                        query_prefetch_cap,
+                        cache,
+                    );
+                }
                 let mut nbr_dists: Vec<(f32, usize)> = Vec::new();
 
                 for n_idx in neighbor_ids {
@@ -1657,6 +1696,12 @@ impl DiskAnnIndex {
         let mut results: Vec<(i64, f32)> = Vec::new();
         let mut visited = vec![false; n];
         let mut candidates: VecDeque<(usize, f32)> = VecDeque::new();
+        let mut prefetched_vectors = if self.flash_prefetch_enabled() {
+            Some(HashMap::new())
+        } else {
+            None
+        };
+        let query_prefetch_cap = self.query_prefetch_cap(n);
 
         // Start from entry points
         for (start, start_dist) in self.initial_search_starts(query) {
@@ -1676,7 +1721,14 @@ impl DiskAnnIndex {
             // Explore neighbors
             {
                 let neighbor_ids = self.neighbor_indices(idx);
-                let prefetched_vectors = self.prefetch_vectors_batch_map(&neighbor_ids, n);
+                if let Some(cache) = prefetched_vectors.as_mut() {
+                    self.prefetch_vectors_batch_into_cache(
+                        &neighbor_ids,
+                        n,
+                        query_prefetch_cap,
+                        cache,
+                    );
+                }
                 let mut nbr_dists: Vec<(f32, usize)> = Vec::new();
 
                 for n_idx in neighbor_ids {
@@ -2317,6 +2369,65 @@ mod tests {
         let result = loaded.search(&query, &req).unwrap();
         assert_eq!(result.ids.len(), 2);
         assert!(result.ids[0] >= 0);
+
+        std::fs::remove_file(temp_path).ok();
+        std::fs::remove_file(sidecar).ok();
+    }
+
+    #[test]
+    fn test_diskann_prefetch_cache_reuses_across_expansions_with_cap() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_enable_flash_layout: Some(true),
+                disk_flash_mmap_mode: Some(true),
+                disk_flash_prefetch_batch: Some(2),
+                beamwidth: Some(2),
+                max_degree: Some(16),
+                ..Default::default()
+            },
+        };
+
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            2.0, 0.0, 0.0, 0.0, //
+            3.0, 0.0, 0.0, 0.0, //
+            4.0, 0.0, 0.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+
+        let temp_path = std::env::temp_dir().join("diskann_flash_prefetch_cache_test.bin");
+        let sidecar = DiskAnnIndex::flash_layout_sidecar_path(&temp_path);
+        index.save(&temp_path).unwrap();
+
+        let mut loaded = DiskAnnIndex::new(&config).unwrap();
+        loaded.load(&temp_path).unwrap();
+        assert!(loaded.flash_sidecar_mmap.is_some());
+        assert!(loaded.flash_prefetch_enabled());
+
+        let n = loaded.ids.len();
+        let cap = loaded.query_prefetch_cap(n);
+        assert_eq!(cap, 4);
+
+        let mut cache: HashMap<usize, Box<[f32]>> = HashMap::new();
+        loaded.prefetch_vectors_batch_into_cache(&[0, 1], n, cap, &mut cache);
+        assert_eq!(cache.len(), 2);
+        assert!(cache.contains_key(&0));
+        assert!(cache.contains_key(&1));
+
+        // Reuse should skip already cached nodes and only fill missing ones.
+        loaded.prefetch_vectors_batch_into_cache(&[1, 2], n, cap, &mut cache);
+        assert_eq!(cache.len(), 3);
+        assert!(cache.contains_key(&2));
+
+        // Respect per-query cap.
+        loaded.prefetch_vectors_batch_into_cache(&[3, 4], n, cap, &mut cache);
+        assert_eq!(cache.len(), 4);
 
         std::fs::remove_file(temp_path).ok();
         std::fs::remove_file(sidecar).ok();
