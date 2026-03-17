@@ -22,6 +22,37 @@
 
 ## Session Log
 
+### Session 228 - 2026-03-17
+- Focus: `diskann-aisaq-filter-threshold-exact-fallback`
+- Completed:
+  - implemented `filter_threshold` gate for filtered search:
+    - added `should_force_exact_filter_scan(...)` based on allowed-ratio vs threshold
+    - when bitset is present and threshold condition is met, search now bypasses graph expansion and runs exact scan on allowed nodes.
+  - added exact filtered fallback implementations:
+    - sync: `exact_scan_allowed_sync(...)`
+    - async: `exact_scan_allowed_async(...)`
+  - compatibility:
+    - default `filter_threshold = -1` keeps gate disabled (previous behavior unchanged).
+  - added regressions:
+    - `aisaq_filter_threshold_triggers_exact_scan_when_allowed_ratio_is_small`
+    - `aisaq_filter_threshold_gate_defaults_to_disabled`
+- Verification:
+  - local:
+    - `cargo test --lib aisaq_filter_threshold_triggers_exact_scan_when_allowed_ratio_is_small -- --nocapture` -> `ok`
+    - `cargo test --lib aisaq_filter_threshold_gate_defaults_to_disabled -- --nocapture` -> `ok`
+    - `cargo test --lib diskann_aisaq::tests:: -- --nocapture` -> `ok` (`21 passed`)
+    - `cargo test --test test_diskann_aisaq -- --nocapture` -> `ok` (`10 passed`)
+    - `cargo test --features async-io --test test_diskann_aisaq -- --nocapture` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T120653Z_9044`)
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann_aisaq::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T120713Z_9139`)
+    - `bash scripts/remote/test.sh --command "cargo test --features async-io --test test_diskann_aisaq -- --nocapture"` -> `ok` (`run_id=20260317T120730Z_9197`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the AISAQ filter-threshold behavior gap with an explicit, test-locked exact fallback path under heavy filtering.
+
 ### Session 227 - 2026-03-17
 - Focus: `diskann-pq-code-budget-api-and-enforcement`
 - Completed:

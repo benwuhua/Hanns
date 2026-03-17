@@ -907,6 +907,10 @@ impl PQFlashIndex {
         let mut io = self.io_template.clone();
         io.reset_stats();
 
+        if self.should_force_exact_filter_scan(bitset) {
+            return self.exact_scan_allowed_sync(query, k, bitset, &mut io);
+        }
+
         let pq_table = self
             .pq_encoder
             .as_ref()
@@ -1024,6 +1028,10 @@ impl PQFlashIndex {
 
         let mut io = self.io_template.clone();
         io.reset_stats();
+
+        if self.should_force_exact_filter_scan(bitset) {
+            return self.exact_scan_allowed_async(query, k, bitset, &mut io).await;
+        }
 
         let pq_table = self
             .pq_encoder
@@ -1143,6 +1151,82 @@ impl PQFlashIndex {
     #[inline]
     fn node_allowed(&self, node_id: u32, bitset: Option<&BitsetView>) -> bool {
         !bitset.is_some_and(|b| (node_id as usize) < b.len() && b.get(node_id as usize))
+    }
+
+    #[inline]
+    fn should_force_exact_filter_scan(&self, bitset: Option<&BitsetView>) -> bool {
+        let bitset = match bitset {
+            Some(bitset) => bitset,
+            None => return false,
+        };
+        if self.config.filter_threshold < 0.0 {
+            return false;
+        }
+        let total = self.len();
+        if total == 0 {
+            return false;
+        }
+        let filtered = bitset.count().min(total);
+        let allowed = total.saturating_sub(filtered);
+        let allowed_ratio = allowed as f32 / total as f32;
+        let threshold = self.config.filter_threshold.clamp(0.0, 1.0);
+        allowed_ratio <= threshold
+    }
+
+    fn exact_scan_allowed_sync(
+        &self,
+        query: &[f32],
+        k: usize,
+        bitset: Option<&BitsetView>,
+        io: &mut BeamSearchIO,
+    ) -> Result<SearchResult> {
+        let mut scored = Vec::new();
+        for node_id in 0..self.len() as u32 {
+            if !self.node_allowed(node_id, bitset) {
+                continue;
+            }
+            let node = self.load_node(node_id, NodeAccessMode::Node, io)?;
+            let distance = self.exact_distance(query, &node.vector);
+            scored.push((node.id, distance));
+        }
+        scored.sort_by(|left, right| left.1.total_cmp(&right.1));
+        scored.truncate(k.min(scored.len()));
+        let mut result = SearchResult::new(
+            scored.iter().map(|(id, _)| *id).collect(),
+            scored.iter().map(|(_, distance)| *distance).collect(),
+            0.0,
+        );
+        result.num_visited = io.stats().nodes_visited;
+        Ok(result)
+    }
+
+    async fn exact_scan_allowed_async(
+        &self,
+        query: &[f32],
+        k: usize,
+        bitset: Option<&BitsetView>,
+        io: &mut BeamSearchIO,
+    ) -> Result<SearchResult> {
+        let mut scored = Vec::new();
+        for node_id in 0..self.len() as u32 {
+            if !self.node_allowed(node_id, bitset) {
+                continue;
+            }
+            let node = self
+                .load_node_async(node_id, NodeAccessMode::Node, io)
+                .await?;
+            let distance = self.exact_distance(query, &node.vector);
+            scored.push((node.id, distance));
+        }
+        scored.sort_by(|left, right| left.1.total_cmp(&right.1));
+        scored.truncate(k.min(scored.len()));
+        let mut result = SearchResult::new(
+            scored.iter().map(|(id, _)| *id).collect(),
+            scored.iter().map(|(_, distance)| *distance).collect(),
+            0.0,
+        );
+        result.num_visited = io.stats().nodes_visited;
+        Ok(result)
     }
 
     fn fill_from_allowed_exact(
@@ -2266,5 +2350,54 @@ mod tests {
             100
         ];
         assert_eq!(index.compute_max_visit(5), 15);
+    }
+
+    #[test]
+    fn aisaq_filter_threshold_triggers_exact_scan_when_allowed_ratio_is_small() {
+        let config = AisaqConfig {
+            max_degree: 4,
+            filter_threshold: 0.4,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, 2).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, //
+            1.0, 0.0, //
+            2.0, 0.0, //
+            3.0, 0.0, //
+            4.0, 0.0,
+        ];
+        index.add(&vectors).unwrap();
+        let mut bitset = BitsetView::new(index.len());
+        bitset.set(0, true);
+        bitset.set(1, true);
+        bitset.set(2, true);
+        bitset.set(3, true);
+
+        let result = index
+            .search_with_bitset(&[4.1, 0.0], 1, &bitset)
+            .expect("search_with_bitset should succeed");
+        assert_eq!(result.ids, vec![4]);
+        assert_eq!(result.num_visited, 1);
+    }
+
+    #[test]
+    fn aisaq_filter_threshold_gate_defaults_to_disabled() {
+        let config = AisaqConfig::default();
+        let mut index = PQFlashIndex::new(config, MetricType::L2, 2).unwrap();
+        index.node_count = 4;
+        index.nodes = vec![
+            FlashNode {
+                id: 0,
+                vector_offset: 0,
+                neighbors: vec![],
+                inline_pq: vec![],
+            };
+            4
+        ];
+        let mut bitset = BitsetView::new(index.len());
+        bitset.set(0, true);
+        bitset.set(1, true);
+        assert!(!index.should_force_exact_filter_scan(Some(&bitset)));
     }
 }
