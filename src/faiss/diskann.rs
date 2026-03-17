@@ -1320,7 +1320,7 @@ impl DiskAnnIndex {
         _R: usize,
         graph: &[Vec<(i64, f32)>],
     ) -> Vec<(usize, f32)> {
-        let mut visited = vec![false; self.ids.len()];
+        let mut visited: HashSet<usize> = HashSet::with_capacity(L.saturating_mul(2));
         let mut candidates: BinaryHeap<ReverseOrderedFloat> = BinaryHeap::new();
         let mut results: Vec<(f32, usize)> = Vec::new();
 
@@ -1328,7 +1328,7 @@ impl DiskAnnIndex {
         if let Some(entry) = self.entry_point {
             let dist = self.compute_dist(query, entry);
             candidates.push(ReverseOrderedFloat(dist, entry));
-            visited[entry] = true;
+            visited.insert(entry);
         }
 
         // Beam search
@@ -1345,7 +1345,7 @@ impl DiskAnnIndex {
             if let Some(nbrs) = graph.get(idx) {
                 for &(nbr_id, _) in nbrs {
                     let n_idx = nbr_id as usize;
-                    if n_idx < visited.len() && !visited[n_idx] {
+                    if n_idx < self.ids.len() && !visited.contains(&n_idx) {
                         let d = self.compute_dist(query, n_idx);
                         nbr_dists.push((d, n_idx));
                     }
@@ -1355,7 +1355,7 @@ impl DiskAnnIndex {
             // Sort and add best beamwidth neighbors
             nbr_dists.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
             for (d, n_idx) in nbr_dists.into_iter().take(beam_size) {
-                visited[n_idx] = true;
+                visited.insert(n_idx);
                 candidates.push(ReverseOrderedFloat(d, n_idx));
             }
         }
@@ -1657,7 +1657,7 @@ impl DiskAnnIndex {
         } else {
             L
         };
-        let mut visited = vec![false; n];
+        let mut visited: HashSet<usize> = HashSet::with_capacity(effective_l.saturating_mul(2));
         let mut candidates: BinaryHeap<ReverseOrderedFloat> = BinaryHeap::new();
         let mut explored: Vec<(f32, usize)> = Vec::new();
         let mut accepted: Vec<(f32, usize)> = Vec::new();
@@ -1682,7 +1682,7 @@ impl DiskAnnIndex {
         }
         for (start, dist) in &starts {
             candidates.push(ReverseOrderedFloat(*dist, *start));
-            visited[*start] = true;
+            visited.insert(*start);
         }
 
         // Beam search loop
@@ -1718,7 +1718,7 @@ impl DiskAnnIndex {
                 let mut nbr_dists: Vec<(f32, usize)> = Vec::new();
 
                 for n_idx in neighbor_ids {
-                    if n_idx < n && !visited[n_idx] {
+                    if n_idx < n && !visited.contains(&n_idx) {
                         // Use PQ distance if available and node is not cached
                         let d = if let Some(pq_codes) = &self.pq_codes {
                             if !self.cached_nodes.contains(&n_idx) {
@@ -1773,7 +1773,7 @@ impl DiskAnnIndex {
                 reranked.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
                 for (exact_d, n_idx) in reranked.into_iter().take(beamwidth) {
-                    visited[n_idx] = true;
+                    visited.insert(n_idx);
                     candidates.push(ReverseOrderedFloat(exact_d, n_idx));
                 }
             }
