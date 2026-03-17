@@ -10,6 +10,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 #[cfg(test)]
 use std::future::Future;
@@ -31,6 +32,7 @@ use serde::{Deserialize, Serialize};
 
 const DEFAULT_PAGE_SIZE: usize = 4096;
 const DEFAULT_PQ_K: usize = 256;
+const PAGE_CACHE_SHARDS: usize = 16;
 
 /// AISAQ configuration parameters.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -458,18 +460,19 @@ struct PageRead {
 }
 
 #[derive(Debug)]
-struct PageCacheState {
+struct PageCacheShard {
     pages: HashMap<usize, Vec<u8>>,
     lru: VecDeque<usize>,
+    capacity: usize,
     stats: PageCacheStats,
 }
 
 #[derive(Debug)]
 pub struct PageCache {
     page_size: usize,
-    capacity_pages: usize,
     mmap: Mmap,
-    state: Mutex<PageCacheState>,
+    requests: AtomicUsize,
+    shards: Vec<Mutex<PageCacheShard>>,
 }
 
 impl PageCache {
@@ -480,13 +483,18 @@ impl PageCache {
 
         Ok(Self {
             page_size: page_size.max(1),
-            capacity_pages,
             mmap,
-            state: Mutex::new(PageCacheState {
-                pages: HashMap::new(),
-                lru: VecDeque::new(),
-                stats: PageCacheStats::default(),
-            }),
+            requests: AtomicUsize::new(0),
+            shards: (0..PAGE_CACHE_SHARDS)
+                .map(|_| {
+                    Mutex::new(PageCacheShard {
+                        pages: HashMap::new(),
+                        lru: VecDeque::new(),
+                        capacity: (capacity_pages / PAGE_CACHE_SHARDS).max(1),
+                        stats: PageCacheStats::default(),
+                    })
+                })
+                .collect(),
         })
     }
 
@@ -505,30 +513,30 @@ impl PageCache {
 
         let start_page = offset / self.page_size;
         let end_page = end.saturating_sub(1) / self.page_size;
-        let mut state = self.state.lock();
-        state.stats.requests += 1;
+        self.requests.fetch_add(1, AtomicOrdering::Relaxed);
 
         let mut pages_loaded = 0usize;
         let mut page_buffers = Vec::with_capacity(end_page - start_page + 1);
         for page_id in start_page..=end_page {
-            if let Some(page) = state.pages.get(&page_id).cloned() {
-                state.stats.page_hits += 1;
-                touch_lru(&mut state.lru, page_id);
-                page_buffers.push((page_id, page));
-                continue;
-            }
-
-            state.stats.page_misses += 1;
-            pages_loaded += 1;
-            let page_start = page_id * self.page_size;
-            let page_end = (page_start + self.page_size).min(self.mmap.len());
-            let page = self.mmap[page_start..page_end].to_vec();
-            state.pages.insert(page_id, page.clone());
-            state.lru.push_back(page_id);
-            evict_if_needed(&mut state, self.capacity_pages);
+            let shard_idx = page_id % PAGE_CACHE_SHARDS;
+            let mut shard = self.shards[shard_idx].lock();
+            let page = if let Some(page) = shard.pages.get(&page_id).cloned() {
+                shard.stats.page_hits += 1;
+                touch_lru(&mut shard.lru, page_id);
+                page
+            } else {
+                shard.stats.page_misses += 1;
+                pages_loaded += 1;
+                let page_start = page_id * self.page_size;
+                let page_end = (page_start + self.page_size).min(self.mmap.len());
+                let page = self.mmap[page_start..page_end].to_vec();
+                shard.pages.insert(page_id, page.clone());
+                shard.lru.push_back(page_id);
+                evict_if_needed(&mut shard);
+                page
+            };
             page_buffers.push((page_id, page));
         }
-        drop(state);
 
         let mut bytes = Vec::with_capacity(len);
         for (index, (_, page)) in page_buffers.iter().enumerate() {
@@ -552,7 +560,17 @@ impl PageCache {
     }
 
     pub fn stats(&self) -> PageCacheStats {
-        self.state.lock().stats.clone()
+        let mut out = PageCacheStats {
+            requests: self.requests.load(AtomicOrdering::Relaxed),
+            ..PageCacheStats::default()
+        };
+        for shard in &self.shards {
+            let shard = shard.lock();
+            out.page_hits += shard.stats.page_hits;
+            out.page_misses += shard.stats.page_misses;
+            out.evictions += shard.stats.evictions;
+        }
+        out
     }
 }
 
@@ -563,11 +581,11 @@ fn touch_lru(lru: &mut VecDeque<usize>, page_id: usize) {
     lru.push_back(page_id);
 }
 
-fn evict_if_needed(state: &mut PageCacheState, capacity_pages: usize) {
-    while state.pages.len() > capacity_pages {
-        if let Some(oldest) = state.lru.pop_front() {
-            if state.pages.remove(&oldest).is_some() {
-                state.stats.evictions += 1;
+fn evict_if_needed(shard: &mut PageCacheShard) {
+    while shard.pages.len() > shard.capacity {
+        if let Some(oldest) = shard.lru.pop_front() {
+            if shard.pages.remove(&oldest).is_some() {
+                shard.stats.evictions += 1;
             }
         } else {
             break;
