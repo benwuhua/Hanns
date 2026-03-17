@@ -22,6 +22,20 @@
 
 ## Session Log
 
+### Session 172 - 2026-03-17
+- Focus: `governance-current-state-regression-lock`
+- Completed:
+  - added `tests/test_governance_current_state_lock.py` to lock current-state governance language against final artifacts.
+  - locked accepted-state assertions for `README.md`, `TASK_QUEUE.md`, `DEV_ROADMAP.md`, and `GAP_ANALYSIS.md`.
+- Verification:
+  - `python3 -m unittest tests/test_governance_current_state_lock.py` -> `ok`
+  - `python3 scripts/validate_features.py feature-list.json` -> `ok`
+  - `python3 -m unittest tests/test_validate_features.py` -> `ok`
+- Result:
+  - `durable_closure=pass`
+- Notes:
+  - governance/test-only change; no runtime behavior modified.
+
 ### Session 171 - 2026-03-17
 - Focus: `historical-doc-layering-archive-cleanup`
 - Completed:
