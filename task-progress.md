@@ -17,10 +17,22 @@
 - Strategic state: `final_rollup_closed_leadership_met` (see `docs/performance-program.md`)
 - Last updated: 2026-03-17
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
-- Workflow policy: narrow performance hypotheses should start with `screen`, promote to tracked work only after `screen_result=promote`, and update durable docs only after authority verdicts
+- Workflow policy: capability-closure first for DiskANN/IVF-PQ (align to native/official feature set before further benchmark tuning); narrow performance hypotheses should start with `screen`, promote to tracked work only after `screen_result=promote`, and update durable docs only after authority verdicts
 - Progress: 66/66 features passing (100%)
 
 ## Session Log
+
+### Session 198 - 2026-03-17
+- Focus: `strategy-pivot-capability-closure-first`
+- Completed:
+  - adopted strategy pivot: prioritize native/official capability closure before additional benchmark tuning rounds.
+  - added durable implementation roadmap for DiskANN capability closure:
+    - `docs/diskann_capability_closure_plan.md`
+- Result:
+  - `durable_closure=pass`
+- Notes:
+  - benchmark sweeps remain allowed only as post-capability acceptance evidence, not as primary driver.
+  - immediate implementation order is now capability-first rather than parameter-first.
 
 ### Session 197 - 2026-03-17
 - Focus: `diskann-entry-point-selection-quality-upgrade`
