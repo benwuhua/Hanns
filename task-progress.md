@@ -22,6 +22,24 @@
 
 ## Session Log
 
+### Session 185 - 2026-03-17
+- Focus: `diskann-beamwidth-secondary-sweep`
+- Completed:
+  - ran secondary beamwidth sweep on top of current tuned config (`construction_l=128`, `pq_expand_pct=125`, `saturate=on`, `intra=8`).
+  - completed authority train+load A/B for `beamwidth=8` vs `beamwidth=10` on the same lane.
+  - archived sweep artifacts to local workspace for durable replay.
+- Verification:
+  - local screen (`base=5000`, `query=200`) generated `bw6/bw8/bw10/bw12` snapshots.
+  - authority (`base=2000`, `query=40`, `dim=128`, `top_k=10`, `pq_dims=4`):
+    - `beamwidth=8` train: `qps=11181.76`, `recall=0.8725`
+    - `beamwidth=10` train: `qps=11580.91`, `recall=0.8275`
+    - `beamwidth=8` load: `qps=11399.58`, `recall=0.8725`
+    - `beamwidth=10` load: `qps=11800.21`, `recall=0.8275`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - `beamwidth=10` is a clear qps-first profile (~`+3.5%`) with notable recall drop (`-4.5` absolute points), so default remains `8` and `10` is kept as opt-in throughput profile.
+
 ### Session 184 - 2026-03-17
 - Focus: `diskann-construction-l-decouple-and-authority-sweep`
 - Completed:
