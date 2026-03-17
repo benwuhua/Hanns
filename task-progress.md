@@ -22,6 +22,36 @@
 
 ## Session Log
 
+### Session 165 - 2026-03-17
+- Focus: `hnsw-fair-lane-throughput-screen-opt57-layer0-tail-batch4-padding`
+- Completed:
+  - ran a fresh cached candidate-profile probe to select next direction from measured hotspots:
+    - `distance_compute` remained dominant (~`69.1%` profiled share), with `batch4_calls=19336`, `scalar_calls=9204`.
+  - tested a new layer-0 tail handling hypothesis in ordered-pool L2 path:
+    - for residual neighbor batch length `2..3`, padded to a single batch4 distance call (duplicate fill index) instead of scalar-per-neighbor tail.
+  - local correctness checks passed, then remote cached quick-lane A/B showed clear regression with recall parity.
+  - rejected and rolled back code.
+- Verification:
+  - hotspot probe:
+    - artifact: `/data/work/knowhere-rs-logs/rs_hnsw_profile_probe_20260317.candidate.json`
+    - parsed summary log: `/data/work/knowhere-rs-logs/test_20260317T004836Z_98914.log`
+  - local:
+    - `cargo fmt --all -- --check` -> `ok`
+    - `cargo test --lib test_search_layer_idx_l2_ordered_pool_matches_heap_layer0_results -- --nocapture` -> `ok`
+    - `cargo test --lib test_search_single_l2_fast_matches_generic_and_filter_path_stays_stable -- --nocapture` -> `ok`
+    - `cargo test --lib test_search_single_l2_fast_bfloat16_matches_generic_unfiltered -- --nocapture` -> `ok`
+  - remote quick-lane A/B (with index cache):
+    - pre: `/data/work/knowhere-rs-logs/rs_hnsw_opt57_pre_quicklane.json` -> `qps=19268.119740`, `recall_at_10=0.9880`
+    - post: `/data/work/knowhere-rs-logs/rs_hnsw_opt57_post_quicklane.json` -> `qps=14058.504749`, `recall_at_10=0.9880`
+    - delta: `-27.04%`
+  - rollback:
+    - `git restore src/faiss/hnsw.rs` -> `ok`
+- Result:
+  - `screen_result=reject`
+- Notes:
+  - interpretation: forcing padded batch4 on short tails adds wasted work and hurts throughput significantly.
+  - next recommended step: stop tail-padding and pivot to data-layout level work (for example, BF16 storage/search path locality) rather than additional batch scheduling tweaks.
+
 ### Session 164 - 2026-03-17
 - Focus: `hnsw-fair-lane-throughput-screen-opt56-tls-search-scratch-reuse`
 - Completed:
