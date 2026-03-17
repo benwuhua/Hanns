@@ -259,6 +259,9 @@ pub struct IndexParams {
     /// For DiskANN persistence: write/read fixed-stride flash layout sidecar
     #[serde(default)]
     pub disk_enable_flash_layout: Option<bool>,
+    /// For DiskANN flash layout: load sidecar via mmap for runtime reads
+    #[serde(default)]
+    pub disk_flash_mmap_mode: Option<bool>,
     /// For PRQ: number of subquantizer splits (m)
     #[serde(default)]
     pub prq_m: Option<usize>,

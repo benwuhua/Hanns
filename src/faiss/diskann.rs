@@ -53,6 +53,8 @@ pub struct DiskAnnConfig {
     pub cache_dram_budget_gb: f32,
     /// Whether to persist/load fixed-stride flash layout sidecar
     pub enable_flash_layout: bool,
+    /// Whether to use mmap runtime reads for flash layout sidecar.
+    pub flash_mmap_mode: bool,
     /// Warm-up before search
     pub warm_up: bool,
     /// Filter threshold for PQ+Refine (0.0-1.0, -1 = auto)
@@ -83,6 +85,7 @@ impl Default for DiskAnnConfig {
             beamwidth: 8,
             cache_dram_budget_gb: 0.0,
             enable_flash_layout: false,
+            flash_mmap_mode: false,
             warm_up: false,
             filter_threshold: -1.0,
             accelerate_build: false,
@@ -118,6 +121,7 @@ impl DiskAnnConfig {
                 .clamp(100, 200),
             cache_dram_budget_gb: params.disk_search_cache_budget_gb.unwrap_or(0.0).max(0.0),
             enable_flash_layout: params.disk_enable_flash_layout.unwrap_or(false),
+            flash_mmap_mode: params.disk_flash_mmap_mode.unwrap_or(false),
             warm_up: false,
             filter_threshold: -1.0,
             accelerate_build: false,
@@ -344,6 +348,8 @@ pub struct DiskAnnIndex {
     flash_max_degree: usize,
     /// Raw vectors loaded from flash sidecar.
     flash_vectors: Option<Vec<f32>>,
+    /// Memory mapped flash sidecar for on-demand neighbor/vector reads.
+    flash_sidecar_mmap: Option<memmap2::Mmap>,
 }
 
 impl DiskAnnIndex {
@@ -374,6 +380,7 @@ impl DiskAnnIndex {
             flash_neighbor_ids: None,
             flash_max_degree: 0,
             flash_vectors: None,
+            flash_sidecar_mmap: None,
         })
     }
 
@@ -391,6 +398,7 @@ impl DiskAnnIndex {
         self.flash_neighbor_ids = None;
         self.flash_max_degree = 0;
         self.flash_vectors = None;
+        self.flash_sidecar_mmap = None;
 
         // Store vectors
         for i in 0..n {
@@ -543,6 +551,22 @@ impl DiskAnnIndex {
             return Ok(false);
         }
 
+        let header_len = 4 + 4 + 4 + 4 + 8;
+        let record_len = 4 + max_degree.saturating_mul(8) + self.dim.saturating_mul(4);
+        let expected_len = header_len + n.saturating_mul(record_len);
+
+        if self.dann_config.flash_mmap_mode {
+            let mmap = unsafe { memmap2::MmapOptions::new().map(&file)? };
+            if mmap.len() < expected_len {
+                return Ok(false);
+            }
+            self.flash_max_degree = max_degree;
+            self.flash_neighbor_ids = None;
+            self.flash_vectors = None;
+            self.flash_sidecar_mmap = Some(mmap);
+            return Ok(true);
+        }
+
         let mut flash_neighbor_ids = Vec::with_capacity(n * max_degree);
         let mut flash_vectors = Vec::with_capacity(n * self.dim);
         for _ in 0..n {
@@ -566,8 +590,53 @@ impl DiskAnnIndex {
         self.flash_max_degree = max_degree;
         self.flash_neighbor_ids = Some(flash_neighbor_ids);
         self.flash_vectors = Some(flash_vectors);
+        self.flash_sidecar_mmap = None;
 
         Ok(true)
+    }
+
+    #[inline]
+    fn flash_mmap_record_len(&self) -> Option<usize> {
+        if self.flash_max_degree == 0 {
+            None
+        } else {
+            Some(4 + self.flash_max_degree * 8 + self.dim * 4)
+        }
+    }
+
+    #[inline]
+    fn flash_mmap_neighbor_id(&self, idx: usize, slot: usize) -> Option<i64> {
+        let mmap = self.flash_sidecar_mmap.as_ref()?;
+        let record = self.flash_mmap_record_len()?;
+        if slot >= self.flash_max_degree {
+            return None;
+        }
+        let offset = 24 + idx.checked_mul(record)? + 4 + slot.checked_mul(8)?;
+        let end = offset + 8;
+        if end > mmap.len() {
+            return None;
+        }
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&mmap[offset..end]);
+        Some(i64::from_le_bytes(bytes))
+    }
+
+    #[inline]
+    fn flash_mmap_vector_component(&self, idx: usize, d: usize) -> Option<f32> {
+        let mmap = self.flash_sidecar_mmap.as_ref()?;
+        let record = self.flash_mmap_record_len()?;
+        if d >= self.dim {
+            return None;
+        }
+        let vec_base = 24 + idx.checked_mul(record)? + 4 + self.flash_max_degree.checked_mul(8)?;
+        let offset = vec_base + d.checked_mul(4)?;
+        let end = offset + 4;
+        if end > mmap.len() {
+            return None;
+        }
+        let mut bytes = [0u8; 4];
+        bytes.copy_from_slice(&mmap[offset..end]);
+        Some(f32::from_le_bytes(bytes))
     }
 
     #[inline]
@@ -589,6 +658,33 @@ impl DiskAnnIndex {
             return None;
         }
         Some(&ids[start..end])
+    }
+
+    #[inline]
+    fn neighbor_indices(&self, idx: usize) -> Vec<usize> {
+        if let Some(nbrs) = self.flash_neighbors(idx) {
+            return nbrs
+                .iter()
+                .copied()
+                .filter(|&id| id >= 0)
+                .map(|id| id as usize)
+                .collect();
+        }
+        if self.flash_sidecar_mmap.is_some() {
+            let mut out = Vec::with_capacity(self.flash_max_degree);
+            for slot in 0..self.flash_max_degree {
+                if let Some(id) = self.flash_mmap_neighbor_id(idx, slot) {
+                    if id >= 0 {
+                        out.push(id as usize);
+                    }
+                }
+            }
+            return out;
+        }
+        self.graph
+            .get(idx)
+            .map(|nbrs| nbrs.iter().map(|&(id, _)| id as usize).collect())
+            .unwrap_or_default()
     }
 
     /// Build PQ codes for compression
@@ -1016,10 +1112,19 @@ impl DiskAnnIndex {
 
     #[inline]
     fn l2_sqr(&self, a: &[f32], b_idx: usize) -> f32 {
-        let b = self.node_vector(b_idx);
-
-        // Search/range gate on squared L2 directly to avoid an unnecessary sqrt+square roundtrip.
-        simd::l2_distance_sq(a, b)
+        if self.flash_sidecar_mmap.is_some() && self.flash_vectors.is_none() {
+            let mut acc = 0.0f32;
+            for (d, &av) in a.iter().enumerate().take(self.dim) {
+                let bv = self.flash_mmap_vector_component(b_idx, d).unwrap_or(0.0);
+                let diff = av - bv;
+                acc += diff * diff;
+            }
+            acc
+        } else {
+            let b = self.node_vector(b_idx);
+            // Search/range gate on squared L2 directly to avoid an unnecessary sqrt+square roundtrip.
+            simd::l2_distance_sq(a, b)
+        }
     }
 
     #[inline]
@@ -1034,14 +1139,20 @@ impl DiskAnnIndex {
 
     #[inline]
     fn ip_distance(&self, a: &[f32], b_idx: usize) -> f32 {
-        let b = self.node_vector(b_idx);
-
         // For IP, higher is better, so we return negative (for consistent sorting)
         let mut sum = 0.0f32;
-        for i in 0..self.dim {
-            sum += a[i] * b[i];
+        if self.flash_sidecar_mmap.is_some() && self.flash_vectors.is_none() {
+            for (d, &av) in a.iter().enumerate().take(self.dim) {
+                let bv = self.flash_mmap_vector_component(b_idx, d).unwrap_or(0.0);
+                sum += av * bv;
+            }
+        } else {
+            let b = self.node_vector(b_idx);
+            for i in 0..self.dim {
+                sum += a[i] * b[i];
+            }
         }
-        -sum // Negative so that max becomes min in sorting
+        -sum
     }
 
     /// Compute distance based on metric type
@@ -1206,64 +1317,10 @@ impl DiskAnnIndex {
             }
 
             // Explore neighbors with beamwidth limit
-            if let Some(nbrs) = self.flash_neighbors(idx) {
+            {
                 let mut nbr_dists: Vec<(f32, usize)> = Vec::new();
 
-                for &nbr_id in nbrs {
-                    if nbr_id < 0 {
-                        continue;
-                    }
-                    let n_idx = nbr_id as usize;
-                    if n_idx < n && !visited[n_idx] {
-                        // Use PQ distance if available and node is not cached
-                        let d = if let Some(pq_codes) = &self.pq_codes {
-                            if !self.cached_nodes.contains(&n_idx) {
-                                if let Some(table) = &pq_query_table {
-                                    pq_codes.distance_with_table(table, n_idx, self.dim)
-                                } else {
-                                    pq_codes.distance(query, n_idx, self.dim)
-                                }
-                            } else {
-                                self.compute_dist(query, n_idx)
-                            }
-                        } else {
-                            self.compute_dist(query, n_idx)
-                        };
-                        nbr_dists.push((d, n_idx));
-                    }
-                }
-
-                // Phase-1: PQ/approx screening order.
-                nbr_dists.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-
-                // Phase-2: optional exact rerank on a wider candidate pool.
-                let rerank_width = if self.pq_codes.is_some() {
-                    beamwidth
-                        .saturating_mul(self.dann_config.rerank_expand_pct)
-                        .saturating_add(99)
-                        / 100
-                } else {
-                    beamwidth
-                }
-                .max(beamwidth)
-                .min(nbr_dists.len());
-
-                let mut reranked: Vec<(f32, usize)> = nbr_dists
-                    .into_iter()
-                    .take(rerank_width)
-                    .map(|(_screen_d, n_idx)| (self.compute_dist(query, n_idx), n_idx))
-                    .collect();
-                reranked.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-
-                for (exact_d, n_idx) in reranked.into_iter().take(beamwidth) {
-                    visited[n_idx] = true;
-                    candidates.push(ReverseOrderedFloat(exact_d, n_idx));
-                }
-            } else if let Some(nbrs) = self.graph.get(idx) {
-                let mut nbr_dists: Vec<(f32, usize)> = Vec::new();
-
-                for &(nbr_id, _) in nbrs {
-                    let n_idx = nbr_id as usize;
+                for n_idx in self.neighbor_indices(idx) {
                     if n_idx < n && !visited[n_idx] {
                         // Use PQ distance if available and node is not cached
                         let d = if let Some(pq_codes) = &self.pq_codes {
@@ -1375,34 +1432,10 @@ impl DiskAnnIndex {
             let (idx, _dist) = candidates.pop_front().unwrap();
 
             // Explore neighbors
-            if let Some(nbrs) = self.flash_neighbors(idx) {
+            {
                 let mut nbr_dists: Vec<(f32, usize)> = Vec::new();
 
-                for &nbr_id in nbrs {
-                    if nbr_id < 0 {
-                        continue;
-                    }
-                    let n_idx = nbr_id as usize;
-                    if n_idx < n && !visited[n_idx] {
-                        let d = self.compute_dist(query, n_idx);
-                        if d <= radius * radius {
-                            results.push((self.ids[n_idx], d.sqrt()));
-                            nbr_dists.push((d, n_idx));
-                        }
-                        visited[n_idx] = true;
-                    }
-                }
-
-                // Continue searching from closest neighbors
-                nbr_dists.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-                for (d, n_idx) in nbr_dists.into_iter().take(beamwidth) {
-                    candidates.push_back((n_idx, d));
-                }
-            } else if let Some(nbrs) = self.graph.get(idx) {
-                let mut nbr_dists: Vec<(f32, usize)> = Vec::new();
-
-                for &(nbr_id, _) in nbrs {
-                    let n_idx = nbr_id as usize;
+                for n_idx in self.neighbor_indices(idx) {
                     if n_idx < n && !visited[n_idx] {
                         let d = self.compute_dist(query, n_idx);
                         if d <= radius * radius {
@@ -1673,6 +1706,7 @@ impl DiskAnnIndex {
             self.flash_neighbor_ids = None;
             self.flash_vectors = None;
             self.flash_max_degree = 0;
+            self.flash_sidecar_mmap = None;
         }
 
         self.trained = true;
@@ -1981,6 +2015,60 @@ mod tests {
     }
 
     #[test]
+    fn test_diskann_search_can_run_from_flash_sidecar_mmap_mode() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_enable_flash_layout: Some(true),
+                disk_flash_mmap_mode: Some(true),
+                max_degree: Some(16),
+                ..Default::default()
+            },
+        };
+
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            2.0, 0.0, 0.0, 0.0, //
+            3.0, 0.0, 0.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+
+        let temp_path = std::env::temp_dir().join("diskann_flash_sidecar_mmap_test.bin");
+        let sidecar = DiskAnnIndex::flash_layout_sidecar_path(&temp_path);
+        index.save(&temp_path).unwrap();
+
+        let mut loaded = DiskAnnIndex::new(&config).unwrap();
+        loaded.load(&temp_path).unwrap();
+        assert!(loaded.has_flash_layout);
+        assert!(loaded.flash_sidecar_mmap.is_some());
+        assert!(loaded.flash_neighbor_ids.is_none());
+        assert!(loaded.flash_vectors.is_none());
+
+        loaded.graph.clear();
+        loaded.vectors.clear();
+
+        let query = vec![0.1f32, 0.0, 0.0, 0.0];
+        let req = SearchRequest {
+            top_k: 2,
+            nprobe: 8,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let result = loaded.search(&query, &req).unwrap();
+        assert_eq!(result.ids.len(), 2);
+        assert!(result.ids[0] >= 0);
+
+        std::fs::remove_file(temp_path).ok();
+        std::fs::remove_file(sidecar).ok();
+    }
+
+    #[test]
     fn test_diskann_range_search() {
         let config = IndexConfig {
             index_type: IndexType::DiskAnn,
@@ -2073,6 +2161,7 @@ mod tests {
             disk_build_dram_budget_gb: Some(2.5),
             disk_search_cache_budget_gb: Some(1.25),
             disk_enable_flash_layout: Some(true),
+            disk_flash_mmap_mode: Some(true),
             ..Default::default()
         };
 
@@ -2100,6 +2189,7 @@ mod tests {
         assert_eq!(index.dann_config.build_dram_budget_gb, 2.5);
         assert_eq!(index.dann_config.cache_dram_budget_gb, 1.25);
         assert!(index.dann_config.enable_flash_layout);
+        assert!(index.dann_config.flash_mmap_mode);
     }
 
     #[test]

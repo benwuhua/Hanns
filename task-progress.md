@@ -22,6 +22,39 @@
 
 ## Session Log
 
+### Session 206 - 2026-03-17
+- Focus: `diskann-flash-mmap-runtime-path`
+- Completed:
+  - added optional mmap runtime mode for DiskANN flash sidecar:
+    - new API param `disk_flash_mmap_mode`.
+    - `DiskAnnConfig.flash_mmap_mode` wiring.
+    - flash sidecar loader now supports two runtime modes:
+      - eager decode (`flash_neighbor_ids` + `flash_vectors`)
+      - mmap on-demand reads (`flash_sidecar_mmap`)
+    - search/range traversal now uses a unified neighbor-source path that works with:
+      - eager flash buffers
+      - mmap flash buffers
+      - legacy in-memory graph fallback
+    - distance kernels now support mmap-backed vector reads when eager vectors are absent.
+  - added regression:
+    - `test_diskann_search_can_run_from_flash_sidecar_mmap_mode`
+      - verifies search works in mmap mode even after clearing in-memory `graph`/`vectors`.
+  - extended config mapping regression:
+    - `test_diskann_config` now locks `disk_flash_mmap_mode -> dann_config.flash_mmap_mode`.
+- Verification:
+  - local:
+    - `cargo test --lib test_diskann_search_can_run_from_flash_sidecar_mmap_mode -- --nocapture` -> `ok`
+    - `cargo test --lib test_diskann_config -- --nocapture` -> `ok`
+    - `cargo test --lib diskann::tests:: -- --nocapture` -> `ok` (`31 passed`)
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib test_diskann_search_can_run_from_flash_sidecar_mmap_mode -- --nocapture"` -> `ok` (`run_id=20260317T092249Z_84809`)
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T092312Z_84965`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this step provides an executable mmap-capable runtime path but still does not include native-grade async SSD I/O scheduling and cache policies.
+
 ### Session 205 - 2026-03-17
 - Focus: `diskann-flash-layout-read-path-runtime`
 - Completed:
