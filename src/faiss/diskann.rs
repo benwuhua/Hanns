@@ -36,6 +36,8 @@ pub struct DiskAnnConfig {
     pub pq_candidate_expand_pct: usize,
     /// Whether to saturate adjacency to max degree after alpha pruning
     pub saturate_after_prune: bool,
+    /// Additional temporal candidates during build (0 = disabled)
+    pub intra_batch_candidates: usize,
     /// Beamwidth for search (IO parallelism), default 8
     pub beamwidth: usize,
     /// Cache DRAM budget in GB
@@ -62,6 +64,7 @@ impl Default for DiskAnnConfig {
             disk_pq_dims: 0,
             pq_candidate_expand_pct: 125,
             saturate_after_prune: true,
+            intra_batch_candidates: 8,
             beamwidth: 8,
             cache_dram_budget_gb: 0.0,
             warm_up: false,
@@ -88,6 +91,7 @@ impl DiskAnnConfig {
                 .unwrap_or(125)
                 .clamp(100, 300),
             saturate_after_prune: params.disk_saturate_after_prune.unwrap_or(true),
+            intra_batch_candidates: params.disk_intra_batch_candidates.unwrap_or(8).min(256),
             cache_dram_budget_gb: 0.0,
             warm_up: false,
             filter_threshold: -1.0,
@@ -439,9 +443,15 @@ impl DiskAnnIndex {
 
             // Search for neighbors using current graph
             let neighbors = self.vamana_search(query, L, R, &current_graph);
+            let mut merged_neighbors = neighbors;
+            if self.dann_config.intra_batch_candidates > 0 {
+                merged_neighbors.extend(self.collect_intra_batch_candidates(i));
+            }
+            merged_neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+            merged_neighbors.dedup_by(|a, b| a.0 == b.0);
 
             // Add bidirectional edges
-            let mut node_neighbors: Vec<(i64, f32)> = neighbors
+            let mut node_neighbors: Vec<(i64, f32)> = merged_neighbors
                 .iter()
                 .map(|&(idx, dist)| (self.ids[idx], dist))
                 .collect();
@@ -452,7 +462,7 @@ impl DiskAnnIndex {
             current_graph.push(node_neighbors);
 
             // Add reverse edges
-            for &(idx, dist) in &neighbors {
+            for &(idx, dist) in &merged_neighbors {
                 if idx < current_graph.len() {
                     current_graph[idx].push((self.ids[i], dist));
                     // Prune reverse edges too
@@ -467,6 +477,23 @@ impl DiskAnnIndex {
         if !self.dann_config.accelerate_build {
             self.refine_graph();
         }
+    }
+
+    /// Add temporal candidates from recent inserted nodes.
+    fn collect_intra_batch_candidates(&self, i: usize) -> Vec<(usize, f32)> {
+        let window = self.dann_config.intra_batch_candidates.min(i);
+        if window == 0 {
+            return Vec::new();
+        }
+
+        let start = i - window;
+        let query = &self.vectors[i * self.dim..(i + 1) * self.dim];
+        let mut out = Vec::with_capacity(window);
+        for idx in start..i {
+            let d = self.compute_dist(query, idx);
+            out.push((idx, d));
+        }
+        out
     }
 
     /// Vamana search for finding neighbors during build
@@ -1439,6 +1466,7 @@ mod tests {
             disk_pq_dims: Some(2),
             disk_pq_candidate_expand_pct: Some(150),
             disk_saturate_after_prune: Some(false),
+            disk_intra_batch_candidates: Some(7),
             ..Default::default()
         };
 
@@ -1458,6 +1486,7 @@ mod tests {
         assert_eq!(index.dann_config.disk_pq_dims, 2);
         assert_eq!(index.dann_config.pq_candidate_expand_pct, 150);
         assert!(!index.dann_config.saturate_after_prune);
+        assert_eq!(index.dann_config.intra_batch_candidates, 7);
     }
 
     #[test]
@@ -1479,6 +1508,33 @@ mod tests {
 
         let index = DiskAnnIndex::new(&config).unwrap();
         assert_eq!(index.dann_config.pq_candidate_expand_pct, 100);
+    }
+
+    #[test]
+    fn test_diskann_collect_intra_batch_candidates_respects_window() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_intra_batch_candidates: Some(2),
+                ..Default::default()
+            },
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        index.vectors = vec![
+            0.0, 0.0, // 0
+            1.0, 0.0, // 1
+            2.0, 0.0, // 2
+            3.0, 0.0, // 3
+        ];
+        index.ids = vec![0, 1, 2, 3];
+
+        let cands = index.collect_intra_batch_candidates(3);
+        assert_eq!(cands.len(), 2);
+        assert_eq!(cands[0].0, 1);
+        assert_eq!(cands[1].0, 2);
     }
 
     #[test]

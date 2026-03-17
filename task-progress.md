@@ -22,6 +22,33 @@
 
 ## Session Log
 
+### Session 183 - 2026-03-17
+- Focus: `diskann-intra-batch-candidates-build-alignment`
+- Completed:
+  - added a new DiskANN build parameter `disk_intra_batch_candidates` and wired it end-to-end:
+    - API field in `IndexParams`
+    - config mapping in `DiskAnnConfig`
+    - benchmark CLI knob `--intra-batch-candidates`
+  - updated `build_vamana_graph` to merge temporal intra-batch candidates (recent inserted window) into build neighbor candidates before prune.
+  - kept dedup and prune boundaries intact, and added unit coverage for candidate-window behavior.
+  - authority-screened `intra=0` vs `intra=8` on the same lane and promoted `intra=8` as new default.
+- Verification:
+  - `cargo fmt --all` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_config -- --nocapture` -> `ok`
+  - `cargo test --lib diskann::tests::test_diskann_collect_intra_batch_candidates_respects_window -- --nocapture` -> `ok`
+  - `cargo test --bin bench_diskann_pq_ab -- --nocapture` -> `ok`
+  - authority (`base=2000`, `query=40`, `dim=128`, `pq_dims=4`, `pq_expand_pct=125`, `saturate=on`):
+    - train lane:
+      - `intra=0`: `qps=13217.31`, `recall=0.7825`
+      - `intra=8`: `qps=13328.33`, `recall=0.8075`
+    - load lane:
+      - `intra=0`: `qps=13281.85`, `recall=0.7825`
+      - `intra=8`: `qps=13483.60`, `recall=0.8075`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - `intra=8` improves both qps and recall on current authority lane, so default has been raised from `0` to `8` while retaining runtime override.
+
 ### Session 182 - 2026-03-17
 - Focus: `diskann-build-prune-robustness-and-saturation-toggle`
 - Completed:
