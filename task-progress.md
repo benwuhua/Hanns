@@ -22,6 +22,33 @@
 
 ## Session Log
 
+### Session 207 - 2026-03-17
+- Focus: `diskann-flash-mmap-budgeted-cache`
+- Completed:
+  - added budgeted runtime cache strategy for DiskANN flash mmap mode:
+    - when `disk_flash_mmap_mode=true`, `load()` now optionally pre-decodes hotspot nodes under `disk_search_cache_budget_gb` budget.
+    - cache population starts from entry points and expands to first-hop neighbors.
+    - runtime search reads now prioritize:
+      1) cached flash decoded nodes
+      2) mmap on-demand reads
+      3) in-memory graph/vector fallback
+  - added regression:
+    - `test_diskann_flash_mmap_runtime_cache_respects_budget`
+      - locks tiny-budget behavior (`<=1` cached node on fixture).
+- Verification:
+  - local:
+    - `cargo test --lib test_diskann_flash_mmap_runtime_cache_respects_budget -- --nocapture` -> `ok`
+    - `cargo test --lib test_diskann_search_can_run_from_flash_sidecar_mmap_mode -- --nocapture` -> `ok`
+    - `cargo test --lib diskann::tests:: -- --nocapture` -> `ok` (`32 passed`)
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib test_diskann_flash_mmap_runtime_cache_respects_budget -- --nocapture"` -> `ok` (`run_id=20260317T092739Z_85958`)
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T092756Z_86068`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes a first budget-aware cache layer for mmap runtime; it is still a synchronous in-process cache (not yet native-grade async read scheduler / multi-level cache policy).
+
 ### Session 206 - 2026-03-17
 - Focus: `diskann-flash-mmap-runtime-path`
 - Completed:

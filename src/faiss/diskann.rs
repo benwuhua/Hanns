@@ -12,7 +12,7 @@
 //! - Statistics API for monitoring
 
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashSet, VecDeque};
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
 use crate::api::search::Predicate;
 use crate::api::{IndexConfig, MetricType, Result, SearchRequest, SearchResult};
@@ -350,6 +350,10 @@ pub struct DiskAnnIndex {
     flash_vectors: Option<Vec<f32>>,
     /// Memory mapped flash sidecar for on-demand neighbor/vector reads.
     flash_sidecar_mmap: Option<memmap2::Mmap>,
+    /// Budgeted runtime cache for flash mmap mode (node idx -> decoded neighbors).
+    flash_cached_neighbors: Option<HashMap<usize, Box<[i64]>>>,
+    /// Budgeted runtime cache for flash mmap mode (node idx -> decoded vector).
+    flash_cached_vectors: Option<HashMap<usize, Box<[f32]>>>,
 }
 
 impl DiskAnnIndex {
@@ -381,6 +385,8 @@ impl DiskAnnIndex {
             flash_max_degree: 0,
             flash_vectors: None,
             flash_sidecar_mmap: None,
+            flash_cached_neighbors: None,
+            flash_cached_vectors: None,
         })
     }
 
@@ -399,6 +405,8 @@ impl DiskAnnIndex {
         self.flash_max_degree = 0;
         self.flash_vectors = None;
         self.flash_sidecar_mmap = None;
+        self.flash_cached_neighbors = None;
+        self.flash_cached_vectors = None;
 
         // Store vectors
         for i in 0..n {
@@ -564,6 +572,8 @@ impl DiskAnnIndex {
             self.flash_neighbor_ids = None;
             self.flash_vectors = None;
             self.flash_sidecar_mmap = Some(mmap);
+            self.flash_cached_neighbors = None;
+            self.flash_cached_vectors = None;
             return Ok(true);
         }
 
@@ -591,6 +601,8 @@ impl DiskAnnIndex {
         self.flash_neighbor_ids = Some(flash_neighbor_ids);
         self.flash_vectors = Some(flash_vectors);
         self.flash_sidecar_mmap = None;
+        self.flash_cached_neighbors = None;
+        self.flash_cached_vectors = None;
 
         Ok(true)
     }
@@ -639,8 +651,118 @@ impl DiskAnnIndex {
         Some(f32::from_le_bytes(bytes))
     }
 
+    fn flash_mmap_read_node(&self, idx: usize) -> Option<(Box<[i64]>, Box<[f32]>)> {
+        if self.flash_sidecar_mmap.is_none() || self.flash_max_degree == 0 {
+            return None;
+        }
+        let mut nbrs = Vec::with_capacity(self.flash_max_degree);
+        for slot in 0..self.flash_max_degree {
+            nbrs.push(self.flash_mmap_neighbor_id(idx, slot)?);
+        }
+        let mut vec = Vec::with_capacity(self.dim);
+        for d in 0..self.dim {
+            vec.push(self.flash_mmap_vector_component(idx, d)?);
+        }
+        Some((nbrs.into_boxed_slice(), vec.into_boxed_slice()))
+    }
+
+    fn build_flash_runtime_cache_from_budget(&mut self) {
+        if self.flash_sidecar_mmap.is_none() || self.flash_max_degree == 0 {
+            self.flash_cached_neighbors = None;
+            self.flash_cached_vectors = None;
+            return;
+        }
+        let Some(budget) = DiskAnnConfig::budget_bytes(self.dann_config.cache_dram_budget_gb) else {
+            self.flash_cached_neighbors = None;
+            self.flash_cached_vectors = None;
+            return;
+        };
+        if budget == 0 {
+            self.flash_cached_neighbors = None;
+            self.flash_cached_vectors = None;
+            return;
+        }
+
+        let node_cost = self
+            .flash_max_degree
+            .saturating_mul(std::mem::size_of::<i64>())
+            .saturating_add(self.dim.saturating_mul(std::mem::size_of::<f32>()));
+        if node_cost == 0 || node_cost > budget {
+            self.flash_cached_neighbors = None;
+            self.flash_cached_vectors = None;
+            return;
+        }
+
+        let mut candidates = Vec::new();
+        candidates.extend(self.entry_points.iter().copied());
+        if candidates.is_empty() {
+            if let Some(ep) = self.entry_point {
+                candidates.push(ep);
+            }
+        }
+        if candidates.is_empty() && !self.ids.is_empty() {
+            candidates.push(0);
+        }
+
+        let mut seen = HashSet::new();
+        let mut used = 0usize;
+        let mut cached_neighbors: HashMap<usize, Box<[i64]>> = HashMap::new();
+        let mut cached_vectors: HashMap<usize, Box<[f32]>> = HashMap::new();
+
+        let mut enqueue_neighbors = Vec::new();
+        for idx in candidates {
+            if idx >= self.ids.len() || !seen.insert(idx) {
+                continue;
+            }
+            if used + node_cost > budget {
+                break;
+            }
+            if let Some((nbrs, vec)) = self.flash_mmap_read_node(idx) {
+                enqueue_neighbors.extend(
+                    nbrs.iter()
+                        .copied()
+                        .filter(|&id| id >= 0)
+                        .map(|id| id as usize),
+                );
+                used += node_cost;
+                cached_neighbors.insert(idx, nbrs);
+                cached_vectors.insert(idx, vec);
+            }
+        }
+
+        for idx in enqueue_neighbors {
+            if idx >= self.ids.len() || !seen.insert(idx) {
+                continue;
+            }
+            if used + node_cost > budget {
+                break;
+            }
+            if let Some((nbrs, vec)) = self.flash_mmap_read_node(idx) {
+                used += node_cost;
+                cached_neighbors.insert(idx, nbrs);
+                cached_vectors.insert(idx, vec);
+            }
+        }
+
+        if cached_neighbors.is_empty() {
+            self.flash_cached_neighbors = None;
+            self.flash_cached_vectors = None;
+        } else {
+            self.flash_cached_neighbors = Some(cached_neighbors);
+            self.flash_cached_vectors = Some(cached_vectors);
+        }
+    }
+
     #[inline]
     fn node_vector(&self, idx: usize) -> &[f32] {
+        if let Some(v) = self
+            .flash_cached_vectors
+            .as_ref()
+            .and_then(|m| m.get(&idx))
+            .map(|b| b.as_ref())
+        {
+            return v;
+        }
         let data: &[f32] = self.flash_vectors.as_deref().unwrap_or(&self.vectors);
         let start = idx * self.dim;
         &data[start..start + self.dim]
@@ -648,6 +770,14 @@ impl DiskAnnIndex {
 
     #[inline]
     fn flash_neighbors(&self, idx: usize) -> Option<&[i64]> {
+        if let Some(n) = self
+            .flash_cached_neighbors
+            .as_ref()
+            .and_then(|m| m.get(&idx))
+            .map(|b| b.as_ref())
+        {
+            return Some(n);
+        }
         let ids = self.flash_neighbor_ids.as_deref()?;
         if self.flash_max_degree == 0 {
             return None;
@@ -1707,6 +1837,10 @@ impl DiskAnnIndex {
             self.flash_vectors = None;
             self.flash_max_degree = 0;
             self.flash_sidecar_mmap = None;
+            self.flash_cached_neighbors = None;
+            self.flash_cached_vectors = None;
+        } else if self.flash_sidecar_mmap.is_some() {
+            self.build_flash_runtime_cache_from_budget();
         }
 
         self.trained = true;
@@ -2063,6 +2197,51 @@ mod tests {
         let result = loaded.search(&query, &req).unwrap();
         assert_eq!(result.ids.len(), 2);
         assert!(result.ids[0] >= 0);
+
+        std::fs::remove_file(temp_path).ok();
+        std::fs::remove_file(sidecar).ok();
+    }
+
+    #[test]
+    fn test_diskann_flash_mmap_runtime_cache_respects_budget() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_enable_flash_layout: Some(true),
+                disk_flash_mmap_mode: Some(true),
+                disk_search_cache_budget_gb: Some(1e-9),
+                max_degree: Some(16),
+                ..Default::default()
+            },
+        };
+
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            2.0, 0.0, 0.0, 0.0, //
+            3.0, 0.0, 0.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+
+        let temp_path = std::env::temp_dir().join("diskann_flash_mmap_budget_test.bin");
+        let sidecar = DiskAnnIndex::flash_layout_sidecar_path(&temp_path);
+        index.save(&temp_path).unwrap();
+
+        let mut loaded = DiskAnnIndex::new(&config).unwrap();
+        loaded.load(&temp_path).unwrap();
+        assert!(loaded.has_flash_layout);
+        assert!(loaded.flash_sidecar_mmap.is_some());
+        let cached = loaded
+            .flash_cached_vectors
+            .as_ref()
+            .map(|m| m.len())
+            .unwrap_or(0);
+        // tiny budget should cache at most one node in this fixture.
+        assert!(cached <= 1);
 
         std::fs::remove_file(temp_path).ok();
         std::fs::remove_file(sidecar).ok();
