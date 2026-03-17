@@ -22,6 +22,30 @@
 
 ## Session Log
 
+### Session 208 - 2026-03-17
+- Focus: `diskann-flash-mmap-prefetch-batch`
+- Completed:
+  - added mmap query-time prefetch batch control:
+    - new API param `disk_flash_prefetch_batch` (0 disables).
+    - `DiskAnnConfig.flash_prefetch_batch` wiring.
+  - search/range expansion now supports per-node local vector prefetch in mmap mode:
+    - for each expansion, first `flash_prefetch_batch` neighbors are decoded into a local temporary vector cache.
+    - distance evaluation prefers this local cache before falling back to mmap/random read path.
+  - extended config mapping regression and mmap runtime regression to lock the new knob.
+- Verification:
+  - local:
+    - `cargo test --lib test_diskann_config -- --nocapture` -> `ok`
+    - `cargo test --lib test_diskann_search_can_run_from_flash_sidecar_mmap_mode -- --nocapture` -> `ok`
+    - `cargo test --lib diskann::tests:: -- --nocapture` -> `ok` (`32 passed`)
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib test_diskann_search_can_run_from_flash_sidecar_mmap_mode -- --nocapture"` -> `ok` (`run_id=20260317T093130Z_86751`)
+    - `bash scripts/remote/test.sh --command "cargo test --lib diskann::tests:: -- --nocapture"` -> `ok` (`run_id=20260317T093148Z_86853`)
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this is still synchronous query-time predecode inside process; it prepares the path for later async batch I/O scheduling rather than replacing it.
+
 ### Session 207 - 2026-03-17
 - Focus: `diskann-flash-mmap-budgeted-cache`
 - Completed:

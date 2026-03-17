@@ -55,6 +55,8 @@ pub struct DiskAnnConfig {
     pub enable_flash_layout: bool,
     /// Whether to use mmap runtime reads for flash layout sidecar.
     pub flash_mmap_mode: bool,
+    /// Per-expansion prefetch batch size for mmap path (0 = disabled).
+    pub flash_prefetch_batch: usize,
     /// Warm-up before search
     pub warm_up: bool,
     /// Filter threshold for PQ+Refine (0.0-1.0, -1 = auto)
@@ -86,6 +88,7 @@ impl Default for DiskAnnConfig {
             cache_dram_budget_gb: 0.0,
             enable_flash_layout: false,
             flash_mmap_mode: false,
+            flash_prefetch_batch: 0,
             warm_up: false,
             filter_threshold: -1.0,
             accelerate_build: false,
@@ -122,6 +125,7 @@ impl DiskAnnConfig {
             cache_dram_budget_gb: params.disk_search_cache_budget_gb.unwrap_or(0.0).max(0.0),
             enable_flash_layout: params.disk_enable_flash_layout.unwrap_or(false),
             flash_mmap_mode: params.disk_flash_mmap_mode.unwrap_or(false),
+            flash_prefetch_batch: params.disk_flash_prefetch_batch.unwrap_or(0).min(256),
             warm_up: false,
             filter_threshold: -1.0,
             accelerate_build: false,
@@ -664,6 +668,17 @@ impl DiskAnnIndex {
             vec.push(self.flash_mmap_vector_component(idx, d)?);
         }
         Some((nbrs.into_boxed_slice(), vec.into_boxed_slice()))
+    }
+
+    fn flash_mmap_read_vector(&self, idx: usize) -> Option<Box<[f32]>> {
+        if self.flash_sidecar_mmap.is_none() {
+            return None;
+        }
+        let mut vec = Vec::with_capacity(self.dim);
+        for d in 0..self.dim {
+            vec.push(self.flash_mmap_vector_component(idx, d)?);
+        }
+        Some(vec.into_boxed_slice())
     }
 
     fn build_flash_runtime_cache_from_budget(&mut self) {
@@ -1295,6 +1310,29 @@ impl DiskAnnIndex {
         }
     }
 
+    #[inline]
+    fn compute_dist_with_prefetched(
+        &self,
+        query: &[f32],
+        idx: usize,
+        prefetched_vectors: Option<&HashMap<usize, Box<[f32]>>>,
+    ) -> f32 {
+        if let Some(v) = prefetched_vectors.and_then(|m| m.get(&idx)) {
+            match self.config.metric_type {
+                MetricType::Ip => {
+                    let mut sum = 0.0f32;
+                    for i in 0..self.dim {
+                        sum += query[i] * v[i];
+                    }
+                    -sum
+                }
+                _ => simd::l2_distance_sq(query, v),
+            }
+        } else {
+            self.compute_dist(query, idx)
+        }
+    }
+
     pub fn add(&mut self, vectors: &[f32], ids: Option<&[i64]>) -> Result<usize> {
         let n = vectors.len() / self.dim;
 
@@ -1448,9 +1486,26 @@ impl DiskAnnIndex {
 
             // Explore neighbors with beamwidth limit
             {
+                let neighbor_ids = self.neighbor_indices(idx);
+                let prefetched_vectors = if self.flash_sidecar_mmap.is_some()
+                    && self.flash_vectors.is_none()
+                    && self.dann_config.flash_prefetch_batch > 0
+                {
+                    let mut cache = HashMap::new();
+                    for &n_idx in neighbor_ids.iter().take(self.dann_config.flash_prefetch_batch) {
+                        if n_idx < n {
+                            if let Some(vec) = self.flash_mmap_read_vector(n_idx) {
+                                cache.insert(n_idx, vec);
+                            }
+                        }
+                    }
+                    Some(cache)
+                } else {
+                    None
+                };
                 let mut nbr_dists: Vec<(f32, usize)> = Vec::new();
 
-                for n_idx in self.neighbor_indices(idx) {
+                for n_idx in neighbor_ids {
                     if n_idx < n && !visited[n_idx] {
                         // Use PQ distance if available and node is not cached
                         let d = if let Some(pq_codes) = &self.pq_codes {
@@ -1464,7 +1519,11 @@ impl DiskAnnIndex {
                                 self.compute_dist(query, n_idx)
                             }
                         } else {
-                            self.compute_dist(query, n_idx)
+                            self.compute_dist_with_prefetched(
+                                query,
+                                n_idx,
+                                prefetched_vectors.as_ref(),
+                            )
                         };
                         nbr_dists.push((d, n_idx));
                     }
@@ -1488,7 +1547,16 @@ impl DiskAnnIndex {
                 let mut reranked: Vec<(f32, usize)> = nbr_dists
                     .into_iter()
                     .take(rerank_width)
-                    .map(|(_screen_d, n_idx)| (self.compute_dist(query, n_idx), n_idx))
+                    .map(|(_screen_d, n_idx)| {
+                        (
+                            self.compute_dist_with_prefetched(
+                                query,
+                                n_idx,
+                                prefetched_vectors.as_ref(),
+                            ),
+                            n_idx,
+                        )
+                    })
                     .collect();
                 reranked.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
@@ -1563,11 +1631,32 @@ impl DiskAnnIndex {
 
             // Explore neighbors
             {
+                let neighbor_ids = self.neighbor_indices(idx);
+                let prefetched_vectors = if self.flash_sidecar_mmap.is_some()
+                    && self.flash_vectors.is_none()
+                    && self.dann_config.flash_prefetch_batch > 0
+                {
+                    let mut cache = HashMap::new();
+                    for &n_idx in neighbor_ids.iter().take(self.dann_config.flash_prefetch_batch) {
+                        if n_idx < n {
+                            if let Some(vec) = self.flash_mmap_read_vector(n_idx) {
+                                cache.insert(n_idx, vec);
+                            }
+                        }
+                    }
+                    Some(cache)
+                } else {
+                    None
+                };
                 let mut nbr_dists: Vec<(f32, usize)> = Vec::new();
 
-                for n_idx in self.neighbor_indices(idx) {
+                for n_idx in neighbor_ids {
                     if n_idx < n && !visited[n_idx] {
-                        let d = self.compute_dist(query, n_idx);
+                        let d = self.compute_dist_with_prefetched(
+                            query,
+                            n_idx,
+                            prefetched_vectors.as_ref(),
+                        );
                         if d <= radius * radius {
                             results.push((self.ids[n_idx], d.sqrt()));
                             nbr_dists.push((d, n_idx));
@@ -2158,6 +2247,7 @@ mod tests {
             params: crate::api::IndexParams {
                 disk_enable_flash_layout: Some(true),
                 disk_flash_mmap_mode: Some(true),
+                disk_flash_prefetch_batch: Some(8),
                 max_degree: Some(16),
                 ..Default::default()
             },
@@ -2182,6 +2272,7 @@ mod tests {
         assert!(loaded.flash_sidecar_mmap.is_some());
         assert!(loaded.flash_neighbor_ids.is_none());
         assert!(loaded.flash_vectors.is_none());
+        assert_eq!(loaded.dann_config.flash_prefetch_batch, 8);
 
         loaded.graph.clear();
         loaded.vectors.clear();
@@ -2341,6 +2432,7 @@ mod tests {
             disk_search_cache_budget_gb: Some(1.25),
             disk_enable_flash_layout: Some(true),
             disk_flash_mmap_mode: Some(true),
+            disk_flash_prefetch_batch: Some(16),
             ..Default::default()
         };
 
@@ -2369,6 +2461,7 @@ mod tests {
         assert_eq!(index.dann_config.cache_dram_budget_gb, 1.25);
         assert!(index.dann_config.enable_flash_layout);
         assert!(index.dann_config.flash_mmap_mode);
+        assert_eq!(index.dann_config.flash_prefetch_batch, 16);
     }
 
     #[test]
