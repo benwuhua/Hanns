@@ -10,8 +10,10 @@
 - Remote-first worker guide and bootstrap entrypoint
 - Automated bootstrap test for `init.sh` injection hooks
 - DiskANN profile compare utility [scripts/diskann_profile_compare.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/scripts/diskann_profile_compare.py) plus regression test [tests/test_diskann_profile_compare.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/tests/test_diskann_profile_compare.py), which standardize `same-lsearch` and `near-same-recall` comparisons from benchmark JSON files and produce reusable compare artifacts (for example [benchmark_results/diskann_profile_compare_20260317.json](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/benchmark_results/diskann_profile_compare_20260317.json)).
+- DiskANN baseline-centered matrix utility [scripts/diskann_baseline_matrix.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/scripts/diskann_baseline_matrix.py) plus regression test [tests/test_diskann_baseline_matrix.py](/Users/ryan/.openclaw/workspace-builder/knowhere-rs/tests/test_diskann_baseline_matrix.py), which add deterministic baseline-row selection (`--baseline-filter`) and same-recall best-pick modes (`within_tolerance` / `nearest_recall_fallback`) for profile-grid artifacts.
 
 ### Changed
+- Added baseline-centered interpretation on top of the latest authority grid: for baseline `intra=8, construction_l=128` (`11418.11 / 0.8125`), the best non-baseline candidate within `±0.005` recall is `intra=4, construction_l=160` (`11250.90 / 0.8075`, `-1.46%` qps, `-0.0050` recall).
 - Authority profile-grid refresh (`2026-03-17`) on the tuned DiskANN lane (`lsearch=128`, `max_degree=48`, `beamwidth=8`, `pq_expand_pct=125`, `saturate=on`) updates the recommended profile matrix from `(intra_batch_candidates, construction_l)` combinations:
   - qps-first: `intra=8, construction_l=160` -> `11503.19 qps / 0.7825 recall`
   - balanced (default): `intra=8, construction_l=128` -> `11418.11 qps / 0.8125 recall`

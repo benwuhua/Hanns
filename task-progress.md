@@ -22,6 +22,24 @@
 
 ## Session Log
 
+### Session 191 - 2026-03-17
+- Focus: `diskann-baseline-centered-matrix-automation`
+- Completed:
+  - added baseline-centered compare utility `scripts/diskann_baseline_matrix.py` to evaluate all profile rows against a selected baseline (via `--baseline-filter key=value`).
+  - added regression test `tests/test_diskann_baseline_matrix.py` to lock both same-recall selection modes:
+    - `within_tolerance` (when a candidate falls inside absolute recall tolerance)
+    - `nearest_recall_fallback` (when no candidate is within tolerance)
+  - generated baseline-matrix artifact from the latest profile grid:
+    - `benchmark_results/diskann_baseline_matrix_20260317.json`
+- Verification:
+  - `python3 -m unittest tests/test_diskann_baseline_matrix.py tests/test_diskann_profile_compare.py` -> `ok`
+  - `python3 scripts/diskann_baseline_matrix.py --grid-json benchmark_results/diskann_profile_grid_20260317.json --baseline-filter intra_batch_candidates=8 --baseline-filter construction_l=128 --recall-tolerance 0.005 --output-json benchmark_results/diskann_baseline_matrix_20260317.json` -> `ok`
+- Result:
+  - `durable_closure=pass`
+- Notes:
+  - baseline (`intra=8`, `construction_l=128`) on this artifact is `11418.11 qps / 0.8125 recall`.
+  - same-recall-best (within `±0.005`) excluding baseline row is `intra=4`, `construction_l=160` at `11250.90 qps / 0.8075 recall` (`-1.46% qps`, `-0.0050 recall` vs baseline).
+
 ### Session 190 - 2026-03-17
 - Focus: `diskann-profile-grid-authority-refresh`
 - Completed:
