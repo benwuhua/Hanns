@@ -1951,6 +1951,9 @@ fn block_on<F: Future>(future: F) -> F::Output {
 mod tests {
     use super::*;
     use crate::api::{DataType, IndexParams, IndexType};
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+    use std::collections::HashSet;
 
     #[test]
     fn beam_io_tracks_reads() {
@@ -2459,5 +2462,162 @@ mod tests {
         bitset.set(0, true);
         bitset.set(1, true);
         assert!(!index.should_force_exact_filter_scan(Some(&bitset)));
+    }
+
+    fn brute_force_topk_l2(
+        vectors: &[f32],
+        queries: &[f32],
+        dim: usize,
+        k: usize,
+    ) -> Vec<Vec<i64>> {
+        let n = vectors.len() / dim;
+        let nq = queries.len() / dim;
+        let mut out = Vec::with_capacity(nq);
+        for q_idx in 0..nq {
+            let q = &queries[q_idx * dim..(q_idx + 1) * dim];
+            let mut scored = Vec::with_capacity(n);
+            for idx in 0..n {
+                let v = &vectors[idx * dim..(idx + 1) * dim];
+                scored.push((idx as i64, simd::l2_distance_sq(q, v)));
+            }
+            scored.sort_by(|a, b| a.1.total_cmp(&b.1));
+            out.push(scored.into_iter().take(k).map(|(id, _)| id).collect());
+        }
+        out
+    }
+
+    fn compute_recall(results: &SearchResult, ground_truth: &[Vec<i64>], k: usize) -> f64 {
+        let mut hits = 0usize;
+        for (query_idx, gt_ids) in ground_truth.iter().enumerate() {
+            let start = query_idx * k;
+            let end = ((query_idx + 1) * k).min(results.ids.len());
+            let result_ids: HashSet<i64> = results.ids[start..end].iter().copied().collect();
+            for &gt_id in gt_ids.iter().take(k) {
+                if result_ids.contains(&gt_id) {
+                    hits += 1;
+                }
+            }
+        }
+        hits as f64 / (k * ground_truth.len()) as f64
+    }
+
+    fn run_batch_search(index: &PQFlashIndex, queries: &[f32], dim: usize, k: usize) -> SearchResult {
+        let nq = queries.len() / dim;
+        let mut ids = Vec::with_capacity(nq * k);
+        let mut dists = Vec::with_capacity(nq * k);
+        for q_idx in 0..nq {
+            let q = &queries[q_idx * dim..(q_idx + 1) * dim];
+            let res = index.search(q, k).unwrap();
+            ids.extend(res.ids);
+            dists.extend(res.distances);
+        }
+        SearchResult::new(ids, dists, 0.0)
+    }
+
+    fn run_batch_search_with_bitset(
+        index: &PQFlashIndex,
+        queries: &[f32],
+        dim: usize,
+        k: usize,
+        bitset: &BitsetView,
+    ) -> SearchResult {
+        let nq = queries.len() / dim;
+        let mut ids = Vec::with_capacity(nq * k);
+        let mut dists = Vec::with_capacity(nq * k);
+        for q_idx in 0..nq {
+            let q = &queries[q_idx * dim..(q_idx + 1) * dim];
+            let res = index.search_with_bitset(q, k, bitset).unwrap();
+            ids.extend(res.ids);
+            dists.extend(res.distances);
+        }
+        SearchResult::new(ids, dists, 0.0)
+    }
+
+    #[test]
+    fn test_pqflash_basic_search() {
+        let dim = 16usize;
+        let n = 200usize;
+        let nq = 20usize;
+        let k = 5usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let queries: Vec<f32> = (0..nq * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+
+        let config = AisaqConfig {
+            max_degree: 16,
+            search_list_size: 50,
+            disk_pq_dims: 0,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, dim).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+
+        let results = run_batch_search(&index, &queries, dim, k);
+        assert_eq!(results.ids.len(), nq * k);
+        assert!(results.ids.iter().all(|&id| id >= 0));
+    }
+
+    #[test]
+    fn test_pqflash_recall_quality() {
+        let dim = 16usize;
+        let n = 500usize;
+        let nq = 30usize;
+        let k = 5usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let queries: Vec<f32> = (0..nq * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+
+        let config = AisaqConfig {
+            max_degree: 16,
+            search_list_size: 50,
+            disk_pq_dims: 0,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, dim).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+
+        let results = run_batch_search(&index, &queries, dim, k);
+        let gt = brute_force_topk_l2(&vectors, &queries, dim, k);
+        let recall = compute_recall(&results, &gt, k);
+        assert!(recall >= 0.70, "recall@5 too low: {recall:.4}");
+    }
+
+    #[test]
+    fn test_pqflash_bitset_filter() {
+        let dim = 16usize;
+        let n = 300usize;
+        let nq = 20usize;
+        let k = 5usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let queries: Vec<f32> = (0..nq * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+
+        let config = AisaqConfig {
+            max_degree: 16,
+            search_list_size: 50,
+            disk_pq_dims: 0,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, dim).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+
+        let mut bitset = BitsetView::new(index.len());
+        for i in (0..index.len()).step_by(2) {
+            bitset.set(i, true);
+        }
+
+        let results = run_batch_search_with_bitset(&index, &queries, dim, k, &bitset);
+        for &id in &results.ids {
+            if id >= 0 {
+                assert_ne!(
+                    (id as usize) % 2,
+                    0,
+                    "deleted id {id} should not appear in filtered results"
+                );
+            }
+        }
     }
 }
