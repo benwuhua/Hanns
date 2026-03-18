@@ -835,12 +835,6 @@ impl PQFlashIndex {
         }
         let stride = self.flat_stride;
         let pq_size = self.pq_code_size.max(1);
-        let build_l = if self.config.build_search_list_size > 0 {
-            self.config.build_search_list_size
-        } else {
-            (stride * 3).max(self.config.search_list_size)
-        };
-
         if self.entry_points.is_empty() && !self.node_ids.is_empty() {
             self.entry_points = vec![0];
         }
@@ -922,6 +916,11 @@ impl PQFlashIndex {
 
         #[cfg(not(feature = "parallel"))]
         {
+            let build_l = if self.config.build_search_list_size > 0 {
+                self.config.build_search_list_size
+            } else {
+                (stride * 3).max(self.config.search_list_size)
+            };
             for row in 0..num_vectors {
                 let start = row * self.dim;
                 let end = start + self.dim;
@@ -2022,7 +2021,7 @@ impl PQFlashIndex {
             self.exact_distance(query, self.node_vector(start_node))
         };
 
-        let mut frontier: BinaryHeap<Candidate> = BinaryHeap::new();
+        let mut frontier: BinaryHeap<Candidate> = BinaryHeap::with_capacity(l);
         let mut visited: HashSet<u32> = HashSet::with_capacity(l.saturating_mul(2));
         let mut best: Vec<(u32, f32)> = Vec::with_capacity(l);
 
