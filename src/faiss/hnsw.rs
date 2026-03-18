@@ -178,7 +178,7 @@ struct Layer0PoolEntry {
 
 #[derive(Default)]
 struct Layer0OrderedFrontier {
-    entries: Vec<Layer0PoolEntry>,
+    entries: BinaryHeap<(SearchMinDist, usize)>,
 }
 
 impl Layer0OrderedFrontier {
@@ -190,23 +190,19 @@ impl Layer0OrderedFrontier {
     }
 
     fn push(&mut self, entry: Layer0PoolEntry) {
-        let insert_at = self.entries.partition_point(|existing| {
-            matches!(
-                existing.dist.total_cmp(&entry.dist),
-                std::cmp::Ordering::Greater
-            ) || (existing.dist.to_bits() == entry.dist.to_bits() && existing.idx > entry.idx)
-        });
-        self.entries.insert(insert_at, entry);
+        self.entries.push((SearchMinDist(entry.dist), entry.idx));
     }
 
     fn pop_best(&mut self) -> Option<Layer0PoolEntry> {
-        self.entries.pop()
+        self.entries
+            .pop()
+            .map(|(SearchMinDist(dist), idx)| Layer0PoolEntry { idx, dist })
     }
 }
 
 #[derive(Default)]
 struct Layer0OrderedResults {
-    entries: Vec<Layer0PoolEntry>,
+    entries: BinaryHeap<(SearchMaxDist, usize)>,
 }
 
 impl Layer0OrderedResults {
@@ -222,7 +218,7 @@ impl Layer0OrderedResults {
     }
 
     fn worst_dist(&self) -> Option<f32> {
-        self.entries.last().map(|entry| entry.dist)
+        self.entries.peek().map(|(SearchMaxDist(dist), _)| *dist)
     }
 
     fn can_insert(&self, dist: f32, ef: usize) -> bool {
@@ -234,13 +230,7 @@ impl Layer0OrderedResults {
             return 0;
         }
 
-        let insert_at = self.entries.partition_point(|existing| {
-            matches!(
-                existing.dist.total_cmp(&entry.dist),
-                std::cmp::Ordering::Less
-            ) || (existing.dist.to_bits() == entry.dist.to_bits() && existing.idx < entry.idx)
-        });
-        self.entries.insert(insert_at, entry);
+        self.entries.push((SearchMaxDist(entry.dist), entry.idx));
         if self.entries.len() > ef {
             self.entries.pop();
             1
@@ -250,10 +240,18 @@ impl Layer0OrderedResults {
     }
 
     fn to_sorted_pairs(&self) -> Vec<(usize, f32)> {
-        self.entries
-            .iter()
-            .map(|entry| (entry.idx, entry.dist))
-            .collect()
+        let mut pairs: Vec<(usize, f32)> = self
+            .entries
+            .clone()
+            .into_sorted_vec()
+            .into_iter()
+            .map(|(SearchMaxDist(dist), idx)| (idx, dist))
+            .collect();
+        pairs.sort_by(|a, b| {
+            a.1.total_cmp(&b.1)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        pairs
     }
 }
 
@@ -388,6 +386,7 @@ struct SearchScratch {
     generic_worst_result_distance: f32,
     layer0_frontier: Layer0OrderedFrontier,
     layer0_results: Layer0OrderedResults,
+    query_bf16_scratch: Vec<u16>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1113,6 +1112,7 @@ impl SearchScratch {
             generic_worst_result_distance: f32::INFINITY,
             layer0_frontier: Layer0OrderedFrontier::default(),
             layer0_results: Layer0OrderedResults::default(),
+            query_bf16_scratch: Vec::new(),
         }
     }
 
@@ -4434,17 +4434,32 @@ impl HnswIndex {
         level: usize,
         ef: usize,
         scratch: &mut SearchScratch,
-        query_bf16: Option<&[u16]>,
     ) -> Vec<(usize, f32)> {
         let num_nodes = self.node_info.len();
         let use_flat_graph = level == 0 && self.layer0_flat_graph.is_enabled_for(num_nodes);
         let use_layer0_slab = use_flat_graph && self.layer0_slab.is_enabled_for(num_nodes);
         let query_ptr = query.as_ptr();
         let base_ptr = self.vectors.as_ptr();
+
+        let use_query_bf16 = self.use_bf16_storage;
+        let (query_bf16_ptr, query_bf16_len) = if use_query_bf16 {
+            scratch.query_bf16_scratch.clear();
+            scratch
+                .query_bf16_scratch
+                .extend(query.iter().map(|&v| Bf16::from_f32(v).to_bits()));
+            (
+                scratch.query_bf16_scratch.as_ptr(),
+                scratch.query_bf16_scratch.len(),
+            )
+        } else {
+            (std::ptr::null::<u16>(), 0usize)
+        };
+
         scratch.prepare(num_nodes);
         scratch.prepare_layer0_pools(ef);
 
-        let entry_dist = if let Some(bits) = query_bf16 {
+        let entry_dist = if use_query_bf16 {
+            let bits = unsafe { std::slice::from_raw_parts(query_bf16_ptr, query_bf16_len) };
             self.l2_distance_to_idx_bf16_with_query_bits(bits, entry_idx)
         } else {
             unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, entry_idx) }
@@ -4538,7 +4553,9 @@ impl HnswIndex {
                     batch_len += 1;
 
                     if batch_len == 4 {
-                        let distances = if let Some(bits) = query_bf16 {
+                        let distances = if use_query_bf16 {
+                            let bits =
+                                unsafe { std::slice::from_raw_parts(query_bf16_ptr, query_bf16_len) };
                             self.l2_distance_to_4_idxs_bf16_with_query_bits(bits, batch_indices)
                         } else {
                             unsafe {
@@ -4579,7 +4596,9 @@ impl HnswIndex {
                     batch_len += 1;
 
                     if batch_len == 4 {
-                        let distances = if let Some(bits) = query_bf16 {
+                        let distances = if use_query_bf16 {
+                            let bits =
+                                unsafe { std::slice::from_raw_parts(query_bf16_ptr, query_bf16_len) };
                             self.l2_distance_to_4_idxs_bf16_with_query_bits(bits, batch_indices)
                         } else {
                             unsafe {
@@ -4608,7 +4627,8 @@ impl HnswIndex {
                             self.dim,
                         )
                     }
-                } else if let Some(bits) = query_bf16 {
+                } else if use_query_bf16 {
+                    let bits = unsafe { std::slice::from_raw_parts(query_bf16_ptr, query_bf16_len) };
                     self.l2_distance_to_idx_bf16_with_query_bits(bits, nbr_idx)
                 } else {
                     unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) }
@@ -5213,23 +5233,12 @@ impl HnswIndex {
             }
         }
 
-        let query_bf16 = if self.use_bf16_storage {
-            Some(
-                query
-                    .iter()
-                    .map(|&v| Bf16::from_f32(v).to_bits())
-                    .collect::<Vec<u16>>(),
-            )
-        } else {
-            None
-        };
         let results = self.search_layer_idx_l2_ordered_pool_fast(
             query,
             best_ep_idx,
             0,
             ef,
             scratch,
-            query_bf16.as_deref(),
         );
 
         let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
