@@ -2518,6 +2518,8 @@ mod tests {
     use super::*;
     use crate::api::IndexType;
     use crate::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
     use serde_json::Value;
     use std::fs;
 
@@ -2527,6 +2529,180 @@ mod tests {
         let content = fs::read_to_string(DISKANN_FINAL_VERDICT_PATH)
             .expect("DiskANN family verdict artifact must exist for the library verdict lane");
         serde_json::from_str(&content).expect("DiskANN family verdict artifact must be valid JSON")
+    }
+
+    fn brute_force_ground_truth(
+        vectors: &[f32],
+        queries: &[f32],
+        dim: usize,
+        metric: MetricType,
+        k: usize,
+    ) -> Vec<Vec<i64>> {
+        let n = vectors.len() / dim;
+        let nq = queries.len() / dim;
+        let mut out = Vec::with_capacity(nq);
+        for q_idx in 0..nq {
+            let q = &queries[q_idx * dim..(q_idx + 1) * dim];
+            let mut scored = Vec::with_capacity(n);
+            for idx in 0..n {
+                let v = &vectors[idx * dim..(idx + 1) * dim];
+                let score = match metric {
+                    MetricType::Ip => {
+                        let mut dot = 0.0f32;
+                        for d in 0..dim {
+                            dot += q[d] * v[d];
+                        }
+                        -dot
+                    }
+                    _ => simd::l2_distance_sq(q, v),
+                };
+                scored.push((idx as i64, score));
+            }
+            scored.sort_by(|a, b| a.1.total_cmp(&b.1));
+            out.push(scored.into_iter().take(k).map(|(id, _)| id).collect());
+        }
+        out
+    }
+
+    fn compute_recall(results: &SearchResult, ground_truth: &[Vec<i64>], k: usize) -> f64 {
+        let mut hits = 0usize;
+        for (query_idx, gt_ids) in ground_truth.iter().enumerate() {
+            let start = query_idx * k;
+            let end = ((query_idx + 1) * k).min(results.ids.len());
+            let result_ids: HashSet<i64> = results.ids[start..end].iter().copied().collect();
+            for &gt_id in gt_ids.iter().take(k) {
+                if result_ids.contains(&gt_id) {
+                    hits += 1;
+                }
+            }
+        }
+        hits as f64 / (k * ground_truth.len()) as f64
+    }
+
+    #[test]
+    fn test_diskann_recall_at_10_l2() {
+        let dim = 16usize;
+        let n = 500usize;
+        let nq = 50usize;
+        let k = 10usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let queries: Vec<f32> = (0..nq * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                max_degree: Some(64),
+                construction_l: Some(256),
+                search_list_size: Some(256),
+                ..Default::default()
+            },
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        index.train(&vectors).unwrap();
+
+        let req = SearchRequest {
+            top_k: k,
+            nprobe: 200,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let results = index.search(&queries, &req).unwrap();
+        let gt = brute_force_ground_truth(&vectors, &queries, dim, MetricType::L2, k);
+        let recall = compute_recall(&results, &gt, k);
+        assert!(recall >= 0.85, "recall@10 L2 too low: {recall:.4}");
+    }
+
+    #[test]
+    fn test_diskann_recall_at_10_ip() {
+        let dim = 16usize;
+        let n = 500usize;
+        let nq = 50usize;
+        let k = 10usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let queries: Vec<f32> = (0..nq * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::Ip,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                max_degree: Some(64),
+                construction_l: Some(256),
+                search_list_size: Some(256),
+                ..Default::default()
+            },
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        index.train(&vectors).unwrap();
+
+        let req = SearchRequest {
+            top_k: k,
+            nprobe: 200,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let results = index.search(&queries, &req).unwrap();
+        let gt = brute_force_ground_truth(&vectors, &queries, dim, MetricType::Ip, k);
+        let recall = compute_recall(&results, &gt, k);
+        assert!(recall >= 0.80, "recall@10 IP too low: {recall:.4}");
+    }
+
+    #[test]
+    fn test_diskann_recall_improves_with_larger_L() {
+        let dim = 16usize;
+        let n = 500usize;
+        let nq = 50usize;
+        let k = 10usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let queries: Vec<f32> = (0..nq * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                max_degree: Some(64),
+                construction_l: Some(256),
+                search_list_size: Some(32),
+                ..Default::default()
+            },
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        index.train(&vectors).unwrap();
+
+        let gt = brute_force_ground_truth(&vectors, &queries, dim, MetricType::L2, k);
+        let req_l50 = SearchRequest {
+            top_k: k,
+            nprobe: 50,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let req_l200 = SearchRequest {
+            top_k: k,
+            nprobe: 200,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let recall_l50 = compute_recall(&index.search(&queries, &req_l50).unwrap(), &gt, k);
+        let recall_l200 = compute_recall(&index.search(&queries, &req_l200).unwrap(), &gt, k);
+
+        assert!(
+            recall_l200 >= recall_l50,
+            "expected recall(L=200) >= recall(L=50), got {recall_l200:.4} < {recall_l50:.4}"
+        );
+        assert!(recall_l200 >= 0.90, "recall@10 with L=200 too low: {recall_l200:.4}");
     }
 
     #[test]
