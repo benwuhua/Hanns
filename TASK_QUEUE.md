@@ -49,7 +49,11 @@
 #### P2 — 修复已知问题
 
 - [ ] **IVF-PQ-FIX-001** [P2]: IVF-PQ recall 0.47 根因分析 + 修复（目前 no-go）
-- [ ] **IVF-SQ8-FIX-001** [P2]: IVF-SQ8 修复 quantizer.train() 传入 residuals 而非原始向量
+- [x] **IVF-SQ8-FIX-001** [P2]: ✅ 修复完成
+  - 修复: train() 改为先 train_ivf() 获得 centroids，再用 residuals 训练 quantizer
+  - 结果: recall@full_scan 从 0.174 → 0.982（100K random, nprobe=256, Mac）
+  - 达到 recall gate (≥0.95 at nprobe=256，random worst-case)
+  - 需要 SIFT-1M 测试确认 authority QPS
 - [ ] **IVF-RABITQ-FIX-001** [P2]: IVF-RaBitQ recall ceiling — investigate larger refine_k (100x) or better quantization
 - [ ] **SCANN-FIX-001** [P2]: ScaNN recall ceiling (0.699 max at 100K) — investigate larger num_centroids/reorder_k or algorithm fix
 - [ ] **HNSW-IMP-001** [P2]: 若 strict-ef 仍落后 native，找真正的优化方向

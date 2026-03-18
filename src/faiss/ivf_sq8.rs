@@ -72,11 +72,21 @@ impl IvfSq8Index {
             ));
         }
 
-        // Train scalar quantizer first
-        self.quantizer.train(vectors);
-
-        // Simple k-means for IVF
+        // Step 1: train IVF centroids first
         self.train_ivf(vectors)?;
+
+        // Step 2: build residual training set using nearest centroids
+        let mut residuals = Vec::with_capacity(n * self.dim);
+        for i in 0..n {
+            let start = i * self.dim;
+            let vector = &vectors[start..start + self.dim];
+            let cluster = self.find_nearest_centroid(vector);
+            let residual = self.compute_residual(vector, cluster);
+            residuals.extend_from_slice(&residual);
+        }
+
+        // Step 3: train scalar quantizer on residuals (not raw vectors)
+        self.quantizer.train(&residuals);
 
         self.trained = true;
         Ok(n)
