@@ -79,11 +79,19 @@
   - centroids=256, reorder_k=1600: recall=0.969, QPS=41 (Mac) ← passes 0.95 gate
   - 原来 no-go (0.699) 是参数太保守；推荐配置: centroids=256, reorder_k=1600
   - 待完成: x86 authority QPS (Script: `examples/scann_authority_baseline.rs`)
-- [ ] **HNSW-IMP-001** [P2]: 若 strict-ef 仍落后 native，找真正的优化方向
-  - Codex A 正在分析 strict-ef 热路径（/tmp/hnsw_hotpath_analysis.txt 待完成）
-- [ ] **IVF-SQ8-PERF-001** [P2]: IVF-SQ8 搜索 QPS=114 vs IVF-Flat QPS=2014（同 nprobe=256）
-  - SQ8 量化距离计算应比 Flat float32 更快，实际差 18x 说明路径有问题
-  - 检查: src/faiss/ivf_sq8.rs search() 路径，对比 src/faiss/ivf_flat.rs
+- [x] **HNSW-IMP-001** [P2]: ✅ 完成 — Layer0 BinaryHeap 优化
+  - 根因: Layer0OrderedFrontier/Results 用 O(ef) Vec::insert，改为 O(log ef) BinaryHeap
+  - 附加: BF16 query 转换复用 SearchScratch buffer（消除 per-query alloc）
+  - Mac 结果 (ef=50, 10K): 22,947 → 41,746 QPS (+1.82x)
+  - x86 结果 (ef=50, 10K): 9,814 → 23,474 QPS (+2.39x) ← authority
+  - x86 improvement larger than Mac — heap ops benefit from x86 branch predictor
+  - 提交: perf(hnsw) cd0a24d
+- [x] **IVF-SQ8-PERF-001** [P2]: ✅ 完成 — 3 阶段优化
+  - Phase 1: decode 路径改为 uint8 domain sq_l2_asymmetric: 114→190 QPS
+  - Phase 2: 重构 inverted list 为 flat 连续内存（消除 per-vector Vec<u8>）
+  - Phase 3: par_iter 并行扫描 + TopKAccumulator（消除 collect-all + sort）: 190→1180 QPS (+6.3x)
+  - Mac 最终 (nprobe=256, 100K): recall=0.99, QPS=1180
+  - 待完成: x86 authority QPS（Codex B 正在跑）
 
 ### AISAQ Phase 2: 能力补全 + 生产就绪 (2026-03-18 开启, 降级为 P2+)
 
