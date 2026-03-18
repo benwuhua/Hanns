@@ -61,6 +61,9 @@ pub struct AisaqConfig {
     pub random_seed: u64,
     /// Build-time temporary degree slack percentage (100 = disabled)
     pub build_degree_slack_pct: usize,
+    /// Build-time Vamana search list size (0 = auto derive from search_list_size/max_degree)
+    #[serde(default)]
+    pub build_search_list_size: usize,
     pub warm_up: bool,
     pub filter_threshold: f32,
     #[serde(default)]
@@ -93,6 +96,7 @@ impl Default for AisaqConfig {
             random_init_edges: 0,
             random_seed: 42,
             build_degree_slack_pct: 100,
+            build_search_list_size: 0,
             warm_up: false,
             filter_threshold: -1.0,
             cache_all_on_load: false,
@@ -121,6 +125,7 @@ impl AisaqConfig {
             random_init_edges: params.disk_random_init_edges.unwrap_or(0).min(64),
             random_seed: params.random_seed.unwrap_or(42),
             build_degree_slack_pct: params.disk_build_degree_slack_pct.unwrap_or(100).clamp(100, 300),
+            build_search_list_size: 0,
             build_dram_budget_gb: params.disk_build_dram_budget_gb.unwrap_or(0.0),
             pq_read_page_cache_size: gb_to_bytes(params.disk_search_cache_budget_gb.unwrap_or(0.0)),
             warm_up: params.disk_warm_up.unwrap_or(false),
@@ -830,13 +835,32 @@ impl PQFlashIndex {
         }
         let stride = self.flat_stride;
         let pq_size = self.pq_code_size.max(1);
+        let build_l = if self.config.build_search_list_size > 0 {
+            self.config.build_search_list_size
+        } else {
+            (stride * 3).max(self.config.search_list_size)
+        };
+
+        if self.entry_points.is_empty() && !self.node_ids.is_empty() {
+            self.entry_points = vec![0];
+        }
 
         for row in 0..num_vectors {
             let start = row * self.dim;
             let end = start + self.dim;
             let vector = &vectors[start..end];
             let node_id = self.node_ids.len() as u32;
-            let neighbors = self.select_neighbors_with_random(node_id as usize, vector, stride);
+            let neighbors = if self.node_ids.len() < 16 {
+                self.select_neighbors(vector, stride)
+            } else {
+                let graph_size = self.node_ids.len();
+                let l = build_l.max(stride * 2).min(graph_size);
+                self.vamana_build_search(vector, l, graph_size)
+                    .into_iter()
+                    .take(stride)
+                    .map(|(id, _)| id)
+                    .collect::<Vec<u32>>()
+            };
             self.vectors.extend_from_slice(vector);
             let inline_pq = self
                 .pq_encoder
@@ -1885,6 +1909,57 @@ impl PQFlashIndex {
         }
     }
 
+    /// Build-time beam search over currently built prefix graph.
+    /// Returns up to `l` candidates sorted by distance ascending.
+    fn vamana_build_search(&self, query: &[f32], l: usize, graph_size: usize) -> Vec<(u32, f32)> {
+        if graph_size == 0 || l == 0 {
+            return Vec::new();
+        }
+        let stride = self.flat_stride.max(1);
+        let start_node = self
+            .entry_points
+            .first()
+            .copied()
+            .unwrap_or(0) as usize;
+        let start_node = start_node.min(graph_size - 1);
+        let start_dist = self.exact_distance(query, self.node_vector(start_node));
+
+        let mut frontier: BinaryHeap<Candidate> = BinaryHeap::new();
+        let mut visited: HashSet<u32> = HashSet::with_capacity(l.saturating_mul(2));
+        let mut best: Vec<(u32, f32)> = Vec::with_capacity(l);
+
+        frontier.push(Candidate {
+            node_id: start_node as u32,
+            score: start_dist,
+        });
+        visited.insert(start_node as u32);
+
+        while let Some(candidate) = frontier.pop() {
+            best.push((candidate.node_id, candidate.score));
+            if best.len() >= l {
+                break;
+            }
+            let node = candidate.node_id as usize;
+            let nb_start = node * stride;
+            let count = self.node_neighbor_counts.get(node).copied().unwrap_or(0) as usize;
+            for k in 0..count {
+                let nb = self.node_neighbor_ids[nb_start + k];
+                if nb as usize >= graph_size || !visited.insert(nb) {
+                    continue;
+                }
+                let nb_dist = self.exact_distance(query, self.node_vector(nb as usize));
+                frontier.push(Candidate {
+                    node_id: nb,
+                    score: nb_dist,
+                });
+            }
+        }
+
+        best.sort_by(|a, b| a.1.total_cmp(&b.1));
+        best.truncate(l);
+        best
+    }
+
     fn select_neighbors(&self, vector: &[f32], max_degree: usize) -> Vec<u32> {
         let mut scored: Vec<(u32, f32)> = (0..self.node_ids.len())
             .map(|node_id| {
@@ -1958,6 +2033,11 @@ impl PQFlashIndex {
         if count < effective_limit {
             self.node_neighbor_ids[start + count] = node_id;
             self.node_neighbor_counts[neighbor_idx] += 1;
+            return;
+        }
+        if self.node_ids.len() > 50_000 {
+            // Build-time fast path on very large graphs: when reverse adjacency is already
+            // full, skip costly O(R log R) re-pruning to keep insertion complexity near linear.
             return;
         }
 
