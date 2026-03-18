@@ -21,7 +21,7 @@
 | IVF-RaBitQ | 0.260 no_refine / 0.552 with_refine | ~121 | — | ❌ no-go: both below 0.95 even full-scan | ivf_rabitq_sweep.rs |
 | DiskANN | 0.009 was train+add bug; real: 0.91@dim=64 (L=32) | — | — | ⚠️ add() no graph edges, diagnosed | diskann_dim_diag.rs |
 | AISAQ/PQFlash NoPQ | ~0.997 (10K) | ~30K (Mac) | ~9,722 (1M) | ⚠️ constrained | benchmark.rs |
-| ScaNN | 1.0 | 37 | — | slow | recall_gated_baseline |
+| ScaNN | 0.699 max (100K, reorder_k=160) | 154 | — | ❌ no-go: below 0.95 gate at 100K | scann_sweep.rs |
 | Sparse/WAND | 1.0 | ~138 | — | ✅ ok | recall_gated_baseline |
 
 ---
@@ -134,10 +134,24 @@
 ### ScaNN (`src/faiss/scann.rs`, 1337 lines)
 
 **Completeness**: ✅ Full (anisotropic VQ, train/add/search/save/load)
-**Recall**: 1.0@10 (small dataset)
-**QPS**: ~37 (tiny dataset, 5K vectors, 100 queries) — likely much higher at real scale
+**Recall**: 1.0@10 (5K, meaningless) → **0.699@10 max** (100K, reorder_k=160) — below 0.95 gate
+**QPS**: 154 at max recall (100K, Mac)
+**Verdict**: ❌ no-go at 100K scale — anisotropic VQ recall ceiling under current params
 
-**Action**: SCANN-001 — authority benchmark at 100K/1M scale.
+**Sweep results (100K random, num_partitions=16, num_centroids=256, Mac)**:
+
+| reorder_k | recall@10 | QPS |
+|-----------|-----------|-----|
+| 10 | 0.226 | 218 |
+| 20 | 0.331 | 211 |
+| 40 | 0.443 | 199 |
+| 80 | 0.570 | 181 |
+| 160 | 0.699 | 154 |
+
+Recall increases with reorder_k but well short of 0.95. Would need reorder_k >> 160 (with further QPS degradation) or larger num_centroids/num_partitions.
+
+**Script**: `examples/scann_sweep.rs`
+**Action**: SCANN-FIX-001 (P2) — investigate larger reorder_k, num_centroids, or algorithm fix for recall ceiling.
 
 ---
 

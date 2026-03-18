@@ -37,7 +37,10 @@
 - [x] **IVF-OPQ-001** [P1]: ✅ done → no-go
   - recall@full_scan=0.167 (plateau), same quantization accuracy issue as IVF-SQ8
   - Script: `examples/ivf_opq_sweep.rs`
-- [ ] **SCANN-001** [P1]: ScaNN 100K scale recall+QPS benchmark
+- [x] **SCANN-001** [P1]: ✅ done → no-go
+  - max recall@10: 0.699 at reorder_k=160 (below 0.95 gate), QPS=154
+  - recall increases with reorder_k but far from gate at practical settings
+  - Script: `examples/scann_sweep.rs`
 - [x] **IVF-RABITQ-001** [P1]: ✅ done → no-go
   - no_refine recall: 0.260 (constant across all nprobe, 1-bit quantization lossy)
   - with_refine(dataview, k=40) recall: 0.552 (constant, still below 0.95 gate)
@@ -48,6 +51,7 @@
 - [ ] **IVF-PQ-FIX-001** [P2]: IVF-PQ recall 0.47 根因分析 + 修复（目前 no-go）
 - [ ] **IVF-SQ8-FIX-001** [P2]: IVF-SQ8 修复 quantizer.train() 传入 residuals 而非原始向量
 - [ ] **IVF-RABITQ-FIX-001** [P2]: IVF-RaBitQ recall ceiling — investigate larger refine_k (100x) or better quantization
+- [ ] **SCANN-FIX-001** [P2]: ScaNN recall ceiling (0.699 max at 100K) — investigate larger num_centroids/reorder_k or algorithm fix
 - [ ] **HNSW-IMP-001** [P2]: 若 strict-ef 仍落后 native，找真正的优化方向
 
 ### AISAQ Phase 2: 能力补全 + 生产就绪 (2026-03-18 开启, 降级为 P2+)
