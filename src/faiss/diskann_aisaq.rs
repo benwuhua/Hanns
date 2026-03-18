@@ -1135,6 +1135,28 @@ impl PQFlashIndex {
         self.search_internal(query, k, Some(bitset))
     }
 
+    /// Range search: return all vectors within `radius` distance from `query`.
+    /// For L2/Cosine: radius is a distance upper bound.
+    /// For IP: radius is the internal distance upper bound (i.e., -similarity).
+    pub fn range_search_raw(&self, query: &[f32], radius: f32) -> Result<Vec<(i64, f32)>> {
+        // Use a large k so search_internal explores enough candidates.
+        // search_list_size * 4 balances quality vs cost; for higher recall increase search_list_size.
+        let k = self
+            .config
+            .search_list_size
+            .saturating_mul(4)
+            .max(64)
+            .min(self.len().max(1));
+        let result = self.search_internal(query, k, None)?;
+        let pairs: Vec<(i64, f32)> = result
+            .ids
+            .into_iter()
+            .zip(result.distances)
+            .filter(|(_, dist)| *dist <= radius)
+            .collect();
+        Ok(pairs)
+    }
+
     #[cfg(feature = "parallel")]
     pub fn search_batch(&self, queries: &[f32], k: usize) -> Result<SearchResult> {
         use rayon::prelude::*;
@@ -2665,6 +2687,27 @@ impl Index for PQFlashIndex {
                 .map_err(|e| IndexError::Unsupported(e.to_string()))?;
             all_ids.extend_from_slice(&result.ids);
             all_dists.extend_from_slice(&result.distances);
+        }
+        Ok(crate::index::SearchResult::new(all_ids, all_dists, 0.0))
+    }
+
+    fn range_search(
+        &self,
+        query: &Dataset,
+        radius: f32,
+    ) -> std::result::Result<crate::index::SearchResult, IndexError> {
+        let queries = query.vectors();
+        let n_queries = queries.len() / self.dim;
+        let mut all_ids = Vec::new();
+        let mut all_dists = Vec::new();
+        for i in 0..n_queries {
+            let q = &queries[i * self.dim..(i + 1) * self.dim];
+            let pairs = PQFlashIndex::range_search_raw(self, q, radius)
+                .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+            for (id, dist) in pairs {
+                all_ids.push(id);
+                all_dists.push(dist);
+            }
         }
         Ok(crate::index::SearchResult::new(all_ids, all_dists, 0.0))
     }
