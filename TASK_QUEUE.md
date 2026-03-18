@@ -84,6 +84,9 @@
   - 附加: BF16 query 转换复用 SearchScratch buffer（消除 per-query alloc）
   - Mac 结果 (ef=50, 10K): 22,947 → 41,746 QPS (+1.82x)
   - x86 结果 (ef=50, 10K): 9,814 → 23,474 QPS (+2.39x) ← authority
+  - x86 ef sweep (100K, m=16): ef=50: recall=0.336 QPS=6,764; ef=128: recall=0.559 QPS=2,980
+  - Mac ef sweep (100K, m=16): ef=50: recall=0.350 QPS=12,145; ef=128: recall=0.560 QPS=5,346
+  - Mac/x86 ratio: ~1.79x consistent across ef values
   - x86 improvement larger than Mac — heap ops benefit from x86 branch predictor
   - 提交: perf(hnsw) cd0a24d
 - [x] **IVF-SQ8-PERF-001** [P2]: ✅ 完成 — 3 阶段优化
