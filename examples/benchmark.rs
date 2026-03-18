@@ -362,6 +362,33 @@ fn benchmark_pqflash() {
     run("NoPQ", config_nopq);
     run("PQ32", config);
 
+    println!("\n[Disk path] Building and saving PQFlash NoPQ...");
+    let disk_build_config = AisaqConfig {
+        disk_pq_dims: 0,
+        cache_all_on_load: false,
+        pq_read_page_cache_size: 512 * 1024,
+        ..AisaqConfig::default()
+    };
+    let mut build_idx = PQFlashIndex::new(disk_build_config, MetricType::L2, DIM).unwrap();
+    build_idx.train(&vectors).unwrap();
+    build_idx.add(&vectors).unwrap();
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "pqflash_disk_bench_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    ));
+    std::fs::create_dir_all(&tmp_dir).ok();
+    let _ = build_idx.save(&tmp_dir).unwrap();
+
+    let disk_idx = PQFlashIndex::load(&tmp_dir).unwrap();
+    let start = Instant::now();
+    let _ = disk_idx.search_batch(&queries_qps, TOP_K).unwrap();
+    let disk_qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
+    println!("[Disk NoPQ] Search QPS: {:.0} queries/sec", disk_qps);
+    std::fs::remove_dir_all(&tmp_dir).ok();
+
     // --- Diagnostic: PQ32 recall sweep ---
     let gt = brute_force_top_k(&vectors, &queries_recall, DIM, TOP_K);
     let sweep_configs: &[(usize, usize, &str)] = &[

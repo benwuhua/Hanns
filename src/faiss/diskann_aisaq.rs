@@ -570,6 +570,44 @@ impl PageCache {
         })
     }
 
+    fn prefetch(&self, offset: usize, len: usize) -> Result<usize> {
+        let end = offset
+            .checked_add(len)
+            .ok_or_else(|| KnowhereError::Storage("page cache prefetch overflow".to_string()))?;
+        if end > self.mmap.len() {
+            return Err(KnowhereError::Storage(format!(
+                "page cache prefetch [{}..{}) exceeds file size {}",
+                offset,
+                end,
+                self.mmap.len()
+            )));
+        }
+
+        let start_page = offset / self.page_size;
+        let end_page = end.saturating_sub(1) / self.page_size;
+        self.requests.fetch_add(1, AtomicOrdering::Relaxed);
+
+        let mut pages_loaded = 0usize;
+        for page_id in start_page..=end_page {
+            let shard_idx = page_id % PAGE_CACHE_SHARDS;
+            let mut shard = self.shards[shard_idx].lock();
+            if shard.pages.contains_key(&page_id) {
+                shard.stats.page_hits += 1;
+                touch_lru(&mut shard.lru, page_id);
+            } else {
+                shard.stats.page_misses += 1;
+                pages_loaded += 1;
+                let page_start = page_id * self.page_size;
+                let page_end = (page_start + self.page_size).min(self.mmap.len());
+                let page = self.mmap[page_start..page_end].to_vec();
+                shard.pages.insert(page_id, page);
+                shard.lru.push_back(page_id);
+                evict_if_needed(&mut shard);
+            }
+        }
+        Ok(pages_loaded)
+    }
+
     pub fn stats(&self) -> PageCacheStats {
         let mut out = PageCacheStats {
             requests: self.requests.load(AtomicOrdering::Relaxed),
@@ -1191,6 +1229,12 @@ impl PQFlashIndex {
                     scores
                 } else {
                     let node = self.load_node(candidate.node_id, NodeAccessMode::Node, &mut io)?;
+                    for &neighbor in &node.neighbors {
+                        if scratch.seen.contains(&neighbor) {
+                            continue;
+                        }
+                        self.prefetch_node(neighbor);
+                    }
                     let mut scores = Vec::with_capacity(node.neighbors.len());
                     for &neighbor in &node.neighbors {
                         if scratch.seen.contains(&neighbor) {
@@ -1343,6 +1387,12 @@ impl PQFlashIndex {
             let node = self
                 .load_node_async(candidate.node_id, NodeAccessMode::Node, &mut io)
                 .await?;
+            for &neighbor in &node.neighbors {
+                if seen.contains(&neighbor) {
+                    continue;
+                }
+                self.prefetch_node(neighbor);
+            }
             let mut neighbor_scores = Vec::with_capacity(node.neighbors.len());
             for &neighbor in &node.neighbors {
                 if seen.contains(&neighbor) {
@@ -1761,6 +1811,20 @@ impl PQFlashIndex {
         }
 
         Ok(self.exact_distance(query, &node.vector))
+    }
+
+    #[inline]
+    fn prefetch_node(&self, node_id: u32) {
+        let Some(storage) = &self.storage else {
+            return;
+        };
+        if node_id as usize >= self.len() {
+            return;
+        }
+        let offset = node_id as usize * self.flash_layout.node_bytes;
+        let _ = storage
+            .page_cache
+            .prefetch(offset, self.flash_layout.node_bytes);
     }
 
     async fn coarse_distance_async(
@@ -3161,6 +3225,50 @@ mod tests {
         let results = run_batch_search(&loaded, &queries, dim, k);
         assert_eq!(results.ids.len(), nq * k);
         assert!(results.ids.iter().all(|&id| id >= 0));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_pqflash_disk_search_path() {
+        let dim = 64usize;
+        let n = 1000usize;
+        let nq = 50usize;
+        let k = 10usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(0.0..1.0)).collect();
+        let queries: Vec<f32> = (0..nq * dim).map(|_| rng.gen_range(0.0..1.0)).collect();
+
+        let build_config = AisaqConfig {
+            max_degree: 24,
+            search_list_size: 100,
+            disk_pq_dims: 0,
+            cache_all_on_load: false,
+            pq_read_page_cache_size: 128 * 1024,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(build_config, MetricType::L2, dim).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+
+        let dir = make_temp_dir("pqflash_disk_search_path");
+        fs::create_dir_all(&dir).unwrap();
+        index.save(&dir).unwrap();
+        let disk_index = PQFlashIndex::load(&dir).unwrap();
+
+        assert!(disk_index.vectors.is_empty(), "disk path should not materialize vectors");
+        assert!(disk_index.storage.is_some(), "disk path should keep disk storage");
+
+        let results = run_batch_search(&disk_index, &queries, dim, k);
+        assert_eq!(results.ids.len(), nq * k);
+        assert!(
+            results.ids.iter().any(|&id| id >= 0),
+            "disk search returned no valid ids"
+        );
+
+        let gt = brute_force_topk_l2(&vectors, &queries, dim, k);
+        let recall = compute_recall(&results, &gt, k);
+        assert!(recall >= 0.85, "disk path recall@10 too low: {recall:.4}");
+
         let _ = fs::remove_dir_all(&dir);
     }
 }
