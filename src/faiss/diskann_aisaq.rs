@@ -845,45 +845,123 @@ impl PQFlashIndex {
             self.entry_points = vec![0];
         }
 
-        for row in 0..num_vectors {
-            let start = row * self.dim;
-            let end = start + self.dim;
-            let vector = &vectors[start..end];
-            let node_id = self.node_ids.len() as u32;
-            let neighbors = if self.node_ids.len() < 16 {
-                self.select_neighbors(vector, stride)
-            } else {
-                let graph_size = self.node_ids.len();
-                let l = build_l.max(stride * 2).min(graph_size);
-                self.vamana_build_search(vector, l, graph_size)
-                    .into_iter()
-                    .take(stride)
-                    .map(|(id, _)| id)
-                    .collect::<Vec<u32>>()
-            };
-            self.vectors.extend_from_slice(vector);
-            let inline_pq = self
-                .pq_encoder
-                .as_ref()
-                .map(|pq| pq.encode(vector))
-                .unwrap_or_default();
+        #[cfg(feature = "parallel")]
+        {
+            use rayon::prelude::*;
+            let batch_size = 512usize.min(num_vectors).max(1);
+            let mut row = 0usize;
 
-            let ext_id = external_ids.map(|ids| ids[row]).unwrap_or(node_id as i64);
-            self.node_ids.push(ext_id);
-            let count = neighbors.len().min(stride);
-            self.node_neighbor_counts.push(count as u32);
-            for i in 0..stride {
-                self.node_neighbor_ids
-                    .push(if i < count { neighbors[i] } else { 0 });
-            }
-            let code_len = inline_pq.len().min(pq_size);
-            for i in 0..pq_size {
-                self.node_pq_codes
-                    .push(if i < code_len { inline_pq[i] } else { 0 });
-            }
+            while row < num_vectors {
+                let batch_end = (row + batch_size).min(num_vectors);
+                let graph_size_snapshot = self.node_ids.len();
 
-            for neighbor in neighbors {
-                self.link_back_with_limit(neighbor, node_id, stride);
+                let batch_results: Vec<(Vec<u32>, Vec<u8>, i64)> = (row..batch_end)
+                    .into_par_iter()
+                    .map(|r| {
+                        let start = r * self.dim;
+                        let vector = &vectors[start..start + self.dim];
+
+                        let neighbors: Vec<u32> = if graph_size_snapshot < 16 {
+                            self.select_neighbors(vector, stride)
+                        } else {
+                            let l = (stride * 3).max(32).min(graph_size_snapshot);
+                            let cands = self.vamana_build_search(vector, l, graph_size_snapshot);
+                            cands
+                                .iter()
+                                .take(stride)
+                                .map(|(id, _)| *id)
+                                .collect()
+                        };
+
+                        let inline_pq = self
+                            .pq_encoder
+                            .as_ref()
+                            .map(|pq| pq.encode(vector))
+                            .unwrap_or_default();
+
+                        let ext_id = if let Some(ids) = external_ids {
+                            ids[r]
+                        } else {
+                            (graph_size_snapshot + (r - row)) as i64
+                        };
+                        (neighbors, inline_pq, ext_id)
+                    })
+                    .collect();
+
+                for (r, (neighbors, inline_pq, ext_id)) in (row..batch_end).zip(batch_results) {
+                    let node_id = self.node_ids.len() as u32;
+                    let vector = &vectors[r * self.dim..(r + 1) * self.dim];
+
+                    self.vectors.extend_from_slice(vector);
+                    self.node_ids.push(ext_id);
+
+                    let count = neighbors.len().min(stride);
+                    self.node_neighbor_counts.push(count as u32);
+                    for i in 0..stride {
+                        self.node_neighbor_ids
+                            .push(if i < count { neighbors[i] } else { 0 });
+                    }
+                    let code_len = inline_pq.len().min(pq_size);
+                    for i in 0..pq_size {
+                        self.node_pq_codes
+                            .push(if i < code_len { inline_pq[i] } else { 0 });
+                    }
+
+                    for &neighbor in &neighbors {
+                        self.link_back_with_limit(neighbor, node_id, stride);
+                    }
+                }
+
+                if self.node_ids.len() % 5000 < batch_size {
+                    self.refresh_entry_points();
+                }
+
+                row = batch_end;
+            }
+        }
+
+        #[cfg(not(feature = "parallel"))]
+        {
+            for row in 0..num_vectors {
+                let start = row * self.dim;
+                let end = start + self.dim;
+                let vector = &vectors[start..end];
+                let node_id = self.node_ids.len() as u32;
+                let neighbors = if self.node_ids.len() < 16 {
+                    self.select_neighbors(vector, stride)
+                } else {
+                    let graph_size = self.node_ids.len();
+                    let l = build_l.max(stride * 2).min(graph_size);
+                    self.vamana_build_search(vector, l, graph_size)
+                        .into_iter()
+                        .take(stride)
+                        .map(|(id, _)| id)
+                        .collect::<Vec<u32>>()
+                };
+                self.vectors.extend_from_slice(vector);
+                let inline_pq = self
+                    .pq_encoder
+                    .as_ref()
+                    .map(|pq| pq.encode(vector))
+                    .unwrap_or_default();
+
+                let ext_id = external_ids.map(|ids| ids[row]).unwrap_or(node_id as i64);
+                self.node_ids.push(ext_id);
+                let count = neighbors.len().min(stride);
+                self.node_neighbor_counts.push(count as u32);
+                for i in 0..stride {
+                    self.node_neighbor_ids
+                        .push(if i < count { neighbors[i] } else { 0 });
+                }
+                let code_len = inline_pq.len().min(pq_size);
+                for i in 0..pq_size {
+                    self.node_pq_codes
+                        .push(if i < code_len { inline_pq[i] } else { 0 });
+                }
+
+                for neighbor in neighbors {
+                    self.link_back_with_limit(neighbor, node_id, stride);
+                }
             }
         }
         self.prune_graph_to_target_degree();
