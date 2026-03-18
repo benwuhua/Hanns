@@ -12,11 +12,15 @@
 
 - [x] **HNSW-VERIFY-001** [P0]: ✅ 验证完成 — leadership CONFIRMED (超出预期)
   - V2 sweep (BF16 + TOP_K=10, SIFT-1M, 8-thread x86):
-    - ef=60: recall=0.9500, QPS=33,061 ← Rust near-equal-recall point
+    - ef=60: recall=0.9500, QPS=33,061 ← Rust near-equal-recall point (pre-native)
     - ef=138: recall=0.9856, QPS=17,066
   - 对比 native BF16 ef=138: recall=0.9518, QPS=15,918
   - **near-equal-recall ratio: 33,061 / 15,918 = 2.077x** (优于此前 1.789x 声明)
-  - 注: V1 sweep 无效（TOP_K=100 导致 10-recall-at-100 虚高 + Float 非 BF16）
+  - V3 re-verify (target-cpu=native, 1M 合成向量, 2026-03-18):
+    - ef=60: recall=0.9527, QPS=**33,406** (+1% vs pre-native)
+    - ef=138: recall=0.9871, QPS=17,251
+    - **更新 ratio: 33,406 / 15,918 = 2.099x**
+    - 结论: 1M 规模 HNSW 内存带宽瓶颈 → native 增益仅 +1%（vs 10K cache-bound +22%）
 
 - [x] **IVF-FLAT-001** [P0]: ✅ 完成 — nprobe sweep done (Mac + x86)
   - Mac (100K, nlist=256): nprobe=256: recall=1.000, QPS=2,014
