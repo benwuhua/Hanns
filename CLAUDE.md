@@ -1,173 +1,212 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working with this repository.
 
-## Project Overview
+---
 
-KnowHere-RS is a Rust implementation of a vector search engine, designed as a Rust-native replacement for Milvus KnowHere (C++). It provides similarity search with various index types and distance metrics.
+## Project Goal
+
+**knowhere-rs is a production-grade Rust replacement for Milvus KnowHere (C++), with absolute performance advantage on core CPU paths.**
+
+Not just parity — leadership. The target is measurably faster than native C++ at equal recall, on real-world authority hardware (x86, not just Apple Silicon).
+
+Current verdicts (2026-03-17):
+- **HNSW**: ✅ leading (1.789x faster than native at near-equal recall)
+- **DiskANN/AISAQ**: ⚠️ constrained — functional, capability closure in progress
+- **IVF-PQ**: ❌ no-go — recall < 0.8 gate
+- **Sparse/Binary/ScaNN**: ✅ parity or better
+
+---
+
+## Index Priority Order
+
+When allocating work, follow this order:
+
+```
+HNSW > DiskANN/AISAQ > PQ > IVF > Sparse/Other
+```
+
+Performance authority: **x86 > ARM**. Mac Apple Silicon is for fast iteration; x86 remote is the authority machine for final numbers.
+
+---
+
+## Session Start Protocol
+
+At the start of each session (when user says "继续" or similar):
+
+1. Read `~/.claude/projects/.../memory/project_diskann_progress.md` — current task status
+2. Read `~/.claude/projects/.../memory/code_aisaq_architecture.md` — code structure (saves re-reading 3300 lines)
+3. Check `TASK_QUEUE.md` for next task
+4. If working with Codex: invoke `claude-codex-collab` skill
+
+**Next task**: AISAQ-CAP-001 (exact rerank stage — post-beam raw float re-sort)
+
+---
+
+## Environment
+
+### Local
+- Repo: `/Users/ryan/.openclaw/workspace-builder/knowhere-rs`
+- tmux session: `knowhere-rs` — pane 0.0 = Codex, pane 0.1 = Claude
+
+### Remote x86 (Authority Machine)
+- SSH: `knowhere-x86-hk-proxy` (configured in `~/.ssh/config`)
+- Proxy script: `/Users/ryan/Code/knowhere/scripts/remote/socks5_proxy.py`
+- Source: `/data/work/knowhere-rs-src`
+- Build cache: `/data/work/knowhere-rs-target`
+- Cargo: `~/.cargo/bin/cargo` (1.94.0)
+- Run benchmark: `ssh knowhere-x86-hk-proxy "cd /data/work/knowhere-rs-src && CARGO_TARGET_DIR=/data/work/knowhere-rs-target ~/.cargo/bin/cargo run --example benchmark --release 2>&1"`
+
+### Reference Codebases
+- Native knowhere C++: `/Users/ryan/Code/knowhere/src/index/diskann/diskann.cc`
+- Rust DiskANN reference: `/Users/ryan/Code/DiskANN/` (Microsoft Rust port)
+
+---
+
+## Collaboration: Claude + Codex
+
+**Claude = architect/reviewer/planner. Codex = implementer.**
+Claude does NOT write implementation code (except trivial <5-line edits).
+
+### Sending tasks to Codex (tmux pane 0.0)
+
+```bash
+cat > /tmp/codex_task.txt << 'EOF'
+SUBAGENT TASK — skip all skill loading, brainstorming, and design reviews. Proceed directly to implementation.
+
+**目标**: ...
+...
+**完成后**: 写入 /tmp/codex_status.txt，格式：DONE: <结果>
+EOF
+
+tmux send-keys -t knowhere-rs:0.0 "$(cat /tmp/codex_task.txt)" Tab
+tmux send-keys -t knowhere-rs:0.0 "" Enter
+sleep 3 && tmux capture-pane -t knowhere-rs:0.0 -p | tail -5  # 确认显示 "• Working"
+```
+
+**关键**: Tab 排队 + Enter 执行。只发 Enter = 换行不提交。
+
+### Watcher (background)
+
+```bash
+rm -f /tmp/codex_status.txt
+until grep -qE "^DONE:|^ERROR:" /tmp/codex_status.txt 2>/dev/null; do sleep 30; done
+cat /tmp/codex_status.txt
+```
+
+Run with `run_in_background=true`.
+
+### After Codex finishes
+1. Read modified files (don't trust description)
+2. `cargo build 2>&1 | grep "^error"`
+3. `cargo test 2>&1 | tail -5`
+4. For perf changes: run benchmark and compare numbers
+5. Only Claude commits (Codex sandbox blocks git)
+
+---
 
 ## Build Commands
 
 ```bash
-# Development build
-cargo build
-
-# Release build (optimized, LTO enabled)
-cargo build --release
-
-# Build using script (builds and runs tests)
-./build.sh release
-
-# Run all tests (106 tests)
-cargo test
-
-# Run specific test
-cargo test test_l2_distance
-
-# Run tests with output
-cargo test -- --nocapture
+cargo build                                    # dev build
+cargo build --release                          # release (LTO + codegen-units=1)
+cargo test                                     # all tests
+cargo test test_name -- --nocapture            # specific test
+cargo run --example benchmark --release        # local benchmark (Mac, reference only)
 ```
 
-## CLI Usage
+---
+
+## Key Source Files
+
+| File | Status | Purpose |
+|------|--------|---------|
+| `src/faiss/hnsw.rs` | ✅ primary | HNSW — production implementation, leading verdict |
+| `src/faiss/hnsw_safe.rs` | ✅ active | HNSW native (high-perf, no-lock design) |
+| `src/faiss/hnsw_pq.rs` | ✅ active | HNSW-PQ |
+| `src/faiss/hnsw_prq.rs` | ✅ active | HNSW-PRQ |
+| `src/faiss/hnsw_quantized.rs` | ✅ active | HNSW-SQ |
+| `src/faiss/hnsw_build.rs` | ⚠️ deprecated | old build code |
+| `src/faiss/hnsw_complete.rs` | ⚠️ deprecated | old complete impl |
+| `src/faiss/hnsw_search.rs` | ⚠️ deprecated | old search code |
+| `src/faiss/hnsw_parallel.rs` | ⚠️ deprecated | old parallel builder |
+| `src/faiss/diskann_aisaq.rs` | ✅ primary | PQFlashIndex (~3300 lines), capability closure in progress |
+| `src/faiss/diskann.rs` | ✅ active | simplified Vamana graph |
+| `src/faiss/ivfpq.rs` | ⚠️ no-go | recall < 0.8, needs fix |
+| `src/faiss/ivf.rs` | ⚠️ scaffold | coarse-assignment scaffold only |
+| `src/faiss/ivfpq_complete.rs` | ⚠️ unclear | possibly duplicate |
+| `src/faiss/pq.rs` | ✅ active | PQ encoder, parallel k-means |
+| `src/faiss/sparse*.rs` | ✅ active | sparse indexes (parity) |
+| `src/faiss/scann.rs` | ✅ active | ScaNN |
+| `examples/benchmark.rs` | ✅ primary | main benchmark, always run with --release |
+
+---
+
+## Benchmark Selection
+
+### Dataset
+All benchmarks use **synthetic random float32 vectors, dim=128, L2 metric** (seeded RNG). This is NOT SIFT — it's uniform random, sufficient for QPS/build timing but not recall on real distributions. All recall numbers are vs brute-force on the same synthetic data.
+
+### Scale Tiers
+
+| Tier | Scale | When to use | Where to run |
+|------|-------|-------------|--------------|
+| Dev | 10K | Fast iteration, recall checking | Local Mac |
+| Medium | 100K | Config sweep, perf regression | Local Mac |
+| **Authority** | **1M** | **Final numbers, PRs, verdicts** | **Remote x86** |
+
+### Which functions to run
+
+- **Dev loop (local)**: `benchmark_diskann()`, `benchmark_pqflash()` — 10K vectors, ~seconds
+- **Medium (local)**: `benchmark_diskann_100k()`, `benchmark_pqflash_100k()` — 100K vectors, ~1-2min
+- **Authority (x86)**: `benchmark_diskann_1m()`, `benchmark_pqflash_1m()` — 1M vectors, 2-4min
+
+### Running on x86
 
 ```bash
-# Build CLI
-cargo build --release
+# Full benchmark (takes 5-10 min)
+ssh knowhere-x86-hk-proxy "cd /data/work/knowhere-rs-src && CARGO_TARGET_DIR=/data/work/knowhere-rs-target ~/.cargo/bin/cargo run --example benchmark --release 2>&1"
 
-# Create index
-./target/release/knowhere-cli create my_index 128 --index-type flat --metric l2
-
-# Add vectors (binary f32 file)
-./target/release/knowhere-cli add my_index vectors.bin
-
-# Search
-./target/release/knowhere-cli search my_index "0.1,0.2,0.3,..." -k 10
-
-# Save/load index
-./target/release/knowhere-cli save my_index /path/to/index
-./target/release/knowhere-cli load my_index /path/to/index 128
+# Quick sanity check (10K only, fast)
+# Currently not separated — full benchmark.rs runs all tiers in sequence
 ```
 
-## Examples
+**Important**: After every non-trivial change, run at minimum the 10K dev benchmark locally before sending to x86.
 
-```bash
-# Basic usage
-cargo run --example basic
+---
 
-# HNSW index
-cargo run --example hnsw
+## Benchmark Baselines (authority: x86, 2026-03-18)
 
-# Benchmarking
-cargo run --example benchmark
-```
+| Index | Scale | Build | QPS |
+|-------|-------|-------|-----|
+| HNSW | — | — | 9,814 (x86) / 22,947 (Mac) |
+| PQFlash NoPQ | 1M | 116.8s | **9,722** (x86) / 21,921 (Mac) |
+| PQFlash PQ32 | 1M | 238.6s | **7,673** (x86) / 18,431 (Mac) |
+| HNSW vs native | — | — | Rust 1.789x faster (near-equal recall) |
 
-## Architecture
+---
 
-### Core Modules
+## Active Task Queue (AISAQ Phase 2)
 
-| Module | Purpose |
-|--------|---------|
-| `src/api/` | Public API interfaces (SearchRequest, IndexConfig, error types) |
-| `src/faiss/` | Index implementations (MemIndex, HnswIndex, IvfPqIndex, DiskAnnIndex) |
-| `src/metrics.rs` | Distance calculations (L2, IP, Cosine, Hamming) |
-| `src/simd.rs` | SIMD-optimized distance functions (NEON/SSE/AVX detection) |
-| `src/dataset.rs` | Dataset abstraction with soft-delete support via BitsetView |
-| `src/bitset.rs` | Bitset for soft deletion |
-| `src/storage/` | Disk and memory storage backends |
-| `src/codec/` | Serialization for index and vector data |
-| `src/executor/` | Thread pool and concurrent execution |
-| `src/quantization/` | K-means and PQ quantization |
+See `TASK_QUEUE.md` for full list. Current priority:
 
-### Index Types
+1. **AISAQ-CAP-001** [P0]: Exact rerank — post-beam raw float re-sort (recall ceiling fix)
+2. **AISAQ-CAP-002** [P1]: External ID mapping (i64 ↔ u32)
+3. **AISAQ-CAP-003** [P1]: On-disk persistence (save/load)
+4. **AISAQ-CAP-004** [P1]: RangeSearch
+5. **IVFPQ-FIX-001** [P3]: IVF-PQ recall < 0.8 root cause
 
-All indexes implement the `Index` trait (`src/index.rs`):
+---
 
-- **MemIndex** (`faiss/mem_index.rs`) - Flat brute-force index
-- **HnswIndex** (`faiss/hnsw.rs`) - HNSW graph-based approximate search
-- **IvfIndex** (`faiss/ivf.rs`) - IVF clustering index
-- **IvfPqIndex** (`faiss/ivfpq.rs`) - IVF with Product Quantization
-- **DiskAnnIndex** (`faiss/diskann.rs`) - Disk-based ANN index
+## Docs Structure
 
-### Key Traits
-
-```rust
-// Index trait - unified interface for all index types
-pub trait Index: Send + Sync {
-    fn index_type(&self) -> &str;
-    fn dim(&self) -> usize;
-    fn count(&self) -> usize;
-    fn is_trained(&self) -> bool;
-    fn train(&mut self, dataset: &Dataset) -> Result<(), IndexError>;
-    fn add(&mut self, dataset: &Dataset) -> Result<usize, IndexError>;
-    fn search(&self, query: &Dataset, top_k: usize) -> Result<SearchResult, IndexError>;
-    fn save(&self, path: &str) -> Result<(), IndexError>;
-    fn load(&mut self, path: &str) -> Result<(), IndexError>;
-}
-
-// Distance trait - for pluggable distance metrics
-pub trait Distance {
-    fn compute(&self, a: &[f32], b: &[f32]) -> f32;
-    fn compute_batch(&self, a: &[f32], b: &[f32], dim: usize) -> Vec<f32>;
-}
-```
-
-## Library Exports
-
-The main entry point is `src/lib.rs`. Key exports:
-
-```rust
-// From api module
-pub use api::{SearchRequest, SearchResult, KnowhereError, Result, IndexConfig, IndexType, MetricType};
-
-// Index types
-pub use faiss::{FaissIndex, MemIndex, HnswIndex, IvfPqIndex, DiskAnnIndex};
-
-// Core utilities
-pub use bitset::BitsetView;
-pub use dataset::{Dataset, DataType};
-pub use metrics::{Distance, get_distance_calculator, L2Distance, InnerProductDistance, CosineDistance, HammingDistance};
-```
-
-## Configuration
-
-Index parameters are configured via `IndexConfig` and `IndexParams`:
-
-```rust
-let config = IndexConfig {
-    index_type: IndexType::Hnsw,
-    metric_type: MetricType::L2,
-    dim: 128,
-    params: IndexParams::hnsw(ef_construction: 200, ef_search: 64, ml: 0.36),
-};
-```
-
-## Crate Types
-
-The library builds as multiple crate types (see `Cargo.toml`):
-
-```toml
-crate-type = ["staticlib", "cdylib", "rlib"]
-```
-
-This enables use as a Rust library, static C library, or shared library for FFI integration.
-
-## Dependencies
-
-Key dependencies:
-- `rayon` - Parallel iterators
-- `parking_lot` - High-performance synchronization primitives
-- `memmap2` - Memory-mapped file I/O
-- `tracing` / `tracing-subscriber` - Logging
-- `serde` / `serde_json` - Serialization
-- `clap` - CLI argument parsing
-- `thiserror` - Error derive macros
-
-## Release Profile
-
-The release profile enables aggressive optimizations:
-```toml
-[profile.release]
-lto = true           # Link-time optimization
-codegen-units = 1    # Single codegen unit for better optimization
-panic = "abort"      # Smaller binary, no unwinding
-```
+| Path | Purpose |
+|------|---------|
+| `docs/superpowers/specs/2026-03-18-diskann-aisaq-gap-analysis.md` | Full gap analysis vs native + Rust DiskANN ref |
+| `docs/FFI_CAPABILITY_MATRIX.md` | FFI capability per index type |
+| `docs/PARITY_AUDIT.md` | Comprehensive parity audit (historical) |
+| `docs/diskann_capability_closure_plan.md` | DiskANN closure strategy |
+| `docs/AISAQ_DESIGN.md` | AISAQ architecture design |
+| `benchmark_results/` | Authority verdict artifacts (HNSW=leading, IVF-PQ=no-go, DiskANN=constrained) |
+| `TASK_QUEUE.md` | Current task panel |
+| `GAP_ANALYSIS.md` | Gap analysis (historical, superseded by specs/2026-03-18) |
