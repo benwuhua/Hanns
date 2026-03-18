@@ -170,14 +170,19 @@ ssh knowhere-x86-hk-proxy "cd /data/work/knowhere-rs-src && CARGO_TARGET_DIR=/da
 
 ---
 
-## Benchmark Baselines (authority: x86, 2026-03-18)
+## Benchmark Baselines (authority: x86, 2026-03-18, target-cpu=native)
 
-| Index | Scale | Build | QPS |
-|-------|-------|-------|-----|
-| HNSW | — | — | 9,814 (x86) / 22,947 (Mac) |
-| PQFlash NoPQ | 1M | 116.8s | **9,722** (x86) / 21,921 (Mac) |
-| PQFlash PQ32 | 1M | 238.6s | **7,673** (x86) / 18,431 (Mac) |
-| HNSW vs native | — | — | Rust 1.789x faster (near-equal recall) |
+Note: `.cargo/config.toml` now sets `target-cpu=native` for x86_64+aarch64. All new benchmarks reflect this.
+
+| Index | Scale | Build | QPS (x86) | QPS (Mac) |
+|-------|-------|-------|-----------|-----------|
+| HNSW (benchmark, ef=50, 10K) | 10K | — | **28,641** | ~41,746 |
+| HNSW (ef=60, recall=0.953, 1M) | 1M | — | **33,406** | — |
+| PQFlash NoPQ | 1M | 116.8s | **9,648** | 21,921 |
+| PQFlash PQ32 | 1M | 238.6s | **8,002** | 18,431 |
+| HNSW vs native | — | — | **2.099x** faster (near-equal recall, ef=60) | — |
+| IVF-SQ8 (nprobe=256) | 100K | — | **397** | 1,180 |
+| ScaNN (reorder_k=1600) | 100K | — | **28** | 41 |
 
 ---
 
