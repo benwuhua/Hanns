@@ -482,24 +482,49 @@ fn benchmark_pqflash_100k() {
     let vectors: Vec<f32> = (0..NUM_VECTORS * DIM).map(|_| rng.r#gen::<f32>()).collect();
     let queries: Vec<f32> = (0..NUM_QPS_QUERIES * DIM).map(|_| rng.r#gen::<f32>()).collect();
 
-    let config = AisaqConfig {
-        disk_pq_dims: 32,
-        rerank_expand_pct: 300,
-        search_list_size: 200,
-        cache_all_on_load: true,
-        ..AisaqConfig::default()
-    };
-    let mut index = PQFlashIndex::new(config, MetricType::L2, DIM).unwrap();
+    // NoPQ 100K
+    {
+        let config = AisaqConfig {
+            disk_pq_dims: 0,
+            search_list_size: 128,
+            cache_all_on_load: true,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, DIM).unwrap();
+        let start = Instant::now();
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+        let build_s = start.elapsed().as_secs_f64();
+        println!("[NoPQ] Build 100K vectors: {:.1}s", build_s);
+        let start = Instant::now();
+        let _ = index.search_batch(&queries, TOP_K).unwrap();
+        let qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
+        println!("[NoPQ] Search QPS: {:.0}", qps);
+    }
 
-    let start = Instant::now();
-    index.train(&vectors).unwrap();
-    index.add(&vectors).unwrap();
-    println!("[PQ32] Build 100K vectors: {:.1}s", start.elapsed().as_secs_f64());
-
-    let start = Instant::now();
-    let _ = index.search_batch(&queries, TOP_K).unwrap();
-    let qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
-    println!("[PQ32] Search QPS: {:.0}", qps);
+    // PQ32 100K — with phase timing
+    {
+        let config = AisaqConfig {
+            disk_pq_dims: 32,
+            rerank_expand_pct: 300,
+            search_list_size: 200,
+            cache_all_on_load: true,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, DIM).unwrap();
+        let t0 = Instant::now();
+        index.train(&vectors).unwrap();
+        let train_s = t0.elapsed().as_secs_f64();
+        let t1 = Instant::now();
+        index.add(&vectors).unwrap();
+        let add_s = t1.elapsed().as_secs_f64();
+        println!("[PQ32] Build 100K vectors: {:.1}s  (train {:.1}s + add {:.1}s)",
+            train_s + add_s, train_s, add_s);
+        let start = Instant::now();
+        let _ = index.search_batch(&queries, TOP_K).unwrap();
+        let qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
+        println!("[PQ32] Search QPS: {:.0}", qps);
+    }
 }
 
 fn main() {

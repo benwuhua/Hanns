@@ -5,6 +5,7 @@
 //! - SIMD 距离计算
 //! - 查表距离 (AD, ASD)
 
+use rayon::prelude::*;
 use crate::simd;
 
 /// PQ 编码器
@@ -33,95 +34,106 @@ impl PqEncoder {
         }
     }
 
-    /// 训练码书 (使用 K-means)
+    /// 训练码书 (使用 K-means，子空间并行)
     pub fn train(&mut self, data: &[f32], max_iter: usize) {
         let n = data.len() / self.dim;
         if n == 0 {
             return;
         }
 
-        // 对每个子空间进行 K-means
-        for m_idx in 0..self.m {
-            // 提取子向量
-            let mut sub_vectors = Vec::with_capacity(n * self.sub_dim);
-            for i in 0..n {
-                for j in 0..self.sub_dim {
-                    sub_vectors.push(data[i * self.dim + m_idx * self.sub_dim + j]);
-                }
-            }
+        let m = self.m;
+        let dim = self.dim;
+        let sub_dim = self.sub_dim;
+        let k = self.k;
 
-            // 运行 K-means
-            self.train_sub_codebook(m_idx, &sub_vectors, max_iter);
+        // Extract sub-vectors per subspace and train all m subspaces in parallel.
+        // Each subspace is independent — this is embarrassingly parallel.
+        let codebook_size = k * sub_dim;
+        let trained: Vec<Vec<f32>> = (0..m)
+            .into_par_iter()
+            .map(|m_idx| {
+                let mut sub_vectors = Vec::with_capacity(n * sub_dim);
+                for i in 0..n {
+                    let base = i * dim + m_idx * sub_dim;
+                    sub_vectors.extend_from_slice(&data[base..base + sub_dim]);
+                }
+                Self::train_sub_codebook_pure(sub_dim, k, &sub_vectors, max_iter)
+            })
+            .collect();
+
+        // Write results back to codebooks sequentially (no contention).
+        for (m_idx, codebook) in trained.into_iter().enumerate() {
+            let offset = m_idx * codebook_size;
+            self.codebooks[offset..offset + codebook_size].copy_from_slice(&codebook);
         }
     }
 
-    /// 训练单个子空间的码书
-    fn train_sub_codebook(&mut self, m_idx: usize, vectors: &[f32], max_iter: usize) {
-        let n = vectors.len() / self.sub_dim;
-        if n < self.k {
-            return;
+    /// Pure-function k-means for one subspace — no &self mutation, safe for par_iter.
+    fn train_sub_codebook_pure(sub_dim: usize, k: usize, vectors: &[f32], max_iter: usize) -> Vec<f32> {
+        let n = vectors.len() / sub_dim;
+        if n < k {
+            return vec![0.0f32; k * sub_dim];
         }
 
         // K-means++ 初始化
-        let mut centroids = vec![0.0f32; self.k * self.sub_dim];
-        self.kmeans_init(vectors, &mut centroids);
+        let mut centroids = vec![0.0f32; k * sub_dim];
+        Self::kmeans_init_pure(sub_dim, k, vectors, &mut centroids);
 
-        // 迭代优化
+        // 迭代优化：assignment 步并行，update 步串行累加
         let mut assignments = vec![0usize; n];
-        let mut new_centroids = vec![0.0f32; self.k * self.sub_dim];
-        let mut counts = vec![0usize; self.k];
+        let mut new_centroids = vec![0.0f32; k * sub_dim];
+        let mut counts = vec![0usize; k];
 
         for _ in 0..max_iter {
-            // 分配
-            for i in 0..n {
-                let sub_vec = &vectors[i * self.sub_dim..(i + 1) * self.sub_dim];
-                let mut min_dist = f32::MAX;
-                let mut best = 0;
-
-                for c in 0..self.k {
-                    let dist = self.l2_sqr(
-                        sub_vec,
-                        &centroids[c * self.sub_dim..(c + 1) * self.sub_dim],
-                    );
-                    if dist < min_dist {
-                        min_dist = dist;
-                        best = c;
+            // Assignment: parallel over vectors
+            assignments
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(i, assignment)| {
+                    let sub_vec = &vectors[i * sub_dim..(i + 1) * sub_dim];
+                    let mut min_dist = f32::MAX;
+                    let mut best = 0;
+                    for c in 0..k {
+                        let centroid = &centroids[c * sub_dim..(c + 1) * sub_dim];
+                        let dist: f32 = sub_vec
+                            .iter()
+                            .zip(centroid.iter())
+                            .map(|(a, b)| (a - b) * (a - b))
+                            .sum();
+                        if dist < min_dist {
+                            min_dist = dist;
+                            best = c;
+                        }
                     }
-                }
-                assignments[i] = best;
-            }
+                    *assignment = best;
+                });
 
-            // 更新
+            // Update: serial accumulation (avoids atomic f32 contention)
             new_centroids.fill(0.0);
             counts.fill(0);
-
             for i in 0..n {
                 let c = assignments[i];
-                for j in 0..self.sub_dim {
-                    new_centroids[c * self.sub_dim + j] += vectors[i * self.sub_dim + j];
+                for j in 0..sub_dim {
+                    new_centroids[c * sub_dim + j] += vectors[i * sub_dim + j];
                 }
                 counts[c] += 1;
             }
-
-            for c in 0..self.k {
+            for c in 0..k {
                 if counts[c] > 0 {
-                    for j in 0..self.sub_dim {
-                        centroids[c * self.sub_dim + j] =
-                            new_centroids[c * self.sub_dim + j] / counts[c] as f32;
+                    for j in 0..sub_dim {
+                        centroids[c * sub_dim + j] =
+                            new_centroids[c * sub_dim + j] / counts[c] as f32;
                     }
                 }
             }
         }
 
-        // 保存码书
-        let offset = m_idx * self.k * self.sub_dim;
-        self.codebooks[offset..self.k * self.sub_dim + offset]
-            .copy_from_slice(&centroids[..self.k * self.sub_dim]);
+        centroids
     }
 
-    /// K-means++ 初始化
-    fn kmeans_init(&self, vectors: &[f32], centroids: &mut [f32]) {
-        let n = vectors.len() / self.sub_dim;
+    /// K-means++ 初始化 (pure, no &self needed)
+    fn kmeans_init_pure(sub_dim: usize, k: usize, vectors: &[f32], centroids: &mut [f32]) {
+        let n = vectors.len() / sub_dim;
         if n == 0 {
             return;
         }
@@ -129,45 +141,39 @@ impl PqEncoder {
         use rand::prelude::*;
         let mut rng = StdRng::from_entropy();
 
-        // 第一个 centroid 随机选择
         let idx = rng.gen_range(0..n);
-        for j in 0..self.sub_dim {
-            centroids[j] = vectors[idx * self.sub_dim + j];
-        }
+        centroids[..sub_dim].copy_from_slice(&vectors[idx * sub_dim..(idx + 1) * sub_dim]);
 
-        // 剩余 k-1 个
-        for c in 1..self.k {
+        for c in 1..k {
             let mut distances = vec![0.0f32; n];
             let mut sum = 0.0f32;
-
             for i in 0..n {
-                let sub_vec = &vectors[i * self.sub_dim..(i + 1) * self.sub_dim];
+                let sub_vec = &vectors[i * sub_dim..(i + 1) * sub_dim];
                 let mut min_dist = f32::MAX;
                 for cc in 0..c {
-                    let d = self.l2_sqr(
-                        sub_vec,
-                        &centroids[cc * self.sub_dim..(cc + 1) * self.sub_dim],
-                    );
+                    let centroid = &centroids[cc * sub_dim..(cc + 1) * sub_dim];
+                    let d: f32 = sub_vec
+                        .iter()
+                        .zip(centroid.iter())
+                        .map(|(a, b)| (a - b) * (a - b))
+                        .sum();
                     min_dist = min_dist.min(d);
                 }
                 distances[i] = min_dist;
                 sum += min_dist;
             }
-
             let threshold = rng.gen::<f32>() * sum;
             let mut acc = 0.0f32;
             let mut selected = 0;
-            for (i, &distance) in distances.iter().enumerate().take(n) {
-                acc += distance;
+            for (i, &d) in distances.iter().enumerate() {
+                acc += d;
                 if acc >= threshold {
                     selected = i;
                     break;
                 }
             }
-
-            for j in 0..self.sub_dim {
-                centroids[c * self.sub_dim + j] = vectors[selected * self.sub_dim + j];
-            }
+            centroids[c * sub_dim..(c + 1) * sub_dim]
+                .copy_from_slice(&vectors[selected * sub_dim..(selected + 1) * sub_dim]);
         }
     }
 
@@ -242,12 +248,6 @@ impl PqEncoder {
         distance_with_table_simd_flat(table, codes, m, self.k)
     }
 
-    /// 计算 L2 距离 (平方)
-    #[inline]
-    fn l2_sqr(&self, a: &[f32], b: &[f32]) -> f32 {
-        let d = simd::l2_distance(a, b);
-        d * d
-    }
 }
 
 #[inline(always)]

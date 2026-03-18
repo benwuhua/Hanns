@@ -27,9 +27,6 @@ use crate::simd;
 use io_uring::{opcode, types, IoUring};
 use memmap2::Mmap;
 use parking_lot::Mutex;
-use rand::rngs::StdRng;
-use rand::seq::SliceRandom;
-use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_PAGE_SIZE: usize = 4096;
@@ -2093,42 +2090,6 @@ impl PQFlashIndex {
         scored.into_iter().map(|(node_id, _)| node_id).collect()
     }
 
-    fn select_neighbors_with_random(
-        &self,
-        node_id: usize,
-        vector: &[f32],
-        max_degree: usize,
-    ) -> Vec<u32> {
-        let mut selected = self.select_neighbors(vector, max_degree);
-        if self.config.random_init_edges == 0 || node_id == 0 || self.node_ids.is_empty() {
-            return selected;
-        }
-
-        let limit = node_id.min(self.node_ids.len());
-        if limit == 0 {
-            return selected;
-        }
-
-        let sample = self.config.random_init_edges.min(limit);
-        let seed = self.config.random_seed ^ ((node_id as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
-        let mut rng = StdRng::seed_from_u64(seed);
-        let mut pool: Vec<usize> = (0..limit).collect();
-        pool.shuffle(&mut rng);
-
-        for idx in pool.into_iter().take(sample) {
-            let rid = idx as u32;
-            if !selected.contains(&rid) {
-                selected.push(rid);
-            }
-        }
-
-        selected.sort_by(|&a, &b| {
-            self.exact_distance(vector, self.node_vector(a as usize))
-                .total_cmp(&self.exact_distance(vector, self.node_vector(b as usize)))
-        });
-        selected.truncate(max_degree.min(selected.len()));
-        selected
-    }
 
     #[cfg(test)]
     fn link_back(&mut self, neighbor: u32, node_id: u32) {
