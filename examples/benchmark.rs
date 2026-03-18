@@ -5,17 +5,16 @@ use std::time::Instant;
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 use knowhere_rs::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
 use knowhere_rs::faiss::{DiskAnnIndex, HnswIndex, IvfPqIndex, MemIndex};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
 const NUM_VECTORS: usize = 1_000;
 const DIM: usize = 128;
 const TOP_K: usize = 10;
 
 fn generate_vectors(n: usize, dim: usize) -> Vec<f32> {
-    let mut vectors = vec![0.0f32; n * dim];
-    for (i, value) in vectors.iter_mut().enumerate() {
-        *value = (i as f32 * 0.01).sin().abs();
-    }
-    vectors
+    let mut rng = StdRng::seed_from_u64(42);
+    (0..n * dim).map(|_| rng.r#gen::<f32>()).collect()
 }
 
 fn benchmark_flat_index() {
