@@ -2054,6 +2054,8 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
     use std::collections::HashSet;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn beam_io_tracks_reads() {
@@ -2633,6 +2635,14 @@ mod tests {
         SearchResult::new(ids, dists, 0.0)
     }
 
+    fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}_{nanos}"))
+    }
+
     #[test]
     fn test_pqflash_basic_search() {
         let dim = 16usize;
@@ -2719,5 +2729,101 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_pqflash_save_load_roundtrip() {
+        let dim = 16usize;
+        let n = 300usize;
+        let nq = 20usize;
+        let k = 5usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let queries: Vec<f32> = (0..nq * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+
+        let config = AisaqConfig {
+            max_degree: 16,
+            search_list_size: 50,
+            disk_pq_dims: 0,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, dim).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+        let original = run_batch_search(&index, &queries, dim, k);
+
+        let dir = make_temp_dir("pqflash_roundtrip");
+        fs::create_dir_all(&dir).unwrap();
+        index.save(&dir).unwrap();
+        let loaded = PQFlashIndex::load(&dir).unwrap();
+        let loaded_results = run_batch_search(&loaded, &queries, dim, k);
+
+        assert_eq!(loaded_results.ids, original.ids);
+        assert_eq!(loaded_results.distances, original.distances);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_pqflash_save_load_with_pq() {
+        let dim = 16usize;
+        let n = 300usize;
+        let nq = 20usize;
+        let k = 5usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let queries: Vec<f32> = (0..nq * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+
+        let config = AisaqConfig {
+            max_degree: 16,
+            search_list_size: 50,
+            disk_pq_dims: 4,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, dim).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+
+        let dir = make_temp_dir("pqflash_roundtrip_pq");
+        fs::create_dir_all(&dir).unwrap();
+        index.save(&dir).unwrap();
+        let loaded = PQFlashIndex::load(&dir).unwrap();
+        let loaded_results = run_batch_search(&loaded, &queries, dim, k);
+
+        let gt = brute_force_topk_l2(&vectors, &queries, dim, k);
+        let recall = compute_recall(&loaded_results, &gt, k);
+        assert!(recall >= 0.65, "loaded pq recall@5 too low: {recall:.4}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_pqflash_disk_path_after_load() {
+        let dim = 16usize;
+        let n = 300usize;
+        let nq = 20usize;
+        let k = 5usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let queries: Vec<f32> = (0..nq * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+
+        let config = AisaqConfig {
+            max_degree: 16,
+            search_list_size: 50,
+            disk_pq_dims: 0,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, dim).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+
+        let dir = make_temp_dir("pqflash_disk_path");
+        fs::create_dir_all(&dir).unwrap();
+        index.save(&dir).unwrap();
+        let loaded = PQFlashIndex::load(&dir).unwrap();
+
+        assert!(loaded.vectors.is_empty(), "loaded index should use disk-backed path");
+        let results = run_batch_search(&loaded, &queries, dim, k);
+        assert_eq!(results.ids.len(), nq * k);
+        assert!(results.ids.iter().all(|&id| id >= 0));
+        let _ = fs::remove_dir_all(&dir);
     }
 }
