@@ -1,6 +1,5 @@
 //! Faiss binding layer
 
-pub mod aisaq;
 pub mod annoy;
 pub mod bin_flat;
 pub mod bin_ivf_flat;
@@ -8,8 +7,6 @@ pub mod binary;
 pub mod binary_hnsw;
 pub mod diskann;
 pub mod diskann_aisaq;
-pub mod diskann_beam;
-pub mod diskann_complete;
 pub mod hnsw;
 pub mod hnsw_build;
 pub mod hnsw_complete;
@@ -39,7 +36,6 @@ pub mod sparse_inverted_cc;
 pub mod sparse_wand;
 pub mod sparse_wand_cc;
 
-pub use aisaq::{AisaqConfig, AisaqIndex, AisaqStats};
 pub use bin_flat::BinFlatIndex;
 pub use bin_ivf_flat::BinIvfFlatIndex;
 pub use binary::BinaryIndex;
