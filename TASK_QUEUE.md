@@ -92,8 +92,11 @@
   - Phase 1: decode 路径改为 uint8 domain sq_l2_asymmetric: 114→190 QPS
   - Phase 2: 重构 inverted list 为 flat 连续内存（消除 per-vector Vec<u8>）
   - Phase 3: par_iter 并行扫描 + TopKAccumulator（消除 collect-all + sort）: 190→1180 QPS (+6.3x)
-  - Mac 最终 (nprobe=256, 100K): recall=0.99, QPS=1180
-  - 待完成: x86 authority QPS（Codex B 正在跑）
+  - Mac 最终 (nprobe=256, 100K): recall=0.990, QPS=1180
+  - x86 authority (nprobe=256, 100K): recall=0.985, QPS=397 ← passes 0.95 gate
+  - min nprobe for recall≥0.95: 256 (full scan needed due to SQ8 quantization)
+  - Mac/x86 ratio: ~2.97x — consistent with HNSW/IVF-Flat ratios
+  - Script: examples/ivf_sq8_authority_baseline.rs
 
 ### AISAQ Phase 2: 能力补全 + 生产就绪 (2026-03-18 开启, 降级为 P2+)
 
