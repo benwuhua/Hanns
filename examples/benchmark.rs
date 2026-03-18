@@ -324,40 +324,53 @@ fn benchmark_pqflash() {
     let queries_qps = generate_vectors(NUM_QPS_QUERIES, DIM);
     let queries_recall = generate_vectors(NUM_RECALL_QUERIES, DIM);
 
-    let config = AisaqConfig {
-        disk_pq_dims: 16,
+    let config_nopq = AisaqConfig {
+        disk_pq_dims: 0,
         ..AisaqConfig::default()
     };
-    let mut index = PQFlashIndex::new(config, MetricType::L2, DIM).unwrap();
-
-    let start = Instant::now();
-    index.train(&vectors).unwrap();
-    index.add(&vectors).unwrap();
-    let build_time = start.elapsed().as_secs_f64();
-    println!("Build 10000 vectors (dim=128): {:.2}s", build_time);
-
-    let start = Instant::now();
-    let qps_result = {
-        let mut ids = Vec::with_capacity(NUM_QPS_QUERIES * TOP_K);
-        for q in queries_qps.chunks(DIM) {
-            let r = index.search(q, TOP_K).unwrap();
-            ids.extend_from_slice(&r.ids);
-        }
-        ids
+    let config = AisaqConfig {
+        disk_pq_dims: 32,
+        rerank_expand_pct: 300,
+        search_list_size: 200,
+        cache_all_on_load: true,
+        ..AisaqConfig::default()
     };
-    let _ = qps_result.len();
-    let search_s = start.elapsed().as_secs_f64();
-    let qps = NUM_QPS_QUERIES as f64 / search_s.max(f64::EPSILON);
-    println!("Search QPS (L=128, R=48): {:.0} queries/sec", qps);
 
-    let mut recall_ids = Vec::with_capacity(NUM_RECALL_QUERIES * TOP_K);
-    for q in queries_recall.chunks(DIM) {
-        let r = index.search(q, TOP_K).unwrap();
-        recall_ids.extend_from_slice(&r.ids);
-    }
-    let gt = brute_force_top_k(&vectors, &queries_recall, DIM, TOP_K);
-    let recall = recall_at_k(&recall_ids, &gt, TOP_K);
-    println!("Recall@10 (100 queries): {:.3}", recall);
+    let run = |label: &str, cfg: AisaqConfig| {
+        let mut index = PQFlashIndex::new(cfg, MetricType::L2, DIM).unwrap();
+
+        let start = Instant::now();
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+        let build_time = start.elapsed().as_secs_f64();
+        println!("[{label}] Build 10000 vectors (dim=128): {:.2}s", build_time);
+
+        let start = Instant::now();
+        let qps_result = {
+            let mut ids = Vec::with_capacity(NUM_QPS_QUERIES * TOP_K);
+            for q in queries_qps.chunks(DIM) {
+                let r = index.search(q, TOP_K).unwrap();
+                ids.extend_from_slice(&r.ids);
+            }
+            ids
+        };
+        let _ = qps_result.len();
+        let search_s = start.elapsed().as_secs_f64();
+        let qps = NUM_QPS_QUERIES as f64 / search_s.max(f64::EPSILON);
+        println!("[{label}] Search QPS (L=128, R=48): {:.0} queries/sec", qps);
+
+        let mut recall_ids = Vec::with_capacity(NUM_RECALL_QUERIES * TOP_K);
+        for q in queries_recall.chunks(DIM) {
+            let r = index.search(q, TOP_K).unwrap();
+            recall_ids.extend_from_slice(&r.ids);
+        }
+        let gt = brute_force_top_k(&vectors, &queries_recall, DIM, TOP_K);
+        let recall = recall_at_k(&recall_ids, &gt, TOP_K);
+        println!("[{label}] Recall@10 (100 queries): {:.3}", recall);
+    };
+
+    run("NoPQ", config_nopq);
+    run("PQ32", config);
 }
 
 fn main() {

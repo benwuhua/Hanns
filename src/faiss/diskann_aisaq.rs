@@ -63,6 +63,8 @@ pub struct AisaqConfig {
     pub build_degree_slack_pct: usize,
     pub warm_up: bool,
     pub filter_threshold: f32,
+    #[serde(default)]
+    pub cache_all_on_load: bool,
 }
 
 impl Default for AisaqConfig {
@@ -87,6 +89,7 @@ impl Default for AisaqConfig {
             build_degree_slack_pct: 100,
             warm_up: false,
             filter_threshold: -1.0,
+            cache_all_on_load: false,
         }
     }
 }
@@ -652,6 +655,7 @@ pub struct PQFlashIndex {
     trained: bool,
     node_count: usize,
     storage: Option<DiskStorage>,
+    loaded_node_cache: Option<HashMap<u32, LoadedNode>>,
 }
 
 impl PQFlashIndex {
@@ -680,6 +684,7 @@ impl PQFlashIndex {
             trained: false,
             node_count: 0,
             storage: None,
+            loaded_node_cache: None,
         })
     }
 
@@ -876,7 +881,7 @@ impl PQFlashIndex {
                 .max(metadata.flash_layout.page_size),
         )?;
 
-        Ok(Self {
+        let mut index = Self {
             config: metadata.config,
             metric_type: metadata.metric_type,
             dim: metadata.dim,
@@ -893,7 +898,12 @@ impl PQFlashIndex {
                 file_group,
                 page_cache,
             }),
-        })
+            loaded_node_cache: None,
+        };
+        if index.config.cache_all_on_load {
+            index.prime_loaded_node_cache()?;
+        }
+        Ok(index)
     }
 
     pub fn search(&self, query: &[f32], k: usize) -> Result<SearchResult> {
@@ -1760,6 +1770,24 @@ impl PQFlashIndex {
         self.vectors = vectors;
         self.nodes = nodes;
         self.storage = None;
+        self.loaded_node_cache = None;
+        Ok(())
+    }
+
+    fn prime_loaded_node_cache(&mut self) -> Result<()> {
+        let Some(storage) = &self.storage else {
+            return Ok(());
+        };
+        let mut cache = HashMap::with_capacity(self.node_count);
+        for node_id in 0..self.node_count {
+            let offset = node_id * self.flash_layout.node_bytes;
+            let page_read = storage
+                .page_cache
+                .read(offset, self.flash_layout.node_bytes)?;
+            let loaded = self.deserialize_node(node_id as u32, &page_read.bytes)?;
+            cache.insert(node_id as u32, loaded);
+        }
+        self.loaded_node_cache = Some(cache);
         Ok(())
     }
 
@@ -1775,6 +1803,21 @@ impl PQFlashIndex {
                 node_id,
                 self.len()
             )));
+        }
+
+        if let Some(cache) = &self.loaded_node_cache {
+            if let Some(loaded) = cache.get(&node_id) {
+                match access_mode {
+                    NodeAccessMode::None => {}
+                    NodeAccessMode::Node => io.record_node_access(node_id, self.flash_layout.node_bytes, 0),
+                    NodeAccessMode::Pq => {
+                        if !loaded.inline_pq.is_empty() {
+                            io.record_pq_access(node_id, loaded.inline_pq.len(), 0);
+                        }
+                    }
+                }
+                return Ok(loaded.clone());
+            }
         }
 
         if let Some(storage) = &self.storage {
