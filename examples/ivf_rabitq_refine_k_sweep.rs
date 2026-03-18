@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
+use std::time::Instant;
 
 use knowhere_rs::api::{IndexConfig, IndexType, MetricType, SearchRequest};
 use knowhere_rs::faiss::{IvfRaBitqConfig, IvfRaBitqIndex, MemIndex};
@@ -53,8 +54,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut best_recall = -1.0f64;
-    let mut best_refine_k = 0usize;
+    let mut recall_at_500: Option<f64> = None;
+    let mut qps_at_500: Option<u64> = None;
 
     for &refine_k in REFINE_KS {
         let cfg = IvfRaBitqConfig::new(DIM, NLIST)
@@ -70,6 +71,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..Default::default()
         };
 
+        // Warmup (not timed)
+        for i in 0..NQ {
+            let q = &queries[i * DIM..(i + 1) * DIM];
+            let _ = index.search(q, &req)?;
+        }
+
+        let start = Instant::now();
         let mut recall_sum = 0.0f64;
         for (i, gt_ids) in gt_top10.iter().enumerate() {
             let q = &queries[i * DIM..(i + 1) * DIM];
@@ -77,22 +85,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let hit = overlap_at_k(gt_ids, &res.ids) as f64;
             recall_sum += hit / TOP_K as f64;
         }
+        let elapsed = start.elapsed();
         let recall = round3(recall_sum / NQ as f64);
-        println!("refine_k={:>5}  recall@10={:.3}", refine_k, recall);
+        let qps = (NQ as f64 / elapsed.as_secs_f64()).round() as u64;
+        println!(
+            "refine_k={:>5}  recall@10={:.3}  qps={}",
+            refine_k, recall, qps
+        );
 
-        if recall > best_recall {
-            best_recall = recall;
-            best_refine_k = refine_k;
+        if refine_k == 500 {
+            recall_at_500 = Some(recall);
+            qps_at_500 = Some(qps);
         }
     }
 
-    fs::write(
-        STATUS_PATH,
-        format!(
-            "DONE: max_recall={:.3} at refine_k={}\n",
-            best_recall, best_refine_k
-        ),
-    )?;
+    let status = match (recall_at_500, qps_at_500) {
+        (Some(recall), Some(qps)) => {
+            format!("DONE: recall={:.3} qps={} at refine_k=500\n", recall, qps)
+        }
+        _ => "ERROR: refine_k=500 result missing\n".to_string(),
+    };
+    fs::write(STATUS_PATH, status)?;
 
     Ok(())
 }
