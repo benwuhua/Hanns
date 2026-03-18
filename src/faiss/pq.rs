@@ -35,11 +35,31 @@ impl PqEncoder {
     }
 
     /// 训练码书 (使用 K-means，子空间并行)
-    pub fn train(&mut self, data: &[f32], max_iter: usize) {
-        let n = data.len() / self.dim;
+    pub fn train(&mut self, data_in: &[f32], max_iter: usize) {
+        let n = data_in.len() / self.dim;
         if n == 0 {
             return;
         }
+
+        const MAX_TRAIN_SAMPLES: usize = 200_000;
+
+        let data = if n > MAX_TRAIN_SAMPLES {
+            // 随机子采样 MAX_TRAIN_SAMPLES 行
+            use rand::seq::SliceRandom;
+            use rand::SeedableRng;
+            let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+            let mut indices: Vec<usize> = (0..n).collect();
+            indices.shuffle(&mut rng);
+            indices.truncate(MAX_TRAIN_SAMPLES);
+            let mut sampled = Vec::with_capacity(MAX_TRAIN_SAMPLES * self.dim);
+            for &i in &indices {
+                sampled.extend_from_slice(&data_in[i * self.dim..(i + 1) * self.dim]);
+            }
+            std::borrow::Cow::Owned(sampled)
+        } else {
+            std::borrow::Cow::Borrowed(data_in)
+        };
+        let n = data.len() / self.dim;  // 重新计算 n（可能已缩小）
 
         let m = self.m;
         let dim = self.dim;

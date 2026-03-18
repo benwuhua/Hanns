@@ -527,6 +527,65 @@ fn benchmark_pqflash_100k() {
     }
 }
 
+fn benchmark_pqflash_1m() {
+    const NUM_VECTORS: usize = 1_000_000;
+    const DIM: usize = 128;
+    const TOP_K: usize = 10;
+    const NUM_QPS_QUERIES: usize = 500;  // 1M时查询集小一点
+
+    println!("\n=== PQFlash 1M Benchmark ===");
+    let mut rng = StdRng::seed_from_u64(456);
+    let vectors: Vec<f32> = (0..NUM_VECTORS * DIM).map(|_| rng.r#gen::<f32>()).collect();
+    let queries: Vec<f32> = (0..NUM_QPS_QUERIES * DIM).map(|_| rng.r#gen::<f32>()).collect();
+
+    // NoPQ 1M
+    {
+        let config = AisaqConfig {
+            disk_pq_dims: 0,
+            search_list_size: 128,
+            cache_all_on_load: true,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, DIM).unwrap();
+        let t0 = Instant::now();
+        index.train(&vectors).unwrap();
+        let train_s = t0.elapsed().as_secs_f64();
+        let t1 = Instant::now();
+        index.add(&vectors).unwrap();
+        let add_s = t1.elapsed().as_secs_f64();
+        println!("[NoPQ] Build 1M vectors: {:.1}s  (train {:.1}s + add {:.1}s)",
+            train_s + add_s, train_s, add_s);
+        let start = Instant::now();
+        let _ = index.search_batch(&queries, TOP_K).unwrap();
+        let qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
+        println!("[NoPQ] Search QPS: {:.0}", qps);
+    }
+
+    // PQ32 1M
+    {
+        let config = AisaqConfig {
+            disk_pq_dims: 32,
+            rerank_expand_pct: 300,
+            search_list_size: 200,
+            cache_all_on_load: true,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, DIM).unwrap();
+        let t0 = Instant::now();
+        index.train(&vectors).unwrap();
+        let train_s = t0.elapsed().as_secs_f64();
+        let t1 = Instant::now();
+        index.add(&vectors).unwrap();
+        let add_s = t1.elapsed().as_secs_f64();
+        println!("[PQ32] Build 1M vectors: {:.1}s  (train {:.1}s + add {:.1}s)",
+            train_s + add_s, train_s, add_s);
+        let start = Instant::now();
+        let _ = index.search_batch(&queries, TOP_K).unwrap();
+        let qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
+        println!("[PQ32] Search QPS: {:.0}", qps);
+    }
+}
+
 fn main() {
     println!("KnowHere RS Benchmark");
     println!("=====================");
@@ -542,6 +601,7 @@ fn main() {
     benchmark_pqflash();
     benchmark_diskann_100k();
     benchmark_pqflash_100k();
+    benchmark_pqflash_1m();
 
     println!("\n✅ Benchmark complete!");
 }

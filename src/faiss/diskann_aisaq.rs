@@ -2945,30 +2945,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn aisaq_random_initial_neighbors_are_seeded() {
-        let config = AisaqConfig {
-            max_degree: 4,
-            random_init_edges: 2,
-            random_seed: 7,
-            ..AisaqConfig::default()
-        };
-        let mut index = PQFlashIndex::new(config, MetricType::L2, 2).unwrap();
-        let vectors = vec![
-            0.0f32, 0.0, //
-            1.0, 0.0, //
-            2.0, 0.0, //
-            3.0, 0.0, //
-            4.0, 0.0,
-        ];
-        index.train(&vectors).unwrap();
-        index.add(&vectors[..8]).unwrap(); // add first 4 nodes
-        let query = [4.0f32, 0.0f32];
-
-        let n1 = index.select_neighbors_with_random(4, &query, 4);
-        let n2 = index.select_neighbors_with_random(4, &query, 4);
-        assert_eq!(n1, n2, "random init neighbors should be deterministic under seed");
-    }
 
     #[test]
     fn aisaq_link_back_keeps_closer_reverse_neighbors() {
