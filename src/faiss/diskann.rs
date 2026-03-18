@@ -355,6 +355,7 @@ pub struct DiskAnnIndex {
     dim: usize,
     vectors: Vec<f32>,
     ids: Vec<i64>,
+    id_to_idx: HashMap<i64, usize>,
     deleted_ids: HashSet<i64>,
     /// Flat neighbor id storage, stride = max_degree.
     neighbor_ids: Vec<u32>,
@@ -405,6 +406,7 @@ impl DiskAnnIndex {
             dim: config.dim,
             vectors: Vec::new(),
             ids: Vec::new(),
+            id_to_idx: HashMap::new(),
             deleted_ids: HashSet::new(),
             neighbor_ids: Vec::new(),
             neighbor_dists: Vec::new(),
@@ -437,6 +439,7 @@ impl DiskAnnIndex {
 
         self.vectors.clear();
         self.ids.clear();
+        self.id_to_idx.clear();
         self.deleted_ids.clear();
         self.vectors.reserve(n * self.dim);
         self.neighbor_ids = vec![u32::MAX; n.saturating_mul(self.dann_config.max_degree)];
@@ -455,7 +458,9 @@ impl DiskAnnIndex {
             let start = i * self.dim;
             self.vectors
                 .extend_from_slice(&vectors[start..start + self.dim]);
-            self.ids.push(i as i64);
+            let id = i as i64;
+            self.ids.push(id);
+            self.id_to_idx.insert(id, i);
         }
         if self.config.metric_type == MetricType::Cosine {
             self.normalize_vectors_in_place();
@@ -1367,31 +1372,17 @@ impl DiskAnnIndex {
             self.entry_points.clear();
             return;
         }
-
-        let mut indices: Vec<usize> = (0..n).collect();
-        indices.sort_by(|&a, &b| {
-            self.vectors[a * self.dim]
-                .partial_cmp(&self.vectors[b * self.dim])
-                .unwrap_or(Ordering::Equal)
-        });
-
         let target = self.dann_config.num_entry_points.max(1).min(n);
-        let pool_size = n.min((target * 32).clamp(target, 4096));
-        let mut pool = Vec::with_capacity(pool_size);
-        if pool_size == 1 {
-            pool.push(indices[0]);
-        } else {
-            for slot in 0..pool_size {
-                let pos = slot * (n - 1) / (pool_size - 1);
-                pool.push(indices[pos]);
-            }
-        }
-        pool.sort_unstable();
-        pool.dedup();
-        if pool.is_empty() {
-            pool.push(indices[0]);
-        }
+        let points = self.select_diverse_entry_points(target);
+        self.entry_point = points.first().copied();
+        self.entry_points = points;
+    }
 
+    fn find_medoid(&self) -> usize {
+        let n = self.ids.len();
+        if n == 0 {
+            return 0;
+        }
         let mut centroid = vec![0.0f32; self.dim];
         for i in 0..n {
             let start = i * self.dim;
@@ -1403,47 +1394,51 @@ impl DiskAnnIndex {
         for v in &mut centroid {
             *v *= inv_n;
         }
-
-        let first = *pool
-            .iter()
-            .min_by(|&&a, &&b| {
+        (0..n)
+            .min_by(|&a, &b| {
                 self.compute_dist(&centroid, a)
                     .partial_cmp(&self.compute_dist(&centroid, b))
                     .unwrap_or(Ordering::Equal)
             })
-            .unwrap_or(&indices[0]);
+            .unwrap_or(0)
+    }
 
-        let mut points = Vec::with_capacity(target);
-        points.push(first);
-        while points.len() < target {
-            let next = pool
-                .iter()
-                .copied()
-                .filter(|idx| !points.contains(idx))
+    fn select_diverse_entry_points(&self, k: usize) -> Vec<usize> {
+        let n = self.ids.len();
+        if n == 0 || k == 0 {
+            return Vec::new();
+        }
+        let k = k.min(n);
+        if k == 1 {
+            return vec![self.find_medoid()];
+        }
+
+        let mut selected = Vec::with_capacity(k);
+        selected.push(self.find_medoid());
+        while selected.len() < k {
+            let next = (0..n)
+                .filter(|idx| !selected.contains(idx))
                 .max_by(|&a, &b| {
-                    let min_a = points
+                    let min_dist_a = selected
                         .iter()
                         .map(|&s| self.distance_between_nodes(s, a))
                         .fold(f32::MAX, f32::min);
-                    let min_b = points
+                    let min_dist_b = selected
                         .iter()
                         .map(|&s| self.distance_between_nodes(s, b))
                         .fold(f32::MAX, f32::min);
-                    min_a.partial_cmp(&min_b).unwrap_or(Ordering::Equal)
+                    min_dist_a.total_cmp(&min_dist_b)
                 });
             if let Some(idx) = next {
-                points.push(idx);
+                selected.push(idx);
             } else {
                 break;
             }
         }
-
-        if points.is_empty() {
-            points.push(indices[0]);
+        if selected.is_empty() {
+            selected.push(0);
         }
-
-        self.entry_point = Some(points[0]);
-        self.entry_points = points;
+        selected
     }
 
     fn initial_search_starts(&self, query: &[f32]) -> Vec<(usize, f32)> {
@@ -1838,7 +1833,9 @@ impl DiskAnnIndex {
 
             let id = ids.map(|ids| ids[i]).unwrap_or(self.next_id);
             self.next_id += 1;
+            let idx = self.ids.len();
             self.ids.push(id);
+            self.id_to_idx.insert(id, idx);
             let r = self.dann_config.max_degree;
             self.neighbor_ids.extend(std::iter::repeat_n(u32::MAX, r));
             self.neighbor_dists.extend(std::iter::repeat_n(f32::MAX, r));
@@ -1863,7 +1860,7 @@ impl DiskAnnIndex {
                 "index not trained".to_string(),
             ));
         }
-        if self.ids.iter().any(|&id| id == external_id) {
+        if self.id_to_idx.contains_key(&external_id) {
             return Err(crate::api::KnowhereError::InvalidArg(format!(
                 "duplicate external id {}",
                 external_id
@@ -1885,6 +1882,7 @@ impl DiskAnnIndex {
 
         self.vectors.extend_from_slice(&vec);
         self.ids.push(external_id);
+        self.id_to_idx.insert(external_id, new_idx);
         self.neighbor_ids.extend(std::iter::repeat_n(u32::MAX, r));
         self.neighbor_dists.extend(std::iter::repeat_n(f32::MAX, r));
         self.neighbor_degrees.push(0);
@@ -1895,9 +1893,9 @@ impl DiskAnnIndex {
                 .iter()
                 .take(r.saturating_mul(2))
                 .filter_map(|(ext_id, dist)| {
-                    self.ids
-                        .iter()
-                        .position(|&id| id == *ext_id)
+                    self.id_to_idx
+                        .get(ext_id)
+                        .copied()
                         .and_then(|idx| (idx != new_idx).then_some((idx as u32, *dist)))
                 })
                 .collect();
@@ -2598,10 +2596,14 @@ impl DiskAnnIndex {
         }
 
         self.ids.clear();
+        self.id_to_idx.clear();
         for _ in 0..count {
             let mut id_bytes = [0u8; 8];
             file.read_exact(&mut id_bytes)?;
-            self.ids.push(i64::from_le_bytes(id_bytes));
+            let id = i64::from_le_bytes(id_bytes);
+            let idx = self.ids.len();
+            self.ids.push(id);
+            self.id_to_idx.insert(id, idx);
         }
 
         self.neighbor_degrees = vec![0u32; count];
@@ -3865,6 +3867,61 @@ mod tests {
     }
 
     #[test]
+    fn test_diskann_multi_entry_points_recall() {
+        let mut rng = StdRng::seed_from_u64(42);
+        let n = 500usize;
+        let dim = 32usize;
+        let mut vectors = Vec::with_capacity(n * dim);
+        for _cluster in 0..5usize {
+            let center: Vec<f32> = (0..dim).map(|_| rng.gen_range(0.0..10.0)).collect();
+            for _ in 0..100 {
+                let v: Vec<f32> = center.iter().map(|&c| c + rng.gen_range(0.0..1.0)).collect();
+                vectors.extend_from_slice(&v);
+            }
+        }
+
+        let config1 = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_num_entry_points: Some(1),
+                ..Default::default()
+            },
+        };
+        let mut idx1 = DiskAnnIndex::new(&config1).unwrap();
+        idx1.train(&vectors).unwrap();
+
+        let config5 = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_num_entry_points: Some(5),
+                ..Default::default()
+            },
+        };
+        let mut idx5 = DiskAnnIndex::new(&config5).unwrap();
+        idx5.train(&vectors).unwrap();
+
+        let queries: Vec<f32> = (0..50 * dim).map(|_| rng.gen_range(0.0..1.0)).collect();
+        let req = SearchRequest {
+            top_k: 10,
+            nprobe: 64,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+
+        let r1 = idx1.search(&queries, &req).unwrap();
+        let r5 = idx5.search(&queries, &req).unwrap();
+        assert!(!r1.ids.is_empty());
+        assert!(!r5.ids.is_empty());
+    }
+
+    #[test]
     fn test_diskann_pq_table_distance_matches_direct_distance() {
         let mut pq = PQCode::new(2);
         let vectors = vec![
@@ -4564,7 +4621,11 @@ impl Index for DiskAnnIndex {
                 )));
             }
             self.ids.clear();
+            self.id_to_idx.clear();
             self.ids.extend_from_slice(ids);
+            for (idx, &id) in self.ids.iter().enumerate() {
+                self.id_to_idx.insert(id, idx);
+            }
             self.next_id = ids.iter().copied().max().map(|m| m.saturating_add(1)).unwrap_or(0);
         }
         Ok(())
