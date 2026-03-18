@@ -2544,16 +2544,23 @@ impl PQFlashIndex {
             )));
         }
 
-        let mut cursor = 0usize;
-        let mut vector = Vec::with_capacity(self.dim);
-        for _ in 0..self.dim {
-            let raw = bytes
-                .get(cursor..cursor + 4)
-                .ok_or_else(|| KnowhereError::Codec("truncated vector payload".to_string()))?;
-            vector.push(f32::from_le_bytes(raw.try_into().unwrap()));
-            cursor += 4;
-        }
+        // Fast bulk deserialization using bytemuck zero-copy cast + memcpy.
+        // Replaces 128+ individual bounds-checked f32 pushes with one slice op.
+        let vec_end = self.dim * 4;
+        let vector_bytes = bytes
+            .get(..vec_end)
+            .ok_or_else(|| KnowhereError::Codec("truncated vector payload".to_string()))?;
+        // SAFETY: f32 has no invalid bit patterns; bytes are LE f32 as written by save()
+        let vector: Vec<f32> = if cfg!(target_endian = "little") {
+            bytemuck::cast_slice::<u8, f32>(vector_bytes).to_vec()
+        } else {
+            vector_bytes
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                .collect()
+        };
 
+        let mut cursor = vec_end;
         let degree = u32::from_le_bytes(
             bytes[cursor..cursor + 4]
                 .try_into()
@@ -2561,24 +2568,26 @@ impl PQFlashIndex {
         ) as usize;
         cursor += 4;
 
-        let mut neighbors = Vec::with_capacity(degree.min(self.config.max_degree));
-        for slot in 0..self.config.max_degree {
-            let neighbor = u32::from_le_bytes(
-                bytes[cursor..cursor + 4]
-                    .try_into()
-                    .map_err(|_| KnowhereError::Codec("truncated neighbor payload".to_string()))?,
-            );
-            cursor += 4;
-            if slot < degree {
-                neighbors.push(neighbor);
-            }
-        }
+        let neighbor_bytes = bytes
+            .get(cursor..cursor + self.config.max_degree * 4)
+            .ok_or_else(|| KnowhereError::Codec("truncated neighbor payload".to_string()))?;
+        let count = degree.min(self.config.max_degree);
+        let neighbors: Vec<u32> = if cfg!(target_endian = "little") {
+            bytemuck::cast_slice::<u8, u32>(neighbor_bytes)[..count].to_vec()
+        } else {
+            neighbor_bytes
+                .chunks_exact(4)
+                .take(count)
+                .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+                .collect()
+        };
+        cursor += self.config.max_degree * 4;
 
-        let inline_pq = bytes[cursor..cursor + self.flash_layout.inline_pq_bytes]
-            .iter()
-            .copied()
-            .take(self.pq_code_size)
-            .collect();
+        let pq_end = cursor + self.pq_code_size.min(self.flash_layout.inline_pq_bytes);
+        let inline_pq = bytes
+            .get(cursor..pq_end)
+            .map(|s| s.to_vec())
+            .unwrap_or_default();
 
         Ok(LoadedNode {
             id: node_id as i64,
