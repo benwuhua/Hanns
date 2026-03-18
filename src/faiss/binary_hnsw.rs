@@ -7,11 +7,16 @@
 
 use rand::Rng;
 use std::collections::HashSet;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::Path;
 
 use crate::api::{IndexConfig, Result, SearchResult as ApiSearchResult};
 
 /// Maximum number of layers in the HNSW graph
 const MAX_LAYERS: usize = 16;
+const BINARY_HNSW_MAGIC: &[u8; 6] = b"BNHNSW";
+const BINARY_HNSW_VERSION: u32 = 1;
 
 /// A single node's neighbor connections at a specific layer
 #[derive(Clone, Debug)]
@@ -462,6 +467,181 @@ impl BinaryHnswIndex {
     pub fn is_empty(&self) -> bool {
         self.ids.is_empty()
     }
+
+    pub fn save(&self, path: &Path) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut file = File::create(path)?;
+
+        file.write_all(BINARY_HNSW_MAGIC)?;
+        file.write_all(&BINARY_HNSW_VERSION.to_le_bytes())?;
+
+        file.write_all(&(self.dim_bits as u32).to_le_bytes())?;
+        file.write_all(&(self.dim_bytes as u32).to_le_bytes())?;
+        file.write_all(&(self.m as u32).to_le_bytes())?;
+        file.write_all(&(self.m_max0 as u32).to_le_bytes())?;
+        file.write_all(&(self.ef_construction as u32).to_le_bytes())?;
+        file.write_all(&(self.ef_search as u32).to_le_bytes())?;
+        file.write_all(&self.level_multiplier.to_le_bytes())?;
+        file.write_all(&[u8::from(self.trained)])?;
+        file.write_all(&(self.max_level as u32).to_le_bytes())?;
+        file.write_all(&self.entry_point.unwrap_or(-1).to_le_bytes())?;
+        file.write_all(&self.next_id.to_le_bytes())?;
+
+        file.write_all(&(self.vectors.len() as u64).to_le_bytes())?;
+        file.write_all(&self.vectors)?;
+
+        file.write_all(&(self.ids.len() as u64).to_le_bytes())?;
+        for &id in &self.ids {
+            file.write_all(&id.to_le_bytes())?;
+        }
+
+        file.write_all(&(self.node_info.len() as u64).to_le_bytes())?;
+        for node in &self.node_info {
+            file.write_all(&(node.max_layer as u32).to_le_bytes())?;
+            file.write_all(&(node.layer_neighbors.len() as u32).to_le_bytes())?;
+            for layer in &node.layer_neighbors {
+                file.write_all(&(layer.neighbors.len() as u32).to_le_bytes())?;
+                for &neighbor in &layer.neighbors {
+                    file.write_all(&neighbor.to_le_bytes())?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn load(
+        path: &Path,
+        dim: usize,
+    ) -> std::result::Result<Self, Box<dyn std::error::Error>> {
+        let mut file = File::open(path)?;
+
+        let mut magic = [0u8; 6];
+        file.read_exact(&mut magic)?;
+        if &magic != BINARY_HNSW_MAGIC {
+            return Err("invalid BinaryHNSW magic".into());
+        }
+
+        let mut u32_buf = [0u8; 4];
+        file.read_exact(&mut u32_buf)?;
+        let version = u32::from_le_bytes(u32_buf);
+        if version != BINARY_HNSW_VERSION {
+            return Err(format!("unsupported BinaryHNSW version: {}", version).into());
+        }
+
+        file.read_exact(&mut u32_buf)?;
+        let dim_bits = u32::from_le_bytes(u32_buf) as usize;
+        if dim_bits != dim {
+            return Err(format!("dim mismatch: load dim {} vs stored {}", dim, dim_bits).into());
+        }
+
+        file.read_exact(&mut u32_buf)?;
+        let dim_bytes = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut u32_buf)?;
+        let m = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut u32_buf)?;
+        let m_max0 = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut u32_buf)?;
+        let ef_construction = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut u32_buf)?;
+        let ef_search = u32::from_le_bytes(u32_buf) as usize;
+
+        let mut f32_buf = [0u8; 4];
+        file.read_exact(&mut f32_buf)?;
+        let level_multiplier = f32::from_le_bytes(f32_buf);
+
+        let mut trained_buf = [0u8; 1];
+        file.read_exact(&mut trained_buf)?;
+        let trained = trained_buf[0] != 0;
+
+        file.read_exact(&mut u32_buf)?;
+        let max_level = u32::from_le_bytes(u32_buf) as usize;
+
+        let mut i64_buf = [0u8; 8];
+        file.read_exact(&mut i64_buf)?;
+        let entry_raw = i64::from_le_bytes(i64_buf);
+        let entry_point = if entry_raw < 0 { None } else { Some(entry_raw) };
+
+        file.read_exact(&mut i64_buf)?;
+        let next_id = i64::from_le_bytes(i64_buf);
+
+        let mut u64_buf = [0u8; 8];
+        file.read_exact(&mut u64_buf)?;
+        let vectors_len = u64::from_le_bytes(u64_buf) as usize;
+        let mut vectors = vec![0u8; vectors_len];
+        file.read_exact(&mut vectors)?;
+
+        file.read_exact(&mut u64_buf)?;
+        let ids_len = u64::from_le_bytes(u64_buf) as usize;
+        let mut ids = vec![0i64; ids_len];
+        for id in &mut ids {
+            let mut buf = [0u8; 8];
+            file.read_exact(&mut buf)?;
+            *id = i64::from_le_bytes(buf);
+        }
+
+        file.read_exact(&mut u64_buf)?;
+        let node_count = u64::from_le_bytes(u64_buf) as usize;
+        let mut node_info = Vec::with_capacity(node_count);
+        for _ in 0..node_count {
+            file.read_exact(&mut u32_buf)?;
+            let node_max_layer = u32::from_le_bytes(u32_buf) as usize;
+            file.read_exact(&mut u32_buf)?;
+            let n_layers = u32::from_le_bytes(u32_buf) as usize;
+            let mut layer_neighbors = Vec::with_capacity(n_layers);
+            for _ in 0..n_layers {
+                file.read_exact(&mut u32_buf)?;
+                let n_neighbors = u32::from_le_bytes(u32_buf) as usize;
+                let mut neighbors = Vec::with_capacity(n_neighbors);
+                for _ in 0..n_neighbors {
+                    let mut buf = [0u8; 8];
+                    file.read_exact(&mut buf)?;
+                    neighbors.push(i64::from_le_bytes(buf));
+                }
+                layer_neighbors.push(LayerNeighbors { neighbors });
+            }
+            node_info.push(NodeInfo {
+                max_layer: node_max_layer,
+                layer_neighbors,
+            });
+        }
+
+        let id_to_idx = ids
+            .iter()
+            .enumerate()
+            .map(|(idx, &id)| (id, idx))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let mut params = crate::api::IndexParams::default();
+        params.m = Some(m);
+        params.ef_construction = Some(ef_construction);
+        params.ef_search = Some(ef_search);
+        let config = IndexConfig {
+            index_type: crate::api::IndexType::BinaryHnsw,
+            dim: dim_bits,
+            metric_type: crate::api::MetricType::Hamming,
+            data_type: crate::api::DataType::Binary,
+            params,
+        };
+
+        Ok(Self {
+            config,
+            entry_point,
+            max_level,
+            vectors,
+            ids,
+            id_to_idx,
+            node_info,
+            next_id,
+            trained,
+            dim_bits,
+            dim_bytes,
+            ef_construction,
+            ef_search,
+            m,
+            m_max0,
+            level_multiplier,
+        })
+    }
 }
 
 // Implement BinaryIndex trait for BinaryHnswIndex
@@ -569,16 +749,16 @@ impl crate::index::BinaryIndex for BinaryHnswIndex {
         })
     }
 
-    fn save(&self, _path: &str) -> std::result::Result<(), crate::index::IndexError> {
-        Err(crate::index::IndexError::Unsupported(
-            "save not implemented for BinaryHNSW".into(),
-        ))
+    fn save(&self, path: &str) -> std::result::Result<(), crate::index::IndexError> {
+        self.save(Path::new(path))
+            .map_err(|e| crate::index::IndexError::Unsupported(e.to_string()))
     }
 
-    fn load(&mut self, _path: &str) -> std::result::Result<(), crate::index::IndexError> {
-        Err(crate::index::IndexError::Unsupported(
-            "load not implemented for BinaryHNSW".into(),
-        ))
+    fn load(&mut self, path: &str) -> std::result::Result<(), crate::index::IndexError> {
+        let loaded = Self::load(Path::new(path), self.dim_bits())
+            .map_err(|e| crate::index::IndexError::Unsupported(e.to_string()))?;
+        *self = loaded;
+        Ok(())
     }
 
     fn has_raw_data(&self) -> bool {
@@ -678,5 +858,37 @@ mod tests {
         assert_eq!(index.len(), 0);
         assert!(!index.trained);
         assert!(index.is_empty());
+    }
+
+    #[test]
+    fn test_binary_hnsw_save_load() {
+        let config = create_test_config(64);
+        let mut index = BinaryHnswIndex::new(&config).unwrap();
+
+        let train_data = vec![0u8; 120 * 8];
+        index.train(&train_data).unwrap();
+
+        let mut vectors = Vec::new();
+        let ids: Vec<i64> = (1000..1120).collect();
+        for i in 0..120 {
+            let mut v = vec![0u8; 8];
+            v[0] = i as u8;
+            v[1] = (i * 3) as u8;
+            vectors.extend(v);
+        }
+        index.add(&vectors, Some(&ids)).unwrap();
+
+        let query = vec![7u8; 8];
+        let before = index.search(&query, 10);
+
+        let path = Path::new("/tmp/binary_hnsw_test.bin");
+        let _ = std::fs::remove_file(path);
+        index.save(path).unwrap();
+
+        let loaded = BinaryHnswIndex::load(path, 64).unwrap();
+        let after = loaded.search(&query, 10);
+
+        assert_eq!(before.ids, after.ids);
+        assert_eq!(before.distances, after.distances);
     }
 }
