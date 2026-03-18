@@ -358,8 +358,10 @@ impl ResidualProductQuantizer {
             .residual_pq
             .compute_distance(&query_residual, residual_code);
 
-        // Total distance (approximation)
-        coarse_dist + residual_dist
+        // Correct ADC approximation: ||(query - coarse_centroid) - residual_decode||^2
+        // coarse_dist is intentionally not added; adding it corrupts ranking.
+        let _ = coarse_dist;
+        residual_dist
     }
 
     /// Decode a Residual PQ code back to approximate vector
