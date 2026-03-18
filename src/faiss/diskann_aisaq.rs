@@ -2021,7 +2021,7 @@ impl PQFlashIndex {
             self.exact_distance(query, self.node_vector(start_node))
         };
 
-        let mut frontier: BinaryHeap<Candidate> = BinaryHeap::with_capacity(l);
+        let mut frontier: BinaryHeap<Candidate> = BinaryHeap::new();
         let mut visited: HashSet<u32> = HashSet::with_capacity(l.saturating_mul(2));
         let mut best: Vec<(u32, f32)> = Vec::with_capacity(l);
 
