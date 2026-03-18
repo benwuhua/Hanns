@@ -126,15 +126,10 @@ cargo run --example benchmark --release        # local benchmark (Mac, reference
 | `src/faiss/hnsw_pq.rs` | ✅ active | HNSW-PQ |
 | `src/faiss/hnsw_prq.rs` | ✅ active | HNSW-PRQ |
 | `src/faiss/hnsw_quantized.rs` | ✅ active | HNSW-SQ |
-| `src/faiss/hnsw_build.rs` | ⚠️ deprecated | old build code |
-| `src/faiss/hnsw_complete.rs` | ⚠️ deprecated | old complete impl |
-| `src/faiss/hnsw_search.rs` | ⚠️ deprecated | old search code |
-| `src/faiss/hnsw_parallel.rs` | ⚠️ deprecated | old parallel builder |
 | `src/faiss/diskann_aisaq.rs` | ✅ primary | PQFlashIndex (~3300 lines), capability closure in progress |
 | `src/faiss/diskann.rs` | ✅ active | simplified Vamana graph |
 | `src/faiss/ivfpq.rs` | ⚠️ no-go | recall < 0.8, needs fix |
 | `src/faiss/ivf.rs` | ⚠️ scaffold | coarse-assignment scaffold only |
-| `src/faiss/ivfpq_complete.rs` | ⚠️ unclear | possibly duplicate |
 | `src/faiss/pq.rs` | ✅ active | PQ encoder, parallel k-means |
 | `src/faiss/sparse*.rs` | ✅ active | sparse indexes (parity) |
 | `src/faiss/scann.rs` | ✅ active | ScaNN |
