@@ -355,6 +355,7 @@ pub struct DiskAnnIndex {
     dim: usize,
     vectors: Vec<f32>,
     ids: Vec<i64>,
+    deleted_ids: HashSet<i64>,
     /// Flat neighbor id storage, stride = max_degree.
     neighbor_ids: Vec<u32>,
     /// Flat neighbor distance storage, stride = max_degree.
@@ -404,6 +405,7 @@ impl DiskAnnIndex {
             dim: config.dim,
             vectors: Vec::new(),
             ids: Vec::new(),
+            deleted_ids: HashSet::new(),
             neighbor_ids: Vec::new(),
             neighbor_dists: Vec::new(),
             neighbor_degrees: Vec::new(),
@@ -433,6 +435,9 @@ impl DiskAnnIndex {
             ));
         }
 
+        self.vectors.clear();
+        self.ids.clear();
+        self.deleted_ids.clear();
         self.vectors.reserve(n * self.dim);
         self.neighbor_ids = vec![u32::MAX; n.saturating_mul(self.dann_config.max_degree)];
         self.neighbor_dists = vec![f32::MAX; n.saturating_mul(self.dann_config.max_degree)];
@@ -1843,6 +1848,162 @@ impl DiskAnnIndex {
         Ok(n)
     }
 
+    /// Insert a single vector into an existing index without full rebuild.
+    /// Returns internal index of the newly inserted node.
+    pub fn insert_point(&mut self, vector: &[f32], external_id: i64) -> Result<usize> {
+        if vector.len() != self.dim {
+            return Err(crate::api::KnowhereError::InvalidArg(format!(
+                "vector dim {} != index dim {}",
+                vector.len(),
+                self.dim
+            )));
+        }
+        if !self.is_trained() {
+            return Err(crate::api::KnowhereError::IndexNotTrained(
+                "index not trained".to_string(),
+            ));
+        }
+        if self.ids.iter().any(|&id| id == external_id) {
+            return Err(crate::api::KnowhereError::InvalidArg(format!(
+                "duplicate external id {}",
+                external_id
+            )));
+        }
+
+        let new_idx = self.ids.len();
+        let r = self.dann_config.max_degree;
+        let l = self
+            .dann_config
+            .search_list_size
+            .max(self.dann_config.construction_l)
+            .max(1);
+
+        let mut vec = vector.to_vec();
+        if self.config.metric_type == MetricType::Cosine {
+            Self::normalize_slice_in_place(&mut vec);
+        }
+
+        self.vectors.extend_from_slice(&vec);
+        self.ids.push(external_id);
+        self.neighbor_ids.extend(std::iter::repeat_n(u32::MAX, r));
+        self.neighbor_dists.extend(std::iter::repeat_n(f32::MAX, r));
+        self.neighbor_degrees.push(0);
+
+        if new_idx > 0 {
+            let results = self.beam_search(&vec, l, None, None);
+            let mut candidates: Vec<(u32, f32)> = results
+                .iter()
+                .take(r.saturating_mul(2))
+                .filter_map(|(ext_id, dist)| {
+                    self.ids
+                        .iter()
+                        .position(|&id| id == *ext_id)
+                        .and_then(|idx| (idx != new_idx).then_some((idx as u32, *dist)))
+                })
+                .collect();
+            candidates.sort_by(|a, b| a.1.total_cmp(&b.1));
+            candidates.dedup_by_key(|(id, _)| *id);
+
+            let pruned = self.prune_neighbors(new_idx, &candidates, r);
+            let degree = pruned.len();
+            self.neighbor_degrees[new_idx] = degree as u32;
+            for (k, (nb_id, nb_dist)) in pruned.iter().enumerate() {
+                self.neighbor_ids[new_idx * r + k] = *nb_id;
+                self.neighbor_dists[new_idx * r + k] = *nb_dist;
+            }
+
+            for &(nb_id, dist) in &pruned {
+                let nb_idx = nb_id as usize;
+                if nb_idx >= new_idx {
+                    continue;
+                }
+                let nb_degree = self.neighbor_degrees[nb_idx] as usize;
+                let nb_start = nb_idx * r;
+                let already_has = self.neighbor_ids[nb_start..nb_start + nb_degree]
+                    .contains(&(new_idx as u32));
+                if already_has {
+                    continue;
+                }
+                if nb_degree < r {
+                    self.neighbor_ids[nb_start + nb_degree] = new_idx as u32;
+                    self.neighbor_dists[nb_start + nb_degree] = dist;
+                    self.neighbor_degrees[nb_idx] += 1;
+                } else {
+                    let mut existing: Vec<(u32, f32)> = (0..nb_degree)
+                        .map(|k| (self.neighbor_ids[nb_start + k], self.neighbor_dists[nb_start + k]))
+                        .collect();
+                    existing.push((new_idx as u32, dist));
+                    let pruned_nb = self.prune_neighbors(nb_idx, &existing, r);
+                    let new_degree = pruned_nb.len();
+                    for (k, (id, d)) in pruned_nb.iter().enumerate() {
+                        self.neighbor_ids[nb_start + k] = *id;
+                        self.neighbor_dists[nb_start + k] = *d;
+                    }
+                    for k in new_degree..nb_degree {
+                        self.neighbor_ids[nb_start + k] = u32::MAX;
+                        self.neighbor_dists[nb_start + k] = f32::MAX;
+                    }
+                    self.neighbor_degrees[nb_idx] = new_degree as u32;
+                }
+            }
+            self.refresh_entry_points();
+        }
+
+        self.next_id = self.next_id.max(external_id.saturating_add(1));
+        Ok(new_idx)
+    }
+
+    /// Mark a vector by external ID as deleted (soft delete).
+    pub fn lazy_delete(&mut self, external_id: i64) -> bool {
+        self.deleted_ids.insert(external_id)
+    }
+
+    /// Returns true if the external ID was marked deleted.
+    pub fn is_deleted(&self, external_id: i64) -> bool {
+        self.deleted_ids.contains(&external_id)
+    }
+
+    /// Number of non-deleted vectors.
+    pub fn live_count(&self) -> usize {
+        self.ids.len().saturating_sub(self.deleted_ids.len())
+    }
+
+    /// Remove edges pointing to deleted nodes.
+    pub fn consolidate(&mut self) {
+        let n = self.ids.len();
+        let r = self.dann_config.max_degree;
+        for idx in 0..n {
+            if self.deleted_ids.contains(&self.ids[idx]) {
+                continue;
+            }
+            let start = idx * r;
+            let degree = self.neighbor_degrees[idx] as usize;
+            let new_neighbors: Vec<(u32, f32)> = (0..degree)
+                .filter_map(|k| {
+                    let nb_id = self.neighbor_ids[start + k];
+                    if nb_id == u32::MAX {
+                        return None;
+                    }
+                    let nb_ext_id = self.ids.get(nb_id as usize)?;
+                    if self.deleted_ids.contains(nb_ext_id) {
+                        return None;
+                    }
+                    Some((nb_id, self.neighbor_dists[start + k]))
+                })
+                .collect();
+            let new_degree = new_neighbors.len();
+            for (k, (id, dist)) in new_neighbors.iter().enumerate() {
+                self.neighbor_ids[start + k] = *id;
+                self.neighbor_dists[start + k] = *dist;
+            }
+            for k in new_degree..degree {
+                self.neighbor_ids[start + k] = u32::MAX;
+                self.neighbor_dists[start + k] = f32::MAX;
+            }
+            self.neighbor_degrees[idx] = new_degree as u32;
+        }
+    }
+
     pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<SearchResult> {
         if self.ids.is_empty() {
             return Err(crate::api::KnowhereError::InvalidArg(
@@ -1932,6 +2093,9 @@ impl DiskAnnIndex {
         filter: Option<&dyn Predicate>,
         bitset: Option<&crate::bitset::BitsetView>,
     ) -> bool {
+        if self.deleted_ids.contains(&self.ids[idx]) {
+            return false;
+        }
         if bitset.is_some_and(|b| idx < b.len() && b.get(idx)) {
             return false;
         }
@@ -2207,7 +2371,7 @@ impl DiskAnnIndex {
 
         // Start from entry points
         for (start, start_dist) in self.initial_search_starts(query) {
-            if start_dist <= radius * radius {
+            if !self.deleted_ids.contains(&self.ids[start]) && start_dist <= radius * radius {
                 results.push((self.ids[start], start_dist.sqrt()));
             }
             candidates.push_back((start, start_dist));
@@ -2240,7 +2404,7 @@ impl DiskAnnIndex {
                             n_idx,
                             prefetched_vectors.as_ref(),
                         );
-                        if d <= radius * radius {
+                        if !self.deleted_ids.contains(&self.ids[n_idx]) && d <= radius * radius {
                             results.push((self.ids[n_idx], d.sqrt()));
                             nbr_dists.push((d, n_idx));
                         }
@@ -2325,7 +2489,7 @@ impl DiskAnnIndex {
         let mut file = File::create(path)?;
 
         file.write_all(b"DANN")?;
-        file.write_all(&4u32.to_le_bytes())?; // Version 4
+        file.write_all(&5u32.to_le_bytes())?; // Version 5
         file.write_all(&(self.dim as u32).to_le_bytes())?;
         file.write_all(&(self.ids.len() as u64).to_le_bytes())?;
 
@@ -2364,6 +2528,11 @@ impl DiskAnnIndex {
             for &v in &pq.codebooks {
                 file.write_all(&v.to_le_bytes())?;
             }
+        }
+
+        file.write_all(&(self.deleted_ids.len() as u64).to_le_bytes())?;
+        for &id in &self.deleted_ids {
+            file.write_all(&id.to_le_bytes())?;
         }
 
         if self.dann_config.enable_flash_layout {
@@ -2529,7 +2698,26 @@ impl DiskAnnIndex {
             }
         }
 
+        self.deleted_ids.clear();
+        if version >= 5 {
+            let mut deleted_len_bytes = [0u8; 8];
+            file.read_exact(&mut deleted_len_bytes)?;
+            let deleted_len = u64::from_le_bytes(deleted_len_bytes) as usize;
+            for _ in 0..deleted_len {
+                let mut id_bytes = [0u8; 8];
+                file.read_exact(&mut id_bytes)?;
+                self.deleted_ids.insert(i64::from_le_bytes(id_bytes));
+            }
+        }
+
         self.refresh_entry_points();
+        self.next_id = self
+            .ids
+            .iter()
+            .copied()
+            .max()
+            .map(|m| m.saturating_add(1))
+            .unwrap_or(0);
         let sidecar = Self::flash_layout_sidecar_path(path);
         self.has_flash_layout = self.try_load_flash_layout_sidecar(&sidecar, count)?;
         if !self.has_flash_layout {
@@ -4052,6 +4240,84 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_diskann_incremental_insert() {
+        let dim = 16usize;
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let initial: Vec<f32> = (0..50 * dim).map(|_| rng.gen_range(0.0..1.0)).collect();
+        index.train(&initial).unwrap();
+        assert_eq!(index.ntotal(), 50);
+
+        for i in 0..10 {
+            let v: Vec<f32> = (0..dim).map(|_| rng.gen_range(0.0..1.0)).collect();
+            let new_idx = index.insert_point(&v, 1000 + i as i64).unwrap();
+            assert_eq!(new_idx, 50 + i);
+        }
+        assert_eq!(index.ntotal(), 60);
+
+        let q: Vec<f32> = (0..dim).map(|_| rng.gen_range(0.0..1.0)).collect();
+        let req = SearchRequest {
+            top_k: 5,
+            nprobe: 32,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let result = index.search(&q, &req).unwrap();
+        assert_eq!(result.ids.len(), 5);
+    }
+
+    #[test]
+    fn test_diskann_lazy_delete() {
+        let dim = 16usize;
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors: Vec<f32> = (0..100 * dim)
+            .map(|i| (i as f32) / (100.0 * dim as f32))
+            .collect();
+        index.train(&vectors).unwrap();
+
+        for id in 0i64..50 {
+            index.lazy_delete(id);
+        }
+        assert_eq!(index.live_count(), 50);
+        assert!(index.is_deleted(0));
+        assert!(!index.is_deleted(50));
+
+        let q = &vectors[0..dim];
+        let req = SearchRequest {
+            top_k: 10,
+            nprobe: 64,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let result = index.search(q, &req).unwrap();
+        for &id in &result.ids {
+            if id >= 0 {
+                assert!(id >= 50, "deleted id {} appeared in results", id);
+            }
+        }
+
+        index.consolidate();
+        assert_eq!(index.live_count(), 50);
     }
 
     #[test]
