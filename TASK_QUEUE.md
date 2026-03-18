@@ -20,18 +20,28 @@
   - 预期 nprobe=32-64 可达 0.95+
   - 得到 x86 authority QPS
 
-- [ ] **DISKANN-RECALL-001** [P0]: 诊断 diskann.rs 在 dim≠128 时 recall=0.009 根因
+- [x] **DISKANN-RECALL-001** [P0]: ✅ 诊断完成
+  - 根因: `add()` 不构建图边；只有 `train()` 中的向量有 Vamana 图连接
+  - cross_dataset recall=0.009 来自 train(空/centroid)+add(4K) → 所有节点 degree=0
+  - 真实 dim 影响: 单调递减 (dim=64: 0.91, dim=128: 0.82)，非 dim=64 特有
+  - 修复路径: add() 调用 insert_point() 接入图，或 API 文档明确 train(完整数据集)
+  - 证据: `examples/diskann_dim_diag.rs`
 
 #### P1 — 填空白基线
 
-- [ ] **IVF-SQ8-001** [P1]: IVF-SQ8 recall+QPS authority baseline
-- [ ] **IVF-OPQ-001** [P1]: IVF-OPQ recall+QPS authority baseline
+- [x] **IVF-SQ8-001** [P1]: ✅ 完成 → 转 no-go
+  - recall@full_scan=0.174 (plateau)，根因: quantizer.train(vectors) 应为 quantizer.train(&residuals)
+  - 负数 residual 全被 clamp 到 0 → 距离计算错误 → recall 受限于量化上限
+  - 证据: `examples/ivf_sq8_sweep.rs`
+  - 修复: 计算完 k-means 后再用所有 residuals 训练 quantizer (P2 fix)
+- [ ] **IVF-OPQ-001** [P1]: IVF-OPQ recall+QPS authority baseline [IN PROGRESS — Codex B on Mac]
 - [ ] **SCANN-001** [P1]: ScaNN 100K scale recall+QPS benchmark
 - [ ] **IVF-RABITQ-001** [P1]: IVF-RaBitQ with refine path enabled
 
 #### P2 — 修复已知问题
 
 - [ ] **IVF-PQ-FIX-001** [P2]: IVF-PQ recall 0.47 根因分析 + 修复（目前 no-go）
+- [ ] **IVF-SQ8-FIX-001** [P2]: IVF-SQ8 修复 quantizer.train() 传入 residuals 而非原始向量
 - [ ] **HNSW-IMP-001** [P2]: 若 strict-ef 仍落后 native，找真正的优化方向
 
 ### AISAQ Phase 2: 能力补全 + 生产就绪 (2026-03-18 开启, 降级为 P2+)
