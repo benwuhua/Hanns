@@ -182,19 +182,24 @@ impl IvfSq8Index {
 
                     let clusters = self.search_clusters(query_vec, nprobe);
 
-                    let mut candidates: Vec<(i64, f32)> = Vec::new();
+                let mut candidates: Vec<(i64, f32)> = Vec::new();
 
-                    for &cluster_id in &clusters {
-                        if let Some(list) = self.inverted_lists.get(&cluster_id) {
-                            for &(id, ref quantized) in list {
-                                let residual = self.quantizer.decode(quantized);
-                                let reconstructed =
-                                    self.reconstruct(query_vec, cluster_id, &residual);
-                                let dist = l2_distance(query_vec, &reconstructed);
-                                candidates.push((id, dist));
-                            }
+                for &cluster_id in &clusters {
+                    if let Some(list) = self.inverted_lists.get(&cluster_id) {
+                        let centroid_vec =
+                            &self.centroids[cluster_id * self.dim..(cluster_id + 1) * self.dim];
+                        let q_residual: Vec<f32> = query_vec
+                            .iter()
+                            .zip(centroid_vec.iter())
+                            .map(|(a, b)| a - b)
+                            .collect();
+
+                        for &(id, ref quantized) in list {
+                            let dist = self.quantizer.sq_l2_asymmetric(&q_residual, quantized);
+                            candidates.push((id, dist));
                         }
                     }
+                }
 
                     candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
                     candidates.truncate(k);
@@ -223,10 +228,16 @@ impl IvfSq8Index {
 
                 for &cluster_id in &clusters {
                     if let Some(list) = self.inverted_lists.get(&cluster_id) {
+                        let centroid_vec =
+                            &self.centroids[cluster_id * self.dim..(cluster_id + 1) * self.dim];
+                        let q_residual: Vec<f32> = query_vec
+                            .iter()
+                            .zip(centroid_vec.iter())
+                            .map(|(a, b)| a - b)
+                            .collect();
+
                         for &(id, ref quantized) in list {
-                            let residual = self.quantizer.decode(quantized);
-                            let reconstructed = self.reconstruct(query_vec, cluster_id, &residual);
-                            let dist = l2_distance(query_vec, &reconstructed);
+                            let dist = self.quantizer.sq_l2_asymmetric(&q_residual, quantized);
                             candidates.push((id, dist));
                         }
                     }

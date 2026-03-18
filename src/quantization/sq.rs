@@ -118,6 +118,26 @@ impl ScalarQuantizer {
         }
         result
     }
+
+    /// 在 uint8 量化域计算近似 L2 距离（无需 decode）
+    ///
+    /// q_residual: 查询向量的残差（float）
+    /// db_code: 数据库向量的 uint8 量化码
+    /// 返回: 近似 L2² 距离（未开根号）
+    pub fn sq_l2_asymmetric(&self, q_residual: &[f32], db_code: &[u8]) -> f32 {
+        debug_assert_eq!(q_residual.len(), db_code.len());
+        let inv_scale = 1.0 / self.scale;
+
+        q_residual
+            .iter()
+            .zip(db_code.iter())
+            .map(|(&qr, &db)| {
+                let db_residual = db as f32 * inv_scale + self.offset;
+                let diff = qr - db_residual;
+                diff * diff
+            })
+            .sum()
+    }
 }
 
 /// SQ8 量化器 (8-bit, 简化别名)
