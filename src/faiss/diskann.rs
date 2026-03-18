@@ -1822,24 +1822,10 @@ impl DiskAnnIndex {
 
         for i in 0..n {
             let start = i * self.dim;
-            if self.config.metric_type == MetricType::Cosine {
-                let mut normalized = vectors[start..start + self.dim].to_vec();
-                Self::normalize_slice_in_place(&mut normalized);
-                self.vectors.extend_from_slice(&normalized);
-            } else {
-                self.vectors
-                    .extend_from_slice(&vectors[start..start + self.dim]);
-            }
-
+            let vec_slice = &vectors[start..start + self.dim];
             let id = ids.map(|ids| ids[i]).unwrap_or(self.next_id);
             self.next_id += 1;
-            let idx = self.ids.len();
-            self.ids.push(id);
-            self.id_to_idx.insert(id, idx);
-            let r = self.dann_config.max_degree;
-            self.neighbor_ids.extend(std::iter::repeat_n(u32::MAX, r));
-            self.neighbor_dists.extend(std::iter::repeat_n(f32::MAX, r));
-            self.neighbor_degrees.push(0);
+            self.insert_point(vec_slice, id)?;
         }
 
         Ok(n)
