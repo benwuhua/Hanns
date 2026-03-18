@@ -382,6 +382,13 @@ pub struct LoadedNode {
     inline_pq: Vec<u8>,
 }
 
+struct LoadedNodeRef<'a> {
+    id: i64,
+    vector: &'a [f32],
+    neighbors: &'a [u32],
+    inline_pq: &'a [u8],
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct SerializedPqEncoder {
     m: usize,
@@ -982,6 +989,7 @@ impl PQFlashIndex {
             .pq_encoder
             .as_ref()
             .map(|encoder| encoder.build_distance_table(query));
+        let pq_table_slice = pq_table.as_ref().map(|v| v.as_slice());
 
         let max_visit = self.compute_max_visit(k);
         let mut scratch = {
@@ -994,7 +1002,7 @@ impl PQFlashIndex {
         let outcome: Result<SearchResult> = (|| {
             for candidate in self.rank_entry_candidates(
                 query,
-                pq_table.as_ref().map(|v| v.as_slice()),
+                pq_table_slice,
                 &mut io,
             )? {
                 scratch.frontier.push(candidate);
@@ -1015,23 +1023,49 @@ impl PQFlashIndex {
                     scratch.accepted.push(candidate);
                 }
 
-                let node = self.load_node(candidate.node_id, NodeAccessMode::Node, &mut io)?;
-                let mut neighbor_scores = Vec::with_capacity(node.neighbors.len());
-                for &neighbor in &node.neighbors {
-                    if scratch.seen.contains(&neighbor) {
-                        continue;
+                let mut neighbor_scores = if let Some(node) = self.node_ref(candidate.node_id) {
+                    io.record_node_read(candidate.node_id, self.flash_layout.node_bytes);
+                    let mut scores = Vec::with_capacity(node.neighbors.len());
+                    for &neighbor in node.neighbors {
+                        if scratch.seen.contains(&neighbor) {
+                            continue;
+                        }
+                        let score = if let Some(neighbor_node) = self.node_ref(neighbor) {
+                            if let (Some(encoder), Some(table)) = (&self.pq_encoder, pq_table_slice) {
+                                if !neighbor_node.inline_pq.is_empty() {
+                                    io.record_pq_read(neighbor, neighbor_node.inline_pq.len());
+                                    encoder.compute_distance_with_table(table, neighbor_node.inline_pq)
+                                } else {
+                                    self.exact_distance(query, neighbor_node.vector)
+                                }
+                            } else {
+                                self.exact_distance(query, neighbor_node.vector)
+                            }
+                        } else {
+                            self.coarse_distance(neighbor, query, pq_table_slice, &mut io)?
+                        };
+                        scores.push(Candidate {
+                            node_id: neighbor,
+                            score,
+                        });
                     }
-                    let score = self.coarse_distance(
-                        neighbor,
-                        query,
-                        pq_table.as_ref().map(|v| v.as_slice()),
-                        &mut io,
-                    )?;
-                    neighbor_scores.push(Candidate {
-                        node_id: neighbor,
-                        score,
-                    });
-                }
+                    scores
+                } else {
+                    let node = self.load_node(candidate.node_id, NodeAccessMode::Node, &mut io)?;
+                    let mut scores = Vec::with_capacity(node.neighbors.len());
+                    for &neighbor in &node.neighbors {
+                        if scratch.seen.contains(&neighbor) {
+                            continue;
+                        }
+                        let score =
+                            self.coarse_distance(neighbor, query, pq_table_slice, &mut io)?;
+                        scores.push(Candidate {
+                            node_id: neighbor,
+                            score,
+                        });
+                    }
+                    scores
+                };
 
                 neighbor_scores.sort_by(|left, right| left.score.total_cmp(&right.score));
                 let expand_limit = self.compute_expand_limit(&io);
@@ -1060,9 +1094,15 @@ impl PQFlashIndex {
                 .iter()
                 .take(rerank_pool)
                 .map(|candidate| {
-                    let node = self.load_node(candidate.node_id, NodeAccessMode::None, &mut io)?;
-                    let distance = self.exact_distance(query, &node.vector);
-                    Ok((node.id, distance))
+                    if let Some(node) = self.node_ref(candidate.node_id) {
+                        let distance = self.exact_distance(query, node.vector);
+                        Ok((node.id, distance))
+                    } else {
+                        let node =
+                            self.load_node(candidate.node_id, NodeAccessMode::None, &mut io)?;
+                        let distance = self.exact_distance(query, &node.vector);
+                        Ok((node.id, distance))
+                    }
                 })
                 .collect::<Result<Vec<_>>>()?;
             scored.sort_by(|left, right| left.1.total_cmp(&right.1));
@@ -1780,6 +1820,23 @@ impl PQFlashIndex {
         let node = &self.nodes[idx];
         let start = node.vector_offset;
         &self.vectors[start..start + self.dim]
+    }
+
+    #[inline]
+    fn node_ref(&self, node_id: u32) -> Option<LoadedNodeRef<'_>> {
+        if self.nodes.is_empty() {
+            return None;
+        }
+        let node = self.nodes.get(node_id as usize)?;
+        let start = node.vector_offset;
+        let end = start.checked_add(self.dim)?;
+        let vector = self.vectors.get(start..end)?;
+        Some(LoadedNodeRef {
+            id: node.id,
+            vector,
+            neighbors: &node.neighbors,
+            inline_pq: &node.inline_pq,
+        })
     }
 
     fn warm_up_cache(&mut self) {
