@@ -330,9 +330,10 @@ fn benchmark_pqflash() {
     };
     let config = AisaqConfig {
         disk_pq_dims: 32,
-        rerank_expand_pct: 300,
+        rerank_expand_pct: 1000,
         search_list_size: 200,
         cache_all_on_load: true,
+        run_refine_pass: true,
         ..AisaqConfig::default()
     };
 
@@ -371,6 +372,35 @@ fn benchmark_pqflash() {
 
     run("NoPQ", config_nopq);
     run("PQ32", config);
+
+    // --- Diagnostic: PQ32 recall sweep ---
+    let gt = brute_force_top_k(&vectors, &queries_recall, DIM, TOP_K);
+    let sweep_configs: &[(usize, usize, &str)] = &[
+        (200, 300, "PQ32 L=200 rerank=3x"),
+        (200, 1000, "PQ32 L=200 rerank=10x"),
+        (500, 1000, "PQ32 L=500 rerank=10x"),
+    ];
+    for &(sl, rr, label) in sweep_configs {
+        let cfg = AisaqConfig {
+            disk_pq_dims: 32,
+            rerank_expand_pct: rr,
+            search_list_size: sl,
+            cache_all_on_load: true,
+            rearrange: true,
+            run_refine_pass: true,
+            ..AisaqConfig::default()
+        };
+        let mut idx = PQFlashIndex::new(cfg, MetricType::L2, DIM).unwrap();
+        idx.train(&vectors).unwrap();
+        idx.add(&vectors).unwrap();
+        let mut ids = Vec::with_capacity(NUM_RECALL_QUERIES * TOP_K);
+        for q in queries_recall.chunks(DIM) {
+            let r = idx.search(q, TOP_K).unwrap();
+            ids.extend_from_slice(&r.ids);
+        }
+        let recall = recall_at_k(&ids, &gt, TOP_K);
+        println!("[sweep {label}] Recall@10: {:.3}", recall);
+    }
 }
 
 fn main() {

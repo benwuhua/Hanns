@@ -65,6 +65,12 @@ pub struct AisaqConfig {
     pub filter_threshold: f32,
     #[serde(default)]
     pub cache_all_on_load: bool,
+    #[serde(default = "default_true")]
+    pub run_refine_pass: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AisaqConfig {
@@ -90,6 +96,7 @@ impl Default for AisaqConfig {
             warm_up: false,
             filter_threshold: -1.0,
             cache_all_on_load: false,
+            run_refine_pass: true,
         }
     }
 }
@@ -801,6 +808,9 @@ impl PQFlashIndex {
             }
         }
         self.prune_graph_to_target_degree();
+        if self.config.run_refine_pass {
+            self.refine_flat_graph();
+        }
 
         self.node_count = self.node_ids.len();
         self.refresh_entry_points();
@@ -1772,6 +1782,36 @@ impl PQFlashIndex {
                 self.node_neighbor_ids[start + i] = 0;
             }
         }
+    }
+
+    fn refine_flat_graph(&mut self) {
+        let n = self.node_ids.len();
+        if n == 0 || n > 50_000 {
+            return;
+        }
+        let stride = self.flat_stride.max(1);
+        let target = self.config.max_degree.min(stride).max(1);
+        let mut new_neighbor_ids = vec![0u32; n * stride];
+        let mut new_neighbor_counts = vec![0u32; n];
+
+        for i in 0..n {
+            let vec_i = self.node_vector(i).to_vec();
+            let mut scored: Vec<(u32, f32)> = (0..n)
+                .filter(|&j| j != i)
+                .map(|j| (j as u32, self.exact_distance(&vec_i, self.node_vector(j))))
+                .collect();
+            scored.sort_by(|a, b| a.1.total_cmp(&b.1));
+            scored.truncate(target);
+            let nb_start = i * stride;
+            let count = scored.len();
+            for (k, (nb, _)) in scored.into_iter().enumerate() {
+                new_neighbor_ids[nb_start + k] = nb;
+            }
+            new_neighbor_counts[i] = count as u32;
+        }
+
+        self.node_neighbor_ids = new_neighbor_ids;
+        self.node_neighbor_counts = new_neighbor_counts;
     }
 
     fn refresh_entry_points(&mut self) {
