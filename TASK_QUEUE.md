@@ -149,6 +149,14 @@
 
 - [ ] **IVFPQ-FIX-001** [P3]: IVF-PQ recall < 0.8 根因分析+修复
 
+- [ ] **HNSW-QUANT-FIX-001** [P3]: 量化 HNSW 变体 recall 修复
+  - HnswSQ8: recall=0.002 (constant across all ef) — ID 映射 bug，不是噪声
+    - 根因: 搜索返回量化空间正确节点但 external ID 映射错误
+    - 修复方向: 检查 hnsw_quantized.rs search() 的 ID 返回路径
+  - HnswPQ8: recall=0.047 max — ADC 量化噪声，和 IVF-PQ 同源
+  - HnswPRQ2: recall=0.149 max，非单调 — 图遍历受量化误差破坏
+  - Script: examples/hnsw_quantized_recall.rs
+
 ### 本轮已完成 (2026-03-18)
 
 - [x] **HNSW-REOPEN-001**: HNSW 重开线已归档
