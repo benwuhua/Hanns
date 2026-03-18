@@ -3,6 +3,7 @@
 use std::time::Instant;
 
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use knowhere_rs::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
 use knowhere_rs::faiss::{DiskAnnIndex, HnswIndex, IvfPqIndex, MemIndex};
 
 const NUM_VECTORS: usize = 1_000;
@@ -212,6 +213,153 @@ fn benchmark_diskann_index() {
     );
 }
 
+fn brute_force_top_k(vectors: &[f32], queries: &[f32], dim: usize, k: usize) -> Vec<Vec<usize>> {
+    let n = vectors.len() / dim;
+    let nq = queries.len() / dim;
+    let mut gt = Vec::with_capacity(nq);
+    for q_idx in 0..nq {
+        let q = &queries[q_idx * dim..(q_idx + 1) * dim];
+        let mut scored = Vec::with_capacity(n);
+        for i in 0..n {
+            let v = &vectors[i * dim..(i + 1) * dim];
+            let dist = q
+                .iter()
+                .zip(v.iter())
+                .map(|(a, b)| {
+                    let d = a - b;
+                    d * d
+                })
+                .sum::<f32>();
+            scored.push((i, dist));
+        }
+        scored.sort_by(|a, b| a.1.total_cmp(&b.1));
+        gt.push(scored.into_iter().take(k).map(|(i, _)| i).collect());
+    }
+    gt
+}
+
+fn recall_at_k(result_ids: &[i64], gt_indices: &[Vec<usize>], k: usize) -> f64 {
+    let mut hits = 0usize;
+    let mut total = 0usize;
+    for (q_idx, gt) in gt_indices.iter().enumerate() {
+        let start = q_idx * k;
+        let end = (start + k).min(result_ids.len());
+        let got = &result_ids[start..end];
+        for &idx in gt.iter().take(k) {
+            total += 1;
+            if got.iter().any(|&id| id == idx as i64) {
+                hits += 1;
+            }
+        }
+    }
+    if total == 0 {
+        0.0
+    } else {
+        hits as f64 / total as f64
+    }
+}
+
+fn benchmark_diskann() {
+    const NUM_VECTORS: usize = 10_000;
+    const DIM: usize = 128;
+    const TOP_K: usize = 10;
+    const NUM_QPS_QUERIES: usize = 1_000;
+    const NUM_RECALL_QUERIES: usize = 100;
+
+    println!("\n=== DiskANN Benchmark ===");
+
+    let vectors = generate_vectors(NUM_VECTORS, DIM);
+    let queries_qps = generate_vectors(NUM_QPS_QUERIES, DIM);
+    let queries_recall = generate_vectors(NUM_RECALL_QUERIES, DIM);
+
+    let config = IndexConfig {
+        index_type: IndexType::DiskAnn,
+        metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
+        dim: DIM,
+        params: IndexParams {
+            max_degree: Some(48),
+            search_list_size: Some(128),
+            construction_l: Some(128),
+            ..IndexParams::default()
+        },
+    };
+    let mut index = DiskAnnIndex::new(&config).unwrap();
+
+    let start = Instant::now();
+    index.train(&vectors).unwrap();
+    let build_time = start.elapsed().as_secs_f64();
+    println!("Build 10000 vectors (dim=128): {:.2}s", build_time);
+
+    let req = SearchRequest {
+        top_k: TOP_K,
+        nprobe: 128,
+        filter: None,
+        params: None,
+        radius: None,
+    };
+    let start = Instant::now();
+    let qps_result = index.search(&queries_qps, &req).unwrap();
+    let _ = qps_result.ids.len();
+    let search_s = start.elapsed().as_secs_f64();
+    let qps = NUM_QPS_QUERIES as f64 / search_s.max(f64::EPSILON);
+    println!("Search QPS (L=128, R=48): {:.0} queries/sec", qps);
+
+    let recall_result = index.search(&queries_recall, &req).unwrap();
+    let gt = brute_force_top_k(&vectors, &queries_recall, DIM, TOP_K);
+    let recall = recall_at_k(&recall_result.ids, &gt, TOP_K);
+    println!("Recall@10 (100 queries): {:.3}", recall);
+}
+
+fn benchmark_pqflash() {
+    const NUM_VECTORS: usize = 10_000;
+    const DIM: usize = 128;
+    const TOP_K: usize = 10;
+    const NUM_QPS_QUERIES: usize = 1_000;
+    const NUM_RECALL_QUERIES: usize = 100;
+
+    println!("\n=== PQFlashIndex Benchmark ===");
+
+    let vectors = generate_vectors(NUM_VECTORS, DIM);
+    let queries_qps = generate_vectors(NUM_QPS_QUERIES, DIM);
+    let queries_recall = generate_vectors(NUM_RECALL_QUERIES, DIM);
+
+    let config = AisaqConfig {
+        disk_pq_dims: 16,
+        ..AisaqConfig::default()
+    };
+    let mut index = PQFlashIndex::new(config, MetricType::L2, DIM).unwrap();
+
+    let start = Instant::now();
+    index.train(&vectors).unwrap();
+    index.add(&vectors).unwrap();
+    let build_time = start.elapsed().as_secs_f64();
+    println!("Build 10000 vectors (dim=128): {:.2}s", build_time);
+
+    let start = Instant::now();
+    let qps_result = {
+        let mut ids = Vec::with_capacity(NUM_QPS_QUERIES * TOP_K);
+        for q in queries_qps.chunks(DIM) {
+            let r = index.search(q, TOP_K).unwrap();
+            ids.extend_from_slice(&r.ids);
+        }
+        ids
+    };
+    let _ = qps_result.len();
+    let search_s = start.elapsed().as_secs_f64();
+    let qps = NUM_QPS_QUERIES as f64 / search_s.max(f64::EPSILON);
+    println!("Search QPS (L=128, R=48): {:.0} queries/sec", qps);
+
+    let mut recall_ids = Vec::with_capacity(NUM_RECALL_QUERIES * TOP_K);
+    for q in queries_recall.chunks(DIM) {
+        let r = index.search(q, TOP_K).unwrap();
+        recall_ids.extend_from_slice(&r.ids);
+    }
+    let gt = brute_force_top_k(&vectors, &queries_recall, DIM, TOP_K);
+    let recall = recall_at_k(&recall_ids, &gt, TOP_K);
+    println!("Recall@10 (100 queries): {:.3}", recall);
+}
+
 fn main() {
     println!("KnowHere RS Benchmark");
     println!("=====================");
@@ -223,6 +371,8 @@ fn main() {
     benchmark_hnsw_index();
     benchmark_ivfpq_index();
     benchmark_diskann_index();
+    benchmark_diskann();
+    benchmark_pqflash();
 
     println!("\n✅ Benchmark complete!");
 }
