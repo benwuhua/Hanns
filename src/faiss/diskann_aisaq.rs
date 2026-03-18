@@ -183,6 +183,8 @@ pub struct FlashLayout {
     pub vector_bytes: usize,
     pub inline_pq_bytes: usize,
     pub neighbor_bytes: usize,
+    #[serde(default)]
+    pub id_bytes: usize,
     pub node_bytes: usize,
 }
 
@@ -191,13 +193,15 @@ impl FlashLayout {
         let vector_bytes = dim * std::mem::size_of::<f32>();
         let inline_pq_bytes = config.inline_pq.max(config.disk_pq_dims);
         let neighbor_bytes = (config.max_degree + 1) * std::mem::size_of::<u32>();
-        let node_bytes = vector_bytes + neighbor_bytes + inline_pq_bytes;
+        let id_bytes = std::mem::size_of::<i64>();
+        let node_bytes = vector_bytes + neighbor_bytes + inline_pq_bytes + id_bytes;
 
         Self {
             page_size: DEFAULT_PAGE_SIZE,
             vector_bytes,
             inline_pq_bytes,
             neighbor_bytes,
+            id_bytes,
             node_bytes,
         }
     }
@@ -2526,6 +2530,8 @@ impl PQFlashIndex {
             };
             bytes.push(v);
         }
+        let external_id = self.node_ids[id];
+        bytes.extend_from_slice(&external_id.to_le_bytes());
         bytes.resize(self.flash_layout.node_bytes, 0);
         bytes
     }
@@ -2574,9 +2580,22 @@ impl PQFlashIndex {
             .copied()
             .take(self.pq_code_size)
             .collect();
+        cursor += self.flash_layout.inline_pq_bytes;
+
+        let external_id = if self.flash_layout.id_bytes >= std::mem::size_of::<i64>()
+            && cursor + std::mem::size_of::<i64>() <= bytes.len()
+        {
+            i64::from_le_bytes(
+                bytes[cursor..cursor + std::mem::size_of::<i64>()]
+                    .try_into()
+                    .map_err(|_| KnowhereError::Codec("truncated id payload".to_string()))?,
+            )
+        } else {
+            node_id as i64
+        };
 
         Ok(LoadedNode {
-            id: node_id as i64,
+            id: external_id,
             vector,
             neighbors,
             inline_pq,
