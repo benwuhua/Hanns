@@ -280,6 +280,7 @@ fn benchmark_diskann() {
             max_degree: Some(48),
             search_list_size: Some(128),
             construction_l: Some(128),
+            num_threads: Some(rayon::current_num_threads()),
             ..IndexParams::default()
         },
     };

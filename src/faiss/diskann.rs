@@ -1159,7 +1159,7 @@ impl DiskAnnIndex {
         current_graph.push(Vec::new());
 
         #[cfg(feature = "parallel")]
-        if self.config.params.num_threads.unwrap_or(1) > 1 && n > 2 {
+        if self.config.params.num_threads.unwrap_or(0) != 1 && n > 2 {
             let current_graph: Vec<RwLock<Vec<(u32, f32)>>> =
                 (0..n).map(|_| RwLock::new(Vec::new())).collect();
             let batch_size = self.dann_config.build_parallel_batch_size.min(n - 1).max(1);
@@ -1689,29 +1689,54 @@ impl DiskAnnIndex {
         let n = self.ids.len();
         let R = self.dann_config.max_degree;
         let build_r = self.compute_build_degree_limit(R);
-        let mut current_graph = self.local_graph_from_flat();
+        let current_graph = self.local_graph_from_flat();
 
-        // For each node, search again and update edges
-        for i in 0..n {
-            let query = &self.vectors[i * self.dim..(i + 1) * self.dim];
-            let neighbors = self.vamana_search(
-                query,
-                self.dann_config.construction_l,
-                build_r,
-                &current_graph,
-            );
+        #[cfg(feature = "parallel")]
+        let new_edges: Vec<Vec<(u32, f32)>> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let query = &self.vectors[i * self.dim..(i + 1) * self.dim];
+                let neighbors =
+                    self.vamana_search(query, self.dann_config.construction_l, build_r, &current_graph);
+                let new_neighbors: Vec<(u32, f32)> = neighbors
+                    .iter()
+                    .filter(|&&(idx, _)| idx as usize != i)
+                    .map(|&(idx, dist)| (idx, dist))
+                    .collect();
+                if !new_neighbors.is_empty() {
+                    self.prune_neighbors(i, &new_neighbors, build_r)
+                } else {
+                    current_graph[i].clone()
+                }
+            })
+            .collect();
 
-            let new_neighbors: Vec<(u32, f32)> = neighbors
-                .iter()
-                .filter(|&&(idx, _)| idx as usize != i)
-                .map(|&(idx, dist)| (idx, dist))
-                .collect();
+        #[cfg(not(feature = "parallel"))]
+        let new_edges: Vec<Vec<(u32, f32)>> = (0..n)
+            .map(|i| {
+                let query = &self.vectors[i * self.dim..(i + 1) * self.dim];
+                let neighbors =
+                    self.vamana_search(query, self.dann_config.construction_l, build_r, &current_graph);
+                let new_neighbors: Vec<(u32, f32)> = neighbors
+                    .iter()
+                    .filter(|&&(idx, _)| idx as usize != i)
+                    .map(|&(idx, dist)| (idx, dist))
+                    .collect();
+                if !new_neighbors.is_empty() {
+                    self.prune_neighbors(i, &new_neighbors, build_r)
+                } else {
+                    current_graph[i].clone()
+                }
+            })
+            .collect();
 
-            if !new_neighbors.is_empty() {
-                current_graph[i] = self.prune_neighbors(i, &new_neighbors, build_r);
+        let mut updated_graph = current_graph;
+        for (i, edges) in new_edges.into_iter().enumerate() {
+            if !edges.is_empty() {
+                updated_graph[i] = edges;
             }
         }
-        self.replace_flat_graph_from_local(&current_graph);
+        self.replace_flat_graph_from_local(&updated_graph);
     }
 
     #[inline]
