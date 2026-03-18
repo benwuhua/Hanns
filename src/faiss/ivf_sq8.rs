@@ -14,7 +14,7 @@ use crate::index::{
 };
 use crate::quantization::ScalarQuantizer;
 
-type IvfSq8InvertedListSnapshot = Vec<(usize, Vec<(i64, Vec<u8>)>)>;
+type IvfSq8InvertedListSnapshot = HashMap<usize, (Vec<i64>, Vec<u8>)>;
 
 /// IVF-SQ8 Index
 #[allow(dead_code)]
@@ -26,8 +26,8 @@ pub struct IvfSq8Index {
 
     /// Cluster centroids
     centroids: Vec<f32>,
-    /// Inverted lists: cluster_id -> list of (vector_id, quantized residual)
-    inverted_lists: HashMap<usize, Vec<(i64, Vec<u8>)>>,
+    /// Inverted lists: cluster_id -> (ids, flat quantized residual codes)
+    inverted_lists: HashMap<usize, (Vec<i64>, Vec<u8>)>,
     /// Scalar quantizer for residuals
     quantizer: ScalarQuantizer,
     /// All vectors (for decoding)
@@ -134,10 +134,12 @@ impl IvfSq8Index {
             self.ids.push(id);
             self.vectors.extend_from_slice(vector);
 
-            self.inverted_lists
+            let entry = self
+                .inverted_lists
                 .entry(cluster)
-                .or_default()
-                .push((id, quantized));
+                .or_insert_with(|| (Vec::new(), Vec::new()));
+            entry.0.push(id);
+            entry.1.extend_from_slice(&quantized);
         }
 
         Ok(n)
@@ -185,7 +187,7 @@ impl IvfSq8Index {
                 let mut candidates: Vec<(i64, f32)> = Vec::new();
 
                 for &cluster_id in &clusters {
-                    if let Some(list) = self.inverted_lists.get(&cluster_id) {
+                    if let Some((ids, codes)) = self.inverted_lists.get(&cluster_id) {
                         let centroid_vec =
                             &self.centroids[cluster_id * self.dim..(cluster_id + 1) * self.dim];
                         let q_residual: Vec<f32> = query_vec
@@ -194,9 +196,11 @@ impl IvfSq8Index {
                             .map(|(a, b)| a - b)
                             .collect();
 
-                        for &(id, ref quantized) in list {
-                            let dist = self.quantizer.sq_l2_asymmetric(&q_residual, quantized);
-                            candidates.push((id, dist));
+                        let n = ids.len().min(codes.len() / self.dim);
+                        for i in 0..n {
+                            let code = &codes[i * self.dim..(i + 1) * self.dim];
+                            let dist = self.quantizer.sq_l2_asymmetric(&q_residual, code);
+                            candidates.push((ids[i], dist));
                         }
                     }
                 }
@@ -227,7 +231,7 @@ impl IvfSq8Index {
                 let mut candidates: Vec<(i64, f32)> = Vec::new();
 
                 for &cluster_id in &clusters {
-                    if let Some(list) = self.inverted_lists.get(&cluster_id) {
+                    if let Some((ids, codes)) = self.inverted_lists.get(&cluster_id) {
                         let centroid_vec =
                             &self.centroids[cluster_id * self.dim..(cluster_id + 1) * self.dim];
                         let q_residual: Vec<f32> = query_vec
@@ -236,9 +240,11 @@ impl IvfSq8Index {
                             .map(|(a, b)| a - b)
                             .collect();
 
-                        for &(id, ref quantized) in list {
-                            let dist = self.quantizer.sq_l2_asymmetric(&q_residual, quantized);
-                            candidates.push((id, dist));
+                        let n = ids.len().min(codes.len() / self.dim);
+                        for i in 0..n {
+                            let code = &codes[i * self.dim..(i + 1) * self.dim];
+                            let dist = self.quantizer.sq_l2_asymmetric(&q_residual, code);
+                            candidates.push((ids[i], dist));
                         }
                     }
                 }
@@ -291,12 +297,6 @@ impl IvfSq8Index {
     fn compute_residual(&self, vector: &[f32], cluster: usize) -> Vec<f32> {
         let centroid = &self.centroids[cluster * self.dim..(cluster + 1) * self.dim];
         vector.iter().zip(centroid).map(|(a, b)| a - b).collect()
-    }
-
-    /// Reconstruct vector from centroid + residual
-    fn reconstruct(&self, _query: &[f32], cluster: usize, residual: &[f32]) -> Vec<f32> {
-        let centroid = &self.centroids[cluster * self.dim..(cluster + 1) * self.dim];
-        centroid.iter().zip(residual).map(|(c, r)| c + r).collect()
     }
 
     /// Add vectors in parallel (requires rayon)
@@ -352,18 +352,23 @@ impl IvfSq8Index {
             .collect();
 
         // Collect by cluster
-        let mut cluster_data: HashMap<usize, Vec<(i64, Vec<u8>)>> = HashMap::new();
+        let mut cluster_data: HashMap<usize, (Vec<i64>, Vec<u8>)> = HashMap::new();
         for (cluster, id, quantized) in assignments {
-            cluster_data
+            let entry = cluster_data
                 .entry(cluster)
-                .or_default()
-                .push((id, quantized));
+                .or_insert_with(|| (Vec::new(), Vec::new()));
+            entry.0.push(id);
+            entry.1.extend_from_slice(&quantized);
         }
 
         // Merge into inverted lists
-        for (cluster, mut items) in cluster_data {
-            let list = self.inverted_lists.entry(cluster).or_default();
-            list.append(&mut items);
+        for (cluster, (mut ids_buf, mut codes_buf)) in cluster_data {
+            let entry = self
+                .inverted_lists
+                .entry(cluster)
+                .or_insert_with(|| (Vec::new(), Vec::new()));
+            entry.0.append(&mut ids_buf);
+            entry.1.append(&mut codes_buf);
         }
 
         // Update ids and vectors
@@ -412,11 +417,7 @@ impl IvfSq8Index {
         let dim = self.dim;
         let nlist = self.nlist;
         let centroids = self.centroids.clone();
-        let inverted_lists: IvfSq8InvertedListSnapshot = self
-            .inverted_lists
-            .iter()
-            .map(|(k, v)| (*k, v.clone()))
-            .collect();
+        let inverted_lists: IvfSq8InvertedListSnapshot = self.inverted_lists.clone();
 
         // Parallel search for each query
         let results: Vec<Vec<(i64, f32)>> = (0..n_queries)
@@ -444,17 +445,19 @@ impl IvfSq8Index {
                 let mut candidates: Vec<(i64, f32)> = Vec::new();
 
                 for &cluster_id in &clusters {
-                    if let Some(list) = inverted_lists.iter().find(|(c, _)| *c == cluster_id) {
-                        for &(id, ref quantized) in &list.1 {
-                            let residual = self.quantizer.decode(quantized);
-                            let reconstructed: Vec<f32> = centroids
-                                [cluster_id * dim..(cluster_id + 1) * dim]
-                                .iter()
-                                .zip(residual.iter())
-                                .map(|(c, r)| c + r)
-                                .collect();
-                            let dist = l2_distance(query_vec, &reconstructed);
-                            candidates.push((id, dist));
+                    if let Some((ids, codes)) = inverted_lists.get(&cluster_id) {
+                        let centroid_vec = &centroids[cluster_id * dim..(cluster_id + 1) * dim];
+                        let q_residual: Vec<f32> = query_vec
+                            .iter()
+                            .zip(centroid_vec.iter())
+                            .map(|(a, b)| a - b)
+                            .collect();
+
+                        let n = ids.len().min(codes.len() / dim);
+                        for i in 0..n {
+                            let code = &codes[i * dim..(i + 1) * dim];
+                            let dist = self.quantizer.sq_l2_asymmetric(&q_residual, code);
+                            candidates.push((ids[i], dist));
                         }
                     }
                 }
@@ -523,6 +526,29 @@ impl IvfSq8Index {
         let vec_bytes: Vec<u8> = self.vectors.iter().flat_map(|&f| f.to_le_bytes()).collect();
         file.write_all(&vec_bytes)?;
 
+        // Inverted lists (flat layout): cluster_id + n + ids + codes
+        file.write_all(&(self.inverted_lists.len() as u64).to_le_bytes())?;
+        for (&cluster_id, (ids, codes)) in &self.inverted_lists {
+            let n = ids.len();
+            file.write_all(&(cluster_id as u64).to_le_bytes())?;
+            file.write_all(&(n as u64).to_le_bytes())?;
+
+            for &id in ids {
+                file.write_all(&id.to_le_bytes())?;
+            }
+
+            let expected = n * self.dim;
+            if codes.len() != expected {
+                return Err(crate::api::KnowhereError::Codec(format!(
+                    "invalid inverted list code length for cluster {}: {} != {}",
+                    cluster_id,
+                    codes.len(),
+                    expected
+                )));
+            }
+            file.write_all(codes)?;
+        }
+
         Ok(())
     }
 
@@ -587,6 +613,29 @@ impl IvfSq8Index {
             *value = f32::from_le_bytes(vbuf);
         }
 
+        file.read_exact(&mut u64_buf)?;
+        let inverted_count = u64::from_le_bytes(u64_buf) as usize;
+        let mut inverted_lists: HashMap<usize, (Vec<i64>, Vec<u8>)> =
+            HashMap::with_capacity(inverted_count);
+        for _ in 0..inverted_count {
+            file.read_exact(&mut u64_buf)?;
+            let cluster_id = u64::from_le_bytes(u64_buf) as usize;
+
+            file.read_exact(&mut u64_buf)?;
+            let list_n = u64::from_le_bytes(u64_buf) as usize;
+
+            let mut list_ids = vec![0i64; list_n];
+            for id in &mut list_ids {
+                let mut ibuf = [0u8; 8];
+                file.read_exact(&mut ibuf)?;
+                *id = i64::from_le_bytes(ibuf);
+            }
+
+            let mut list_codes = vec![0u8; list_n * stored_dim];
+            file.read_exact(&mut list_codes)?;
+            inverted_lists.insert(cluster_id, (list_ids, list_codes));
+        }
+
         let mut quantizer = ScalarQuantizer::new(stored_dim, 8);
         quantizer.min_val = min_val;
         quantizer.max_val = max_val;
@@ -605,7 +654,7 @@ impl IvfSq8Index {
             nlist,
             nprobe: 8,
             centroids,
-            inverted_lists: HashMap::new(),
+            inverted_lists,
             quantizer,
             vectors,
             ids,
@@ -614,22 +663,6 @@ impl IvfSq8Index {
         };
 
         index.next_id = index.ids.iter().copied().max().map_or(0, |m| m + 1);
-
-        // Rebuild inverted lists from vectors + ids.
-        let total = index.ids.len();
-        for i in 0..total {
-            let start = i * index.dim;
-            let vector = &index.vectors[start..start + index.dim];
-            let cluster = index.find_nearest_centroid(vector);
-            let residual = index.compute_residual(vector, cluster);
-            let quantized = index.quantizer.encode(&residual);
-            let id = index.ids[i];
-            index
-                .inverted_lists
-                .entry(cluster)
-                .or_default()
-                .push((id, quantized));
-        }
 
         Ok(index)
     }
