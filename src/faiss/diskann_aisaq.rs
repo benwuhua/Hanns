@@ -1204,15 +1204,20 @@ impl PQFlashIndex {
 
     #[cfg(not(feature = "parallel"))]
     pub fn search_batch(&self, queries: &[f32], k: usize) -> Result<SearchResult> {
+        use rayon::prelude::*;
         let n_queries = queries.len() / self.dim;
         if n_queries == 0 {
             return Ok(SearchResult::new(vec![], vec![], 0.0));
         }
+        let results: Result<Vec<SearchResult>> = queries
+            .par_chunks(self.dim)
+            .map(|q| self.search_internal(q, k, None))
+            .collect();
+        let results = results?;
         let total = n_queries * k;
         let mut ids = Vec::with_capacity(total);
         let mut distances = Vec::with_capacity(total);
-        for q in queries.chunks(self.dim) {
-            let r = self.search_internal(q, k, None)?;
+        for r in &results {
             let row_len = k.min(r.ids.len()).min(r.distances.len());
             ids.extend_from_slice(&r.ids[..row_len]);
             for _ in row_len..k {
