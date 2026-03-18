@@ -2410,12 +2410,10 @@ impl PQFlashIndex {
         Ok(out)
     }
 
-    /// Pre-load all nodes into a lock-free Arc HashMap for zero-contention parallel search.
+    /// Materialize all disk nodes into in-memory flat arrays, giving the same search
+    /// performance as a purely in-memory index (no PageCache, no HashMap, no Mutex contention).
     pub fn enable_node_cache(&mut self) -> Result<()> {
-        if self.loaded_node_cache.is_none() {
-            self.prime_loaded_node_cache()?;
-        }
-        Ok(())
+        self.materialize_storage()
     }
 
     fn prime_loaded_node_cache(&mut self) -> Result<()> {
