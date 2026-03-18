@@ -948,7 +948,11 @@ impl PQFlashIndex {
         let mut expanded = Vec::new();
         let mut accepted = Vec::new();
 
-        for candidate in self.rank_entry_candidates(query, pq_table.as_ref(), &mut io)? {
+        for candidate in self.rank_entry_candidates(
+            query,
+            pq_table.as_ref().map(|v| v.as_slice()),
+            &mut io,
+        )? {
             frontier.push(candidate);
         }
 
@@ -975,7 +979,12 @@ impl PQFlashIndex {
                 if seen.contains(&neighbor) {
                     continue;
                 }
-                let score = self.coarse_distance(neighbor, query, pq_table.as_ref(), &mut io)?;
+                let score = self.coarse_distance(
+                    neighbor,
+                    query,
+                    pq_table.as_ref().map(|v| v.as_slice()),
+                    &mut io,
+                )?;
                 neighbor_scores.push(Candidate {
                     node_id: neighbor,
                     score,
@@ -1071,7 +1080,11 @@ impl PQFlashIndex {
         let mut accepted = Vec::new();
 
         for candidate in self
-            .rank_entry_candidates_async(query, pq_table.as_ref(), &mut io)
+            .rank_entry_candidates_async(
+                query,
+                pq_table.as_ref().map(|v| v.as_slice()),
+                &mut io,
+            )
             .await?
         {
             frontier.push(candidate);
@@ -1100,7 +1113,12 @@ impl PQFlashIndex {
                     continue;
                 }
                 let score = self
-                    .coarse_distance_async(neighbor, query, pq_table.as_ref(), &mut io)
+                    .coarse_distance_async(
+                        neighbor,
+                        query,
+                        pq_table.as_ref().map(|v| v.as_slice()),
+                        &mut io,
+                    )
                     .await?;
                 neighbor_scores.push(Candidate {
                     node_id: neighbor,
@@ -1296,7 +1314,7 @@ impl PQFlashIndex {
     fn rank_entry_candidates(
         &self,
         query: &[f32],
-        pq_table: Option<&Vec<Vec<f32>>>,
+        pq_table: Option<&[f32]>,
         io: &mut BeamSearchIO,
     ) -> Result<Vec<Candidate>> {
         let mut ranked = Vec::new();
@@ -1314,7 +1332,7 @@ impl PQFlashIndex {
     async fn rank_entry_candidates_async(
         &self,
         query: &[f32],
-        pq_table: Option<&Vec<Vec<f32>>>,
+        pq_table: Option<&[f32]>,
         io: &mut BeamSearchIO,
     ) -> Result<Vec<Candidate>> {
         let mut ranked = Vec::new();
@@ -1495,7 +1513,7 @@ impl PQFlashIndex {
         &self,
         node_id: u32,
         query: &[f32],
-        pq_table: Option<&Vec<Vec<f32>>>,
+        pq_table: Option<&[f32]>,
         io: &mut BeamSearchIO,
     ) -> Result<f32> {
         let node = self.load_node(node_id, NodeAccessMode::Pq, io)?;
@@ -1513,7 +1531,7 @@ impl PQFlashIndex {
         &self,
         node_id: u32,
         query: &[f32],
-        pq_table: Option<&Vec<Vec<f32>>>,
+        pq_table: Option<&[f32]>,
         io: &mut BeamSearchIO,
     ) -> Result<f32> {
         let node = self.load_node_async(node_id, NodeAccessMode::Pq, io).await?;

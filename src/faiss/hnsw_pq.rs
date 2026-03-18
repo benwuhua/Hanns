@@ -257,7 +257,7 @@ impl HnswPqIndex {
         let mut sum = 0.0f32;
         for m_idx in 0..self.config.pq_m {
             let c = code[m_idx] as usize;
-            sum += table[m_idx][c];
+            sum += table[m_idx * self.pq.k + c];
         }
         sum
     }

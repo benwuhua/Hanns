@@ -217,9 +217,9 @@ impl PqEncoder {
 
     /// 构建查询距离表 (Asymmetric Distance Computation)
     ///
-    /// 返回 [m][k] 的距离表
-    pub fn build_distance_table(&self, query: &[f32]) -> Vec<Vec<f32>> {
-        let mut table = vec![vec![0.0; self.k]; self.m];
+    /// 返回扁平距离表，布局为 [m0c0, m0c1, ..., m1c0, ...]，步长为 `self.k`
+    pub fn build_distance_table(&self, query: &[f32]) -> Vec<f32> {
+        let mut table = vec![0.0f32; self.m * self.k];
 
         for m_idx in 0..self.m {
             let query_sub = &query[m_idx * self.sub_dim..(m_idx + 1) * self.sub_dim];
@@ -228,7 +228,7 @@ impl PqEncoder {
 
             for c in 0..self.k {
                 let cent = &codebook[c * self.sub_dim..(c + 1) * self.sub_dim];
-                table[m_idx][c] = simd::l2_distance(query_sub, cent);
+                table[m_idx * self.k + c] = simd::l2_distance(query_sub, cent);
             }
         }
 
@@ -237,9 +237,9 @@ impl PqEncoder {
 
     /// 使用距离表计算与编码向量的距离 (ADC)
     #[inline(always)]
-    pub fn compute_distance_with_table(&self, table: &[Vec<f32>], codes: &[u8]) -> f32 {
-        let m = self.m.min(codes.len()).min(table.len());
-        distance_with_table_simd(table, codes, m)
+    pub fn compute_distance_with_table(&self, table: &[f32], codes: &[u8]) -> f32 {
+        let m = self.m.min(codes.len()).min(table.len() / self.k.max(1));
+        distance_with_table_simd_flat(table, codes, m, self.k)
     }
 
     /// 计算 L2 距离 (平方)
@@ -251,29 +251,24 @@ impl PqEncoder {
 }
 
 #[inline(always)]
-fn distance_with_table_simd(table: &[Vec<f32>], codes: &[u8], m: usize) -> f32 {
+fn distance_with_table_simd_flat(table: &[f32], codes: &[u8], m: usize, k: usize) -> f32 {
     #[cfg(target_arch = "x86_64")]
     unsafe {
-        if let Some(first_row) = table.first() {
-            std::arch::x86_64::_mm_prefetch(
-                first_row.as_ptr() as *const i8,
-                std::arch::x86_64::_MM_HINT_T0,
-            );
-        }
+        std::arch::x86_64::_mm_prefetch(table.as_ptr() as *const i8, std::arch::x86_64::_MM_HINT_T0);
     }
 
     let mut sum = 0.0f32;
     let chunks4 = (m / 4) * 4;
     let mut i = 0usize;
     while i < chunks4 {
-        sum += table[i][codes[i] as usize];
-        sum += table[i + 1][codes[i + 1] as usize];
-        sum += table[i + 2][codes[i + 2] as usize];
-        sum += table[i + 3][codes[i + 3] as usize];
+        sum += table[i * k + codes[i] as usize];
+        sum += table[(i + 1) * k + codes[i + 1] as usize];
+        sum += table[(i + 2) * k + codes[i + 2] as usize];
+        sum += table[(i + 3) * k + codes[i + 3] as usize];
         i += 4;
     }
     while i < m {
-        sum += table[i][codes[i] as usize];
+        sum += table[i * k + codes[i] as usize];
         i += 1;
     }
     sum
@@ -331,7 +326,6 @@ mod tests {
         let query = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
         let table = pq.build_distance_table(&query);
 
-        assert_eq!(table.len(), 2);
-        assert_eq!(table[0].len(), 4);
+        assert_eq!(table.len(), 8);
     }
 }
