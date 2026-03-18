@@ -23,12 +23,11 @@
   - 预期 nprobe=32-64 可达 0.95+
   - 得到 x86 authority QPS
 
-- [x] **DISKANN-RECALL-001** [P0]: ✅ 诊断完成
+- [x] **DISKANN-RECALL-001** [P0]: ✅ 已修复并验证
   - 根因: `add()` 不构建图边；只有 `train()` 中的向量有 Vamana 图连接
-  - cross_dataset recall=0.009 来自 train(空/centroid)+add(4K) → 所有节点 degree=0
-  - 真实 dim 影响: 单调递减 (dim=64: 0.91, dim=128: 0.82)，非 dim=64 特有
-  - 修复路径: add() 调用 insert_point() 接入图，或 API 文档明确 train(完整数据集)
-  - 证据: `examples/diskann_dim_diag.rs`
+  - 修复: `add()` 改为调用 `insert_point()`，建立真正的 Vamana 图边
+  - 验证: train(1000) + add(1000) → recall@10=0.981, avg_degree=32.00
+  - 提交: fix(diskann) 961bde3, test(diskann) e0be1dc
 
 #### P1 — 填空白基线
 
@@ -64,30 +63,33 @@
   - 结果: recall@full_scan 从 0.174 → 0.982（100K random, nprobe=256, Mac）
   - 达到 recall gate (≥0.95 at nprobe=256，random worst-case)
   - 需要 SIFT-1M 测试确认 authority QPS
-- [ ] **IVF-RABITQ-FIX-001** [P2]: IVF-RaBitQ recall ceiling — investigate larger refine_k (100x) or better quantization
+- [x] **IVF-RABITQ-FIX-001** [P2]: ✅ 完成 — refine_k=500 过 0.95 gate
+  - recall@10=0.950, QPS=115 (Mac, 100K, nprobe=256)
+  - 从 no-go 升级为 viable-with-tradeoff (50x refine overhead)
+  - 脚本: `examples/ivf_rabitq_refine_k_sweep.rs`
 - [ ] **SCANN-FIX-001** [P2]: ScaNN recall ceiling (0.699 max at 100K) — investigate larger num_centroids/reorder_k or algorithm fix
 - [ ] **HNSW-IMP-001** [P2]: 若 strict-ef 仍落后 native，找真正的优化方向
 
 ### AISAQ Phase 2: 能力补全 + 生产就绪 (2026-03-18 开启, 降级为 P2+)
 
-- [ ] **AISAQ-CAP-001** [P0]: 真正的 exact rerank stage
-  - 现状: `rearrange_candidates` 用 ADC 非 exact distance
-  - 目标: beam search 后取 top-N 候选，用原始 float 向量重算精确距离再排序
-  - 参考: `diskann-disk/src/search/provider/disk_provider.rs` `post_process()`
-  - 完成标准: recall@10 可测提升 + authority A/B
+- [x] **AISAQ-CAP-001** [P0]: ✅ 已完成 — exact rerank 已实装
+  - 实现: `search_internal()` rerank pool 用 `exact_distance()` 对 top-N 候选重算精确距离
+  - 代码: `diskann_aisaq.rs` lines 1396-1417 (rearrange switch + exact_distance)
+  - 提交: feat(diskann-aisaq): wire rearrange switch and rerank semantics (a0aff54)
 
-- [ ] **AISAQ-CAP-002** [P1]: External ID / Tag 系统
-  - `i64` external_id ↔ internal `u32` row_id 双向映射
-  - Milvus 集成前必须: 搜索结果返回 external IDs
-  - 设计: `BTreeMap<i64, u32>` + `Vec<i64>` + 序列化支持
+- [x] **AISAQ-CAP-002** [P1]: ✅ External ID 已修复
+  - 内存路径已支持；save/load 路径修复：serialize_node 写入 external i64，deserialize_node 读回
+  - 旧文件 backward compatible (id_bytes=0 fallback to row_id)
+  - 提交: fix(aisaq) 187883b
 
-- [ ] **AISAQ-CAP-003** [P1]: On-disk persistence
-  - 现状: materialize_storage() 是内存加速，重启即丢
-  - 目标: CSR graph + PQ codebooks + raw vectors → mmap 文件；save()/load()
-  - 参考: native knowhere FileManager + Rust DiskANN DiskIndexWriter
+- [x] **AISAQ-CAP-003** [P1]: ✅ On-disk persistence 已完整
+  - save() 覆盖: config/metric/dim/pq_encoder/entry_points/trained/全节点数据(含 external id+vector+neighbors+inline_pq)
+  - load() 后可直接 search，无需 retrain
+  - Runtime caches (loaded_node_cache/scratch_pool) 不持久化属设计意图
 
-- [ ] **AISAQ-CAP-004** [P1]: RangeSearch
-  - 参考: native `DiskANNIndexNode::RangeSearch` with range_filter
+- [x] **AISAQ-CAP-004** [P1]: ✅ RangeSearch 已实装
+  - `range_search_raw()` + Index trait `range_search()` 已实现
+  - 提交: feat(aisaq): implement range_search for PQFlashIndex (5c89bc4)
 
 - [ ] **AISAQ-CAP-005** [P2]: Incremental insert + lazy delete + consolidation
   - 参考: Rust DiskANN `add()` / `consolidate_vector()`
