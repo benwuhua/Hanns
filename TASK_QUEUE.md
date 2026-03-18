@@ -19,9 +19,12 @@
   - 注: V1 sweep 无效（TOP_K=100 导致 10-recall-at-100 虚高 + Float 非 BF16）
 
 - [ ] **IVF-FLAT-001** [P0]: nprobe 参数扫描 → 确认 IVF-Flat 能过 0.95 recall gate
-  - 当前 nprobe=8 → recall=0.535，太低
-  - 预期 nprobe=32-64 可达 0.95+
-  - 得到 x86 authority QPS
+  - Mac 结果 (100K, nlist=256, dim=128, L2, script: examples/ivf_flat_nprobe_sweep.rs):
+    - nprobe=64: recall=0.627, QPS=6,756
+    - nprobe=128: recall=0.858, QPS=3,806
+    - nprobe=256: recall=1.000, QPS=2,014 ← passes 0.95 gate (full scan)
+  - 结论: nlist=256 需全扫才过 0.95；下一步需要 x86 authority QPS
+  - 待完成: x86 authority QPS (ssh to knowhere-x86-hk-proxy 跑同 script)
 
 - [x] **DISKANN-RECALL-001** [P0]: ✅ 已修复并验证
   - 根因: `add()` 不构建图边；只有 `train()` 中的向量有 Vamana 图连接
@@ -61,9 +64,11 @@
   - 证据: `examples/ivf_pq_diag.rs`（nprobe max=0.152, m=32 max=0.621, ADC sanity bug 确认）
 - [x] **IVF-SQ8-FIX-001** [P2]: ✅ 修复完成
   - 修复: train() 改为先 train_ivf() 获得 centroids，再用 residuals 训练 quantizer
-  - 结果: recall@full_scan 从 0.174 → 0.982（100K random, nprobe=256, Mac）
-  - 达到 recall gate (≥0.95 at nprobe=256，random worst-case)
-  - 需要 SIFT-1M 测试确认 authority QPS
+  - Mac authority (100K, nlist=256, script: examples/ivf_sq8_authority_baseline.rs):
+    - nprobe=128: recall=0.855, QPS=230
+    - nprobe=256: recall=0.990, QPS=114 ← passes gate
+  - ⚠️ 异常: IVF-SQ8 (114 QPS) << IVF-Flat (2014 QPS) — SQ8 应比 Flat 快，疑有搜索路径性能问题
+  - 新任务: IVF-SQ8-PERF-001 — 分析 SQ8 搜索路径为何比 Flat 慢 18x
 - [x] **IVF-RABITQ-FIX-001** [P2]: ✅ 完成 — refine_k=500 过 0.95 gate
   - recall@10=0.950, QPS=115 (Mac, 100K, nprobe=256)
   - 从 no-go 升级为 viable-with-tradeoff (50x refine overhead)
@@ -75,6 +80,10 @@
   - 原来 no-go (0.699) 是参数太保守；推荐配置: centroids=256, reorder_k=1600
   - 待完成: x86 authority QPS (Script: `examples/scann_authority_baseline.rs`)
 - [ ] **HNSW-IMP-001** [P2]: 若 strict-ef 仍落后 native，找真正的优化方向
+  - Codex A 正在分析 strict-ef 热路径（/tmp/hnsw_hotpath_analysis.txt 待完成）
+- [ ] **IVF-SQ8-PERF-001** [P2]: IVF-SQ8 搜索 QPS=114 vs IVF-Flat QPS=2014（同 nprobe=256）
+  - SQ8 量化距离计算应比 Flat float32 更快，实际差 18x 说明路径有问题
+  - 检查: src/faiss/ivf_sq8.rs search() 路径，对比 src/faiss/ivf_flat.rs
 
 ### AISAQ Phase 2: 能力补全 + 生产就绪 (2026-03-18 开启, 降级为 P2+)
 
