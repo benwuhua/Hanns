@@ -4,7 +4,37 @@
 
 ## 当前大任务面板
 
-### AISAQ Phase 2: 能力补全 + 生产就绪 (2026-03-18 开启)
+> 优先级调整 2026-03-18: HNSW/DiskANN/PQ/SQ/IVF/ScaNN 整体上移；AISAQ 降级。
+
+### Phase 3: 多 Index 能力验证 + 修复 (2026-03-18 开启)
+
+#### P0 — 验证/诊断（立即）
+
+- [ ] **HNSW-VERIFY-001** [P0]: 独立重跑 near-equal-recall benchmark 验证 1.789x 结论
+  - 在 x86 上同时跑 strict-ef lane (ef=138) + near-equal-recall lane (Rust at recall≈0.95)
+  - 对比 native ef=138 (15,918 QPS, recall=0.95)
+  - Codex 独立完成的结论不能完全信任，必须 Claude 参与验证
+
+- [ ] **IVF-FLAT-001** [P0]: nprobe 参数扫描 → 确认 IVF-Flat 能过 0.95 recall gate
+  - 当前 nprobe=8 → recall=0.535，太低
+  - 预期 nprobe=32-64 可达 0.95+
+  - 得到 x86 authority QPS
+
+- [ ] **DISKANN-RECALL-001** [P0]: 诊断 diskann.rs 在 dim≠128 时 recall=0.009 根因
+
+#### P1 — 填空白基线
+
+- [ ] **IVF-SQ8-001** [P1]: IVF-SQ8 recall+QPS authority baseline
+- [ ] **IVF-OPQ-001** [P1]: IVF-OPQ recall+QPS authority baseline
+- [ ] **SCANN-001** [P1]: ScaNN 100K scale recall+QPS benchmark
+- [ ] **IVF-RABITQ-001** [P1]: IVF-RaBitQ with refine path enabled
+
+#### P2 — 修复已知问题
+
+- [ ] **IVF-PQ-FIX-001** [P2]: IVF-PQ recall 0.47 根因分析 + 修复（目前 no-go）
+- [ ] **HNSW-IMP-001** [P2]: 若 strict-ef 仍落后 native，找真正的优化方向
+
+### AISAQ Phase 2: 能力补全 + 生产就绪 (2026-03-18 开启, 降级为 P2+)
 
 - [ ] **AISAQ-CAP-001** [P0]: 真正的 exact rerank stage
   - 现状: `rearrange_candidates` 用 ADC 非 exact distance
