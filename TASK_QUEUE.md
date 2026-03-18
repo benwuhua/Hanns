@@ -1,7 +1,44 @@
 # Builder 任务队列
-> 最后更新: 2026-03-17 | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
+> 最后更新: 2026-03-18 | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
+> 详细 gap analysis: `docs/superpowers/specs/2026-03-18-diskann-aisaq-gap-analysis.md`
 
 ## 当前大任务面板
+
+### AISAQ Phase 2: 能力补全 + 生产就绪 (2026-03-18 开启)
+
+- [ ] **AISAQ-CAP-001** [P0]: 真正的 exact rerank stage
+  - 现状: `rearrange_candidates` 用 ADC 非 exact distance
+  - 目标: beam search 后取 top-N 候选，用原始 float 向量重算精确距离再排序
+  - 参考: `diskann-disk/src/search/provider/disk_provider.rs` `post_process()`
+  - 完成标准: recall@10 可测提升 + authority A/B
+
+- [ ] **AISAQ-CAP-002** [P1]: External ID / Tag 系统
+  - `i64` external_id ↔ internal `u32` row_id 双向映射
+  - Milvus 集成前必须: 搜索结果返回 external IDs
+  - 设计: `BTreeMap<i64, u32>` + `Vec<i64>` + 序列化支持
+
+- [ ] **AISAQ-CAP-003** [P1]: On-disk persistence
+  - 现状: materialize_storage() 是内存加速，重启即丢
+  - 目标: CSR graph + PQ codebooks + raw vectors → mmap 文件；save()/load()
+  - 参考: native knowhere FileManager + Rust DiskANN DiskIndexWriter
+
+- [ ] **AISAQ-CAP-004** [P1]: RangeSearch
+  - 参考: native `DiskANNIndexNode::RangeSearch` with range_filter
+
+- [ ] **AISAQ-CAP-005** [P2]: Incremental insert + lazy delete + consolidation
+  - 参考: Rust DiskANN `add()` / `consolidate_vector()`
+
+- [ ] **AISAQ-CAP-006** [P2]: Multi-entry-point medoid seeding
+
+- [ ] **AISAQ-CAP-007** [P2]: x86 SIMD audit (AVX2/AVX-512 验证)
+  - 当前 x86 比 Mac 慢 2.25x；部分可能是 SIMD 未激活
+
+- [ ] **AISAQ-CAP-008** [P2]: Async IO (io_uring) 冷 disk 路径
+  - 现状: 冷盘 ~330 QPS；目标 async batch reads 达到 5K+ QPS
+
+- [ ] **IVFPQ-FIX-001** [P3]: IVF-PQ recall < 0.8 根因分析+修复
+
+### 本轮已完成 (2026-03-18)
 
 - [x] **HNSW-REOPEN-001**: HNSW 重开线已归档
   - 当前子阶段: `closed_after_opt56_authority_and_final_rollup` ✅
