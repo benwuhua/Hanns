@@ -1838,8 +1838,7 @@ impl IndexWrapper {
             idx.save(path.to_str().unwrap())
                 .map_err(|_| CError::Internal)
         } else if let Some(ref idx) = self.hnsw_prq {
-            idx.save(path.to_str().unwrap())
-                .map_err(|_| CError::Internal)
+            idx.save(path).map_err(|_| CError::Internal)
         } else if let Some(ref idx) = self.ivf_pq {
             idx.save(path).map_err(|_| CError::Internal)
         } else if let Some(ref idx) = self.minhash_lsh {

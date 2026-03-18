@@ -5,12 +5,16 @@
 
 use rand::Rng;
 use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::Path;
 
 use crate::api::{MetricType, Result as ApiResult};
 use crate::bitset::BitsetView;
 use crate::dataset::Dataset;
 use crate::index::{Index, IndexError, SearchResult};
 use crate::quantization::prq::{PRQConfig, ProductResidualQuantizer};
+use crate::quantization::rq::{RQConfig, ResidualQuantizer};
 
 /// Maximum number of layers in the HNSW graph
 const MAX_LAYERS: usize = 16;
@@ -545,6 +549,214 @@ impl HnswPrqIndex {
     pub fn is_trained(&self) -> bool {
         self.trained
     }
+
+    /// Save index
+    pub fn save(&self, path: &Path) -> ApiResult<()> {
+        let mut file = File::create(path)?;
+
+        file.write_all(b"HNSWPRQ")?;
+        file.write_all(&(self.config.dim as u32).to_le_bytes())?;
+        file.write_all(&(self.config.m as u32).to_le_bytes())?;
+        file.write_all(&(self.config.m_max0 as u32).to_le_bytes())?;
+        file.write_all(&(self.config.ef_construction as u32).to_le_bytes())?;
+        file.write_all(&(self.config.prq_nsplits as u32).to_le_bytes())?;
+        file.write_all(&(self.config.prq_msub as u32).to_le_bytes())?;
+        file.write_all(&(self.config.prq_nbits as u32).to_le_bytes())?;
+
+        file.write_all(&self.entry_point.unwrap_or(-1).to_le_bytes())?;
+        file.write_all(&(self.max_level as u32).to_le_bytes())?;
+        file.write_all(&self.next_id.to_le_bytes())?;
+        file.write_all(&self.level_multiplier.to_le_bytes())?;
+        file.write_all(&[u8::from(self.trained)])?;
+
+        file.write_all(&(self.prq.quantizers.len() as u32).to_le_bytes())?;
+        for q in &self.prq.quantizers {
+            file.write_all(&(q.codebooks.len() as u64).to_le_bytes())?;
+            for &v in &q.codebooks {
+                file.write_all(&v.to_le_bytes())?;
+            }
+        }
+
+        file.write_all(&(self.node_info.len() as u64).to_le_bytes())?;
+        for node in &self.node_info {
+            file.write_all(&(node.layer_neighbors.len() as u32).to_le_bytes())?;
+            for layer in &node.layer_neighbors {
+                file.write_all(&(layer.neighbors.len() as u32).to_le_bytes())?;
+                for &(nid, dist) in &layer.neighbors {
+                    file.write_all(&nid.to_le_bytes())?;
+                    file.write_all(&dist.to_le_bytes())?;
+                }
+            }
+            file.write_all(&(node.code.len() as u32).to_le_bytes())?;
+            file.write_all(&node.code)?;
+        }
+
+        file.write_all(&(self.ids.len() as u64).to_le_bytes())?;
+        for &id in &self.ids {
+            file.write_all(&id.to_le_bytes())?;
+        }
+
+        Ok(())
+    }
+
+    /// Load index
+    pub fn load(path: &Path) -> ApiResult<Self> {
+        let mut file = File::open(path)?;
+
+        let mut magic = [0u8; 7];
+        file.read_exact(&mut magic)?;
+        if &magic != b"HNSWPRQ" {
+            return Err(crate::api::KnowhereError::Codec(
+                "invalid HNSWPRQ magic".to_string(),
+            ));
+        }
+
+        let mut u32_buf = [0u8; 4];
+        file.read_exact(&mut u32_buf)?;
+        let dim = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut u32_buf)?;
+        let m = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut u32_buf)?;
+        let m_max0 = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut u32_buf)?;
+        let ef_construction = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut u32_buf)?;
+        let prq_nsplits = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut u32_buf)?;
+        let prq_msub = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut u32_buf)?;
+        let prq_nbits = u32::from_le_bytes(u32_buf) as usize;
+
+        let mut i64_buf = [0u8; 8];
+        file.read_exact(&mut i64_buf)?;
+        let entry_raw = i64::from_le_bytes(i64_buf);
+        let entry_point = if entry_raw < 0 { None } else { Some(entry_raw) };
+
+        file.read_exact(&mut u32_buf)?;
+        let max_level = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut i64_buf)?;
+        let next_id = i64::from_le_bytes(i64_buf);
+
+        let mut f32_buf = [0u8; 4];
+        file.read_exact(&mut f32_buf)?;
+        let level_multiplier = f32::from_le_bytes(f32_buf);
+
+        let mut trained_flag = [0u8; 1];
+        file.read_exact(&mut trained_flag)?;
+
+        // Rebuild PRQ
+        let prq_config = PRQConfig {
+            d: dim,
+            nsplits: prq_nsplits,
+            msub: prq_msub,
+            nbits: prq_nbits,
+            max_beam_size: 8,
+        };
+        let mut prq = ProductResidualQuantizer::new(prq_config)?;
+
+        file.read_exact(&mut u32_buf)?;
+        let n_quantizers = u32::from_le_bytes(u32_buf) as usize;
+        let split_dim = dim / prq_nsplits;
+        prq.quantizers.clear();
+        prq.quantizers.reserve(n_quantizers);
+
+        for _ in 0..n_quantizers {
+            let mut u64_buf = [0u8; 8];
+            file.read_exact(&mut u64_buf)?;
+            let codebooks_len = u64::from_le_bytes(u64_buf) as usize;
+
+            let rq_cfg = RQConfig {
+                d: split_dim,
+                m: prq_msub,
+                nbits: prq_nbits,
+                max_beam_size: 8,
+            };
+            let mut rq = ResidualQuantizer::new(rq_cfg)?;
+            rq.codebooks = vec![0.0f32; codebooks_len];
+            for value in &mut rq.codebooks {
+                let mut buf = [0u8; 4];
+                file.read_exact(&mut buf)?;
+                *value = f32::from_le_bytes(buf);
+            }
+            rq.is_trained = true;
+            prq.quantizers.push(rq);
+        }
+        prq.is_trained = true;
+
+        let mut u64_buf = [0u8; 8];
+        file.read_exact(&mut u64_buf)?;
+        let n_nodes = u64::from_le_bytes(u64_buf) as usize;
+        let mut node_info = Vec::with_capacity(n_nodes);
+        for _ in 0..n_nodes {
+            file.read_exact(&mut u32_buf)?;
+            let n_layers = u32::from_le_bytes(u32_buf) as usize;
+            let mut layer_neighbors = Vec::with_capacity(n_layers);
+            for _ in 0..n_layers {
+                file.read_exact(&mut u32_buf)?;
+                let n_neighbors = u32::from_le_bytes(u32_buf) as usize;
+                let mut neighbors = Vec::with_capacity(n_neighbors);
+                for _ in 0..n_neighbors {
+                    let mut nid_buf = [0u8; 8];
+                    file.read_exact(&mut nid_buf)?;
+                    let nid = i64::from_le_bytes(nid_buf);
+                    let mut dist_buf = [0u8; 4];
+                    file.read_exact(&mut dist_buf)?;
+                    let dist = f32::from_le_bytes(dist_buf);
+                    neighbors.push((nid, dist));
+                }
+                layer_neighbors.push(LayerNeighbors { neighbors });
+            }
+
+            file.read_exact(&mut u32_buf)?;
+            let code_len = u32::from_le_bytes(u32_buf) as usize;
+            let mut code = vec![0u8; code_len];
+            file.read_exact(&mut code)?;
+            let max_layer_node = n_layers.saturating_sub(1);
+            node_info.push(NodeInfo {
+                max_layer: max_layer_node,
+                layer_neighbors,
+                code,
+            });
+        }
+
+        file.read_exact(&mut u64_buf)?;
+        let ids_len = u64::from_le_bytes(u64_buf) as usize;
+        let mut ids = vec![0i64; ids_len];
+        for id in &mut ids {
+            let mut ibuf = [0u8; 8];
+            file.read_exact(&mut ibuf)?;
+            *id = i64::from_le_bytes(ibuf);
+        }
+        let id_to_idx = ids
+            .iter()
+            .enumerate()
+            .map(|(idx, &id)| (id, idx))
+            .collect::<HashMap<_, _>>();
+
+        let _ = trained_flag;
+        Ok(Self {
+            config: HnswPrqConfig {
+                dim,
+                m,
+                m_max0,
+                ef_construction,
+                ef_search: HnswPrqConfig::default().ef_search,
+                prq_nsplits,
+                prq_msub,
+                prq_nbits,
+                metric_type: MetricType::L2,
+            },
+            entry_point,
+            max_level,
+            node_info,
+            ids,
+            id_to_idx,
+            next_id,
+            trained: true,
+            level_multiplier,
+            prq,
+        })
+    }
 }
 
 impl Index for HnswPrqIndex {
@@ -596,22 +808,24 @@ impl Index for HnswPrqIndex {
         self.search(&vectors[0..self.config.dim], top_k, Some(bitset))
     }
 
-    fn save(&self, _path: &str) -> Result<(), IndexError> {
-        Err(IndexError::Unsupported(
-            "serialization not implemented".into(),
-        ))
+    fn save(&self, path: &str) -> Result<(), IndexError> {
+        self.save(Path::new(path))
+            .map_err(|e| IndexError::Unsupported(e.to_string()))
     }
 
-    fn load(&mut self, _path: &str) -> Result<(), IndexError> {
-        Err(IndexError::Unsupported(
-            "deserialization not implemented".into(),
-        ))
+    fn load(&mut self, path: &str) -> Result<(), IndexError> {
+        let loaded =
+            HnswPrqIndex::load(Path::new(path)).map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        *self = loaded;
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
 
     #[test]
     fn test_hnsw_prq_creation() {
@@ -658,5 +872,31 @@ mod tests {
         let results = index.search(&query, 5, None).unwrap();
         assert!(results.ids.len() <= 5);
         assert_eq!(results.ids.len(), results.distances.len());
+    }
+
+    #[test]
+    fn test_hnsw_prq_save_load() {
+        let dim = 16usize;
+        let n = 400usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.r#gen::<f32>()).collect();
+
+        let config = HnswPrqConfig::new(dim)
+            .with_m(8)
+            .with_ef_construction(100)
+            .with_ef_search(32)
+            .with_prq_params(2, 1, 6);
+        let mut index = HnswPrqIndex::new(config).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        let path = Path::new("/tmp/hnsw_prq_test.bin");
+        let _ = std::fs::remove_file(path);
+        index.save(path).unwrap();
+
+        let loaded = HnswPrqIndex::load(path).unwrap();
+        let query = &vectors[0..dim];
+        let result = loaded.search(query, 5, None).unwrap();
+        assert_eq!(result.ids.len(), 5);
     }
 }

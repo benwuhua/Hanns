@@ -68,11 +68,12 @@
   - recall@10=0.950, QPS=115 (Mac, 100K, nprobe=256)
   - 从 no-go 升级为 viable-with-tradeoff (50x refine overhead)
   - 脚本: `examples/ivf_rabitq_refine_k_sweep.rs`
-- [x] **SCANN-FIX-001** [P2]: ✅ 完成 — 更大参数可过 0.95 gate
-  - centroids=256, reorder_k=1600 → recall@10=0.969 (n=100K, dim=128, Mac)
-  - 原来 no-go (0.699) 是参数太保守；此配置 viable-with-params
-  - centroids=512 训练不稳定，centroids=1024 太慢（超时）→ centroids=256 为推荐配置
-  - 待完成: x86 authority QPS (Script: `examples/scann_large_sweep.rs`)
+- [x] **SCANN-FIX-001** [P2]: ✅ 完成 — Mac authority 已确认
+  - centroids=256, reorder_k=400: recall=0.840, QPS=104 (Mac)
+  - centroids=256, reorder_k=800: recall=0.922, QPS=67 (Mac)
+  - centroids=256, reorder_k=1600: recall=0.969, QPS=41 (Mac) ← passes 0.95 gate
+  - 原来 no-go (0.699) 是参数太保守；推荐配置: centroids=256, reorder_k=1600
+  - 待完成: x86 authority QPS (Script: `examples/scann_authority_baseline.rs`)
 - [ ] **HNSW-IMP-001** [P2]: 若 strict-ef 仍落后 native，找真正的优化方向
 
 ### AISAQ Phase 2: 能力补全 + 生产就绪 (2026-03-18 开启, 降级为 P2+)

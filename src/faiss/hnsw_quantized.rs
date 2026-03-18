@@ -3,8 +3,9 @@
 //! HNSW 图索引 + 标量量化 或 产品量化
 //! 内存优化版本
 
-use crate::api::{Result, SearchRequest, SearchResult};
+use crate::api::{Result, SearchRequest, SearchResult as ApiSearchResult};
 use crate::faiss::PqEncoder;
+use crate::index::{Index, IndexError, SearchResult as IndexSearchResult};
 use crate::quantization::ScalarQuantizer;
 
 /// HNSW 量化配置
@@ -153,9 +154,9 @@ impl HnswSqIndex {
     }
 
     /// 搜索
-    pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<SearchResult> {
+    pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<ApiSearchResult> {
         if self.ids.is_empty() {
-            return Ok(SearchResult::new(vec![], vec![], 0.0));
+            return Ok(ApiSearchResult::new(vec![], vec![], 0.0));
         }
 
         let k = req.top_k;
@@ -181,7 +182,7 @@ impl HnswSqIndex {
             all_dists.push(f32::MAX);
         }
 
-        Ok(SearchResult::new(all_ids, all_dists, 0.0))
+        Ok(ApiSearchResult::new(all_ids, all_dists, 0.0))
     }
 
     /// 递归搜索
@@ -240,6 +241,251 @@ impl HnswSqIndex {
         let centroids_size = self.centroids.len() * std::mem::size_of::<f32>();
 
         vectors_size + quantized_size + graph_size + ids_size + centroids_size
+    }
+
+    pub fn save(
+        &self,
+        path: &std::path::Path,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use std::fs::File;
+        use std::io::Write;
+
+        let mut file = File::create(path)?;
+        file.write_all(b"HNSWSQ")?;
+        file.write_all(&(self.dim as u32).to_le_bytes())?;
+        file.write_all(&(self.config.max_neighbors as u32).to_le_bytes())?;
+        file.write_all(&(self.config.ef_construction as u32).to_le_bytes())?;
+        file.write_all(&(self.config.ef_search as u32).to_le_bytes())?;
+        file.write_all(&self.next_id.to_le_bytes())?;
+        file.write_all(&[if self.trained { 1 } else { 0 }])?;
+
+        file.write_all(&self.quantizer.min_val.to_le_bytes())?;
+        file.write_all(&self.quantizer.max_val.to_le_bytes())?;
+        file.write_all(&self.quantizer.scale.to_le_bytes())?;
+        file.write_all(&self.quantizer.offset.to_le_bytes())?;
+
+        file.write_all(&(self.centroids.len() as u64).to_le_bytes())?;
+        for &v in &self.centroids {
+            file.write_all(&v.to_le_bytes())?;
+        }
+
+        let n = self.ids.len();
+        file.write_all(&(n as u64).to_le_bytes())?;
+        for &id in &self.ids {
+            file.write_all(&id.to_le_bytes())?;
+        }
+
+        for &v in &self.vectors {
+            file.write_all(&v.to_le_bytes())?;
+        }
+
+        file.write_all(&self.quantized_vectors)?;
+
+        for neighbors in &self.graph {
+            file.write_all(&(neighbors.len() as u32).to_le_bytes())?;
+            for &(id, dist) in neighbors {
+                file.write_all(&id.to_le_bytes())?;
+                file.write_all(&dist.to_le_bytes())?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn load(
+        path: &std::path::Path,
+        dim: usize,
+    ) -> std::result::Result<Self, Box<dyn std::error::Error>> {
+        use std::fs::File;
+        use std::io::{Error, ErrorKind, Read};
+
+        let mut file = File::open(path)?;
+
+        let mut magic = [0u8; 6];
+        file.read_exact(&mut magic)?;
+        if &magic != b"HNSWSQ" {
+            return Err(Box::new(Error::new(
+                ErrorKind::InvalidData,
+                "invalid HNSWSQ magic",
+            )));
+        }
+
+        let mut u32_buf = [0u8; 4];
+        let mut u64_buf = [0u8; 8];
+        let mut i64_buf = [0u8; 8];
+        let mut f32_buf = [0u8; 4];
+
+        file.read_exact(&mut u32_buf)?;
+        let stored_dim = u32::from_le_bytes(u32_buf) as usize;
+        if stored_dim != dim {
+            return Err(Box::new(Error::new(
+                ErrorKind::InvalidData,
+                format!("dim mismatch: load dim {} vs stored dim {}", dim, stored_dim),
+            )));
+        }
+
+        file.read_exact(&mut u32_buf)?;
+        let max_neighbors = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut u32_buf)?;
+        let ef_construction = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut u32_buf)?;
+        let ef_search = u32::from_le_bytes(u32_buf) as usize;
+
+        file.read_exact(&mut i64_buf)?;
+        let next_id = i64::from_le_bytes(i64_buf);
+
+        let mut trained_flag = [0u8; 1];
+        file.read_exact(&mut trained_flag)?;
+
+        file.read_exact(&mut f32_buf)?;
+        let min_val = f32::from_le_bytes(f32_buf);
+        file.read_exact(&mut f32_buf)?;
+        let max_val = f32::from_le_bytes(f32_buf);
+        file.read_exact(&mut f32_buf)?;
+        let scale = f32::from_le_bytes(f32_buf);
+        file.read_exact(&mut f32_buf)?;
+        let offset = f32::from_le_bytes(f32_buf);
+
+        file.read_exact(&mut u64_buf)?;
+        let n_centroids = u64::from_le_bytes(u64_buf) as usize;
+        let mut centroids = vec![0.0f32; n_centroids];
+        for value in &mut centroids {
+            file.read_exact(&mut f32_buf)?;
+            *value = f32::from_le_bytes(f32_buf);
+        }
+
+        file.read_exact(&mut u64_buf)?;
+        let n = u64::from_le_bytes(u64_buf) as usize;
+
+        let mut ids = vec![0i64; n];
+        for id in &mut ids {
+            file.read_exact(&mut i64_buf)?;
+            *id = i64::from_le_bytes(i64_buf);
+        }
+
+        let vec_len = n
+            .checked_mul(stored_dim)
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "vector length overflow"))?;
+        let mut vectors = vec![0.0f32; vec_len];
+        for value in &mut vectors {
+            file.read_exact(&mut f32_buf)?;
+            *value = f32::from_le_bytes(f32_buf);
+        }
+
+        let quant_len = n
+            .checked_mul(stored_dim)
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "quantized length overflow"))?;
+        let mut quantized_vectors = vec![0u8; quant_len];
+        file.read_exact(&mut quantized_vectors)?;
+
+        let mut graph = Vec::with_capacity(n);
+        for _ in 0..n {
+            file.read_exact(&mut u32_buf)?;
+            let neighbors_n = u32::from_le_bytes(u32_buf) as usize;
+            let mut neighbors = Vec::with_capacity(neighbors_n);
+            for _ in 0..neighbors_n {
+                file.read_exact(&mut i64_buf)?;
+                let id = i64::from_le_bytes(i64_buf);
+                file.read_exact(&mut f32_buf)?;
+                let dist = f32::from_le_bytes(f32_buf);
+                neighbors.push((id, dist));
+            }
+            graph.push(neighbors);
+        }
+
+        let mut quantizer = ScalarQuantizer::new(stored_dim, 8);
+        quantizer.min_val = min_val;
+        quantizer.max_val = max_val;
+        quantizer.scale = scale;
+        quantizer.offset = offset;
+
+        let _ = trained_flag;
+        Ok(Self {
+            dim: stored_dim,
+            config: HnswQuantizeConfig {
+                max_neighbors,
+                ef_construction,
+                ef_search,
+                ..Default::default()
+            },
+            vectors,
+            quantizer,
+            quantized_vectors,
+            graph,
+            ids,
+            next_id,
+            centroids,
+            trained: true,
+        })
+    }
+}
+
+impl Index for HnswSqIndex {
+    fn index_type(&self) -> &str {
+        "HNSW_SQ"
+    }
+
+    fn dim(&self) -> usize {
+        self.dim
+    }
+
+    fn count(&self) -> usize {
+        self.count()
+    }
+
+    fn is_trained(&self) -> bool {
+        self.trained
+    }
+
+    fn train(&mut self, dataset: &crate::dataset::Dataset) -> std::result::Result<(), IndexError> {
+        self.train(dataset.vectors())
+            .map(|_| ())
+            .map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn add(
+        &mut self,
+        dataset: &crate::dataset::Dataset,
+    ) -> std::result::Result<usize, IndexError> {
+        self.add(dataset.vectors(), dataset.ids())
+            .map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn search(
+        &self,
+        query: &crate::dataset::Dataset,
+        top_k: usize,
+    ) -> std::result::Result<IndexSearchResult, IndexError> {
+        let vectors = query.vectors();
+        if vectors.len() < self.dim {
+            return Err(IndexError::Empty);
+        }
+        let req = SearchRequest {
+            top_k,
+            nprobe: self.config.ef_search,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let api_result = HnswSqIndex::search(self, &vectors[..self.dim], &req)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        Ok(IndexSearchResult::new(
+            api_result.ids,
+            api_result.distances,
+            api_result.elapsed_ms,
+        ))
+    }
+
+    fn save(&self, path: &str) -> std::result::Result<(), IndexError> {
+        self.save(std::path::Path::new(path))
+            .map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn load(&mut self, path: &str) -> std::result::Result<(), IndexError> {
+        let loaded = Self::load(std::path::Path::new(path), self.dim)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        *self = loaded;
+        Ok(())
     }
 }
 
@@ -323,9 +569,9 @@ impl HnswPqIndex {
     }
 
     /// 搜索
-    pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<SearchResult> {
+    pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<ApiSearchResult> {
         if self.ids.is_empty() {
-            return Ok(SearchResult::new(vec![], vec![], 0.0));
+            return Ok(ApiSearchResult::new(vec![], vec![], 0.0));
         }
 
         let k = req.top_k;
@@ -353,13 +599,15 @@ impl HnswPqIndex {
             all_dists.push(f32::MAX);
         }
 
-        Ok(SearchResult::new(all_ids, all_dists, 0.0))
+        Ok(ApiSearchResult::new(all_ids, all_dists, 0.0))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
 
     #[test]
     fn test_hnsw_sq() {
@@ -403,5 +651,34 @@ mod tests {
 
         let result = index.search(&query, &req).unwrap();
         assert!(result.ids.len() >= 2);
+    }
+
+    #[test]
+    fn test_hnsw_sq_save_load() {
+        let dim = 16usize;
+        let n = 300usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.r#gen::<f32>()).collect();
+
+        let mut index = HnswSqIndex::new(dim);
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        let path = std::path::Path::new("/tmp/hnsw_sq_test.bin");
+        index.save(path).unwrap();
+
+        let loaded = HnswSqIndex::load(path, dim).unwrap();
+        let query = vectors[0..dim].to_vec();
+        let req = SearchRequest {
+            top_k: 5,
+            nprobe: 10,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let result = loaded.search(&query, &req).unwrap();
+        assert!(!result.ids.is_empty());
+
+        let _ = std::fs::remove_file(path);
     }
 }
