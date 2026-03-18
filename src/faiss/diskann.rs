@@ -12,6 +12,7 @@
 //! - Statistics API for monitoring
 
 use std::cmp::Ordering;
+use std::borrow::Cow;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
 #[cfg(feature = "parallel")]
@@ -447,6 +448,9 @@ impl DiskAnnIndex {
                 .extend_from_slice(&vectors[start..start + self.dim]);
             self.ids.push(i as i64);
         }
+        if self.config.metric_type == MetricType::Cosine {
+            self.normalize_vectors_in_place();
+        }
 
         self.next_id = n as i64;
 
@@ -467,7 +471,7 @@ impl DiskAnnIndex {
 
         // Build PQ codes if configured
         if self.dann_config.disk_pq_dims > 0 {
-            self.build_pq_codes(vectors)?;
+            self.build_pq_codes()?;
         }
 
         // Warm-up if configured
@@ -1027,9 +1031,9 @@ impl DiskAnnIndex {
     }
 
     /// Build PQ codes for compression
-    fn build_pq_codes(&mut self, vectors: &[f32]) -> Result<()> {
+    fn build_pq_codes(&mut self) -> Result<()> {
         let mut pq = PQCode::new(self.dann_config.disk_pq_dims);
-        pq.encode(vectors, self.dim);
+        pq.encode(&self.vectors, self.dim);
         if let Some(budget) = DiskAnnConfig::budget_bytes(self.dann_config.pq_code_budget_gb) {
             if pq.codes.len() > budget {
                 return Err(KnowhereError::InvalidArg(format!(
@@ -1041,6 +1045,43 @@ impl DiskAnnIndex {
         }
         self.pq_codes = Some(pq);
         Ok(())
+    }
+
+    #[inline]
+    fn normalize_slice_in_place(v: &mut [f32]) {
+        let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > f32::EPSILON {
+            for x in v.iter_mut() {
+                *x /= norm;
+            }
+        }
+    }
+
+    fn normalize_vectors_in_place(&mut self) {
+        if self.dim == 0 {
+            return;
+        }
+        let n = self.vectors.len() / self.dim;
+        for i in 0..n {
+            let start = i * self.dim;
+            let end = start + self.dim;
+            Self::normalize_slice_in_place(&mut self.vectors[start..end]);
+        }
+    }
+
+    fn normalize_query_if_needed<'a>(&self, query: &'a [f32]) -> Cow<'a, [f32]> {
+        if self.config.metric_type != MetricType::Cosine {
+            return Cow::Borrowed(query);
+        }
+        let norm = query.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm <= f32::EPSILON {
+            return Cow::Borrowed(query);
+        }
+        let mut normalized = query.to_vec();
+        for x in normalized.iter_mut() {
+            *x /= norm;
+        }
+        Cow::Owned(normalized)
     }
 
     /// Warm-up: cache frequently accessed nodes
@@ -1719,7 +1760,7 @@ impl DiskAnnIndex {
     fn compute_dist(&self, query: &[f32], idx: usize) -> f32 {
         match self.config.metric_type {
             MetricType::L2 => self.l2_sqr(query, idx),
-            MetricType::Ip => self.ip_distance(query, idx),
+            MetricType::Ip | MetricType::Cosine => self.ip_distance(query, idx),
             _ => self.l2_sqr(query, idx),
         }
     }
@@ -1733,7 +1774,7 @@ impl DiskAnnIndex {
     ) -> f32 {
         if let Some(v) = prefetched_vectors.and_then(|m| m.get(&idx)) {
             match self.config.metric_type {
-                MetricType::Ip => {
+                MetricType::Ip | MetricType::Cosine => {
                     let mut sum = 0.0f32;
                     for i in 0..self.dim {
                         sum += query[i] * v[i];
@@ -1752,8 +1793,14 @@ impl DiskAnnIndex {
 
         for i in 0..n {
             let start = i * self.dim;
-            self.vectors
-                .extend_from_slice(&vectors[start..start + self.dim]);
+            if self.config.metric_type == MetricType::Cosine {
+                let mut normalized = vectors[start..start + self.dim].to_vec();
+                Self::normalize_slice_in_place(&mut normalized);
+                self.vectors.extend_from_slice(&normalized);
+            } else {
+                self.vectors
+                    .extend_from_slice(&vectors[start..start + self.dim]);
+            }
 
             let id = ids.map(|ids| ids[i]).unwrap_or(self.next_id);
             self.next_id += 1;
@@ -1799,6 +1846,7 @@ impl DiskAnnIndex {
                         ids.push(results[i].0);
                         let dist = match self.config.metric_type {
                             MetricType::Ip => -results[i].1,
+                            MetricType::Cosine => results[i].1,
                             _ => results[i].1.sqrt(),
                         };
                         dists.push(dist);
@@ -1824,6 +1872,7 @@ impl DiskAnnIndex {
                         ids.push(results[i].0);
                         let dist = match self.config.metric_type {
                             MetricType::Ip => -results[i].1,
+                            MetricType::Cosine => results[i].1,
                             _ => results[i].1.sqrt(),
                         };
                         dists.push(dist);
@@ -1871,6 +1920,8 @@ impl DiskAnnIndex {
         filter: Option<&dyn Predicate>,
         bitset: Option<&crate::bitset::BitsetView>,
     ) -> Vec<(i64, f32)> {
+        let query = self.normalize_query_if_needed(query);
+        let query = &*query;
         let n = self.ids.len();
         if n == 0 {
             return vec![];
@@ -2066,6 +2117,8 @@ impl DiskAnnIndex {
         filter: Option<&dyn Predicate>,
         bitset: Option<&crate::bitset::BitsetView>,
     ) -> Vec<(i64, f32)> {
+        let query = self.normalize_query_if_needed(query);
+        let query = &*query;
         let mut accepted = Vec::new();
         for idx in 0..self.ids.len() {
             if !self.node_allowed(idx, filter, bitset) {
@@ -2554,6 +2607,22 @@ mod tests {
                         }
                         -dot
                     }
+                    MetricType::Cosine => {
+                        let mut dot = 0.0f32;
+                        let mut q_norm = 0.0f32;
+                        let mut v_norm = 0.0f32;
+                        for d in 0..dim {
+                            dot += q[d] * v[d];
+                            q_norm += q[d] * q[d];
+                            v_norm += v[d] * v[d];
+                        }
+                        let denom = q_norm.sqrt() * v_norm.sqrt();
+                        if denom > f32::EPSILON {
+                            -(dot / denom)
+                        } else {
+                            f32::MAX
+                        }
+                    }
                     _ => simd::l2_distance_sq(q, v),
                 };
                 scored.push((idx as i64, score));
@@ -2653,6 +2722,52 @@ mod tests {
         let gt = brute_force_ground_truth(&vectors, &queries, dim, MetricType::Ip, k);
         let recall = compute_recall(&results, &gt, k);
         assert!(recall >= 0.80, "recall@10 IP too low: {recall:.4}");
+    }
+
+    #[test]
+    fn test_diskann_recall_at_10_cosine() {
+        let dim = 16usize;
+        let n = 500usize;
+        let nq = 50usize;
+        let k = 10usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let queries: Vec<f32> = (0..nq * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::Cosine,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                max_degree: Some(64),
+                construction_l: Some(256),
+                search_list_size: Some(256),
+                ..Default::default()
+            },
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        index.train(&vectors).unwrap();
+
+        let req = SearchRequest {
+            top_k: k,
+            nprobe: 200,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let results = index.search(&queries, &req).unwrap();
+        let gt = brute_force_ground_truth(&vectors, &queries, dim, MetricType::Cosine, k);
+        let recall = compute_recall(&results, &gt, k);
+        assert!(recall >= 0.80, "recall@10 Cosine too low: {recall:.4}");
+        for &d in &results.distances {
+            if d != f32::MAX {
+                assert!(
+                    (-1.0001..=0.0001).contains(&d),
+                    "cosine distance should be near [-1, 0], got {d}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -4196,6 +4311,7 @@ impl Index for DiskAnnIndex {
                     if i < results.len() {
                         let dist = match self.config.metric_type {
                             MetricType::Ip => -results[i].1,
+                            MetricType::Cosine => results[i].1,
                             _ => results[i].1.sqrt(),
                         };
                         ids.push(results[i].0);
@@ -4221,6 +4337,7 @@ impl Index for DiskAnnIndex {
                     if i < results.len() {
                         let dist = match self.config.metric_type {
                             MetricType::Ip => -results[i].1,
+                            MetricType::Cosine => results[i].1,
                             _ => results[i].1.sqrt(),
                         };
                         ids.push(results[i].0);
