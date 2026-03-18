@@ -1993,6 +1993,12 @@ impl PQFlashIndex {
         if graph_size == 0 || l == 0 {
             return Vec::new();
         }
+        // Build PQ distance table if available (ADC lookup — 4-8x faster than exact distance)
+        let pq_table: Option<Vec<f32>> = if self.pq_code_size > 0 && !self.node_pq_codes.is_empty() {
+            self.pq_encoder.as_ref().map(|pq| pq.build_distance_table(query))
+        } else {
+            None
+        };
         let stride = self.flat_stride.max(1);
         let start_node = self
             .entry_points
@@ -2000,7 +2006,21 @@ impl PQFlashIndex {
             .copied()
             .unwrap_or(0) as usize;
         let start_node = start_node.min(graph_size - 1);
-        let start_dist = self.exact_distance(query, self.node_vector(start_node));
+        let start_dist = if let Some(ref table) = pq_table {
+            let code_start = start_node * self.pq_code_size;
+            let code_end = code_start + self.pq_code_size;
+            if code_end <= self.node_pq_codes.len() {
+                if let Some(ref pq) = self.pq_encoder {
+                    pq.compute_distance_with_table(table, &self.node_pq_codes[code_start..code_end])
+                } else {
+                    self.exact_distance(query, self.node_vector(start_node))
+                }
+            } else {
+                self.exact_distance(query, self.node_vector(start_node))
+            }
+        } else {
+            self.exact_distance(query, self.node_vector(start_node))
+        };
 
         let mut frontier: BinaryHeap<Candidate> = BinaryHeap::new();
         let mut visited: HashSet<u32> = HashSet::with_capacity(l.saturating_mul(2));
@@ -2025,7 +2045,22 @@ impl PQFlashIndex {
                 if nb as usize >= graph_size || !visited.insert(nb) {
                     continue;
                 }
-                let nb_dist = self.exact_distance(query, self.node_vector(nb as usize));
+                let nb_dist = if let Some(ref table) = pq_table {
+                    let code_start = nb as usize * self.pq_code_size;
+                    let code_end = code_start + self.pq_code_size;
+                    if code_end <= self.node_pq_codes.len() {
+                        if let Some(ref pq) = self.pq_encoder {
+                            pq.compute_distance_with_table(table, &self.node_pq_codes[code_start..code_end])
+                        } else {
+                            self.exact_distance(query, self.node_vector(nb as usize))
+                        }
+                    } else {
+                        // node not yet encoded (shouldn't happen, but safe fallback)
+                        self.exact_distance(query, self.node_vector(nb as usize))
+                    }
+                } else {
+                    self.exact_distance(query, self.node_vector(nb as usize))
+                };
                 frontier.push(Candidate {
                     node_id: nb,
                     score: nb_dist,
