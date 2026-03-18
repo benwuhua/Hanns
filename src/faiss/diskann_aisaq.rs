@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 
 const DEFAULT_PAGE_SIZE: usize = 4096;
 const DEFAULT_PQ_K: usize = 256;
-const PAGE_CACHE_SHARDS: usize = 16;
+const PAGE_CACHE_SHARDS: usize = 256;
 
 /// AISAQ configuration parameters.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -538,7 +538,6 @@ impl PageCache {
             let mut shard = self.shards[shard_idx].lock();
             let page = if let Some(arc) = shard.pages.get(&page_id) {
                 let page = std::sync::Arc::clone(arc);  // clone while borrow is live
-                drop(arc);  // release immutable borrow
                 shard.stats.page_hits += 1;
                 touch_lru(&mut shard.lru, page_id);
                 page
@@ -2409,6 +2408,14 @@ impl PQFlashIndex {
                 .copy_from_slice(&bytes[src_start..src_start + copy_len]);
         }
         Ok(out)
+    }
+
+    /// Pre-load all nodes into a lock-free Arc HashMap for zero-contention parallel search.
+    pub fn enable_node_cache(&mut self) -> Result<()> {
+        if self.loaded_node_cache.is_none() {
+            self.prime_loaded_node_cache()?;
+        }
+        Ok(())
     }
 
     fn prime_loaded_node_cache(&mut self) -> Result<()> {

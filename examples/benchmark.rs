@@ -382,6 +382,7 @@ fn benchmark_pqflash() {
     std::fs::create_dir_all(&tmp_dir).ok();
     let _ = build_idx.save(&tmp_dir).unwrap();
 
+    // Page cache path (warm) — 256-shard Mutex, no node pre-loading
     let disk_idx = PQFlashIndex::load(&tmp_dir).unwrap();
     println!("[Disk NoPQ] Warming up...");
     for _ in 0..10 {
@@ -390,7 +391,15 @@ fn benchmark_pqflash() {
     let start = Instant::now();
     let _ = disk_idx.search_batch(&queries_qps, TOP_K).unwrap();
     let disk_qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
-    println!("[Disk NoPQ] Cold→Hot QPS: {:.0} queries/sec", disk_qps);
+    println!("[Disk NoPQ] PageCache warm QPS: {:.0} queries/sec", disk_qps);
+
+    // lock-free HashMap path via enable_node_cache — Arc::clone per node, no Mutex contention
+    let mut disk_cached_idx = PQFlashIndex::load(&tmp_dir).unwrap();
+    disk_cached_idx.enable_node_cache().unwrap();
+    let start = Instant::now();
+    let _ = disk_cached_idx.search_batch(&queries_qps, TOP_K).unwrap();
+    let disk_cached_qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
+    println!("[Disk NoPQ] Cached (lock-free) QPS: {:.0} queries/sec", disk_cached_qps);
     std::fs::remove_dir_all(&tmp_dir).ok();
 
     // --- Diagnostic: PQ32 recall sweep ---
