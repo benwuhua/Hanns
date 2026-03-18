@@ -236,14 +236,10 @@ impl PqEncoder {
     }
 
     /// 使用距离表计算与编码向量的距离 (ADC)
-    #[inline]
+    #[inline(always)]
     pub fn compute_distance_with_table(&self, table: &[Vec<f32>], codes: &[u8]) -> f32 {
-        let mut sum = 0.0f32;
-        for m_idx in 0..self.m {
-            let c = codes[m_idx] as usize;
-            sum += table[m_idx][c];
-        }
-        sum
+        let m = self.m.min(codes.len()).min(table.len());
+        distance_with_table_simd(table, codes, m)
     }
 
     /// 计算 L2 距离 (平方)
@@ -252,6 +248,35 @@ impl PqEncoder {
         let d = simd::l2_distance(a, b);
         d * d
     }
+}
+
+#[inline(always)]
+fn distance_with_table_simd(table: &[Vec<f32>], codes: &[u8], m: usize) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        if let Some(first_row) = table.first() {
+            std::arch::x86_64::_mm_prefetch(
+                first_row.as_ptr() as *const i8,
+                std::arch::x86_64::_MM_HINT_T0,
+            );
+        }
+    }
+
+    let mut sum = 0.0f32;
+    let chunks4 = (m / 4) * 4;
+    let mut i = 0usize;
+    while i < chunks4 {
+        sum += table[i][codes[i] as usize];
+        sum += table[i + 1][codes[i + 1] as usize];
+        sum += table[i + 2][codes[i + 2] as usize];
+        sum += table[i + 3][codes[i + 3] as usize];
+        i += 4;
+    }
+    while i < m {
+        sum += table[i][codes[i] as usize];
+        i += 1;
+    }
+    sum
 }
 
 #[cfg(test)]
