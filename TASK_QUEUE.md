@@ -10,10 +10,13 @@
 
 #### P0 — 验证/诊断（立即）
 
-- [ ] **HNSW-VERIFY-001** [P0]: 独立重跑 near-equal-recall benchmark 验证 1.789x 结论
-  - 在 x86 上同时跑 strict-ef lane (ef=138) + near-equal-recall lane (Rust at recall≈0.95)
-  - 对比 native ef=138 (15,918 QPS, recall=0.95)
-  - Codex 独立完成的结论不能完全信任，必须 Claude 参与验证
+- [x] **HNSW-VERIFY-001** [P0]: ✅ 验证完成 — leadership CONFIRMED (超出预期)
+  - V2 sweep (BF16 + TOP_K=10, SIFT-1M, 8-thread x86):
+    - ef=60: recall=0.9500, QPS=33,061 ← Rust near-equal-recall point
+    - ef=138: recall=0.9856, QPS=17,066
+  - 对比 native BF16 ef=138: recall=0.9518, QPS=15,918
+  - **near-equal-recall ratio: 33,061 / 15,918 = 2.077x** (优于此前 1.789x 声明)
+  - 注: V1 sweep 无效（TOP_K=100 导致 10-recall-at-100 虚高 + Float 非 BF16）
 
 - [ ] **IVF-FLAT-001** [P0]: nprobe 参数扫描 → 确认 IVF-Flat 能过 0.95 recall gate
   - 当前 nprobe=8 → recall=0.535，太低

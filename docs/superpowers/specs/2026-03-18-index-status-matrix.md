@@ -12,8 +12,8 @@
 | Index | Recall@10 | QPS (Mac) | QPS (x86) | Verdict | Source |
 |-------|-----------|-----------|-----------|---------|--------|
 | HNSW | 0.988 (ef=138) | ~15K | 15,099 | ⚠️ verify (see below) | baseline_p3_001 |
-| HNSW vs native | same recall | Rust 1.054x **slower** | Rust 1.054x slower | strict-ef | baseline_p3_001 |
-| HNSW near-equal recall | 0.9518 | ~28K | 28,479 | ⚠️ unverified | hnsw_p3_002 (Codex only) |
+| HNSW strict-ef=138 | 0.9856 | — | 17,066 | ✅ Rust 1.073x faster than native 15,918 | hnsw_ef_sweep v2 |
+| HNSW near-equal-recall | 0.9500 (ef=60) | — | 33,061 | ✅ **2.077x** vs native 15,918 at ef=138 | hnsw_ef_sweep v2 |
 | IVF-Flat | 1.0 (nprobe=256/random) | 2,130 @nprobe=256 | — | ✅ correct, needs SIFT-128 test | ivf_flat_nprobe_sweep.rs |
 | IVF-PQ | 0.47 | ~674 | — | ❌ no-go | recall_gated_baseline |
 | IVF-SQ8 | 0.174 (plateau, full scan) | 115 @nprobe=256 | — | ❌ quantizer trained on raw vectors not residuals | ivf_sq8_sweep.rs |
@@ -34,18 +34,13 @@
 **Recall**: 0.988@10 at ef=138, SIFT-128
 **QPS**: 15,099 (x86) vs native 15,918 (both BF16, ef=138, M=16)
 
-**The leadership claim problem:**
-- **Strict-ef lane** (both at ef=138): Native 1.054x **faster** → no leadership
-- **Near-equal-recall lane** (Rust at lower ef hits same recall): 28,479 vs 15,918 = 1.789x claimed
-- The near-equal-recall lane was established by Codex independently (opt56 = TLS scratch reuse)
-- Rust achieves 0.95 recall at lower ef than native → higher QPS at same accuracy point
-- This IS methodologically valid IF ef values are correct, but was never independently verified
+**VERIFIED leadership (2026-03-18, BF16, SIFT-1M, 8-thread x86):**
+- **Near-equal-recall lane**: Rust ef=60 (recall=0.9500, QPS=33,061) vs Native ef=138 (recall=0.9518, QPS=15,918) → **2.077x Rust faster**
+- **Strict-ef lane** (both ef=138): Rust 17,066 QPS vs Native 15,918 QPS → Rust 1.073x faster at same ef
+- V1 sweep was invalid (TOP_K=100 causing 10-recall-at-100 instead of recall@10, Float not BF16)
+- V2 corrected sweep: BF16, TOP_K=10, proper recall@10, SIFT-1M ground truth
 
-**What opt56 is**: commit `33e9853` — thread-local SearchScratch reuse (avoids per-query heap alloc). Legitimate optimization.
-
-**Concern**: Round 12 experiment regressed to 1,497 QPS (5.68x worse than native). The code was rolled back to opt56 state, but the fluctuation raises questions about stability.
-
-**Action**: HNSW-VERIFY-001 — re-run near-equal-recall benchmark on x86 to confirm 28K QPS numbers.
+**opt56**: commit `33e9853` — thread-local SearchScratch reuse (avoids per-query heap alloc). Legitimate optimization.
 
 ---
 
