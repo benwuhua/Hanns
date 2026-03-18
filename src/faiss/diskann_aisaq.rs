@@ -735,7 +735,7 @@ pub struct PQFlashIndex {
     trained: bool,
     node_count: usize,
     storage: Option<DiskStorage>,
-    loaded_node_cache: Option<HashMap<u32, LoadedNode>>,
+    loaded_node_cache: Option<HashMap<u32, std::sync::Arc<LoadedNode>>>,
     scratch_pool: Mutex<Vec<AisaqScratch>>,
 }
 
@@ -1810,7 +1810,7 @@ impl PQFlashIndex {
         node_id: u32,
         access_mode: NodeAccessMode,
         io: &mut BeamSearchIO,
-    ) -> Result<LoadedNode> {
+    ) -> Result<std::sync::Arc<LoadedNode>> {
         if node_id as usize >= self.len() {
             return Err(KnowhereError::InvalidArg(format!(
                 "node_id {} out of bounds for {} nodes",
@@ -1836,7 +1836,7 @@ impl PQFlashIndex {
                 }
             }
         }
-        Ok(loaded)
+        Ok(std::sync::Arc::new(loaded))
     }
 
     #[cfg(not(all(feature = "async-io", target_os = "linux")))]
@@ -1845,7 +1845,7 @@ impl PQFlashIndex {
         node_id: u32,
         access_mode: NodeAccessMode,
         io: &mut BeamSearchIO,
-    ) -> Result<LoadedNode> {
+    ) -> Result<std::sync::Arc<LoadedNode>> {
         // Fallback to sync on non-Linux platforms
         self.load_node(node_id, access_mode, io)
     }
@@ -2334,7 +2334,7 @@ impl PQFlashIndex {
 
         let node_count = self.node_count;
         let mut vectors = Vec::with_capacity(node_count * self.dim);
-        let mut node_data: Vec<LoadedNode> = Vec::with_capacity(node_count);
+        let mut node_data: Vec<std::sync::Arc<LoadedNode>> = Vec::with_capacity(node_count);
         let mut io = self.io_template.clone();
         for node_id in 0..node_count {
             let loaded = self.load_node(node_id as u32, NodeAccessMode::None, &mut io)?;
@@ -2415,7 +2415,7 @@ impl PQFlashIndex {
                 .page_cache
                 .read(offset, self.flash_layout.node_bytes)?;
             let loaded = self.deserialize_node(node_id as u32, &page_read.bytes)?;
-            cache.insert(node_id as u32, loaded);
+            cache.insert(node_id as u32, std::sync::Arc::new(loaded));
         }
         self.loaded_node_cache = Some(cache);
         Ok(())
@@ -2426,7 +2426,7 @@ impl PQFlashIndex {
         node_id: u32,
         access_mode: NodeAccessMode,
         io: &mut BeamSearchIO,
-    ) -> Result<LoadedNode> {
+    ) -> Result<std::sync::Arc<LoadedNode>> {
         if node_id as usize >= self.len() {
             return Err(KnowhereError::InvalidArg(format!(
                 "node_id {} out of bounds for {} nodes",
@@ -2446,7 +2446,7 @@ impl PQFlashIndex {
                         }
                     }
                 }
-                return Ok(loaded.clone());
+                return Ok(std::sync::Arc::clone(loaded));
             }
         }
 
@@ -2473,7 +2473,7 @@ impl PQFlashIndex {
                     }
                 }
             }
-            return Ok(loaded);
+            return Ok(std::sync::Arc::new(loaded));
         }
 
         if let Some(node) = self.node_ref(node_id) {
@@ -2486,12 +2486,12 @@ impl PQFlashIndex {
                     }
                 }
             }
-            return Ok(LoadedNode {
+            return Ok(std::sync::Arc::new(LoadedNode {
                 id: node.id,
                 vector: node.vector.to_vec(),
                 neighbors: node.neighbors.to_vec(),
                 inline_pq: node.inline_pq.to_vec(),
-            });
+            }));
         }
         Err(KnowhereError::InvalidArg(format!(
             "node_id {} out of bounds for {} nodes",
