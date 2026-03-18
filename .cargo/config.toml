@@ -1,2 +1,8 @@
 [env]
 PYO3_USE_ABI3_FORWARD_COMPATIBILITY = "1"
+
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-cpu=native"]
+
+[target.'cfg(target_arch = "aarch64")']
+rustflags = ["-C", "target-cpu=native"]

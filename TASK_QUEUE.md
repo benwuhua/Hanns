@@ -130,8 +130,15 @@
   - `AisaqConfig::num_entry_points` 支持 1..64，默认 1
   - 调用时机: `train()` 末尾 + `add()` 末尾
 
-- [ ] **AISAQ-CAP-007** [P2]: x86 SIMD audit (AVX2/AVX-512 验证)
-  - 当前 x86 比 Mac 慢 2.25x；部分可能是 SIMD 未激活
+- [x] **AISAQ-CAP-007** [P2]: ✅ 完成 — x86 AVX-512 audit + target-cpu=native 优化
+  - CPU 支持: avx512f/bw/dq/vl/cd + avx512_bf16 + avx512_vnni + avx512_fp16 (全套)
+  - 当前 binary (无 native flag): ymm=212, zmm=160 — 已部分使用 AVX-512
+  - 加 RUSTFLAGS="-C target-cpu=native" 后:
+    - HNSW (10K, ef=50): 23,474 → **28,641 QPS (+22.0%)**
+    - PQFlash NoPQ 1M: 9,722 → 9,648 QPS (基本不变, 内存带宽瓶颈)
+    - PQFlash PQ32 1M: 7,673 → 8,002 QPS (+4.3%)
+  - 修复: `.cargo/config.toml` 已加 target-cpu=native for x86_64 + aarch64
+  - 新 x86 authority baseline: HNSW **28,641 QPS** (取代旧 23,474)
 
 - [ ] **AISAQ-CAP-008** [P2]: Async IO (io_uring) 冷 disk 路径
   - 现状: 冷盘 ~330 QPS；目标 async batch reads 达到 5K+ QPS
