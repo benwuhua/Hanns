@@ -9,7 +9,7 @@ use std::time::Instant;
 
 const DEFAULT_SIFT_PATH: &str = "/data/work/knowhere-rs-src/data/sift1m";
 const NUM_QUERIES: usize = 1000;
-const TOP_K: usize = 100;
+const TOP_K: usize = 10;
 const RECALL_K: usize = 10;
 const BATCH_SIZE: usize = 32;
 const NUM_THREADS: usize = 8;
@@ -110,7 +110,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
-        data_type: DataType::Float,
+        data_type: DataType::BFloat16,
         dim,
         params: IndexParams {
             m: Some(16),
@@ -121,7 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     };
 
-    println!("Building HNSW: M=16 efConstruction=100 data_type=Float threads={NUM_THREADS}");
+    println!("Building HNSW: M=16 efConstruction=100 data_type=BFloat16 threads={NUM_THREADS}");
     let mut index = HnswIndex::new(&config)?;
     index.train(base)?;
     index.add(base, None)?;
