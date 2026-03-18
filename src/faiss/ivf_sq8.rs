@@ -514,6 +514,114 @@ impl IvfSq8Index {
 
         Ok(())
     }
+
+    /// Load index
+    pub fn load(path: &std::path::Path, dim: usize) -> Result<Self> {
+        use std::fs::File;
+        use std::io::Read;
+
+        let mut file = File::open(path)?;
+
+        let mut magic = [0u8; 6];
+        file.read_exact(&mut magic)?;
+        if &magic != b"IVFSQ8" {
+            return Err(crate::api::KnowhereError::Codec(
+                "invalid IVFSQ8 magic".to_string(),
+            ));
+        }
+
+        let mut u32_buf = [0u8; 4];
+        file.read_exact(&mut u32_buf)?;
+        let stored_dim = u32::from_le_bytes(u32_buf) as usize;
+        if stored_dim != dim {
+            return Err(crate::api::KnowhereError::InvalidArg(format!(
+                "dim mismatch: load dim {} vs stored dim {}",
+                dim, stored_dim
+            )));
+        }
+
+        file.read_exact(&mut u32_buf)?;
+        let nlist = u32::from_le_bytes(u32_buf) as usize;
+
+        let mut centroids = vec![0.0f32; nlist * stored_dim];
+        for value in &mut centroids {
+            let mut buf = [0u8; 4];
+            file.read_exact(&mut buf)?;
+            *value = f32::from_le_bytes(buf);
+        }
+
+        let mut f32_buf = [0u8; 4];
+        file.read_exact(&mut f32_buf)?;
+        let min_val = f32::from_le_bytes(f32_buf);
+        file.read_exact(&mut f32_buf)?;
+        let max_val = f32::from_le_bytes(f32_buf);
+        file.read_exact(&mut f32_buf)?;
+        let scale = f32::from_le_bytes(f32_buf);
+
+        let mut u64_buf = [0u8; 8];
+        file.read_exact(&mut u64_buf)?;
+        let n = u64::from_le_bytes(u64_buf) as usize;
+
+        let mut ids = vec![0i64; n];
+        for id in &mut ids {
+            let mut ibuf = [0u8; 8];
+            file.read_exact(&mut ibuf)?;
+            *id = i64::from_le_bytes(ibuf);
+        }
+
+        let mut vectors = vec![0.0f32; n * stored_dim];
+        for value in &mut vectors {
+            let mut vbuf = [0u8; 4];
+            file.read_exact(&mut vbuf)?;
+            *value = f32::from_le_bytes(vbuf);
+        }
+
+        let mut quantizer = ScalarQuantizer::new(stored_dim, 8);
+        quantizer.min_val = min_val;
+        quantizer.max_val = max_val;
+        quantizer.scale = scale;
+        quantizer.offset = min_val;
+
+        let mut index = Self {
+            config: IndexConfig {
+                index_type: crate::api::IndexType::IvfSq8,
+                metric_type: crate::api::MetricType::L2,
+                dim: stored_dim,
+                data_type: crate::api::DataType::Float,
+                params: crate::api::IndexParams::ivf(nlist, 8),
+            },
+            dim: stored_dim,
+            nlist,
+            nprobe: 8,
+            centroids,
+            inverted_lists: HashMap::new(),
+            quantizer,
+            vectors,
+            ids,
+            next_id: 0,
+            trained: true,
+        };
+
+        index.next_id = index.ids.iter().copied().max().map_or(0, |m| m + 1);
+
+        // Rebuild inverted lists from vectors + ids.
+        let total = index.ids.len();
+        for i in 0..total {
+            let start = i * index.dim;
+            let vector = &index.vectors[start..start + index.dim];
+            let cluster = index.find_nearest_centroid(vector);
+            let residual = index.compute_residual(vector, cluster);
+            let quantized = index.quantizer.encode(&residual);
+            let id = index.ids[i];
+            index
+                .inverted_lists
+                .entry(cluster)
+                .or_default()
+                .push((id, quantized));
+        }
+
+        Ok(index)
+    }
 }
 
 /// Index trait implementation for IvfSq8Index
@@ -620,12 +728,11 @@ impl IndexTrait for IvfSq8Index {
             .map_err(|e| IndexError::Unsupported(e.to_string()))
     }
 
-    fn load(&mut self, _path: &str) -> std::result::Result<(), IndexError> {
-        // IVF-SQ8 uses save/load pair, but load is not implemented as instance method
-        // For now, return Unsupported
-        Err(IndexError::Unsupported(
-            "load not implemented for IVF-SQ8, use deserialize_from_memory".into(),
-        ))
+    fn load(&mut self, path: &str) -> std::result::Result<(), IndexError> {
+        let loaded = IvfSq8Index::load(std::path::Path::new(path), self.dim)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        *self = loaded;
+        Ok(())
     }
 
     fn has_raw_data(&self) -> bool {
@@ -703,6 +810,8 @@ impl AnnIterator for IvfSq8AnnIterator {
 mod tests {
     use super::*;
     use crate::api::{IndexParams, IndexType, MetricType, SearchRequest};
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
 
     #[test]
     fn test_ivf_sq8_new() {
@@ -717,6 +826,71 @@ mod tests {
         let index = IvfSq8Index::new(&config).unwrap();
         assert_eq!(index.ntotal(), 0);
         assert!(!index.trained);
+    }
+
+    #[test]
+    fn test_ivf_sq8_save_load() {
+        let dim = 32usize;
+        let n = 500usize;
+        let nlist = 16usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.r#gen::<f32>()).collect();
+
+        let config = IndexConfig {
+            index_type: IndexType::IvfSq8,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: IndexParams::ivf(nlist, 16),
+        };
+
+        let mut index = IvfSq8Index::new(&config).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        let path = std::path::Path::new("/tmp/ivf_sq8_test.bin");
+        let _ = std::fs::remove_file(path);
+        index.save(path).unwrap();
+
+        let loaded = IvfSq8Index::load(path, dim).unwrap();
+
+        let query = &vectors[0..dim];
+        let req = SearchRequest {
+            top_k: 10,
+            nprobe: 16,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let result = loaded.search(query, &req).unwrap();
+
+        let mut gt: Vec<(i64, f32)> = (0..n)
+            .map(|i| {
+                let v = &vectors[i * dim..(i + 1) * dim];
+                let d = v
+                    .iter()
+                    .zip(query.iter())
+                    .map(|(a, b)| {
+                        let diff = a - b;
+                        diff * diff
+                    })
+                    .sum::<f32>();
+                (i as i64, d)
+            })
+            .collect();
+        gt.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let gt_top10: Vec<i64> = gt.into_iter().take(10).map(|(id, _)| id).collect();
+
+        let hits = gt_top10
+            .iter()
+            .filter(|id| result.ids.iter().take(10).any(|rid| rid == *id))
+            .count();
+        let recall = hits as f64 / 10.0;
+        assert!(
+            recall >= 0.8,
+            "save/load ivf-sq8 recall@10 too low: {:.3}",
+            recall
+        );
     }
 
     #[test]
