@@ -4,6 +4,7 @@
 //! 内存优化索引，适合大规模数据
 
 use std::collections::HashMap;
+use std::cmp::Ordering;
 
 use crate::api::{IndexConfig, Result, SearchRequest, SearchResult};
 use crate::bitset::BitsetView;
@@ -15,6 +16,159 @@ use crate::index::{
 use crate::quantization::ScalarQuantizer;
 
 type IvfSq8InvertedListSnapshot = HashMap<usize, (Vec<i64>, Vec<u8>)>;
+
+#[derive(Debug, Clone, Copy)]
+struct SearchHit {
+    id: i64,
+    dist: f32,
+}
+
+impl PartialEq for SearchHit {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.dist.to_bits() == other.dist.to_bits()
+    }
+}
+
+impl Eq for SearchHit {}
+
+impl PartialOrd for SearchHit {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SearchHit {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.dist
+            .total_cmp(&other.dist)
+            .then_with(|| self.id.cmp(&other.id))
+    }
+}
+
+const INLINE_TOPK_CAP: usize = 32;
+const EMPTY_HIT: SearchHit = SearchHit {
+    id: 0,
+    dist: f32::INFINITY,
+};
+
+struct TopKAccumulator {
+    inline_hits: [SearchHit; INLINE_TOPK_CAP],
+    heap_hits: Vec<SearchHit>,
+    limit: usize,
+    len: usize,
+    visited: usize,
+}
+
+impl TopKAccumulator {
+    fn new(limit: usize) -> Self {
+        Self {
+            inline_hits: [EMPTY_HIT; INLINE_TOPK_CAP],
+            heap_hits: if limit > INLINE_TOPK_CAP {
+                Vec::with_capacity(limit)
+            } else {
+                Vec::new()
+            },
+            limit,
+            len: 0,
+            visited: 0,
+        }
+    }
+
+    #[inline]
+    fn push(&mut self, id: i64, dist: f32) {
+        if self.limit == 0 {
+            return;
+        }
+
+        let candidate = SearchHit { id, dist };
+        if self.limit <= INLINE_TOPK_CAP {
+            insert_sorted(
+                &mut self.inline_hits[..self.limit],
+                &mut self.len,
+                self.limit,
+                candidate,
+            );
+        } else {
+            insert_sorted_vec(&mut self.heap_hits, self.limit, candidate);
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.visited += other.visited;
+        for hit in other.hits() {
+            self.push(hit.id, hit.dist);
+        }
+    }
+
+    #[inline]
+    fn hits(&self) -> &[SearchHit] {
+        if self.limit <= INLINE_TOPK_CAP {
+            &self.inline_hits[..self.len]
+        } else {
+            &self.heap_hits
+        }
+    }
+
+    #[inline]
+    fn into_hits(self) -> Vec<SearchHit> {
+        if self.limit <= INLINE_TOPK_CAP {
+            self.inline_hits[..self.len].to_vec()
+        } else {
+            self.heap_hits
+        }
+    }
+}
+
+#[inline]
+fn insert_sorted(storage: &mut [SearchHit], len: &mut usize, limit: usize, candidate: SearchHit) {
+    debug_assert_eq!(storage.len(), limit);
+
+    if *len == limit && !is_better(candidate, storage[*len - 1]) {
+        return;
+    }
+
+    let search_len = (*len).min(limit);
+    let pos = storage[..search_len]
+        .binary_search_by(|hit| hit.cmp(&candidate))
+        .unwrap_or_else(|pos| pos);
+
+    if *len < limit {
+        for idx in (pos..*len).rev() {
+            storage[idx + 1] = storage[idx];
+        }
+        storage[pos] = candidate;
+        *len += 1;
+        return;
+    }
+
+    for idx in (pos..limit - 1).rev() {
+        storage[idx + 1] = storage[idx];
+    }
+    storage[pos] = candidate;
+}
+
+#[inline]
+fn insert_sorted_vec(storage: &mut Vec<SearchHit>, limit: usize, candidate: SearchHit) {
+    if storage.len() == limit && !is_better(candidate, storage[storage.len() - 1]) {
+        return;
+    }
+
+    let pos = storage
+        .binary_search_by(|hit| hit.cmp(&candidate))
+        .unwrap_or_else(|pos| pos);
+
+    if storage.len() < limit {
+        storage.insert(pos, candidate);
+    } else if pos < limit {
+        storage.insert(pos, candidate);
+        storage.truncate(limit);
+    }
+}
+
+#[inline]
+fn is_better(candidate: SearchHit, existing: SearchHit) -> bool {
+    candidate < existing
+}
 
 /// IVF-SQ8 Index
 #[allow(dead_code)]
@@ -167,100 +321,71 @@ impl IvfSq8Index {
         let k = req.top_k;
         let nprobe = req.nprobe.min(self.nlist);
 
+        if k == 0 {
+            return Ok(SearchResult::new(Vec::new(), Vec::new(), 0.0));
+        }
+
         let mut all_ids = vec![-1; n_queries * k];
         let mut all_dists = vec![f32::MAX; n_queries * k];
 
-        #[cfg(feature = "parallel")]
-        {
-            use rayon::prelude::*;
+        for q_idx in 0..n_queries {
+            let q_start = q_idx * self.dim;
+            let query_vec = &query[q_start..q_start + self.dim];
+            let clusters = self.search_clusters(query_vec, nprobe);
 
-            let q_indices: Vec<usize> = (0..n_queries).collect();
-
-            let results: Vec<Vec<(i64, f32)>> = q_indices
-                .par_iter()
-                .map(|&q_idx| {
-                    let q_start = q_idx * self.dim;
-                    let query_vec = &query[q_start..q_start + self.dim];
-
-                    let clusters = self.search_clusters(query_vec, nprobe);
-
-                let mut candidates: Vec<(i64, f32)> = Vec::new();
-
-                for &cluster_id in &clusters {
-                    if let Some((ids, codes)) = self.inverted_lists.get(&cluster_id) {
-                        let centroid_vec =
-                            &self.centroids[cluster_id * self.dim..(cluster_id + 1) * self.dim];
-                        let q_residual: Vec<f32> = query_vec
-                            .iter()
-                            .zip(centroid_vec.iter())
-                            .map(|(a, b)| a - b)
-                            .collect();
-
-                        let n = ids.len().min(codes.len() / self.dim);
-                        for i in 0..n {
-                            let code = &codes[i * self.dim..(i + 1) * self.dim];
-                            let dist = self.quantizer.sq_l2_asymmetric(&q_residual, code);
-                            candidates.push((ids[i], dist));
-                        }
-                    }
+            #[cfg(feature = "parallel")]
+            let mut merged = {
+                use rayon::prelude::*;
+                let partials: Vec<TopKAccumulator> = clusters
+                    .par_iter()
+                    .map(|&cluster_id| self.scan_cluster(cluster_id, query_vec, k))
+                    .collect();
+                let mut merged = TopKAccumulator::new(k);
+                for partial in partials {
+                    merged.merge(partial);
                 }
+                merged
+            };
 
-                    candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-                    candidates.truncate(k);
-                    candidates
-                })
-                .collect();
-
-            for (q_idx, res) in results.into_iter().enumerate() {
-                let offset = q_idx * k;
-                for (i, item) in res.into_iter().enumerate().take(k) {
-                    all_ids[offset + i] = item.0;
-                    all_dists[offset + i] = item.1;
+            #[cfg(not(feature = "parallel"))]
+            let mut merged = {
+                let mut merged = TopKAccumulator::new(k);
+                for cluster_id in clusters {
+                    merged.merge(self.scan_cluster(cluster_id, query_vec, k));
                 }
-            }
-        }
+                merged
+            };
 
-        #[cfg(not(feature = "parallel"))]
-        {
-            for q_idx in 0..n_queries {
-                let q_start = q_idx * self.dim;
-                let query_vec = &query[q_start..q_start + self.dim];
-
-                let clusters = self.search_clusters(query_vec, nprobe);
-
-                let mut candidates: Vec<(i64, f32)> = Vec::new();
-
-                for &cluster_id in &clusters {
-                    if let Some((ids, codes)) = self.inverted_lists.get(&cluster_id) {
-                        let centroid_vec =
-                            &self.centroids[cluster_id * self.dim..(cluster_id + 1) * self.dim];
-                        let q_residual: Vec<f32> = query_vec
-                            .iter()
-                            .zip(centroid_vec.iter())
-                            .map(|(a, b)| a - b)
-                            .collect();
-
-                        let n = ids.len().min(codes.len() / self.dim);
-                        for i in 0..n {
-                            let code = &codes[i * self.dim..(i + 1) * self.dim];
-                            let dist = self.quantizer.sq_l2_asymmetric(&q_residual, code);
-                            candidates.push((ids[i], dist));
-                        }
-                    }
-                }
-
-                candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-                candidates.truncate(k);
-
-                let offset = q_idx * k;
-                for (i, item) in candidates.into_iter().enumerate().take(k) {
-                    all_ids[offset + i] = item.0;
-                    all_dists[offset + i] = item.1;
-                }
+            let hits = merged.into_hits();
+            let offset = q_idx * k;
+            for (i, hit) in hits.into_iter().enumerate().take(k) {
+                all_ids[offset + i] = hit.id;
+                all_dists[offset + i] = hit.dist;
             }
         }
 
         Ok(SearchResult::new(all_ids, all_dists, 0.0))
+    }
+
+    fn scan_cluster(&self, cluster_id: usize, query_vec: &[f32], top_k: usize) -> TopKAccumulator {
+        let mut acc = TopKAccumulator::new(top_k);
+        if let Some((ids, codes)) = self.inverted_lists.get(&cluster_id) {
+            let centroid_vec = &self.centroids[cluster_id * self.dim..(cluster_id + 1) * self.dim];
+            let q_residual: Vec<f32> = query_vec
+                .iter()
+                .zip(centroid_vec.iter())
+                .map(|(a, b)| a - b)
+                .collect();
+
+            let n = ids.len().min(codes.len() / self.dim);
+            acc.visited = n;
+            for i in 0..n {
+                let code = &codes[i * self.dim..(i + 1) * self.dim];
+                let dist = self.quantizer.sq_l2_asymmetric(&q_residual, code);
+                acc.push(ids[i], dist);
+            }
+        }
+        acc
     }
 
     /// Find nearest centroid
