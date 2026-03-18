@@ -419,6 +419,80 @@ fn benchmark_pqflash() {
     }
 }
 
+fn benchmark_diskann_100k() {
+    const NUM_VECTORS: usize = 100_000;
+    const DIM: usize = 128;
+    const TOP_K: usize = 10;
+    const NUM_QPS_QUERIES: usize = 1_000;
+
+    println!("\n=== DiskANN 100K Benchmark ===");
+    let mut rng = StdRng::seed_from_u64(123);
+    let vectors: Vec<f32> = (0..NUM_VECTORS * DIM).map(|_| rng.r#gen::<f32>()).collect();
+    let queries: Vec<f32> = (0..NUM_QPS_QUERIES * DIM).map(|_| rng.r#gen::<f32>()).collect();
+
+    let config = IndexConfig {
+        index_type: IndexType::DiskAnn,
+        metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
+        dim: DIM,
+        params: IndexParams {
+            max_degree: Some(48),
+            search_list_size: Some(128),
+            construction_l: Some(128),
+            num_threads: Some(rayon::current_num_threads()),
+            ..IndexParams::default()
+        },
+    };
+    let mut index = DiskAnnIndex::new(&config).unwrap();
+
+    let start = Instant::now();
+    index.train(&vectors).unwrap();
+    println!("Build 100K vectors: {:.1}s", start.elapsed().as_secs_f64());
+
+    let req = SearchRequest {
+        top_k: TOP_K,
+        nprobe: 128,
+        filter: None,
+        params: None,
+        radius: None,
+    };
+    let start = Instant::now();
+    let _ = index.search(&queries, &req).unwrap();
+    let qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
+    println!("Search QPS: {:.0}", qps);
+}
+
+fn benchmark_pqflash_100k() {
+    const NUM_VECTORS: usize = 100_000;
+    const DIM: usize = 128;
+    const TOP_K: usize = 10;
+    const NUM_QPS_QUERIES: usize = 1_000;
+
+    println!("\n=== PQFlash 100K Benchmark ===");
+    let mut rng = StdRng::seed_from_u64(123);
+    let vectors: Vec<f32> = (0..NUM_VECTORS * DIM).map(|_| rng.r#gen::<f32>()).collect();
+    let queries: Vec<f32> = (0..NUM_QPS_QUERIES * DIM).map(|_| rng.r#gen::<f32>()).collect();
+
+    let config = AisaqConfig {
+        disk_pq_dims: 32,
+        rerank_expand_pct: 300,
+        search_list_size: 200,
+        cache_all_on_load: true,
+        ..AisaqConfig::default()
+    };
+    let mut index = PQFlashIndex::new(config, MetricType::L2, DIM).unwrap();
+
+    let start = Instant::now();
+    index.train(&vectors).unwrap();
+    index.add(&vectors).unwrap();
+    println!("[PQ32] Build 100K vectors: {:.1}s", start.elapsed().as_secs_f64());
+
+    let start = Instant::now();
+    let _ = index.search_batch(&queries, TOP_K).unwrap();
+    let qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
+    println!("[PQ32] Search QPS: {:.0}", qps);
+}
+
 fn main() {
     println!("KnowHere RS Benchmark");
     println!("=====================");
@@ -432,6 +506,8 @@ fn main() {
     benchmark_diskann_index();
     benchmark_diskann();
     benchmark_pqflash();
+    benchmark_diskann_100k();
+    benchmark_pqflash_100k();
 
     println!("\n✅ Benchmark complete!");
 }

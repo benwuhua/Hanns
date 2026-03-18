@@ -720,6 +720,8 @@ pub struct PQFlashIndex {
     node_neighbor_ids: Vec<u32>,
     node_neighbor_counts: Vec<u32>,
     node_pq_codes: Vec<u8>,
+    /// Flat PQ codes loaded in RAM for disk-backed search fast coarse scoring.
+    disk_pq_codes: Vec<u8>,
     flat_stride: usize,
     pq_encoder: Option<PqEncoder>,
     pq_code_size: usize,
@@ -754,6 +756,7 @@ impl PQFlashIndex {
             node_neighbor_ids: Vec::new(),
             node_neighbor_counts: Vec::new(),
             node_pq_codes: Vec::new(),
+            disk_pq_codes: Vec::new(),
             flat_stride: 0,
             pq_encoder: None,
             pq_code_size: 0,
@@ -996,6 +999,7 @@ impl PQFlashIndex {
             node_neighbor_ids: Vec::new(),
             node_neighbor_counts: Vec::new(),
             node_pq_codes: Vec::new(),
+            disk_pq_codes: Vec::new(),
             flat_stride: 0,
             pq_encoder: metadata.pq_encoder.map(SerializedPqEncoder::into_encoder),
             pq_code_size: metadata.pq_code_size,
@@ -1012,6 +1016,9 @@ impl PQFlashIndex {
         };
         if index.config.cache_all_on_load {
             index.prime_loaded_node_cache()?;
+        }
+        if index.pq_code_size > 0 {
+            index.disk_pq_codes = index.load_disk_pq_codes()?;
         }
         Ok(index)
     }
@@ -1816,6 +1823,17 @@ impl PQFlashIndex {
         pq_table: Option<&[f32]>,
         io: &mut BeamSearchIO,
     ) -> Result<f32> {
+        if let (Some(encoder), Some(table)) = (&self.pq_encoder, pq_table) {
+            let pq_size = self.pq_code_size.max(1);
+            let start = node_id as usize * pq_size;
+            if start + pq_size <= self.disk_pq_codes.len() {
+                io.record_pq_access(node_id, pq_size, 0);
+                return Ok(encoder.compute_distance_with_table(
+                    table,
+                    &self.disk_pq_codes[start..start + pq_size],
+                ));
+            }
+        }
         let node = self.load_node(node_id, NodeAccessMode::Pq, io)?;
         if let (Some(encoder), Some(table)) = (&self.pq_encoder, pq_table) {
             let pq = &node.inline_pq;
@@ -2156,7 +2174,42 @@ impl PQFlashIndex {
         self.vectors = vectors;
         self.storage = None;
         self.loaded_node_cache = None;
+        self.disk_pq_codes.clear();
         Ok(())
+    }
+
+    fn load_disk_pq_codes(&self) -> Result<Vec<u8>> {
+        let Some(storage) = &self.storage else {
+            return Ok(Vec::new());
+        };
+        if self.pq_code_size == 0 || self.node_count == 0 {
+            return Ok(Vec::new());
+        }
+
+        let bytes = fs::read(storage.file_group.data_path())?;
+        let expected = self.node_count.saturating_mul(self.flash_layout.node_bytes);
+        if bytes.len() < expected {
+            return Err(KnowhereError::Codec(format!(
+                "node file too small for pq extraction: got {} expected at least {}",
+                bytes.len(),
+                expected
+            )));
+        }
+
+        let mut out = vec![0u8; self.node_count * self.pq_code_size];
+        let inline_offset = self.flash_layout.vector_bytes + self.flash_layout.neighbor_bytes;
+        let copy_len = self.pq_code_size.min(self.flash_layout.inline_pq_bytes);
+        for i in 0..self.node_count {
+            if copy_len == 0 {
+                continue;
+            }
+            let node_start = i * self.flash_layout.node_bytes;
+            let src_start = node_start + inline_offset;
+            let dst_start = i * self.pq_code_size;
+            out[dst_start..dst_start + copy_len]
+                .copy_from_slice(&bytes[src_start..src_start + copy_len]);
+        }
+        Ok(out)
     }
 
     fn prime_loaded_node_cache(&mut self) -> Result<()> {
