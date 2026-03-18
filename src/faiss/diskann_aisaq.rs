@@ -19,7 +19,9 @@ use std::os::fd::AsRawFd;
 
 use crate::api::{IndexConfig, KnowhereError, MetricType, Result, SearchResult};
 use crate::bitset::BitsetView;
+use crate::dataset::Dataset;
 use crate::faiss::pq::PqEncoder;
+use crate::index::{Index, IndexError};
 use crate::simd;
 #[cfg(all(feature = "async-io", target_os = "linux"))]
 use io_uring::{opcode, types, IoUring};
@@ -1934,6 +1936,86 @@ fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {
         return 0.0;
     }
     dot(left, right) / (left_norm * right_norm)
+}
+
+impl Index for PQFlashIndex {
+    fn index_type(&self) -> &str {
+        "DiskANN-AISAQ"
+    }
+
+    fn dim(&self) -> usize {
+        self.dim
+    }
+
+    fn count(&self) -> usize {
+        self.len()
+    }
+
+    fn is_trained(&self) -> bool {
+        self.trained
+    }
+
+    fn train(&mut self, dataset: &Dataset) -> std::result::Result<(), IndexError> {
+        let vectors = dataset.vectors();
+        PQFlashIndex::train(self, vectors).map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn add(&mut self, dataset: &Dataset) -> std::result::Result<usize, IndexError> {
+        let vectors = dataset.vectors();
+        let count_before = self.len();
+        PQFlashIndex::add(self, vectors).map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        Ok(self.len().saturating_sub(count_before))
+    }
+
+    fn search(
+        &self,
+        query: &Dataset,
+        top_k: usize,
+    ) -> std::result::Result<crate::index::SearchResult, IndexError> {
+        let queries = query.vectors();
+        let n_queries = queries.len() / self.dim;
+        let mut all_ids = Vec::with_capacity(n_queries * top_k);
+        let mut all_dists = Vec::with_capacity(n_queries * top_k);
+        for i in 0..n_queries {
+            let q = &queries[i * self.dim..(i + 1) * self.dim];
+            let result =
+                PQFlashIndex::search(self, q, top_k).map_err(|e| IndexError::Unsupported(e.to_string()))?;
+            all_ids.extend_from_slice(&result.ids);
+            all_dists.extend_from_slice(&result.distances);
+        }
+        Ok(crate::index::SearchResult::new(all_ids, all_dists, 0.0))
+    }
+
+    fn search_with_bitset(
+        &self,
+        query: &Dataset,
+        top_k: usize,
+        bitset: &BitsetView,
+    ) -> std::result::Result<crate::index::SearchResult, IndexError> {
+        let queries = query.vectors();
+        let n_queries = queries.len() / self.dim;
+        let mut all_ids = Vec::with_capacity(n_queries * top_k);
+        let mut all_dists = Vec::with_capacity(n_queries * top_k);
+        for i in 0..n_queries {
+            let q = &queries[i * self.dim..(i + 1) * self.dim];
+            let result = PQFlashIndex::search_with_bitset(self, q, top_k, bitset)
+                .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+            all_ids.extend_from_slice(&result.ids);
+            all_dists.extend_from_slice(&result.distances);
+        }
+        Ok(crate::index::SearchResult::new(all_ids, all_dists, 0.0))
+    }
+
+    fn save(&self, path: &str) -> std::result::Result<(), IndexError> {
+        PQFlashIndex::save(self, path)
+            .map(|_| ())
+            .map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    fn load(&mut self, path: &str) -> std::result::Result<(), IndexError> {
+        *self = PQFlashIndex::load(path).map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

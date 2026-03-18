@@ -14,6 +14,7 @@
 use std::cmp::Ordering;
 use std::borrow::Cow;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+use parking_lot::Mutex;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -383,6 +384,8 @@ pub struct DiskAnnIndex {
     flash_cached_neighbors: Option<HashMap<usize, Box<[i64]>>>,
     /// Budgeted runtime cache for flash mmap mode (node idx -> decoded vector).
     flash_cached_vectors: Option<HashMap<usize, Box<[f32]>>>,
+    /// Reusable per-query scratch buffers to reduce allocation churn.
+    scratch_pool: Mutex<Vec<SearchScratch>>,
 }
 
 impl DiskAnnIndex {
@@ -418,6 +421,7 @@ impl DiskAnnIndex {
             flash_sidecar_mmap: None,
             flash_cached_neighbors: None,
             flash_cached_vectors: None,
+            scratch_pool: Mutex::new(Vec::new()),
         })
     }
 
@@ -1940,10 +1944,6 @@ impl DiskAnnIndex {
         } else {
             L
         };
-        let mut visited: HashSet<usize> = HashSet::with_capacity(effective_l.saturating_mul(2));
-        let mut candidates: BinaryHeap<ReverseOrderedFloat> = BinaryHeap::new();
-        let mut explored: Vec<(f32, usize)> = Vec::new();
-        let mut accepted: Vec<(f32, usize)> = Vec::new();
         let mut prefetched_vectors = if self.flash_prefetch_enabled() {
             Some(HashMap::new())
         } else {
@@ -1963,22 +1963,33 @@ impl DiskAnnIndex {
         if starts.is_empty() {
             return Vec::new();
         }
+
+        let mut scratch = {
+            let mut pool = self.scratch_pool.lock();
+            pool.pop()
+                .unwrap_or_else(|| SearchScratch::new(effective_l.saturating_mul(2)))
+        };
+        scratch.reset();
+
         for (start, dist) in &starts {
-            candidates.push(ReverseOrderedFloat(*dist, *start));
-            visited.insert(*start);
+            scratch
+                .candidates
+                .push(ReverseOrderedFloat(*dist, *start));
+            scratch.visited.insert(*start);
         }
 
         // Beam search loop
-        while !candidates.is_empty() && explored.len() < effective_l {
-            let ReverseOrderedFloat(dist, idx) = candidates.pop().unwrap();
-            explored.push((dist, idx));
+        while !scratch.candidates.is_empty() && scratch.explored.len() < effective_l {
+            let ReverseOrderedFloat(dist, idx) = scratch.candidates.pop().unwrap();
+            scratch.explored.push((dist, idx));
             if self.node_allowed(idx, filter, bitset) {
-                accepted.push((dist, idx));
+                scratch.accepted.push((dist, idx));
             }
 
             // Early termination: stop if frontier cannot improve accepted set.
-            if accepted.len() >= L {
-                let worst_accepted = accepted
+            if scratch.accepted.len() >= L {
+                let worst_accepted = scratch
+                    .accepted
                     .iter()
                     .map(|(d, _)| *d)
                     .fold(f32::NEG_INFINITY, f32::max);
@@ -2001,7 +2012,7 @@ impl DiskAnnIndex {
                 let mut nbr_dists: Vec<(f32, usize)> = Vec::new();
 
                 for n_idx in neighbor_ids {
-                    if n_idx < n && !visited.contains(&n_idx) {
+                    if n_idx < n && !scratch.visited.contains(&n_idx) {
                         // Use PQ distance if available and node is not cached
                         let d = if let Some(pq_codes) = &self.pq_codes {
                             if !self.cached_nodes.contains(&n_idx) {
@@ -2056,15 +2067,18 @@ impl DiskAnnIndex {
                 reranked.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
                 for (exact_d, n_idx) in reranked.into_iter().take(beamwidth) {
-                    visited.insert(n_idx);
-                    candidates.push(ReverseOrderedFloat(exact_d, n_idx));
+                    scratch.visited.insert(n_idx);
+                    scratch
+                        .candidates
+                        .push(ReverseOrderedFloat(exact_d, n_idx));
                 }
             }
         }
 
         // If filtering shrinks candidate pool too much, fill with exact scan.
-        if accepted.len() < L {
-            let mut accepted_set: HashSet<usize> = accepted.iter().map(|(_, idx)| *idx).collect();
+        if scratch.accepted.len() < L {
+            let mut accepted_set: HashSet<usize> =
+                scratch.accepted.iter().map(|(_, idx)| *idx).collect();
             let mut fallback: Vec<(f32, usize)> = Vec::new();
             for idx in 0..n {
                 if accepted_set.contains(&idx) || !self.node_allowed(idx, filter, bitset) {
@@ -2074,21 +2088,29 @@ impl DiskAnnIndex {
             }
             fallback.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
             for (dist, idx) in fallback {
-                accepted.push((dist, idx));
+                scratch.accepted.push((dist, idx));
                 accepted_set.insert(idx);
-                if accepted.len() >= L {
+                if scratch.accepted.len() >= L {
                     break;
                 }
             }
         }
 
-        accepted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-        accepted.truncate(L);
+        scratch
+            .accepted
+            .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+        scratch.accepted.truncate(L);
 
-        accepted
-            .into_iter()
+        let output = scratch
+            .accepted
+            .iter()
+            .copied()
             .map(|(d, idx)| (self.ids[idx], d))
-            .collect()
+            .collect();
+
+        let mut pool = self.scratch_pool.lock();
+        pool.push(scratch);
+        output
     }
 
     fn should_force_exact_filter_scan(&self, bitset: Option<&crate::bitset::BitsetView>) -> bool {
@@ -2504,6 +2526,31 @@ impl DiskAnnIndex {
 /// Helper struct for priority queue (min-heap)
 #[derive(Debug)]
 struct ReverseOrderedFloat(f32, usize);
+
+struct SearchScratch {
+    visited: HashSet<usize>,
+    candidates: BinaryHeap<ReverseOrderedFloat>,
+    explored: Vec<(f32, usize)>,
+    accepted: Vec<(f32, usize)>,
+}
+
+impl SearchScratch {
+    fn new(capacity: usize) -> Self {
+        Self {
+            visited: HashSet::with_capacity(capacity),
+            candidates: BinaryHeap::with_capacity(capacity),
+            explored: Vec::with_capacity(capacity),
+            accepted: Vec::with_capacity(capacity),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.visited.clear();
+        self.candidates.clear();
+        self.explored.clear();
+        self.accepted.clear();
+    }
+}
 
 impl PartialEq for ReverseOrderedFloat {
     fn eq(&self, other: &Self) -> bool {
