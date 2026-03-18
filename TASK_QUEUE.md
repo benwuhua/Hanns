@@ -37,8 +37,9 @@
   - 证据: `examples/ivf_sq8_sweep.rs`
   - 修复: 计算完 k-means 后再用所有 residuals 训练 quantizer (P2 fix)
 - [x] **IVF-OPQ-001** [P1]: ✅ done → no-go
-  - recall@full_scan=0.167 (plateau), same quantization accuracy issue as IVF-SQ8
-  - Script: `examples/ivf_opq_sweep.rs`
+  - recall@full_scan=0.167 random data (plateau); 0.475 clustered data (plateau)
+  - Same ADC quantization ceiling as IVF-PQ — constant across nprobe, not a code bug
+  - Script: `examples/ivf_opq_sweep.rs`, `examples/ivf_opq_clustered_diag.rs`
 - [x] **SCANN-001** [P1]: ✅ done → no-go
   - max recall@10: 0.699 at reorder_k=160 (below 0.95 gate), QPS=154
   - recall increases with reorder_k but far from gate at practical settings
@@ -91,10 +92,15 @@
   - `range_search_raw()` + Index trait `range_search()` 已实现
   - 提交: feat(aisaq): implement range_search for PQFlashIndex (5c89bc4)
 
-- [ ] **AISAQ-CAP-005** [P2]: Incremental insert + lazy delete + consolidation
-  - 参考: Rust DiskANN `add()` / `consolidate_vector()`
+- [x] **AISAQ-CAP-005** [P2]: ✅ 完成 — lazy delete + consolidation
+  - `soft_delete(external_id)`, `consolidate()`, `deleted_count()`, `is_deleted()`
+  - `node_allowed()` 过滤已删除节点；save/load 持久化 deleted_ids（向前兼容）
+  - 提交: feat(aisaq) 370d420
 
-- [ ] **AISAQ-CAP-006** [P2]: Multi-entry-point medoid seeding
+- [x] **AISAQ-CAP-006** [P2]: ✅ 已实装 (pre-existing)
+  - `refresh_entry_points()` 实现了 medoid seed + farthest-first diversity
+  - `AisaqConfig::num_entry_points` 支持 1..64，默认 1
+  - 调用时机: `train()` 末尾 + `add()` 末尾
 
 - [ ] **AISAQ-CAP-007** [P2]: x86 SIMD audit (AVX2/AVX-512 验证)
   - 当前 x86 比 Mac 慢 2.25x；部分可能是 SIMD 未激活

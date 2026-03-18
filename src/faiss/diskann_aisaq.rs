@@ -891,6 +891,7 @@ impl PQFlashIndex {
         self.node_neighbor_counts = new_neighbor_counts;
         self.node_neighbor_ids = new_neighbor_ids;
         self.node_pq_codes = new_node_pq_codes;
+        self.disk_pq_codes.clear(); // stale after ID remapping; reload if needed
         self.entry_points = new_entry_points;
         self.node_count = kept;
         self.deleted_ids.clear();
