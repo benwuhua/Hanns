@@ -8,7 +8,7 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
@@ -738,6 +738,7 @@ pub struct PQFlashIndex {
     node_count: usize,
     storage: Option<DiskStorage>,
     loaded_node_cache: Option<HashMap<u32, std::sync::Arc<LoadedNode>>>,
+    deleted_ids: HashSet<usize>,
     scratch_pool: Mutex<Vec<AisaqScratch>>,
 }
 
@@ -773,8 +774,127 @@ impl PQFlashIndex {
             node_count: 0,
             storage: None,
             loaded_node_cache: None,
+            deleted_ids: HashSet::new(),
             scratch_pool: Mutex::new(Vec::new()),
         })
+    }
+
+    /// Soft-delete node by external id. Returns true if found and marked.
+    pub fn soft_delete(&mut self, external_id: i64) -> bool {
+        if self.storage.is_some() && self.node_ids.is_empty() {
+            let _ = self.materialize_storage();
+        }
+        if let Some(row_id) = self.node_ids.iter().position(|&id| id == external_id) {
+            self.deleted_ids.insert(row_id)
+        } else {
+            false
+        }
+    }
+
+    pub fn is_deleted(&self, external_id: i64) -> bool {
+        if let Some(row_id) = self.node_ids.iter().position(|&id| id == external_id) {
+            self.deleted_ids.contains(&row_id)
+        } else {
+            false
+        }
+    }
+
+    pub fn deleted_count(&self) -> usize {
+        self.deleted_ids.len()
+    }
+
+    /// Physically remove deleted rows and remap flat graph.
+    pub fn consolidate(&mut self) -> usize {
+        if self.deleted_ids.is_empty() {
+            return 0;
+        }
+        if self.storage.is_some() && self.node_ids.is_empty() && self.materialize_storage().is_err() {
+            return 0;
+        }
+
+        let old_n = self.node_ids.len();
+        if old_n == 0 {
+            self.deleted_ids.clear();
+            return 0;
+        }
+        let stride = self.flat_stride.max(1);
+        let pq_size = self.pq_code_size.max(1);
+
+        let mut old_to_new: Vec<Option<u32>> = vec![None; old_n];
+        let mut kept = 0usize;
+        for (old, slot) in old_to_new.iter_mut().enumerate().take(old_n) {
+            if !self.deleted_ids.contains(&old) {
+                *slot = Some(kept as u32);
+                kept += 1;
+            }
+        }
+        let removed = old_n.saturating_sub(kept);
+
+        let mut new_vectors = Vec::with_capacity(kept * self.dim);
+        let mut new_node_ids = Vec::with_capacity(kept);
+        let mut new_neighbor_counts = vec![0u32; kept];
+        let mut new_neighbor_ids = vec![0u32; kept * stride];
+        let mut new_node_pq_codes = vec![0u8; kept * pq_size];
+
+        for old_idx in 0..old_n {
+            let Some(new_idx_u32) = old_to_new[old_idx] else {
+                continue;
+            };
+            let new_idx = new_idx_u32 as usize;
+
+            new_node_ids.push(self.node_ids[old_idx]);
+            new_vectors.extend_from_slice(&self.vectors[old_idx * self.dim..(old_idx + 1) * self.dim]);
+
+            let old_pq_start = old_idx * pq_size;
+            let new_pq_start = new_idx * pq_size;
+            if old_pq_start + pq_size <= self.node_pq_codes.len()
+                && new_pq_start + pq_size <= new_node_pq_codes.len()
+            {
+                new_node_pq_codes[new_pq_start..new_pq_start + pq_size]
+                    .copy_from_slice(&self.node_pq_codes[old_pq_start..old_pq_start + pq_size]);
+            }
+
+            let old_start = old_idx * stride;
+            let old_deg = self.node_neighbor_counts[old_idx] as usize;
+            let mut remapped = Vec::with_capacity(old_deg);
+            for slot in 0..old_deg {
+                let nb = self.node_neighbor_ids[old_start + slot] as usize;
+                if nb >= old_n || self.deleted_ids.contains(&nb) {
+                    continue;
+                }
+                if let Some(new_nb) = old_to_new[nb] {
+                    remapped.push(new_nb);
+                }
+            }
+            let new_deg = remapped.len().min(stride);
+            new_neighbor_counts[new_idx] = new_deg as u32;
+            let new_start = new_idx * stride;
+            for (i, nb) in remapped.into_iter().take(new_deg).enumerate() {
+                new_neighbor_ids[new_start + i] = nb;
+            }
+        }
+
+        let mut new_entry_points = Vec::new();
+        for &old_ep in &self.entry_points {
+            if let Some(new_ep) = old_to_new.get(old_ep as usize).and_then(|v| *v) {
+                if !new_entry_points.contains(&new_ep) {
+                    new_entry_points.push(new_ep);
+                }
+            }
+        }
+        if new_entry_points.is_empty() && kept > 0 {
+            new_entry_points.push(0);
+        }
+
+        self.vectors = new_vectors;
+        self.node_ids = new_node_ids;
+        self.node_neighbor_counts = new_neighbor_counts;
+        self.node_neighbor_ids = new_neighbor_ids;
+        self.node_pq_codes = new_node_pq_codes;
+        self.entry_points = new_entry_points;
+        self.node_count = kept;
+        self.deleted_ids.clear();
+        removed
     }
 
     pub fn train(&mut self, training_data: &[f32]) -> Result<()> {
@@ -1048,12 +1168,17 @@ impl PQFlashIndex {
         let mut data_file = File::create(file_group.data_path())?;
         if let Some(storage) = &self.storage {
             let mut input = File::open(storage.file_group.data_path())?;
-            std::io::copy(&mut input, &mut data_file)?;
+            let node_bytes_len = self.len().saturating_mul(self.flash_layout.node_bytes) as u64;
+            std::io::copy(&mut input.take(node_bytes_len), &mut data_file)?;
         } else {
             for node_id in 0..self.node_ids.len() {
                 let bytes = self.serialize_node(node_id as u32);
                 data_file.write_all(&bytes)?;
             }
+        }
+        data_file.write_all(&(self.deleted_ids.len() as u64).to_le_bytes())?;
+        for &id in &self.deleted_ids {
+            data_file.write_all(&(id as u64).to_le_bytes())?;
         }
         data_file.flush()?;
 
@@ -1115,8 +1240,44 @@ impl PQFlashIndex {
                 page_cache,
             }),
             loaded_node_cache: None,
+            deleted_ids: HashSet::new(),
             scratch_pool: Mutex::new(Vec::new()),
         };
+        // Optional trailing deleted-id payload: [count:u64][row_id:u64 * count]
+        let expected_node_bytes = index
+            .node_count
+            .saturating_mul(index.flash_layout.node_bytes) as u64;
+        let mut data_file = File::open(
+            index
+                .storage
+                .as_ref()
+                .expect("storage set")
+                .file_group
+                .data_path(),
+        )?;
+        let file_len = data_file.metadata()?.len();
+        if file_len > expected_node_bytes + 8 {
+            data_file.seek(SeekFrom::Start(expected_node_bytes))?;
+            let mut count_buf = [0u8; 8];
+            if data_file.read_exact(&mut count_buf).is_ok() {
+                let count = u64::from_le_bytes(count_buf) as usize;
+                let needed = expected_node_bytes
+                    .saturating_add(8)
+                    .saturating_add((count as u64).saturating_mul(8));
+                if file_len >= needed {
+                    for _ in 0..count {
+                        let mut id_buf = [0u8; 8];
+                        if data_file.read_exact(&mut id_buf).is_err() {
+                            break;
+                        }
+                        let row = u64::from_le_bytes(id_buf) as usize;
+                        if row < index.node_count {
+                            index.deleted_ids.insert(row);
+                        }
+                    }
+                }
+            }
+        }
         if index.config.cache_all_on_load {
             index.prime_loaded_node_cache()?;
         }
@@ -1634,6 +1795,9 @@ impl PQFlashIndex {
 
     #[inline]
     fn node_allowed(&self, node_id: u32, bitset: Option<&BitsetView>) -> bool {
+        if self.deleted_ids.contains(&(node_id as usize)) {
+            return false;
+        }
         !bitset.is_some_and(|b| (node_id as usize) < b.len() && b.get(node_id as usize))
     }
 
@@ -3575,6 +3739,57 @@ mod tests {
                     id
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_soft_delete_and_consolidate() {
+        let dim = 32usize;
+        let n = 1000usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(0.0..1.0)).collect();
+
+        let config = AisaqConfig {
+            max_degree: 16,
+            search_list_size: 64,
+            disk_pq_dims: 0,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, dim).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+
+        for id in 0i64..100i64 {
+            assert!(index.soft_delete(id), "failed to soft_delete id={id}");
+        }
+        assert!(index.is_deleted(0));
+        assert!(!index.is_deleted(500));
+        assert_eq!(index.deleted_count(), 100);
+
+        let q = &vectors[0..dim];
+        let result = index.search(q, 10).unwrap();
+        for &id in &result.ids {
+            assert!(
+                !(0..100).contains(&id),
+                "soft-deleted id {} appeared in search result",
+                id
+            );
+        }
+
+        let removed = index.consolidate();
+        assert_eq!(removed, 100);
+        assert_eq!(index.node_count, 900);
+        assert_eq!(index.deleted_count(), 0);
+        assert!(!index.is_deleted(0));
+        assert!(!index.is_deleted(500));
+
+        let result2 = index.search(q, 10).unwrap();
+        for &id in &result2.ids {
+            assert!(
+                !(0..100).contains(&id),
+                "deleted-range id {} appeared after consolidate",
+                id
+            );
         }
     }
 }
