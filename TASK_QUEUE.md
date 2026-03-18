@@ -18,13 +18,12 @@
   - **near-equal-recall ratio: 33,061 / 15,918 = 2.077x** (优于此前 1.789x 声明)
   - 注: V1 sweep 无效（TOP_K=100 导致 10-recall-at-100 虚高 + Float 非 BF16）
 
-- [ ] **IVF-FLAT-001** [P0]: nprobe 参数扫描 → 确认 IVF-Flat 能过 0.95 recall gate
-  - Mac 结果 (100K, nlist=256, dim=128, L2, script: examples/ivf_flat_nprobe_sweep.rs):
-    - nprobe=64: recall=0.627, QPS=6,756
-    - nprobe=128: recall=0.858, QPS=3,806
-    - nprobe=256: recall=1.000, QPS=2,014 ← passes 0.95 gate (full scan)
-  - 结论: nlist=256 需全扫才过 0.95；下一步需要 x86 authority QPS
-  - 待完成: x86 authority QPS (ssh to knowhere-x86-hk-proxy 跑同 script)
+- [x] **IVF-FLAT-001** [P0]: ✅ 完成 — nprobe sweep done (Mac + x86)
+  - Mac (100K, nlist=256): nprobe=256: recall=1.000, QPS=2,014
+  - x86 (100K, nlist=256): nprobe=256: recall=1.000, QPS=344
+  - Mac/x86 ratio: 5.85x — IVF-Flat highly sensitive to memory bandwidth (Apple Silicon advantage)
+  - 结论: nlist=256 需全扫 (nprobe=256) 才过 0.95 gate on random data
+  - Script: examples/ivf_flat_nprobe_sweep.rs
 
 - [x] **DISKANN-RECALL-001** [P0]: ✅ 已修复并验证
   - 根因: `add()` 不构建图边；只有 `train()` 中的向量有 Vamana 图连接
