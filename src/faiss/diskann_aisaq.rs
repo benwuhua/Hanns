@@ -977,6 +977,122 @@ impl PQFlashIndex {
         self.search_internal(query, k, Some(bitset))
     }
 
+    #[cfg(feature = "parallel")]
+    pub fn search_batch(&self, queries: &[f32], k: usize) -> Result<SearchResult> {
+        use rayon::prelude::*;
+        let n_queries = queries.len() / self.dim;
+        if n_queries == 0 {
+            return Ok(SearchResult::new(vec![], vec![], 0.0));
+        }
+        let results: Result<Vec<SearchResult>> = queries
+            .par_chunks(self.dim)
+            .map(|q| self.search_internal(q, k, None))
+            .collect();
+        let results = results?;
+        let total = n_queries * k;
+        let mut ids = Vec::with_capacity(total);
+        let mut distances = Vec::with_capacity(total);
+        for r in &results {
+            let row_len = k.min(r.ids.len()).min(r.distances.len());
+            ids.extend_from_slice(&r.ids[..row_len]);
+            for _ in row_len..k {
+                ids.push(-1);
+            }
+            distances.extend_from_slice(&r.distances[..row_len]);
+            for _ in row_len..k {
+                distances.push(f32::MAX);
+            }
+        }
+        Ok(SearchResult::new(ids, distances, 0.0))
+    }
+
+    #[cfg(feature = "parallel")]
+    pub fn search_batch_with_bitset(
+        &self,
+        queries: &[f32],
+        k: usize,
+        bitset: &BitsetView,
+    ) -> Result<SearchResult> {
+        use rayon::prelude::*;
+        let n_queries = queries.len() / self.dim;
+        if n_queries == 0 {
+            return Ok(SearchResult::new(vec![], vec![], 0.0));
+        }
+        let results: Result<Vec<SearchResult>> = queries
+            .par_chunks(self.dim)
+            .map(|q| self.search_internal(q, k, Some(bitset)))
+            .collect();
+        let results = results?;
+        let total = n_queries * k;
+        let mut ids = Vec::with_capacity(total);
+        let mut distances = Vec::with_capacity(total);
+        for r in &results {
+            let row_len = k.min(r.ids.len()).min(r.distances.len());
+            ids.extend_from_slice(&r.ids[..row_len]);
+            for _ in row_len..k {
+                ids.push(-1);
+            }
+            distances.extend_from_slice(&r.distances[..row_len]);
+            for _ in row_len..k {
+                distances.push(f32::MAX);
+            }
+        }
+        Ok(SearchResult::new(ids, distances, 0.0))
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    pub fn search_batch(&self, queries: &[f32], k: usize) -> Result<SearchResult> {
+        let n_queries = queries.len() / self.dim;
+        if n_queries == 0 {
+            return Ok(SearchResult::new(vec![], vec![], 0.0));
+        }
+        let total = n_queries * k;
+        let mut ids = Vec::with_capacity(total);
+        let mut distances = Vec::with_capacity(total);
+        for q in queries.chunks(self.dim) {
+            let r = self.search_internal(q, k, None)?;
+            let row_len = k.min(r.ids.len()).min(r.distances.len());
+            ids.extend_from_slice(&r.ids[..row_len]);
+            for _ in row_len..k {
+                ids.push(-1);
+            }
+            distances.extend_from_slice(&r.distances[..row_len]);
+            for _ in row_len..k {
+                distances.push(f32::MAX);
+            }
+        }
+        Ok(SearchResult::new(ids, distances, 0.0))
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    pub fn search_batch_with_bitset(
+        &self,
+        queries: &[f32],
+        k: usize,
+        bitset: &BitsetView,
+    ) -> Result<SearchResult> {
+        let n_queries = queries.len() / self.dim;
+        if n_queries == 0 {
+            return Ok(SearchResult::new(vec![], vec![], 0.0));
+        }
+        let total = n_queries * k;
+        let mut ids = Vec::with_capacity(total);
+        let mut distances = Vec::with_capacity(total);
+        for q in queries.chunks(self.dim) {
+            let r = self.search_internal(q, k, Some(bitset))?;
+            let row_len = k.min(r.ids.len()).min(r.distances.len());
+            ids.extend_from_slice(&r.ids[..row_len]);
+            for _ in row_len..k {
+                ids.push(-1);
+            }
+            distances.extend_from_slice(&r.distances[..row_len]);
+            for _ in row_len..k {
+                distances.push(f32::MAX);
+            }
+        }
+        Ok(SearchResult::new(ids, distances, 0.0))
+    }
+
     fn search_internal(
         &self,
         query: &[f32],

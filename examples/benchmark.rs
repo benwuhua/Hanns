@@ -347,26 +347,15 @@ fn benchmark_pqflash() {
         println!("[{label}] Build 10000 vectors (dim=128): {:.2}s", build_time);
 
         let start = Instant::now();
-        let qps_result = {
-            let mut ids = Vec::with_capacity(NUM_QPS_QUERIES * TOP_K);
-            for q in queries_qps.chunks(DIM) {
-                let r = index.search(q, TOP_K).unwrap();
-                ids.extend_from_slice(&r.ids);
-            }
-            ids
-        };
-        let _ = qps_result.len();
+        let qps_result = index.search_batch(&queries_qps, TOP_K).unwrap();
+        let _ = qps_result.ids.len();
         let search_s = start.elapsed().as_secs_f64();
         let qps = NUM_QPS_QUERIES as f64 / search_s.max(f64::EPSILON);
         println!("[{label}] Search QPS (L=128, R=48): {:.0} queries/sec", qps);
 
-        let mut recall_ids = Vec::with_capacity(NUM_RECALL_QUERIES * TOP_K);
-        for q in queries_recall.chunks(DIM) {
-            let r = index.search(q, TOP_K).unwrap();
-            recall_ids.extend_from_slice(&r.ids);
-        }
         let gt = brute_force_top_k(&vectors, &queries_recall, DIM, TOP_K);
-        let recall = recall_at_k(&recall_ids, &gt, TOP_K);
+        let recall_result = index.search_batch(&queries_recall, TOP_K).unwrap();
+        let recall = recall_at_k(&recall_result.ids, &gt, TOP_K);
         println!("[{label}] Recall@10 (100 queries): {:.3}", recall);
     };
 
@@ -393,12 +382,8 @@ fn benchmark_pqflash() {
         let mut idx = PQFlashIndex::new(cfg, MetricType::L2, DIM).unwrap();
         idx.train(&vectors).unwrap();
         idx.add(&vectors).unwrap();
-        let mut ids = Vec::with_capacity(NUM_RECALL_QUERIES * TOP_K);
-        for q in queries_recall.chunks(DIM) {
-            let r = idx.search(q, TOP_K).unwrap();
-            ids.extend_from_slice(&r.ids);
-        }
-        let recall = recall_at_k(&ids, &gt, TOP_K);
+        let recall_result = idx.search_batch(&queries_recall, TOP_K).unwrap();
+        let recall = recall_at_k(&recall_result.ids, &gt, TOP_K);
         println!("[sweep {label}] Recall@10: {:.3}", recall);
     }
 }
