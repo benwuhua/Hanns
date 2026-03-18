@@ -16,6 +16,8 @@ use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
+#[cfg(feature = "parallel")]
+use parking_lot::RwLock;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
@@ -1113,20 +1115,21 @@ impl DiskAnnIndex {
 
         #[cfg(feature = "parallel")]
         if self.config.params.num_threads.unwrap_or(1) > 1 && n > 2 {
+            let current_graph: Vec<RwLock<Vec<(u32, f32)>>> =
+                (0..n).map(|_| RwLock::new(Vec::new())).collect();
             let batch_size = self.dann_config.build_parallel_batch_size.min(n - 1).max(1);
             let mut batch_start = 1usize;
             while batch_start < n {
                 let batch_end = (batch_start + batch_size).min(n);
-                let snapshot = current_graph.clone();
-                let snapshot_len = snapshot.len();
+                let snapshot_len = batch_start;
                 let mut batch_results: Vec<(usize, Vec<(usize, f32)>)> = (batch_start..batch_end)
                     .into_par_iter()
                     .map(|node_idx| {
-                        let merged = self.gather_build_candidates(
+                        let merged = self.gather_build_candidates_parallel(
                             node_idx,
                             L,
                             build_r,
-                            &snapshot,
+                            &current_graph,
                             snapshot_len,
                         );
                         (node_idx, merged)
@@ -1134,25 +1137,31 @@ impl DiskAnnIndex {
                     .collect();
                 batch_results.sort_by_key(|(node_idx, _)| *node_idx);
 
-                for (node_idx, merged_neighbors) in batch_results {
+                for (node_idx, merged_neighbors) in &batch_results {
                     let mut node_neighbors: Vec<(u32, f32)> = merged_neighbors
                         .iter()
                         .map(|&(idx, dist)| (idx as u32, dist))
                         .collect();
-                    node_neighbors = self.prune_neighbors(node_idx, &node_neighbors, build_r);
-                    current_graph.push(node_neighbors);
+                    node_neighbors = self.prune_neighbors(*node_idx, &node_neighbors, build_r);
+                    let mut node_slot = current_graph[*node_idx].write();
+                    *node_slot = node_neighbors;
+                }
 
-                    for &(idx, dist) in &merged_neighbors {
-                        if idx < current_graph.len() {
-                            current_graph[idx].push((node_idx as u32, dist));
-                            current_graph[idx] =
-                                self.prune_neighbors(idx, &current_graph[idx], build_r);
+                batch_results.par_iter().for_each(|(node_idx, merged_neighbors)| {
+                    for &(idx, dist) in merged_neighbors {
+                        if idx < snapshot_len {
+                            let mut neighbors = current_graph[idx].write();
+                            neighbors.push((*node_idx as u32, dist));
+                            let pruned = self.prune_neighbors(idx, &neighbors, build_r);
+                            *neighbors = pruned;
                         }
                     }
-                }
+                });
                 batch_start = batch_end;
             }
 
+            let current_graph: Vec<Vec<(u32, f32)>> =
+                current_graph.into_iter().map(|node| node.into_inner()).collect();
             self.replace_flat_graph_from_local(&current_graph);
             if !self.dann_config.accelerate_build {
                 self.refine_graph();
@@ -1209,6 +1218,38 @@ impl DiskAnnIndex {
         let query = &self.vectors[node_idx * self.dim..(node_idx + 1) * self.dim];
         let mut merged_neighbors: Vec<(usize, f32)> = self
             .vamana_search(query, l, build_r, graph)
+            .into_iter()
+            .map(|(idx, dist)| (idx as usize, dist))
+            .collect();
+        if self.dann_config.intra_batch_candidates > 0 {
+            merged_neighbors.extend(self.collect_intra_batch_candidates_with_upper(
+                node_idx,
+                upper_bound,
+            ));
+        }
+        if self.dann_config.random_init_edges > 0 {
+            merged_neighbors.extend(self.collect_random_initial_candidates_with_upper(
+                node_idx,
+                upper_bound,
+            ));
+        }
+        merged_neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+        merged_neighbors.dedup_by(|a, b| a.0 == b.0);
+        merged_neighbors
+    }
+
+    #[cfg(feature = "parallel")]
+    fn gather_build_candidates_parallel(
+        &self,
+        node_idx: usize,
+        l: usize,
+        build_r: usize,
+        graph: &[RwLock<Vec<(u32, f32)>>],
+        upper_bound: usize,
+    ) -> Vec<(usize, f32)> {
+        let query = &self.vectors[node_idx * self.dim..(node_idx + 1) * self.dim];
+        let mut merged_neighbors: Vec<(usize, f32)> = self
+            .vamana_search_parallel(query, l, build_r, graph, upper_bound)
             .into_iter()
             .map(|(idx, dist)| (idx as usize, dist))
             .collect();
@@ -1459,6 +1500,58 @@ impl DiskAnnIndex {
         }
 
         results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        results.into_iter().map(|(d, idx)| (idx as u32, d)).collect()
+    }
+
+    #[cfg(feature = "parallel")]
+    #[allow(non_snake_case)]
+    fn vamana_search_parallel(
+        &self,
+        query: &[f32],
+        L: usize,
+        _R: usize,
+        graph: &[RwLock<Vec<(u32, f32)>>],
+        upper_bound: usize,
+    ) -> Vec<(u32, f32)> {
+        let mut visited: HashSet<usize> = HashSet::with_capacity(L.saturating_mul(2));
+        let mut candidates: BinaryHeap<ReverseOrderedFloat> = BinaryHeap::new();
+        let mut results: Vec<(f32, usize)> = Vec::new();
+
+        if let Some(entry) = self.entry_point {
+            if entry < upper_bound {
+                let dist = self.compute_dist(query, entry);
+                candidates.push(ReverseOrderedFloat(dist, entry));
+                visited.insert(entry);
+            }
+        }
+
+        let beam_size = self.dann_config.beamwidth;
+        while !candidates.is_empty() && results.len() < L {
+            let ReverseOrderedFloat(dist, idx) = candidates.pop().unwrap();
+            results.push((dist, idx));
+
+            if idx >= upper_bound {
+                continue;
+            }
+
+            let mut nbr_dists: Vec<(f32, usize)> = Vec::new();
+            let nbrs = graph[idx].read();
+            for &(nbr_id, _) in nbrs.iter() {
+                let n_idx = nbr_id as usize;
+                if n_idx < upper_bound && !visited.contains(&n_idx) {
+                    let d = self.compute_dist(query, n_idx);
+                    nbr_dists.push((d, n_idx));
+                }
+            }
+
+            nbr_dists.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+            for (d, n_idx) in nbr_dists.into_iter().take(beam_size) {
+                visited.insert(n_idx);
+                candidates.push(ReverseOrderedFloat(d, n_idx));
+            }
+        }
+
+        results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
         results.into_iter().map(|(d, idx)| (idx as u32, d)).collect()
     }
 
