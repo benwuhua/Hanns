@@ -10,6 +10,9 @@
 //! - 保留 SIMD 批量距离计算
 
 use std::cmp::Ordering;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::Path;
 
 use crate::api::{IndexConfig, Result, SearchRequest, SearchResult};
 use crate::simd::{l2_batch_4_ptr, l2_distance_sq, l2_distance_sq_ptr};
@@ -560,12 +563,157 @@ impl IvfFlatIndex {
             })
             .collect()
     }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        let mut file = File::create(path)?;
+
+        file.write_all(b"IVFFLAT")?;
+        file.write_all(&(self.dim as u32).to_le_bytes())?;
+        file.write_all(&(self.nlist as u32).to_le_bytes())?;
+        file.write_all(&(self.nprobe as u32).to_le_bytes())?;
+        file.write_all(&self.next_id.to_le_bytes())?;
+
+        for &v in &self.centroids {
+            file.write_all(&v.to_le_bytes())?;
+        }
+
+        for &off in &self.invlist_offsets {
+            file.write_all(&(off as u64).to_le_bytes())?;
+        }
+        for &sz in &self.invlist_sizes {
+            file.write_all(&(sz as u64).to_le_bytes())?;
+        }
+
+        let n_total = self.invlist_ids.len() as u64;
+        file.write_all(&n_total.to_le_bytes())?;
+        for &id in &self.invlist_ids {
+            file.write_all(&id.to_le_bytes())?;
+        }
+        for &v in &self.invlist_vectors {
+            file.write_all(&v.to_le_bytes())?;
+        }
+
+        let n_ordered = self.ids.len() as u64;
+        file.write_all(&n_ordered.to_le_bytes())?;
+        for &id in &self.ids {
+            file.write_all(&id.to_le_bytes())?;
+        }
+        for &v in &self.vectors {
+            file.write_all(&v.to_le_bytes())?;
+        }
+
+        Ok(())
+    }
+
+    pub fn load(path: &Path, dim: usize) -> Result<Self> {
+        let mut file = File::open(path)?;
+
+        let mut magic = [0u8; 7];
+        file.read_exact(&mut magic)?;
+        if &magic != b"IVFFLAT" {
+            return Err(crate::api::KnowhereError::Codec(
+                "invalid IVFFLAT magic".to_string(),
+            ));
+        }
+
+        let mut u32_buf = [0u8; 4];
+        file.read_exact(&mut u32_buf)?;
+        let stored_dim = u32::from_le_bytes(u32_buf) as usize;
+        if stored_dim != dim {
+            return Err(crate::api::KnowhereError::InvalidArg(format!(
+                "dim mismatch: load dim {} vs stored dim {}",
+                dim, stored_dim
+            )));
+        }
+
+        file.read_exact(&mut u32_buf)?;
+        let nlist = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut u32_buf)?;
+        let nprobe = u32::from_le_bytes(u32_buf) as usize;
+
+        let mut i64_buf = [0u8; 8];
+        file.read_exact(&mut i64_buf)?;
+        let next_id = i64::from_le_bytes(i64_buf);
+
+        let mut centroids = vec![0.0f32; nlist * stored_dim];
+        for value in &mut centroids {
+            let mut fbuf = [0u8; 4];
+            file.read_exact(&mut fbuf)?;
+            *value = f32::from_le_bytes(fbuf);
+        }
+
+        let mut invlist_offsets = vec![0usize; nlist];
+        for off in &mut invlist_offsets {
+            let mut ubuf = [0u8; 8];
+            file.read_exact(&mut ubuf)?;
+            *off = u64::from_le_bytes(ubuf) as usize;
+        }
+
+        let mut invlist_sizes = vec![0usize; nlist];
+        for sz in &mut invlist_sizes {
+            let mut ubuf = [0u8; 8];
+            file.read_exact(&mut ubuf)?;
+            *sz = u64::from_le_bytes(ubuf) as usize;
+        }
+
+        let mut u64_buf = [0u8; 8];
+        file.read_exact(&mut u64_buf)?;
+        let n_total = u64::from_le_bytes(u64_buf) as usize;
+
+        let mut invlist_ids = vec![0i64; n_total];
+        for id in &mut invlist_ids {
+            let mut ibuf = [0u8; 8];
+            file.read_exact(&mut ibuf)?;
+            *id = i64::from_le_bytes(ibuf);
+        }
+
+        let mut invlist_vectors = vec![0.0f32; n_total * stored_dim];
+        for value in &mut invlist_vectors {
+            let mut fbuf = [0u8; 4];
+            file.read_exact(&mut fbuf)?;
+            *value = f32::from_le_bytes(fbuf);
+        }
+
+        file.read_exact(&mut u64_buf)?;
+        let n_ordered = u64::from_le_bytes(u64_buf) as usize;
+
+        let mut ids = vec![0i64; n_ordered];
+        for id in &mut ids {
+            let mut ibuf = [0u8; 8];
+            file.read_exact(&mut ibuf)?;
+            *id = i64::from_le_bytes(ibuf);
+        }
+
+        let mut vectors = vec![0.0f32; n_ordered * stored_dim];
+        for value in &mut vectors {
+            let mut fbuf = [0u8; 4];
+            file.read_exact(&mut fbuf)?;
+            *value = f32::from_le_bytes(fbuf);
+        }
+
+        Ok(Self {
+            dim: stored_dim,
+            nlist,
+            nprobe,
+            centroids,
+            invlist_ids,
+            invlist_vectors,
+            invlist_offsets,
+            invlist_sizes,
+            vectors,
+            ids,
+            next_id,
+            trained: true,
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::api::{IndexParams, IndexType, MetricType};
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
 
     #[test]
     fn test_ivf_flat_new() {
@@ -611,5 +759,83 @@ mod tests {
 
         let result = index.search(&query, &req).unwrap();
         assert!(!result.ids.is_empty() && result.ids.len() <= 2); // IVF may return fewer than top_k
+    }
+
+    #[test]
+    fn test_ivf_flat_save_load() {
+        let dim = 64usize;
+        let n = 1000usize;
+        let nlist = 32usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let n_clusters = 20usize;
+        let centers: Vec<f32> = (0..n_clusters * dim)
+            .map(|_| rng.r#gen::<f32>() * 2.0 - 1.0)
+            .collect();
+        let mut vectors = Vec::with_capacity(n * dim);
+        for i in 0..n {
+            let c = i % n_clusters;
+            let center = &centers[c * dim..(c + 1) * dim];
+            for &v in center {
+                let noise = (rng.r#gen::<f32>() - 0.5) * 0.1;
+                vectors.push(v + noise);
+            }
+        }
+
+        let cfg = IndexConfig {
+            index_type: IndexType::IvfFlat,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: IndexParams::ivf(nlist, 8),
+        };
+        let mut index = IvfFlatIndex::new(&cfg).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        let path = Path::new("/tmp/ivf_flat_test.bin");
+        let _ = std::fs::remove_file(path);
+        index.save(path).unwrap();
+
+        let loaded = IvfFlatIndex::load(path, dim).unwrap();
+
+        let req = SearchRequest {
+            top_k: 10,
+            nprobe: 8,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let num_queries = 100usize;
+        let mut total_hits = 0usize;
+        for qi in 0..num_queries {
+            let query = &vectors[qi * dim..(qi + 1) * dim];
+            let result = loaded.search(query, &req).unwrap();
+            let mut gt: Vec<(i64, f32)> = (0..n)
+                .map(|i| {
+                    let v = &vectors[i * dim..(i + 1) * dim];
+                    let d = v
+                        .iter()
+                        .zip(query.iter())
+                        .map(|(a, b)| {
+                            let diff = a - b;
+                            diff * diff
+                        })
+                        .sum::<f32>();
+                    (i as i64, d)
+                })
+                .collect();
+            gt.sort_by(|a, b| a.1.total_cmp(&b.1));
+            let gt_top10: Vec<i64> = gt.into_iter().take(10).map(|(id, _)| id).collect();
+            total_hits += gt_top10
+                .iter()
+                .filter(|id| result.ids.iter().take(10).any(|rid| rid == *id))
+                .count();
+        }
+        let recall = total_hits as f64 / (num_queries as f64 * 10.0);
+        assert!(
+            recall >= 0.8,
+            "save/load ivf-flat recall@10 too low: {:.3}",
+            recall
+        );
     }
 }
