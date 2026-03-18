@@ -367,14 +367,6 @@ impl BeamSearchIO {
 }
 
 #[derive(Clone, Debug)]
-struct FlashNode {
-    id: i64,
-    vector_offset: usize,
-    neighbors: Vec<u32>,
-    inline_pq: Vec<u8>,
-}
-
-#[derive(Clone, Debug)]
 pub struct LoadedNode {
     id: i64,
     vector: Vec<f32>,
@@ -679,7 +671,11 @@ pub struct PQFlashIndex {
     dim: usize,
     flash_layout: FlashLayout,
     vectors: Vec<f32>,
-    nodes: Vec<FlashNode>,
+    node_ids: Vec<i64>,
+    node_neighbor_ids: Vec<u32>,
+    node_neighbor_counts: Vec<u32>,
+    node_pq_codes: Vec<u8>,
+    flat_stride: usize,
     pq_encoder: Option<PqEncoder>,
     pq_code_size: usize,
     entry_points: Vec<u32>,
@@ -709,7 +705,11 @@ impl PQFlashIndex {
             dim,
             flash_layout,
             vectors: Vec::new(),
-            nodes: Vec::new(),
+            node_ids: Vec::new(),
+            node_neighbor_ids: Vec::new(),
+            node_neighbor_counts: Vec::new(),
+            node_pq_codes: Vec::new(),
+            flat_stride: 0,
             pq_encoder: None,
             pq_code_size: 0,
             entry_points: Vec::new(),
@@ -764,14 +764,18 @@ impl PQFlashIndex {
         self.validate_build_dram_budget(num_vectors)?;
         self.validate_pq_code_budget(num_vectors)?;
         let build_max_degree = self.compute_build_max_degree();
+        if self.flat_stride == 0 {
+            self.flat_stride = build_max_degree.max(1);
+        }
+        let stride = self.flat_stride;
+        let pq_size = self.pq_code_size.max(1);
+
         for row in 0..num_vectors {
             let start = row * self.dim;
             let end = start + self.dim;
             let vector = &vectors[start..end];
-            let node_id = self.nodes.len() as u32;
-            let neighbors =
-                self.select_neighbors_with_random(node_id as usize, vector, build_max_degree);
-            let vector_offset = self.vectors.len();
+            let node_id = self.node_ids.len() as u32;
+            let neighbors = self.select_neighbors_with_random(node_id as usize, vector, stride);
             self.vectors.extend_from_slice(vector);
             let inline_pq = self
                 .pq_encoder
@@ -779,21 +783,26 @@ impl PQFlashIndex {
                 .map(|pq| pq.encode(vector))
                 .unwrap_or_default();
 
-            let node = FlashNode {
-                id: node_id as i64,
-                vector_offset,
-                neighbors: neighbors.clone(),
-                inline_pq,
-            };
-            self.nodes.push(node);
+            self.node_ids.push(node_id as i64);
+            let count = neighbors.len().min(stride);
+            self.node_neighbor_counts.push(count as u32);
+            for i in 0..stride {
+                self.node_neighbor_ids
+                    .push(if i < count { neighbors[i] } else { 0 });
+            }
+            let code_len = inline_pq.len().min(pq_size);
+            for i in 0..pq_size {
+                self.node_pq_codes
+                    .push(if i < code_len { inline_pq[i] } else { 0 });
+            }
 
             for neighbor in neighbors {
-                self.link_back_with_limit(neighbor, node_id, build_max_degree);
+                self.link_back_with_limit(neighbor, node_id, stride);
             }
         }
         self.prune_graph_to_target_degree();
 
-        self.node_count = self.nodes.len();
+        self.node_count = self.node_ids.len();
         self.refresh_entry_points();
         if self.config.warm_up {
             self.warm_up_cache();
@@ -808,7 +817,7 @@ impl PQFlashIndex {
 
         let budget_bytes =
             (self.config.build_dram_budget_gb as f64 * 1024.0 * 1024.0 * 1024.0) as usize;
-        let total_nodes = self.nodes.len().saturating_add(additional_nodes);
+        let total_nodes = self.node_ids.len().saturating_add(additional_nodes);
         let projected_bytes = total_nodes.saturating_mul(self.flash_layout.node_bytes);
         if projected_bytes > budget_bytes {
             return Err(KnowhereError::InvalidArg(format!(
@@ -825,7 +834,7 @@ impl PQFlashIndex {
         }
 
         let budget_bytes = gb_to_bytes(self.config.pq_code_budget_gb);
-        let total_nodes = self.nodes.len().saturating_add(additional_nodes);
+        let total_nodes = self.node_ids.len().saturating_add(additional_nodes);
         let projected_bytes = total_nodes.saturating_mul(self.pq_code_size);
         if projected_bytes > budget_bytes {
             return Err(KnowhereError::InvalidArg(format!(
@@ -873,7 +882,7 @@ impl PQFlashIndex {
             let mut input = File::open(storage.file_group.data_path())?;
             std::io::copy(&mut input, &mut data_file)?;
         } else {
-            for node_id in 0..self.nodes.len() {
+            for node_id in 0..self.node_ids.len() {
                 let bytes = self.serialize_node(node_id as u32);
                 data_file.write_all(&bytes)?;
             }
@@ -921,7 +930,11 @@ impl PQFlashIndex {
             dim: metadata.dim,
             flash_layout: metadata.flash_layout,
             vectors: Vec::new(),
-            nodes: Vec::new(),
+            node_ids: Vec::new(),
+            node_neighbor_ids: Vec::new(),
+            node_neighbor_counts: Vec::new(),
+            node_pq_codes: Vec::new(),
+            flat_stride: 0,
             pq_encoder: metadata.pq_encoder.map(SerializedPqEncoder::into_encoder),
             pq_code_size: metadata.pq_code_size,
             entry_points: metadata.entry_points,
@@ -1651,15 +1664,11 @@ impl PQFlashIndex {
     }
 
     fn select_neighbors(&self, vector: &[f32], max_degree: usize) -> Vec<u32> {
-        let mut scored: Vec<(u32, f32)> = (0..self.nodes.len())
+        let mut scored: Vec<(u32, f32)> = (0..self.node_ids.len())
             .map(|node_id| {
                 (
                     node_id as u32,
-                    self.exact_distance(
-                        vector,
-                        &self.vectors[self.nodes[node_id].vector_offset
-                            ..self.nodes[node_id].vector_offset + self.dim],
-                    ),
+                    self.exact_distance(vector, self.node_vector(node_id)),
                 )
             })
             .collect();
@@ -1676,11 +1685,11 @@ impl PQFlashIndex {
         max_degree: usize,
     ) -> Vec<u32> {
         let mut selected = self.select_neighbors(vector, max_degree);
-        if self.config.random_init_edges == 0 || node_id == 0 || self.nodes.is_empty() {
+        if self.config.random_init_edges == 0 || node_id == 0 || self.node_ids.is_empty() {
             return selected;
         }
 
-        let limit = node_id.min(self.nodes.len());
+        let limit = node_id.min(self.node_ids.len());
         if limit == 0 {
             return selected;
         }
@@ -1713,39 +1722,55 @@ impl PQFlashIndex {
 
     fn link_back_with_limit(&mut self, neighbor: u32, node_id: u32, degree_limit: usize) {
         let neighbor_idx = neighbor as usize;
-        if neighbor_idx >= self.nodes.len() {
+        if neighbor_idx >= self.node_ids.len() {
+            return;
+        }
+        let stride = self.flat_stride.max(1);
+        let start = neighbor_idx * stride;
+        let count = self.node_neighbor_counts[neighbor_idx] as usize;
+        let effective_limit = stride.min(degree_limit.max(1));
+        let current = &self.node_neighbor_ids[start..start + count];
+        if current.contains(&node_id) {
+            return;
+        }
+        if count < effective_limit {
+            self.node_neighbor_ids[start + count] = node_id;
+            self.node_neighbor_counts[neighbor_idx] += 1;
             return;
         }
 
-        let mut neighbor_list = self.nodes[neighbor_idx].neighbors.clone();
-        if !neighbor_list.contains(&node_id) {
-            neighbor_list.push(node_id);
+        let mut neighbor_list: Vec<u32> = current.to_vec();
+        neighbor_list.push(node_id);
+        let anchor = self.node_vector(neighbor_idx).to_vec();
+        let mut scored: Vec<(u32, f32)> = neighbor_list
+            .iter()
+            .map(|&nb| (nb, self.exact_distance(&anchor, self.node_vector(nb as usize))))
+            .collect();
+        scored.sort_by(|a, b| a.1.total_cmp(&b.1));
+        scored.truncate(effective_limit);
+        let new_count = scored.len();
+        for (i, (nb, _)) in scored.into_iter().enumerate() {
+            self.node_neighbor_ids[start + i] = nb;
         }
-        if neighbor_list.len() > degree_limit {
-            let anchor = self.node_vector(neighbor_idx).to_vec();
-            neighbor_list.sort_by(|&a, &b| {
-                self.exact_distance(&anchor, self.node_vector(a as usize))
-                    .total_cmp(&self.exact_distance(&anchor, self.node_vector(b as usize)))
-            });
-            neighbor_list.truncate(degree_limit);
+        for i in new_count..stride {
+            self.node_neighbor_ids[start + i] = 0;
         }
-        self.nodes[neighbor_idx].neighbors = neighbor_list;
+        self.node_neighbor_counts[neighbor_idx] = new_count as u32;
     }
 
     fn prune_graph_to_target_degree(&mut self) {
         let target_degree = self.config.max_degree;
-        for idx in 0..self.nodes.len() {
-            if self.nodes[idx].neighbors.len() <= target_degree {
+        let stride = self.flat_stride.max(1);
+        for idx in 0..self.node_ids.len() {
+            let count = self.node_neighbor_counts[idx] as usize;
+            if count <= target_degree {
                 continue;
             }
-            let anchor = self.node_vector(idx).to_vec();
-            let mut neighbors = self.nodes[idx].neighbors.clone();
-            neighbors.sort_by(|&a, &b| {
-                self.exact_distance(&anchor, self.node_vector(a as usize))
-                    .total_cmp(&self.exact_distance(&anchor, self.node_vector(b as usize)))
-            });
-            neighbors.truncate(target_degree);
-            self.nodes[idx].neighbors = neighbors;
+            self.node_neighbor_counts[idx] = target_degree as u32;
+            let start = idx * stride;
+            for i in target_degree..count {
+                self.node_neighbor_ids[start + i] = 0;
+            }
         }
     }
 
@@ -1757,15 +1782,14 @@ impl PQFlashIndex {
         }
 
         let count = self.config.num_entry_points.min(n).max(1);
-        if self.vectors.is_empty() || self.nodes.is_empty() {
+        if self.vectors.is_empty() || self.node_ids.is_empty() {
             self.entry_points = (0..count as u32).collect();
             return;
         }
 
         let mut centroid = vec![0.0f32; self.dim];
-        for node in &self.nodes {
-            let start = node.vector_offset;
-            let vec = &self.vectors[start..start + self.dim];
+        for i in 0..self.node_ids.len() {
+            let vec = self.node_vector(i);
             for d in 0..self.dim {
                 centroid[d] += vec[d];
             }
@@ -1817,32 +1841,43 @@ impl PQFlashIndex {
 
     #[inline]
     fn node_vector(&self, idx: usize) -> &[f32] {
-        let node = &self.nodes[idx];
-        let start = node.vector_offset;
+        let start = idx * self.dim;
         &self.vectors[start..start + self.dim]
     }
 
     #[inline]
     fn node_ref(&self, node_id: u32) -> Option<LoadedNodeRef<'_>> {
-        if self.nodes.is_empty() {
+        if self.node_ids.is_empty() {
             return None;
         }
-        let node = self.nodes.get(node_id as usize)?;
-        let start = node.vector_offset;
-        let end = start.checked_add(self.dim)?;
-        let vector = self.vectors.get(start..end)?;
+        let id = node_id as usize;
+        if id >= self.node_ids.len() {
+            return None;
+        }
+        let stride = self.flat_stride.max(1);
+        let nb_start = id * stride;
+        let count = self.node_neighbor_counts.get(id).copied().unwrap_or(0) as usize;
+        let pq_size = self.pq_code_size.max(1);
+        let pq_start = id * pq_size;
         Some(LoadedNodeRef {
-            id: node.id,
-            vector,
-            neighbors: &node.neighbors,
-            inline_pq: &node.inline_pq,
+            id: self.node_ids[id],
+            vector: self.node_vector(id),
+            neighbors: &self.node_neighbor_ids[nb_start..nb_start + count.min(stride)],
+            inline_pq: if pq_start + pq_size <= self.node_pq_codes.len() {
+                &self.node_pq_codes[pq_start..pq_start + pq_size]
+            } else {
+                &[]
+            },
         })
     }
 
     fn warm_up_cache(&mut self) {
         for &entry in &self.entry_points {
             self.io_template.cache_node(entry);
-            if !self.nodes[entry as usize].inline_pq.is_empty() {
+            let pq_size = self.pq_code_size.max(1);
+            let pq_start = entry as usize * pq_size;
+            let has_pq = pq_start + pq_size <= self.node_pq_codes.len();
+            if has_pq {
                 self.io_template.cache_pq_vector(entry);
             }
         }
@@ -1855,22 +1890,36 @@ impl PQFlashIndex {
 
         let node_count = self.node_count;
         let mut vectors = Vec::with_capacity(node_count * self.dim);
-        let mut nodes = Vec::with_capacity(node_count);
+        let mut node_data: Vec<LoadedNode> = Vec::with_capacity(node_count);
         let mut io = self.io_template.clone();
         for node_id in 0..node_count {
             let loaded = self.load_node(node_id as u32, NodeAccessMode::None, &mut io)?;
-            let vector_offset = vectors.len();
             vectors.extend_from_slice(&loaded.vector);
-            nodes.push(FlashNode {
-                id: loaded.id,
-                vector_offset,
-                neighbors: loaded.neighbors,
-                inline_pq: loaded.inline_pq,
-            });
+            node_data.push(loaded);
         }
 
+        let n = node_data.len();
+        let stride = self.compute_build_max_degree().max(1);
+        self.flat_stride = stride;
+        self.node_ids = node_data.iter().map(|node| node.id).collect();
+        self.node_neighbor_counts = node_data
+            .iter()
+            .map(|node| node.neighbors.len().min(stride) as u32)
+            .collect();
+        self.node_neighbor_ids = vec![0u32; n * stride];
+        let pq_size = self.pq_code_size.max(1);
+        self.node_pq_codes = vec![0u8; n * pq_size];
+        for (i, node) in node_data.iter().enumerate() {
+            let nb_start = i * stride;
+            let count = node.neighbors.len().min(stride);
+            self.node_neighbor_ids[nb_start..nb_start + count]
+                .copy_from_slice(&node.neighbors[..count]);
+            let pq_start = i * pq_size;
+            let code_len = node.inline_pq.len().min(pq_size);
+            self.node_pq_codes[pq_start..pq_start + code_len]
+                .copy_from_slice(&node.inline_pq[..code_len]);
+        }
         self.vectors = vectors;
-        self.nodes = nodes;
         self.storage = None;
         self.loaded_node_cache = None;
         Ok(())
@@ -1948,45 +1997,61 @@ impl PQFlashIndex {
             return Ok(loaded);
         }
 
-        let node = &self.nodes[node_id as usize];
-        match access_mode {
-            NodeAccessMode::None => {}
-            NodeAccessMode::Node => io.record_node_read(node_id, self.flash_layout.node_bytes),
-            NodeAccessMode::Pq => {
-                if !node.inline_pq.is_empty() {
-                    io.record_pq_read(node_id, node.inline_pq.len());
+        if let Some(node) = self.node_ref(node_id) {
+            match access_mode {
+                NodeAccessMode::None => {}
+                NodeAccessMode::Node => io.record_node_read(node_id, self.flash_layout.node_bytes),
+                NodeAccessMode::Pq => {
+                    if !node.inline_pq.is_empty() {
+                        io.record_pq_read(node_id, node.inline_pq.len());
+                    }
                 }
             }
+            return Ok(LoadedNode {
+                id: node.id,
+                vector: node.vector.to_vec(),
+                neighbors: node.neighbors.to_vec(),
+                inline_pq: node.inline_pq.to_vec(),
+            });
         }
-
-        let start = node.vector_offset;
-        Ok(LoadedNode {
-            id: node.id,
-            vector: self.vectors[start..start + self.dim].to_vec(),
-            neighbors: node.neighbors.clone(),
-            inline_pq: node.inline_pq.clone(),
-        })
+        Err(KnowhereError::InvalidArg(format!(
+            "node_id {} out of bounds for {} nodes",
+            node_id,
+            self.len()
+        )))
     }
 
     fn serialize_node(&self, node_id: u32) -> Vec<u8> {
-        let node = &self.nodes[node_id as usize];
+        let id = node_id as usize;
+        let stride = self.flat_stride.max(1);
+        let nb_start = id * stride;
+        let count = self.node_neighbor_counts[id] as usize;
+        let pq_size = self.pq_code_size.max(1);
+        let pq_start = id * pq_size;
         let mut bytes = Vec::with_capacity(self.flash_layout.node_bytes);
-        let start = node.vector_offset;
-        for value in &self.vectors[start..start + self.dim] {
+        for value in self.node_vector(id) {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
 
-        let degree = node.neighbors.len().min(self.config.max_degree) as u32;
+        let degree = count.min(self.config.max_degree) as u32;
         bytes.extend_from_slice(&degree.to_le_bytes());
-        for &neighbor in node.neighbors.iter().take(self.config.max_degree) {
+        for i in 0..self.config.max_degree {
+            let neighbor = if i < count {
+                self.node_neighbor_ids[nb_start + i]
+            } else {
+                0
+            };
             bytes.extend_from_slice(&neighbor.to_le_bytes());
         }
-        for _ in node.neighbors.len().min(self.config.max_degree)..self.config.max_degree {
-            bytes.extend_from_slice(&0u32.to_le_bytes());
+        let inline_len = self.flash_layout.inline_pq_bytes.min(pq_size);
+        for i in 0..inline_len {
+            let v = if pq_start + i < self.node_pq_codes.len() {
+                self.node_pq_codes[pq_start + i]
+            } else {
+                0
+            };
+            bytes.push(v);
         }
-
-        let inline_len = self.flash_layout.inline_pq_bytes.min(node.inline_pq.len());
-        bytes.extend_from_slice(&node.inline_pq[..inline_len]);
         bytes.resize(self.flash_layout.node_bytes, 0);
         bytes
     }
@@ -2201,6 +2266,16 @@ mod tests {
     use std::collections::HashSet;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn set_flat_graph_for_tests(index: &mut PQFlashIndex, node_count: usize, stride: usize) {
+        index.node_ids = (0..node_count as i64).collect();
+        index.flat_stride = stride.max(1);
+        index.node_neighbor_counts = vec![0; node_count];
+        index.node_neighbor_ids = vec![0; node_count * index.flat_stride];
+        let pq_size = index.pq_code_size.max(1);
+        index.node_pq_codes = vec![0; node_count * pq_size];
+        index.node_count = node_count;
+    }
 
     #[test]
     fn beam_io_tracks_reads() {
@@ -2455,37 +2530,19 @@ mod tests {
             1.0, 0.0, // node 2 (near)
             2.0, 0.0, // node 3 (near)
         ];
-        index.nodes = vec![
-            FlashNode {
-                id: 0,
-                vector_offset: 0,
-                neighbors: vec![1, 2],
-                inline_pq: Vec::new(),
-            },
-            FlashNode {
-                id: 1,
-                vector_offset: 2,
-                neighbors: vec![0],
-                inline_pq: Vec::new(),
-            },
-            FlashNode {
-                id: 2,
-                vector_offset: 4,
-                neighbors: vec![0],
-                inline_pq: Vec::new(),
-            },
-            FlashNode {
-                id: 3,
-                vector_offset: 6,
-                neighbors: vec![],
-                inline_pq: Vec::new(),
-            },
-        ];
-        index.node_count = 4;
+        set_flat_graph_for_tests(&mut index, 4, 2);
+        index.node_neighbor_counts[0] = 2;
+        index.node_neighbor_ids[0] = 1;
+        index.node_neighbor_ids[1] = 2;
+        index.node_neighbor_counts[1] = 1;
+        index.node_neighbor_ids[2] = 0;
+        index.node_neighbor_counts[2] = 1;
+        index.node_neighbor_ids[4] = 0;
 
         index.link_back(0, 3);
-        let nbrs = &index.nodes[0].neighbors;
-        assert_eq!(nbrs.len(), 2);
+        let cnt = index.node_neighbor_counts[0] as usize;
+        let nbrs = &index.node_neighbor_ids[0..cnt];
+        assert_eq!(cnt, 2);
         assert!(nbrs.contains(&2));
         assert!(nbrs.contains(&3));
         assert!(
@@ -2587,9 +2644,9 @@ mod tests {
         ];
         index.add(&vectors).unwrap();
         assert!(index
-            .nodes
+            .node_neighbor_counts
             .iter()
-            .all(|node| node.neighbors.len() <= index.config.max_degree));
+            .all(|&count| count as usize <= index.config.max_degree));
     }
 
     #[test]
@@ -2625,16 +2682,9 @@ mod tests {
         };
         let mut index = PQFlashIndex::new(config, MetricType::L2, 2).unwrap();
         index.trained = true;
-        index.node_count = 100;
-        index.nodes = vec![
-            FlashNode {
-                id: 0,
-                vector_offset: 0,
-                neighbors: vec![],
-                inline_pq: vec![],
-            };
-            100
-        ];
+        index.vectors = vec![0.0; 100 * 2];
+        let stride = index.config.max_degree.max(1);
+        set_flat_graph_for_tests(&mut index, 100, stride);
         assert_eq!(index.compute_max_visit(5), 10);
     }
 
@@ -2649,16 +2699,9 @@ mod tests {
         let mut index = PQFlashIndex::new(config, MetricType::L2, 2).unwrap();
         let train = vec![0.0f32, 0.0, 1.0, 0.0, 2.0, 0.0, 3.0, 0.0];
         index.train(&train).unwrap();
-        index.node_count = 100;
-        index.nodes = vec![
-            FlashNode {
-                id: 0,
-                vector_offset: 0,
-                neighbors: vec![],
-                inline_pq: vec![],
-            };
-            100
-        ];
+        index.vectors = vec![0.0; 100 * 2];
+        let stride = index.config.max_degree.max(1);
+        set_flat_graph_for_tests(&mut index, 100, stride);
         assert_eq!(index.compute_max_visit(5), 15);
     }
 
@@ -2695,16 +2738,9 @@ mod tests {
     fn aisaq_filter_threshold_gate_defaults_to_disabled() {
         let config = AisaqConfig::default();
         let mut index = PQFlashIndex::new(config, MetricType::L2, 2).unwrap();
-        index.node_count = 4;
-        index.nodes = vec![
-            FlashNode {
-                id: 0,
-                vector_offset: 0,
-                neighbors: vec![],
-                inline_pq: vec![],
-            };
-            4
-        ];
+        index.vectors = vec![0.0; 4 * 2];
+        let stride = index.config.max_degree.max(1);
+        set_flat_graph_for_tests(&mut index, 4, stride);
         let mut bitset = BitsetView::new(index.len());
         bitset.set(0, true);
         bitset.set(1, true);
