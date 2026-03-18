@@ -14,12 +14,12 @@
 | HNSW | 0.988 (ef=138) | ~15K | 15,099 | ⚠️ verify (see below) | baseline_p3_001 |
 | HNSW vs native | same recall | Rust 1.054x **slower** | Rust 1.054x slower | strict-ef | baseline_p3_001 |
 | HNSW near-equal recall | 0.9518 | ~28K | 28,479 | ⚠️ unverified | hnsw_p3_002 (Codex only) |
-| IVF-Flat | 0.545 (nprobe=8) | ~4K | — | needs tuning | cross_dataset_sampling |
+| IVF-Flat | 1.0 (nprobe=256/random) | 2,130 @nprobe=256 | — | ✅ correct, needs SIFT-128 test | ivf_flat_nprobe_sweep.rs |
 | IVF-PQ | 0.47 | ~674 | — | ❌ no-go | recall_gated_baseline |
-| IVF-SQ8 | unknown | — | — | untested | — |
-| IVF-OPQ | unknown | — | — | untested | — |
-| IVF-RaBitQ | 0.393 | ~144 | — | recheck (lossy) | recall_gated_baseline |
-| DiskANN | 0.009 (4K dim=64) | ~607 | — | ❌ broken params | cross_dataset_sampling |
+| IVF-SQ8 | 0.174 (plateau, full scan) | 115 @nprobe=256 | — | ❌ quantizer trained on raw vectors not residuals | ivf_sq8_sweep.rs |
+| IVF-OPQ | 0.167 (plateau, full scan) | 65 @nprobe=256 | — | ❌ same PQ accuracy issue | ivf_opq_sweep.rs |
+| IVF-RaBitQ | 0.260 no_refine / 0.552 with_refine | ~121 | — | ❌ no-go: both below 0.95 even full-scan | ivf_rabitq_sweep.rs |
+| DiskANN | 0.009 was train+add bug; real: 0.91@dim=64 (L=32) | — | — | ⚠️ add() no graph edges, diagnosed | diskann_dim_diag.rs |
 | AISAQ/PQFlash NoPQ | ~0.997 (10K) | ~30K (Mac) | ~9,722 (1M) | ⚠️ constrained | benchmark.rs |
 | ScaNN | 1.0 | 37 | — | slow | recall_gated_baseline |
 | Sparse/WAND | 1.0 | ~138 | — | ✅ ok | recall_gated_baseline |
@@ -118,8 +118,16 @@
 ### IVF-RaBitQ (`src/faiss/ivf_rabitq.rs`, 909 lines)
 
 **Completeness**: ✅ Full (external rabitq_ffi bindings)
-**Recall**: 0.393@10 — lossy, needs refine path
-**Action**: IVF-RABITQ-001 — test with refine enabled.
+**Recall**: 0.260@10 no_refine, 0.552@10 with_refine(dataview, k=40) — both below 0.95 gate
+**Verdict**: ❌ no-go — 1-bit quantization too lossy even at nprobe=256 (full scan). Refine with k=40 insufficient.
+
+**Sweep results (100K random, nlist=256, Mac)**:
+- nprobe has NO effect on recall (0.260 constant for no_refine, 0.552 for with_refine across nprobe=4..256)
+- The constant recall is explained by random data + RaBitQ 1-bit quantization: even full-scan, wrong neighbors selected by approx distances
+- To improve: need refine_k >> TOP_K (e.g. 100x) or better quantization scheme
+
+**Script**: `examples/ivf_rabitq_sweep.rs`
+**Action**: IVF-RABITQ-FIX-001 (P2) — investigate larger refine_k or quantization improvements before revisiting.
 
 ---
 
