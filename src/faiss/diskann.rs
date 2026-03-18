@@ -4020,6 +4020,41 @@ mod tests {
     }
 
     #[test]
+    fn test_diskann_external_ids() {
+        use crate::dataset::Dataset;
+        use crate::index::Index;
+
+        let n = 100usize;
+        let dim = 16usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(0.0..1.0)).collect();
+        let ext_ids: Vec<i64> = (1000..1000 + n as i64).collect();
+
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        };
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let dataset = Dataset::from_f32_slice_with_ids(&vectors, dim, ext_ids);
+        Index::train(&mut index, &dataset).unwrap();
+
+        let query = Dataset::from_f32_slice(&vectors[0..dim], dim);
+        let result = Index::search(&index, &query, 5).unwrap();
+        for &id in &result.ids {
+            if id >= 0 {
+                assert!(
+                    (1000..1100).contains(&id),
+                    "id {} out of external range [1000, 1100)",
+                    id
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_diskann_l2_sqr_matches_simd_squared_distance() {
         let config = IndexConfig {
             index_type: IndexType::DiskAnn,
@@ -4253,12 +4288,26 @@ impl Index for DiskAnnIndex {
 
     fn train(&mut self, dataset: &Dataset) -> std::result::Result<(), IndexError> {
         let vectors = dataset.vectors().to_vec();
-        DiskAnnIndex::train(self, &vectors).map_err(|e| IndexError::Unsupported(e.to_string()))
+        DiskAnnIndex::train(self, &vectors).map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        if let Some(ids) = dataset.ids() {
+            if ids.len() != self.ids.len() {
+                return Err(IndexError::Unsupported(format!(
+                    "dataset id count {} does not match index vector count {}",
+                    ids.len(),
+                    self.ids.len()
+                )));
+            }
+            self.ids.clear();
+            self.ids.extend_from_slice(ids);
+            self.next_id = ids.iter().copied().max().map(|m| m.saturating_add(1)).unwrap_or(0);
+        }
+        Ok(())
     }
 
     fn add(&mut self, dataset: &Dataset) -> std::result::Result<usize, IndexError> {
         let vectors = dataset.vectors().to_vec();
-        DiskAnnIndex::add(self, &vectors, None).map_err(|e| IndexError::Unsupported(e.to_string()))
+        DiskAnnIndex::add(self, &vectors, dataset.ids())
+            .map_err(|e| IndexError::Unsupported(e.to_string()))
     }
 
     fn search(

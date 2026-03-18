@@ -74,6 +74,16 @@ pub struct Dataset {
 }
 
 impl Dataset {
+    /// 从 f32 切片创建数据集（会复制数据）
+    pub fn from_f32_slice(data: &[f32], dim: usize) -> Self {
+        Self::from_vectors(data.to_vec(), dim)
+    }
+
+    /// 从 f32 切片和显式 IDs 创建数据集（会复制数据）
+    pub fn from_f32_slice_with_ids(data: &[f32], dim: usize, ids: Vec<i64>) -> Self {
+        Self::from_vectors_with_ids(data.to_vec(), dim, ids)
+    }
+
     /// 从向量数组创建数据集
     pub fn from_vectors(vectors: Vec<f32>, dim: usize) -> Self {
         let num_vectors = vectors.len() / dim;

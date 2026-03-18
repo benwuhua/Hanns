@@ -795,6 +795,10 @@ impl PQFlashIndex {
     }
 
     pub fn add(&mut self, vectors: &[f32]) -> Result<()> {
+        self.add_with_ids(vectors, None)
+    }
+
+    pub fn add_with_ids(&mut self, vectors: &[f32], external_ids: Option<&[i64]>) -> Result<()> {
         self.materialize_storage()?;
         self.validate_vectors(vectors)?;
         if vectors.is_empty() {
@@ -806,6 +810,15 @@ impl PQFlashIndex {
         }
 
         let num_vectors = vectors.len() / self.dim;
+        if let Some(ids) = external_ids {
+            if ids.len() != num_vectors {
+                return Err(KnowhereError::InvalidArg(format!(
+                    "ids count {} does not match vector count {}",
+                    ids.len(),
+                    num_vectors
+                )));
+            }
+        }
         self.validate_build_dram_budget(num_vectors)?;
         self.validate_pq_code_budget(num_vectors)?;
         let build_max_degree = self.compute_build_max_degree();
@@ -828,7 +841,8 @@ impl PQFlashIndex {
                 .map(|pq| pq.encode(vector))
                 .unwrap_or_default();
 
-            self.node_ids.push(node_id as i64);
+            let ext_id = external_ids.map(|ids| ids[row]).unwrap_or(node_id as i64);
+            self.node_ids.push(ext_id);
             let count = neighbors.len().min(stride);
             self.node_neighbor_counts.push(count as u32);
             for i in 0..stride {
@@ -2393,7 +2407,8 @@ impl Index for PQFlashIndex {
     fn add(&mut self, dataset: &Dataset) -> std::result::Result<usize, IndexError> {
         let vectors = dataset.vectors();
         let count_before = self.len();
-        PQFlashIndex::add(self, vectors).map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        PQFlashIndex::add_with_ids(self, vectors, dataset.ids())
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
         Ok(self.len().saturating_sub(count_before))
     }
 
@@ -3270,5 +3285,40 @@ mod tests {
         assert!(recall >= 0.85, "disk path recall@10 too low: {recall:.4}");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_pqflash_external_ids() {
+        use crate::dataset::Dataset;
+        use crate::index::Index;
+
+        let n = 100usize;
+        let dim = 16usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(0.0..1.0)).collect();
+        let ext_ids: Vec<i64> = (1000..1000 + n as i64).collect();
+
+        let config = AisaqConfig {
+            max_degree: 16,
+            search_list_size: 64,
+            disk_pq_dims: 0,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, dim).unwrap();
+        let dataset = Dataset::from_f32_slice_with_ids(&vectors, dim, ext_ids);
+        Index::train(&mut index, &dataset).unwrap();
+        Index::add(&mut index, &dataset).unwrap();
+
+        let query = Dataset::from_f32_slice(&vectors[0..dim], dim);
+        let result = Index::search(&index, &query, 5).unwrap();
+        for &id in &result.ids {
+            if id >= 0 {
+                assert!(
+                    (1000..1100).contains(&id),
+                    "id {} out of external range [1000, 1100)",
+                    id
+                );
+            }
+        }
     }
 }
