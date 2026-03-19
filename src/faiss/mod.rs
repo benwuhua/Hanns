@@ -7,6 +7,7 @@ pub mod binary;
 pub mod binary_hnsw;
 pub mod diskann;
 pub mod diskann_aisaq;
+pub mod diskann_sq;
 pub mod hnsw;
 pub mod hnsw_pq;
 pub mod hnsw_prq;
@@ -40,6 +41,7 @@ pub use diskann_aisaq::{
     AsyncReadEngine, BeamSearchIO, BeamSearchStats, FileGroup, FlashLayout, PQFlashIndex,
     PageCache, PageCacheStats,
 };
+pub use diskann_sq::{DiskAnnSqConfig, DiskAnnSqIndex};
 pub use hnsw::HnswIndex;
 pub use hnsw_pq::{HnswPqConfig, HnswPqIndex};
 pub use hnsw_prq::{HnswPrqConfig, HnswPrqIndex};
