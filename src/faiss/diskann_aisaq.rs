@@ -1650,6 +1650,49 @@ impl PQFlashIndex {
         self.search_async_internal(query, k, Some(bitset)).await
     }
 
+    async fn load_node_batch_async(
+        &self,
+        batch: &[Candidate],
+        io: &mut BeamSearchIO,
+    ) -> Result<Vec<(Candidate, std::sync::Arc<LoadedNode>)>> {
+        if batch.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        if batch.len() <= 1 {
+            let candidate = batch[0];
+            let node = self
+                .load_node_async(candidate.node_id, NodeAccessMode::Node, io)
+                .await?;
+            return Ok(vec![(candidate, node)]);
+        }
+
+        let loaded = std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(batch.len());
+            for &candidate in batch {
+                handles.push(scope.spawn(move || {
+                    let mut local_io = self.io_template.clone();
+                    local_io.reset_stats();
+                    let node = self.load_node(candidate.node_id, NodeAccessMode::Node, &mut local_io)?;
+                    Ok::<_, KnowhereError>((candidate, node, local_io.stats().pages_read))
+                }));
+            }
+
+            let mut out = Vec::with_capacity(batch.len());
+            for handle in handles {
+                let joined = handle
+                    .join()
+                    .map_err(|_| KnowhereError::InternalError("async batch load thread panicked".to_string()))?;
+                let (candidate, node, pages_read) = joined?;
+                io.record_node_access(candidate.node_id, self.flash_layout.node_bytes, pages_read);
+                out.push((candidate, node));
+            }
+            Ok::<_, KnowhereError>(out)
+        })?;
+
+        Ok(loaded)
+    }
+
     async fn search_async_internal(
         &self,
         query: &[f32],
@@ -1704,49 +1747,60 @@ impl PQFlashIndex {
 
         let max_visit = self.compute_max_visit(k);
         while expanded.len() < max_visit {
-            let candidate = match frontier.pop() {
-                Some(candidate) => candidate,
-                None => break,
-            };
-            if !seen.insert(candidate.node_id) {
-                continue;
-            }
-            expanded.push(candidate);
-            if self.node_allowed(candidate.node_id, bitset) {
-                accepted.push(candidate);
+            let remaining_budget = max_visit.saturating_sub(expanded.len());
+            let batch_cap = self.config.beamwidth.max(1).min(remaining_budget);
+            let mut batch = Vec::with_capacity(batch_cap);
+            while batch.len() < batch_cap {
+                let Some(candidate) = frontier.pop() else {
+                    break;
+                };
+                if !seen.insert(candidate.node_id) {
+                    continue;
+                }
+                expanded.push(candidate);
+                if self.node_allowed(candidate.node_id, bitset) {
+                    accepted.push(candidate);
+                }
+                batch.push(candidate);
             }
 
-            let node = self
-                .load_node_async(candidate.node_id, NodeAccessMode::Node, &mut io)
-                .await?;
-            for &neighbor in &node.neighbors {
-                if seen.contains(&neighbor) {
-                    continue;
-                }
-                self.prefetch_node(neighbor);
+            if batch.is_empty() {
+                break;
             }
-            let mut neighbor_scores = Vec::with_capacity(node.neighbors.len());
-            for &neighbor in &node.neighbors {
-                if seen.contains(&neighbor) {
-                    continue;
+
+            let loaded_batch = self.load_node_batch_async(&batch, &mut io).await?;
+            for (_, node) in loaded_batch {
+                for &neighbor in &node.neighbors {
+                    if seen.contains(&neighbor) {
+                        continue;
+                    }
+                    self.prefetch_node(neighbor);
                 }
-                let score = self
-                    .coarse_distance_async(
-                        neighbor,
-                        query,
-                        pq_table.as_ref().map(|v| v.as_slice()),
-                        &mut io,
-                    )
-                    .await?;
-                neighbor_scores.push(Candidate {
-                    node_id: neighbor,
-                    score,
-                });
-            }
-            neighbor_scores.sort_by(|left, right| left.score.total_cmp(&right.score));
-            let expand_limit = self.compute_expand_limit(&io);
-            for neighbor in neighbor_scores.into_iter().take(expand_limit) {
-                frontier.push(neighbor);
+
+                let mut neighbor_scores = Vec::with_capacity(node.neighbors.len());
+                for &neighbor in &node.neighbors {
+                    if seen.contains(&neighbor) {
+                        continue;
+                    }
+                    let score = self
+                        .coarse_distance_async(
+                            neighbor,
+                            query,
+                            pq_table.as_ref().map(|v| v.as_slice()),
+                            &mut io,
+                        )
+                        .await?;
+                    neighbor_scores.push(Candidate {
+                        node_id: neighbor,
+                        score,
+                    });
+                }
+
+                neighbor_scores.sort_by(|left, right| left.score.total_cmp(&right.score));
+                let expand_limit = self.compute_expand_limit(&io);
+                for neighbor in neighbor_scores.into_iter().take(expand_limit) {
+                    frontier.push(neighbor);
+                }
             }
         }
 

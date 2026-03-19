@@ -183,18 +183,23 @@
 
 #### P1 — 算法完整性
 
-- [ ] **AISAQ-ARCH-003** [P1]: 全局 I/O budget 终止语义
-  - 让 beam search 在 disk lane 受真实 sector 访问成本约束（对齐 `io_count > search_io_limit` 语义）
-  - 依赖 AISAQ-ARCH-001 完成后再做，sector-dedup 先建立再加 budget 控制
+- [x] **AISAQ-ARCH-003** [P1]: ✅ 完成 — 全局 I/O budget 终止语义（已实装，待 x86 验证效果）
+  - `AisaqConfig::search_io_limit: Option<usize>`，beam search 超过 budget 时提前终止
+  - `BeamSearchIO::pages_loaded_total` 计数，`pages_loaded_total()` 获取
+  - 提交: fix(aisaq) db249f4
 
-- [ ] **AISAQ-ARCH-004** [P1]: 完善 cache list / warmup — BFS cache + sample-query warmup
-  - 现状: `warm_up_cache()` 只 warm entry points 及其 PQ 码
-  - 目标: 实现 `cache_bfs_levels()` + `generate_cache_list_from_sample_queries()` 语义
-  - 影响: 冷启动 QPS 和 steady-state cache hit rate
+- [x] **AISAQ-ARCH-004** [P1]: ✅ 完成 — BFS 层级缓存预热 + 样本查询缓存生成
+  - `cache_bfs_levels(n)`: BFS 从 entry_points 展开 n 层，load 节点+inline PQ 进 io_template 缓存
+  - `generate_cache_list_from_sample_queries(queries, k)`: BFS-2 候选按 query 距离排频次，缓存 top-k hub 节点
+  - `warm_up_cache()` 改为调用 `cache_bfs_levels(2)`
+  - 提交: perf(aisaq) 84ff6a1（与 ARCH-006 同 commit）
 
-- [ ] **AISAQ-ARCH-005** [P1]: async disk path 真正批量化
-  - 现状: `search_async_internal()` 仍是逐点 `await load_node_async()`，rerank 回退 sync
-  - 目标: 每轮 beam 以 batch 为单位 await，依赖 AISAQ-ARCH-001 的 sector-batch 结构
+- [x] **AISAQ-ARCH-005** [P1]: ✅ 完成 — async disk path 每轮 beam 批量 load
+  - `load_node_batch_async()`: 用 `std::thread::scope` 并行 load beamwidth 个候选节点
+  - `search_async_internal()` 每轮 pop beamwidth 个候选 → batch load → 批量评分邻居
+  - batch.len()<=1 时 fallback 到单点 await，边界安全
+  - ⚠️ 注意: std::thread::scope 在 async executor 中阻塞等待，非真正 io_uring async；可接受
+  - build: OK, 32 tests: OK，aisaq_search_async_matches_sync: OK
 
 #### P2 — 细化优化
 
@@ -203,11 +208,12 @@
   - 10K Mac QPS: 38,406（基线 ~41,746，无回退）
   - 提交: perf(hnsw) 47de3d5
 
-- [ ] **AISAQ-ARCH-006** [P1]: 实现 RobustPrune-style 多样性感知反向边修剪
-  - 现状: `link_back_with_limit()` 用 nearest-only 修剪，在大图上删掉长距离导航边
-  - 目标: 实现 RobustPrune（alpha 距离阈值 + 角度多样性），取代当前 sort-truncate
-  - 完成后可去掉 100K guard，恢复对任意规模图的正确反向边质量
-  - 参考: DiskANN 论文 Algorithm 2 (RobustPrune)，native `/Users/ryan/Code/DiskANN/` 实现
+- [x] **AISAQ-ARCH-006** [P1]: ✅ 完成 — RobustPrune-style 多样性感知反向边修剪
+  - `robust_prune_scored()` + `run_robust_prune_pass()` 实现 DiskANN Algorithm 2 (alpha-occlusion)
+  - `link_back_with_limit()` 改用 RobustPrune，two-pass: alpha=1.0 strict + alpha=1.2 relaxed
+  - 100K guard 保留，待 x86 1M authority 验证后再放宽
+  - Mac 10K cached QPS: 25,464（无回退）；unit test: aisaq_link_back_robust_prune_keeps_diverse_reverse_neighbors
+  - 提交: perf(aisaq) 84ff6a1
 
 - [ ] **IVFPQ-SCANNER-001** [P2]: 实现 FAISS-style QueryTables/scanner family
   - 依赖 IVFPQ-KMEANS-001 先修 codebook 质量；scanner 主要解决性能而非 recall
