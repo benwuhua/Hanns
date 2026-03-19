@@ -150,9 +150,10 @@
 - [ ] **IVFPQ-FIX-001** [P3]: IVF-PQ recall < 0.8 根因分析+修复
 
 - [ ] **HNSW-QUANT-FIX-001** [P3]: 量化 HNSW 变体 recall 修复
-  - HnswSQ8: recall=0.002 (constant across all ef) — ID 映射 bug，不是噪声
-    - 根因: 搜索返回量化空间正确节点但 external ID 映射错误
-    - 修复方向: 检查 hnsw_quantized.rs search() 的 ID 返回路径
+  - HnswSQ8: recall=0.002 (brute force 仍然失败!) — `quantized_distance()` 不保距
+    - 诊断: ID 映射正确; `search_recursive()` 是暴力搜索所有向量
+    - 真正根因: uint8 对称 L2 给出错误排名 (brute force + 正确 IDs 仍 recall=0.002)
+    - 修复方向: 参考 ivf_sq8.rs 中 sq_l2_asymmetric 修复量化距离函数
   - HnswPQ8: recall=0.047 max — ADC 量化噪声，和 IVF-PQ 同源
   - HnswPRQ2: recall=0.149 max，非单调 — 图遍历受量化误差破坏
   - Script: examples/hnsw_quantized_recall.rs
