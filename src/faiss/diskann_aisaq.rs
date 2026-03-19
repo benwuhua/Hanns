@@ -2238,7 +2238,7 @@ impl PQFlashIndex {
         let node_bytes = self.flash_layout.node_bytes;
         let page_size = storage.page_cache.page_size.max(1);
         let mmap_len = storage.page_cache.mmap.len();
-        let mut page_ids = std::collections::BTreeSet::new();
+        let mut page_ids: Vec<usize> = Vec::with_capacity(neighbor_ids.len().saturating_mul(2));
 
         for &node_id in neighbor_ids {
             if node_id as usize >= self.len() {
@@ -2254,9 +2254,12 @@ impl PQFlashIndex {
             let start_page = offset / page_size;
             let end_page = end_offset / page_size;
             for page_id in start_page..=end_page {
-                page_ids.insert(page_id);
+                page_ids.push(page_id);
             }
         }
+
+        page_ids.sort_unstable();
+        page_ids.dedup();
 
         for page_id in page_ids {
             let offset = page_id * page_size;

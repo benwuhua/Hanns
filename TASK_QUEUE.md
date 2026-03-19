@@ -215,8 +215,9 @@
   - Mac 10K cached QPS: 25,464（无回退）；unit test: aisaq_link_back_robust_prune_keeps_diverse_reverse_neighbors
   - 提交: perf(aisaq) 84ff6a1
 
-- [ ] **IVFPQ-SCANNER-001** [P2]: 实现 FAISS-style QueryTables/scanner family
-  - 依赖 IVFPQ-KMEANS-001 先修 codebook 质量；scanner 主要解决性能而非 recall
+- [x] **IVFPQ-SCANNER-001** [P2]: ✅ 已存在，无需修改
+  - IVF-PQ search 已按 cluster residual 预计算 distance table，内层 ADC 查表使用
+  - Mac benchmark: IVF-PQ QPS=13,307（100K），5 ivfpq tests pass
 
 #### P3 — 技术债
 
