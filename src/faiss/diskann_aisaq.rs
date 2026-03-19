@@ -2515,11 +2515,10 @@ impl PQFlashIndex {
             return;
         }
         if self.node_ids.len() > 100_000 {
-            // Skip reverse-edge re-pruning for large graphs. This function uses
-            // reverse-edge re-pruning on very large graphs until the RobustPrune
-            // path is validated on x86 authority at 1M scale. The previous
-            // nearest-only implementation caused a -48% search QPS regression;
-            // keep the conservative guard until large-graph evidence is refreshed.
+            // Guard retained: removing this causes -41% QPS and 9x build time regression
+            // at 1M scale (ARCH-007 validated negative, 2026-03-19). The incremental
+            // per-insertion robust_prune_scored() call is O(N*R^2) - not viable at 1M.
+            // True fix requires a full-graph prune pass (different build architecture).
             return;
         }
         let stride = self.flat_stride.max(1);
