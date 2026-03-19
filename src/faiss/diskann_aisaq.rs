@@ -1542,17 +1542,15 @@ impl PQFlashIndex {
                     scores
                 } else {
                     let node = self.load_node(candidate.node_id, NodeAccessMode::Node, &mut io)?;
-                    for &neighbor in &node.neighbors {
-                        if scratch.seen.contains(&neighbor) {
-                            continue;
-                        }
-                        self.prefetch_node(neighbor);
-                    }
-                    let mut scores = Vec::with_capacity(node.neighbors.len());
-                    for &neighbor in &node.neighbors {
-                        if scratch.seen.contains(&neighbor) {
-                            continue;
-                        }
+                    let unseen: Vec<u32> = node
+                        .neighbors
+                        .iter()
+                        .filter(|&&neighbor| !scratch.seen.contains(&neighbor))
+                        .copied()
+                        .collect();
+                    self.batch_prefetch_neighbors(&unseen);
+                    let mut scores = Vec::with_capacity(unseen.len());
+                    for &neighbor in &unseen {
                         let score =
                             self.coarse_distance(neighbor, query, pq_table_slice, &mut io)?;
                         scores.push(Candidate {
@@ -2152,6 +2150,49 @@ impl PQFlashIndex {
         let _ = storage
             .page_cache
             .prefetch(offset, self.flash_layout.node_bytes);
+    }
+
+    fn batch_prefetch_neighbors(&self, neighbor_ids: &[u32]) {
+        let Some(storage) = &self.storage else {
+            return;
+        };
+        if neighbor_ids.is_empty() {
+            return;
+        }
+
+        let node_bytes = self.flash_layout.node_bytes;
+        let page_size = storage.page_cache.page_size.max(1);
+        let mmap_len = storage.page_cache.mmap.len();
+        let mut page_ids = std::collections::BTreeSet::new();
+
+        for &node_id in neighbor_ids {
+            if node_id as usize >= self.len() {
+                continue;
+            }
+            let offset = node_id as usize * node_bytes;
+            if offset >= mmap_len || node_bytes == 0 {
+                continue;
+            }
+            let end_offset = offset
+                .saturating_add(node_bytes.saturating_sub(1))
+                .min(mmap_len.saturating_sub(1));
+            let start_page = offset / page_size;
+            let end_page = end_offset / page_size;
+            for page_id in start_page..=end_page {
+                page_ids.insert(page_id);
+            }
+        }
+
+        for page_id in page_ids {
+            let offset = page_id * page_size;
+            if offset >= mmap_len {
+                continue;
+            }
+            let len = page_size.min(mmap_len.saturating_sub(offset));
+            if len > 0 {
+                let _ = storage.page_cache.prefetch(offset, len);
+            }
+        }
     }
 
     async fn coarse_distance_async(
