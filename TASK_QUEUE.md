@@ -161,12 +161,11 @@
 
 #### P0 — 架构级差距（高影响）
 
-- [ ] **AISAQ-ARCH-001** [P0]: Sector-dedup + 批量对齐读 — disk beam search 架构根修
-  - 现状: `search_internal()` 每个邻居独立触发 `load_node()` / `PageCache::read()`，node-by-node 模式
-  - native 做法: `nodes_to_fetch → sectors_to_fetch` 去重 → 一次对齐批读（`disk_sector_graph.rs::ensure_loaded()`）
-  - 目标: 把 beam 每一轮的邻居集 → sector ID set → batch read，消除重复扇区访问
-  - 预期影响: disk_warm QPS 数倍提升（当前 ~326 QPS，目标 >1000）；这是 CAP-008 两次失败的真正根因
-  - 参考: `/Users/ryan/Code/DiskANN/diskann-disk/src/search/provider/disk_sector_graph.rs`
+- [x] **AISAQ-ARCH-001** [P0]: ✅ 完成 — sector-dedup 批量页预热
+  - 实现: 每轮 beam 先收集 unseen neighbors → BTreeSet page ID 去重 → batch warm PageCache → 串行评分
+  - 同时消除了双重 seen-filter（prefetch loop + score loop → 单 Vec + score loop）
+  - Mac 10K disk_warm: ~326 → 442 QPS (+35%)；x86 authority 待验证
+  - 提交: perf(aisaq) aefbe8c
 
 - [x] **AISAQ-ARCH-002** [P0]: ✅ 完成 — 图 build 质量修复
   - 删除 `link_back_with_limit()` 的 50K guard — 现在对所有规模做正确 O(R log R) Vamana 反向边修剪
