@@ -1569,7 +1569,7 @@ impl PQFlashIndex {
                         .filter(|&&neighbor| !scratch.seen.contains(&neighbor))
                         .copied()
                         .collect();
-                    self.batch_prefetch_neighbors(&unseen);
+                    // self.batch_prefetch_neighbors(&unseen); // disabled: net negative on x86 warm path
                     let mut scores = Vec::with_capacity(unseen.len());
                     for &neighbor in &unseen {
                         let score =
