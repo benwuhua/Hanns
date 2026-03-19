@@ -1297,6 +1297,9 @@ impl PQFlashIndex {
         if index.pq_code_size > 0 {
             index.disk_pq_codes = index.load_disk_pq_codes()?;
         }
+        if index.config.warm_up {
+            index.warm_up_cache();
+        }
         Ok(index)
     }
 
@@ -2346,19 +2349,120 @@ impl PQFlashIndex {
         self.link_back_with_limit(neighbor, node_id, self.config.max_degree);
     }
 
+    fn candidate_pair_distance(&self, a: u32, b: u32) -> Option<f32> {
+        let a_idx = a as usize;
+        let b_idx = b as usize;
+        if a_idx >= self.node_ids.len() || b_idx >= self.node_ids.len() {
+            return None;
+        }
+        Some(self.exact_distance(self.node_vector(a_idx), self.node_vector(b_idx)))
+    }
+
+    fn run_robust_prune_pass(
+        &self,
+        pool: &[(u32, f32)],
+        selected: &mut Vec<u32>,
+        selected_ids: &mut HashSet<u32>,
+        current_alpha: f32,
+        degree_limit: usize,
+    ) {
+        for &(candidate_id, anchor_distance) in pool {
+            if selected.len() >= degree_limit {
+                break;
+            }
+            if selected_ids.contains(&candidate_id) {
+                continue;
+            }
+
+            let mut occluded = false;
+            for &selected_id in selected.iter() {
+                let Some(d_jk) = self.candidate_pair_distance(selected_id, candidate_id) else {
+                    continue;
+                };
+                if d_jk <= f32::EPSILON || anchor_distance / d_jk > current_alpha {
+                    occluded = true;
+                    break;
+                }
+            }
+
+            if !occluded {
+                selected.push(candidate_id);
+                selected_ids.insert(candidate_id);
+            }
+        }
+    }
+
+    fn robust_prune_scored(
+        &self,
+        anchor_idx: usize,
+        pool: &[(u32, f32)],
+        degree_limit: usize,
+        alpha: f32,
+    ) -> Vec<u32> {
+        if pool.is_empty() || degree_limit == 0 {
+            return Vec::new();
+        }
+
+        let anchor_id = anchor_idx as u32;
+        let mut dedup = HashSet::with_capacity(pool.len().saturating_mul(2));
+        let filtered: Vec<(u32, f32)> = pool
+            .iter()
+            .copied()
+            .filter(|&(candidate_id, _)| candidate_id != anchor_id)
+            .filter(|&(candidate_id, _)| (candidate_id as usize) < self.node_ids.len())
+            .filter(|&(candidate_id, _)| dedup.insert(candidate_id))
+            .collect();
+
+        if filtered.len() <= degree_limit {
+            return filtered.into_iter().map(|(candidate_id, _)| candidate_id).collect();
+        }
+
+        let final_alpha = alpha.max(1.0);
+        let mut selected = Vec::with_capacity(degree_limit.min(filtered.len()));
+        let mut selected_ids = HashSet::with_capacity(degree_limit.saturating_mul(2));
+
+        self.run_robust_prune_pass(
+            &filtered,
+            &mut selected,
+            &mut selected_ids,
+            1.0,
+            degree_limit,
+        );
+        if selected.len() < degree_limit && final_alpha > 1.0 {
+            self.run_robust_prune_pass(
+                &filtered,
+                &mut selected,
+                &mut selected_ids,
+                final_alpha,
+                degree_limit,
+            );
+        }
+
+        if final_alpha > 1.0 {
+            for &(candidate_id, _) in &filtered {
+                if selected.len() >= degree_limit {
+                    break;
+                }
+                if selected_ids.insert(candidate_id) {
+                    selected.push(candidate_id);
+                }
+            }
+        }
+
+        selected
+    }
+
     fn link_back_with_limit(&mut self, neighbor: u32, node_id: u32, degree_limit: usize) {
         let neighbor_idx = neighbor as usize;
-        if neighbor_idx >= self.node_ids.len() {
+        if neighbor_idx >= self.node_ids.len() || node_id == neighbor {
             return;
         }
         if self.node_ids.len() > 100_000 {
             // Skip reverse-edge re-pruning for large graphs. This function uses
-            // nearest-only pruning (keeps R closest neighbors), which differs from
-            // native DiskANN's RobustPrune (diversity-aware). At 1M scale, nearest-only
-            // pruning removes long-range navigability edges, causing -48% search QPS
-            // regression (verified x86 authority, 2026-03-19).
-            // TODO(AISAQ-ARCH-006): implement RobustPrune-style diversity pruning
-            // before removing this guard.
+            // reverse-edge re-pruning on very large graphs until the RobustPrune
+            // path is validated on x86 authority at 1M scale. The previous
+            // nearest-only implementation caused a -48% search QPS regression;
+            // keep the conservative guard until large-graph evidence is refreshed.
             return;
         }
         let stride = self.flat_stride.max(1);
@@ -2382,9 +2486,9 @@ impl PQFlashIndex {
             .map(|&nb| (nb, self.exact_distance(&anchor, self.node_vector(nb as usize))))
             .collect();
         scored.sort_by(|a, b| a.1.total_cmp(&b.1));
-        scored.truncate(effective_limit);
-        let new_count = scored.len();
-        for (i, (nb, _)) in scored.into_iter().enumerate() {
+        let selected = self.robust_prune_scored(neighbor_idx, &scored, effective_limit, 1.2);
+        let new_count = selected.len();
+        for (i, nb) in selected.into_iter().enumerate() {
             self.node_neighbor_ids[start + i] = nb;
         }
         for i in new_count..stride {
@@ -2536,16 +2640,131 @@ impl PQFlashIndex {
         })
     }
 
-    fn warm_up_cache(&mut self) {
+    fn bfs_cache_candidates(&self, num_levels: usize, io: &mut BeamSearchIO) -> Vec<u32> {
+        if self.entry_points.is_empty() || self.is_empty() {
+            return Vec::new();
+        }
+
+        let mut visited = HashSet::with_capacity(self.entry_points.len().saturating_mul(8).max(1));
+        let mut queue = VecDeque::with_capacity(self.entry_points.len().max(1));
+        let mut ordered = Vec::new();
+
         for &entry in &self.entry_points {
-            self.io_template.cache_node(entry);
-            let pq_size = self.pq_code_size.max(1);
-            let pq_start = entry as usize * pq_size;
-            let has_pq = pq_start + pq_size <= self.node_pq_codes.len();
-            if has_pq {
-                self.io_template.cache_pq_vector(entry);
+            if entry as usize >= self.len() || !visited.insert(entry) {
+                continue;
+            }
+            queue.push_back((entry, 0usize));
+        }
+
+        while let Some((node_id, level)) = queue.pop_front() {
+            let Ok(node) = self.load_node(node_id, NodeAccessMode::Node, io) else {
+                continue;
+            };
+            ordered.push(node_id);
+
+            if level >= num_levels {
+                continue;
+            }
+
+            for &neighbor in &node.neighbors {
+                if neighbor as usize >= self.len() || !visited.insert(neighbor) {
+                    continue;
+                }
+                queue.push_back((neighbor, level + 1));
             }
         }
+
+        ordered
+    }
+
+    fn warm_up_cache(&mut self) {
+        let _ = self.cache_bfs_levels(2);
+    }
+
+    pub fn cache_bfs_levels(&mut self, num_levels: usize) -> usize {
+        let mut io = self.io_template.clone();
+        let cached = self.bfs_cache_candidates(num_levels, &mut io);
+        for &node_id in &cached {
+            self.io_template.cache_node(node_id);
+            if let Ok(node) = self.load_node(node_id, NodeAccessMode::None, &mut io) {
+                if !node.inline_pq.is_empty() {
+                    self.io_template.cache_pq_vector(node_id);
+                }
+            }
+        }
+        cached.len()
+    }
+
+    pub fn generate_cache_list_from_sample_queries(
+        &mut self,
+        sample_queries: &[Vec<f32>],
+        cache_k: usize,
+    ) -> usize {
+        if cache_k == 0 || sample_queries.is_empty() || self.is_empty() {
+            return 0;
+        }
+
+        let mut bfs_io = self.io_template.clone();
+        let bfs_candidates = self.bfs_cache_candidates(2, &mut bfs_io);
+        if bfs_candidates.is_empty() {
+            return 0;
+        }
+
+        let mut frequency: HashMap<u32, (usize, f32)> = HashMap::new();
+        let per_query = cache_k.min(bfs_candidates.len());
+        let mut distance_io = self.io_template.clone();
+
+        for query in sample_queries {
+            if query.len() != self.dim {
+                continue;
+            }
+
+            let mut scored = Vec::with_capacity(bfs_candidates.len());
+            for &node_id in &bfs_candidates {
+                let Ok(node) = self.load_node(node_id, NodeAccessMode::None, &mut distance_io) else {
+                    continue;
+                };
+                scored.push((node_id, self.exact_distance(query, &node.vector)));
+            }
+
+            scored.sort_by(|left, right| {
+                left.1
+                    .total_cmp(&right.1)
+                    .then_with(|| left.0.cmp(&right.0))
+            });
+
+            for &(node_id, distance) in scored.iter().take(per_query) {
+                let entry = frequency.entry(node_id).or_insert((0, 0.0));
+                entry.0 += 1;
+                entry.1 += distance;
+            }
+        }
+
+        let mut ranked: Vec<(u32, usize, f32)> = frequency
+            .into_iter()
+            .map(|(node_id, (count, total_distance))| (node_id, count, total_distance))
+            .collect();
+        ranked.sort_by(|left, right| {
+            right
+                .1
+                .cmp(&left.1)
+                .then_with(|| left.2.total_cmp(&right.2))
+                .then_with(|| left.0.cmp(&right.0))
+        });
+
+        let mut warm_io = self.io_template.clone();
+        let mut cached = 0usize;
+        for (node_id, _, _) in ranked.into_iter().take(cache_k) {
+            self.io_template.cache_node(node_id);
+            if let Ok(node) = self.load_node(node_id, NodeAccessMode::Node, &mut warm_io) {
+                if !node.inline_pq.is_empty() {
+                    self.io_template.cache_pq_vector(node_id);
+                }
+                cached += 1;
+            }
+        }
+
+        cached
     }
 
     fn materialize_storage(&mut self) -> Result<()> {
@@ -3237,7 +3456,7 @@ mod tests {
 
 
     #[test]
-    fn aisaq_link_back_keeps_closer_reverse_neighbors() {
+    fn aisaq_link_back_robust_prune_keeps_diverse_reverse_neighbors() {
         let config = AisaqConfig {
             max_degree: 2,
             ..AisaqConfig::default()
@@ -3263,10 +3482,13 @@ mod tests {
         let nbrs = &index.node_neighbor_ids[0..cnt];
         assert_eq!(cnt, 2);
         assert!(nbrs.contains(&2));
-        assert!(nbrs.contains(&3));
         assert!(
-            !nbrs.contains(&1),
-            "far neighbor should be evicted when reverse list overflows"
+            nbrs.contains(&1),
+            "robust prune should preserve the long-range navigability edge"
+        );
+        assert!(
+            !nbrs.contains(&3),
+            "near-but-occluded edge should be pruned under alpha-occlusion"
         );
     }
 
@@ -3464,6 +3686,65 @@ mod tests {
         bitset.set(0, true);
         bitset.set(1, true);
         assert!(!index.should_force_exact_filter_scan(Some(&bitset)));
+    }
+
+    #[test]
+    fn aisaq_cache_bfs_levels_warms_two_hops_from_entry_points() {
+        let mut index = PQFlashIndex::new(AisaqConfig::default(), MetricType::L2, 2).unwrap();
+        index.vectors = vec![
+            0.0f32, 0.0, //
+            1.0, 0.0, //
+            2.0, 0.0, //
+            3.0, 0.0, //
+            4.0, 0.0,
+        ];
+        set_flat_graph_for_tests(&mut index, 5, 2);
+        index.entry_points = vec![0];
+        index.node_neighbor_counts[0] = 2;
+        index.node_neighbor_ids[0] = 1;
+        index.node_neighbor_ids[1] = 2;
+        index.node_neighbor_counts[1] = 1;
+        index.node_neighbor_ids[2] = 3;
+        index.node_neighbor_counts[2] = 1;
+        index.node_neighbor_ids[4] = 4;
+
+        let warmed = index.cache_bfs_levels(2);
+
+        assert_eq!(warmed, 5);
+        for node_id in 0..5u32 {
+            assert!(index.io_template.cached_nodes.contains(&node_id));
+            assert!(index.io_template.cached_pq_vectors.contains(&node_id));
+        }
+    }
+
+    #[test]
+    fn aisaq_generate_cache_list_from_sample_queries_promotes_frequent_bfs_hubs() {
+        let mut index = PQFlashIndex::new(AisaqConfig::default(), MetricType::L2, 2).unwrap();
+        index.vectors = vec![
+            0.0f32, 0.0, //
+            1.0, 0.0, //
+            2.0, 0.0, //
+            3.0, 0.0, //
+            4.0, 0.0,
+        ];
+        set_flat_graph_for_tests(&mut index, 5, 2);
+        index.entry_points = vec![0];
+        index.node_neighbor_counts[0] = 2;
+        index.node_neighbor_ids[0] = 1;
+        index.node_neighbor_ids[1] = 2;
+        index.node_neighbor_counts[1] = 1;
+        index.node_neighbor_ids[2] = 3;
+        index.node_neighbor_counts[2] = 1;
+        index.node_neighbor_ids[4] = 4;
+
+        let cached = index.generate_cache_list_from_sample_queries(
+            &[vec![3.0, 0.0], vec![3.1, 0.0], vec![2.9, 0.0]],
+            1,
+        );
+
+        assert_eq!(cached, 1);
+        assert!(index.io_template.cached_nodes.contains(&3));
+        assert!(index.io_template.cached_pq_vectors.contains(&3));
     }
 
     fn brute_force_topk_l2(
