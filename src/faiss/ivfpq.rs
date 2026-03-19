@@ -6,11 +6,9 @@
 //!
 //! OPT-003: 内存布局优化 - 使用 Vec 替代 HashMap
 
-use rand::distributions::Distribution;
-use rand::Rng;
-
 use crate::api::{IndexConfig, Result, SearchRequest, SearchResult};
 use crate::executor::l2_distance;
+use crate::quantization::KMeans;
 use crate::quantization::opq::{OPQConfig, OptimizedProductQuantizer};
 use crate::quantization::pq::{PQConfig, ProductQuantizer};
 use crate::simd::l2_distance_sq;
@@ -117,8 +115,8 @@ impl IvfPqIndex {
             ));
         }
 
-        // Step 1: Train coarse quantizer (k-means for IVF centroids)
-        self.centroids = self.kmeans(vectors, self.nlist);
+        // Step 1: Train coarse quantizer (parallel KMeans)
+        self.train_ivf_centroids(vectors, n)?;
 
         // Clear inverted lists (already initialized in new())
         for i in 0..self.nlist {
@@ -191,133 +189,11 @@ impl IvfPqIndex {
         self.pq.encode(residual)
     }
 
-    /// Simple k-means implementation with k-means++ initialization
-    fn kmeans(&self, vectors: &[f32], k: usize) -> Vec<f32> {
-        let n = vectors.len() / self.dim;
-        let mut centroids = vec![0.0f32; k * self.dim];
-        let mut rng = rand::thread_rng();
-
-        // K-means++ initialization for better cluster quality
-        // First centroid: random
-        let first_idx = rng.gen_range(0..n) * self.dim;
-        centroids[..self.dim].copy_from_slice(&vectors[first_idx..self.dim + first_idx]);
-
-        // Remaining centroids: choose with probability proportional to D(x)^2
-        use rand::distributions::WeightedIndex;
-        let mut weights = vec![0.0f32; n];
-
-        for c in 1..k {
-            // Compute D(x)^2 for each point (distance to nearest existing centroid)
-            for i in 0..n {
-                let mut min_dist = f32::MAX;
-                for existing_c in 0..c {
-                    let dist = l2_distance_sq(
-                        &vectors[i * self.dim..(i + 1) * self.dim],
-                        &centroids[existing_c * self.dim..(existing_c + 1) * self.dim],
-                    );
-                    if dist < min_dist {
-                        min_dist = dist;
-                    }
-                }
-                weights[i] = min_dist.max(1e-10); // Avoid zero weights
-            }
-
-            // Normalize weights
-            let sum: f32 = weights.iter().sum();
-            for w in &mut weights {
-                *w /= sum;
-            }
-
-            // Sample next centroid
-            let dist = WeightedIndex::new(&weights).unwrap();
-            let next_idx = dist.sample(&mut rng) * self.dim;
-            for j in 0..self.dim {
-                centroids[c * self.dim + j] = vectors[next_idx + j];
-            }
-        }
-
-        // Iterative refinement with adaptive iterations
-        // OPT-004: 动态调整迭代次数，避免小数据集训练过慢
-        // - n < 10K: 10 次迭代（快速训练）
-        // - 10K <= n < 100K: 25 次迭代
-        // - n >= 100K: 50 次迭代
-        let max_iter = if n < 10_000 {
-            10
-        } else if n < 100_000 {
-            25
-        } else {
-            50
-        };
-
-        // 早停机制：如果质心变化小于阈值则提前终止
-        let convergence_threshold = 1e-4;
-        let mut prev_centroids = centroids.clone();
-
-        for iter in 0..max_iter {
-            // Assign vectors to nearest centroid
-            let mut assignments = vec![0usize; n];
-            for (i, assignment) in assignments.iter_mut().enumerate().take(n) {
-                let start = i * self.dim;
-                let mut min_dist = f32::MAX;
-                let mut min_idx = 0;
-                for c in 0..k {
-                    let dist = l2_distance_sq(
-                        &vectors[start..start + self.dim],
-                        &centroids[c * self.dim..(c + 1) * self.dim],
-                    );
-                    if dist < min_dist {
-                        min_dist = dist;
-                        min_idx = c;
-                    }
-                }
-                *assignment = min_idx;
-            }
-
-            // Update centroids
-            let mut sums = vec![0.0f32; k * self.dim];
-            let mut counts = vec![0usize; k];
-
-            for i in 0..n {
-                let c = assignments[i];
-                for j in 0..self.dim {
-                    sums[c * self.dim + j] += vectors[i * self.dim + j];
-                }
-                counts[c] += 1;
-            }
-
-            for c in 0..k {
-                if counts[c] > 0 {
-                    for j in 0..self.dim {
-                        centroids[c * self.dim + j] = sums[c * self.dim + j] / counts[c] as f32;
-                    }
-                }
-            }
-
-            // OPT-004: 早停机制 - 检查收敛
-            if iter > 0 {
-                let mut total_change = 0.0f32;
-                for c in 0..k {
-                    for j in 0..self.dim {
-                        let diff = centroids[c * self.dim + j] - prev_centroids[c * self.dim + j];
-                        total_change += diff * diff;
-                    }
-                }
-                let avg_change = total_change / (k * self.dim) as f32;
-
-                if avg_change < convergence_threshold {
-                    tracing::debug!(
-                        "IVF k-means converged at iteration {} (change={:.6})",
-                        iter,
-                        avg_change
-                    );
-                    break;
-                }
-            }
-
-            prev_centroids = centroids.clone();
-        }
-
-        centroids
+    fn train_ivf_centroids(&mut self, vectors: &[f32], _n: usize) -> Result<()> {
+        let mut km = KMeans::new(self.nlist, self.dim);
+        km.train(vectors);
+        self.centroids = km.centroids().to_vec();
+        Ok(())
     }
 
     /// Add vectors to index

@@ -15,19 +15,14 @@
 
 ### P0 — 立即（轻量、高收益）
 
-- [ ] **HANNS-VIS-001** [P0]: Thread-local Visited Pool
+- [x] **HANNS-VIS-001** [P0]: ✅ 完成 — generation counter O(1) reset，已集成 DiskANN beam_search (a6b519a)
   - 目标: `src/search/visited_pool.rs` — generation counter O(1) reset，替代当前每次查询的 visited set allocate/clear
   - 实现要点: `thread_local! { static VISITED: RefCell<VisitedList> }`（不用 HashMap，文档版本有 lifetime bug）
   - 集成: AISAQ `search_internal` + DiskANN Vamana search
   - 影响: warm QPS，per-query 分配开销
   - 复杂度: 小
 
-- [ ] **HANNS-IOC-001** [P0]: IO Cutting 早停
-  - 目标: `src/search/io_cutting.rs` — beam search 候选列表收敛后按比例早停
-  - 核心: `stable_count / remaining >= threshold`，叠加在现有 `max_visit` + `search_io_limit` 之上
-  - 集成: AISAQ `search_internal`（beam loop 中每次 insert 后判断）
-  - 影响: cold/disk QPS
-  - 复杂度: 小到中
+- [x] **HANNS-IOC-001** [P0]: ✅ 完成 — IO Cutting 早停，默认 disabled，已集成 DiskANN beam_search (a6b519a)
 
 - [x] **IVFPQ-ADC-001** [P0]: ✅ 根因确认（2026-03-19）
   - 诊断结果: reconstruction_error=62.38, avg_rel_err=27.14%, brute_recall=1.000
@@ -37,22 +32,14 @@
 
 ### P1 — 下一 sprint（中等复杂度）
 
-- [ ] **HANNS-PCA-001** [P1]: PCA 模块
-  - 目标: `src/quantization/pca.rs`
-  - 实现: nalgebra SVD（纯 Rust，无系统依赖），不用 openblas-system
-  - 接口: `PcaTransform::train(data, n, dim, pca_dim)` + `transform_query(query)`
-  - 复杂度: 中
+- [x] **HANNS-PCA-001** [P1]: ✅ 完成 — nalgebra SVD PCA 模块，src/quantization/pca.rs (6af0d4d)
 
-- [ ] **HANNS-SQ-001** [P1]: SQ Flash Index + PCA 加速 build
-  - 目标: `src/faiss/diskann_sq.rs`（新文件）+ `src/quantization/sq.rs` 增强
-  - 依赖: HANNS-PCA-001
-  - 思路: PCA 降维 → SQ8 量化 → DiskANN graph，降低 build time
-  - 复杂度: 中大
+- [x] **HANNS-SQ-001** [P1]: ✅ 完成 — DiskAnnSqIndex scaffold，PCA+SQ8 build，search 委托 inner (6d08815)
+  - ⚠️ 后续: search() 目前委托 inner.search()；SQ 距离 beam search 为 future work
 
-- [ ] **IVFPQ-FIX-002** [P1]: IVF-OPQ 集成
-  - 方案: 在 `IvfPqIndex::train()` 中用 `OptimizedProductQuantizer`（opq.rs 已有）替换 plain PQ
-  - 预期: recall@10 从 0.72 提升到 ~0.88+（OPQ 旋转消除维度间相关性）
-  - 注意: add_parallel/search_parallel 有 `&centroids[c * dim..]` 越界 bug，需同时修复
+- [x] **IVFPQ-FIX-002** [P1]: ✅ 完成 — OPQ 集成 + parallel slice bug + NaN-safe sort (68a44cf)
+  - OPQ 对 dim>=64 启用，dim<64（测试）用 plain PQ
+  - 预期 SIFT-1M recall 从 0.719 提升到 ~0.88+（x86 验证中）
 
 ### P2 — 待 P1 稳定后
 

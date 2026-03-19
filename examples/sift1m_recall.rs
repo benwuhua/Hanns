@@ -114,11 +114,12 @@ fn run_ivf_flat(
     n_queries: usize,
     gt_width: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = make_cfg(IndexType::IvfFlat, NLIST, 1, None);
+    let mut index = IvfFlatIndex::new(&cfg)?;
+    index.train(train)?;
+    index.add(base, None)?;
+
     for &nprobe in &[16usize, 32, 64, 128, 256] {
-        let cfg = make_cfg(IndexType::IvfFlat, NLIST, nprobe, None);
-        let mut index = IvfFlatIndex::new(&cfg)?;
-        index.train(train)?;
-        index.add(base, None)?;
         let req = SearchRequest {
             top_k: TOP_K,
             nprobe,
@@ -151,11 +152,12 @@ fn run_ivf_sq8(
     n_queries: usize,
     gt_width: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = make_cfg(IndexType::IvfSq8, NLIST, 1, None);
+    let mut index = IvfSq8Index::new(&cfg)?;
+    index.train(train)?;
+    index.add(base, None)?;
+
     for &nprobe in &[32usize, 64, 128, 256] {
-        let cfg = make_cfg(IndexType::IvfSq8, NLIST, nprobe, None);
-        let mut index = IvfSq8Index::new(&cfg)?;
-        index.train(train)?;
-        index.add(base, None)?;
         let req = SearchRequest {
             top_k: TOP_K,
             nprobe,
@@ -181,11 +183,12 @@ fn run_ivf_pq(
     gt_width: usize,
     m: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = make_cfg(IndexType::IvfPq, NLIST, 1, Some(m));
+    let mut index = IvfPqIndex::new(&cfg)?;
+    index.train(train)?;
+    index.add(base, None)?;
+
     for &nprobe in &[32usize, 64, 128, 256] {
-        let cfg = make_cfg(IndexType::IvfPq, NLIST, nprobe, Some(m));
-        let mut index = IvfPqIndex::new(&cfg)?;
-        index.train(train)?;
-        index.add(base, None)?;
         let req = SearchRequest {
             top_k: TOP_K,
             nprobe,
