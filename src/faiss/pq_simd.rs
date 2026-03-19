@@ -19,6 +19,9 @@ impl PqDistance {
     pub fn distance(&self, query: &[f32], codebook: &[f32], codes: &[u8]) -> f32 {
         #[cfg(all(feature = "simd", target_arch = "x86_64"))]
         {
+            if std::is_x86_feature_detected!("avx512f") {
+                return unsafe { self.distance_avx512(query, codebook, codes) };
+            }
             if std::is_x86_feature_detected!("avx2") {
                 return unsafe { self.distance_avx2(query, codebook, codes) };
             }
@@ -191,6 +194,53 @@ impl PqDistance {
         result
     }
 
+    /// AVX-512 优化的 PQ 距离 (16 elements per iteration)
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    #[inline]
+    #[target_feature(enable = "avx512f")]
+    unsafe fn distance_avx512(&self, query: &[f32], codebook: &[f32], codes: &[u8]) -> f32 {
+        use std::arch::x86_64::*;
+
+        let mut total = 0.0f32;
+
+        for (sub_idx, &code_u8) in codes.iter().take(self.m).enumerate() {
+            let code = code_u8 as usize;
+            let cent_offset = sub_idx * self.k * self.sub_dim + code * self.sub_dim;
+
+            if cent_offset + self.sub_dim > codebook.len() {
+                continue;
+            }
+
+            let q_start = sub_idx * self.sub_dim;
+            if q_start + self.sub_dim > query.len() {
+                continue;
+            }
+
+            let mut acc = _mm512_setzero_ps();
+            let mut i = 0;
+            let q_ptr = query.as_ptr().add(q_start);
+            let c_ptr = codebook.as_ptr().add(cent_offset);
+
+            while i + 16 <= self.sub_dim {
+                let qv = _mm512_loadu_ps(q_ptr.add(i));
+                let cv = _mm512_loadu_ps(c_ptr.add(i));
+                let diff = _mm512_sub_ps(qv, cv);
+                acc = _mm512_fmadd_ps(diff, diff, acc);
+                i += 16;
+            }
+
+            total += _mm512_reduce_add_ps(acc);
+
+            while i < self.sub_dim {
+                let diff = *q_ptr.add(i) - *c_ptr.add(i);
+                total += diff * diff;
+                i += 1;
+            }
+        }
+
+        total
+    }
+
     /// NEON 优化的 PQ 距离 (4 elements per iteration)
     #[cfg(all(feature = "simd", target_arch = "aarch64"))]
     #[inline]
@@ -273,6 +323,9 @@ impl DistanceTable {
     pub fn compute(&mut self, query: &[f32], codebook: &[f32], sub_dim: usize) {
         #[cfg(all(feature = "simd", target_arch = "x86_64"))]
         {
+            if std::is_x86_feature_detected!("avx512f") {
+                return unsafe { self.compute_avx512(query, codebook, sub_dim) };
+            }
             if std::is_x86_feature_detected!("avx2") {
                 return unsafe { self.compute_avx2(query, codebook, sub_dim) };
             }
@@ -387,6 +440,45 @@ impl DistanceTable {
                 result += _mm_cvtss_f32(_mm_add_ps(high, _mm256_castps256_ps128(sum)));
 
                 // Handle remainder
+                while i < sub_dim {
+                    let diff = *q_ptr.add(i) - *c_ptr.add(i);
+                    result += diff * diff;
+                    i += 1;
+                }
+
+                self.table[m_idx * self.k + k_idx] = result;
+            }
+        }
+    }
+
+    /// AVX-512 优化的预计算
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    #[inline]
+    #[target_feature(enable = "avx512f")]
+    unsafe fn compute_avx512(&mut self, query: &[f32], codebook: &[f32], sub_dim: usize) {
+        use std::arch::x86_64::*;
+
+        for m_idx in 0..self.m {
+            let q_start = m_idx * sub_dim;
+            let q_ptr = query.as_ptr().add(q_start);
+
+            for k_idx in 0..self.k {
+                let cent_offset = m_idx * self.k * sub_dim + k_idx * sub_dim;
+                let c_ptr = codebook.as_ptr().add(cent_offset);
+
+                let mut acc = _mm512_setzero_ps();
+                let mut i = 0;
+
+                while i + 16 <= sub_dim {
+                    let qv = _mm512_loadu_ps(q_ptr.add(i));
+                    let cv = _mm512_loadu_ps(c_ptr.add(i));
+                    let diff = _mm512_sub_ps(qv, cv);
+                    acc = _mm512_fmadd_ps(diff, diff, acc);
+                    i += 16;
+                }
+
+                let mut result = _mm512_reduce_add_ps(acc);
+
                 while i < sub_dim {
                     let diff = *q_ptr.add(i) - *c_ptr.add(i);
                     result += diff * diff;
