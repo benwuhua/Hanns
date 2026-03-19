@@ -144,12 +144,8 @@
   - 修复: `.cargo/config.toml` 已加 target-cpu=native for x86_64 + aarch64
   - 新 x86 authority baseline: HNSW **28,641 QPS** (取代旧 23,474)
 
-- [x] **AISAQ-CAP-008** [P2]: ✅ 完成 — beam search 并行节点读取
-  - 实现: `coarse_distances_for_neighbors(parallel: bool)` — disk 节点用 rayon par_iter，cache 节点串行
-  - `coarse_score_with_stats()`: disk_pq_codes → in-memory LRU → page_cache 三级 fallback
-  - `from_disk` flag: 父节点来自磁盘时才启用并行，避免 LRU 锁竞争
-  - Mac benchmark (相对修复前回退版本): cached QPS 10,387 → 18,536; disk QPS 326 → 429 (+31.6%)
-  - 待完成: x86 authority 验证（需 git pull + cargo run --example benchmark）
+- [ ] **AISAQ-CAP-008** [P2]: Async IO (io_uring) 冷 disk 路径
+  - 现状: 冷盘 ~330 QPS；目标 async batch reads 达到 5K+ QPS
 
 - [ ] **IVFPQ-FIX-001** [P3]: IVF-PQ recall < 0.8 根因分析+修复
 

@@ -27,8 +27,6 @@ use crate::simd;
 use io_uring::{opcode, types, IoUring};
 use memmap2::Mmap;
 use parking_lot::Mutex;
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_PAGE_SIZE: usize = 4096;
@@ -668,13 +666,6 @@ pub enum NodeAccessMode {
 struct Candidate {
     node_id: u32,
     score: f32,
-}
-
-struct CoarseScore {
-    node_id: u32,
-    score: f32,
-    pq_bytes: usize,
-    pages_loaded: usize,
 }
 
 impl PartialEq for Candidate {
@@ -1522,17 +1513,33 @@ impl PQFlashIndex {
                     scratch.accepted.push(candidate);
                 }
 
-                let from_disk = self.node_ref(candidate.node_id).is_none();
-                let neighbor_ids = if let Some(node) = self.node_ref(candidate.node_id) {
+                let mut neighbor_scores = if let Some(node) = self.node_ref(candidate.node_id) {
                     io.record_node_read(candidate.node_id, self.flash_layout.node_bytes);
-                    let mut ids = Vec::with_capacity(node.neighbors.len());
+                    let mut scores = Vec::with_capacity(node.neighbors.len());
                     for &neighbor in node.neighbors {
                         if scratch.seen.contains(&neighbor) {
                             continue;
                         }
-                        ids.push(neighbor);
+                        let score = if let Some(neighbor_node) = self.node_ref(neighbor) {
+                            if let (Some(encoder), Some(table)) = (&self.pq_encoder, pq_table_slice) {
+                                if !neighbor_node.inline_pq.is_empty() {
+                                    io.record_pq_read(neighbor, neighbor_node.inline_pq.len());
+                                    encoder.compute_distance_with_table(table, neighbor_node.inline_pq)
+                                } else {
+                                    self.exact_distance(query, neighbor_node.vector)
+                                }
+                            } else {
+                                self.exact_distance(query, neighbor_node.vector)
+                            }
+                        } else {
+                            self.coarse_distance(neighbor, query, pq_table_slice, &mut io)?
+                        };
+                        scores.push(Candidate {
+                            node_id: neighbor,
+                            score,
+                        });
                     }
-                    ids
+                    scores
                 } else {
                     let node = self.load_node(candidate.node_id, NodeAccessMode::Node, &mut io)?;
                     for &neighbor in &node.neighbors {
@@ -1541,23 +1548,21 @@ impl PQFlashIndex {
                         }
                         self.prefetch_node(neighbor);
                     }
-                    let mut ids = Vec::with_capacity(node.neighbors.len());
+                    let mut scores = Vec::with_capacity(node.neighbors.len());
                     for &neighbor in &node.neighbors {
                         if scratch.seen.contains(&neighbor) {
                             continue;
                         }
-                        ids.push(neighbor);
+                        let score =
+                            self.coarse_distance(neighbor, query, pq_table_slice, &mut io)?;
+                        scores.push(Candidate {
+                            node_id: neighbor,
+                            score,
+                        });
                     }
-                    ids
+                    scores
                 };
 
-                let mut neighbor_scores = self.coarse_distances_for_neighbors(
-                    &neighbor_ids,
-                    query,
-                    pq_table_slice,
-                    &mut io,
-                    from_disk,
-                )?;
                 neighbor_scores.sort_by(|left, right| left.score.total_cmp(&right.score));
                 let expand_limit = self.compute_expand_limit(&io);
                 for neighbor in neighbor_scores.into_iter().take(expand_limit) {
@@ -2133,124 +2138,6 @@ impl PQFlashIndex {
         }
 
         Ok(self.exact_distance(query, &node.vector))
-    }
-
-    fn coarse_score_with_stats(
-        &self,
-        node_id: u32,
-        query: &[f32],
-        pq_table: Option<&[f32]>,
-    ) -> Result<CoarseScore> {
-        if let (Some(encoder), Some(table)) = (&self.pq_encoder, pq_table) {
-            let pq_size = self.pq_code_size.max(1);
-            let start = node_id as usize * pq_size;
-            if start + pq_size <= self.disk_pq_codes.len() {
-                let score =
-                    encoder.compute_distance_with_table(table, &self.disk_pq_codes[start..start + pq_size]);
-                return Ok(CoarseScore {
-                    node_id,
-                    score,
-                    pq_bytes: pq_size,
-                    pages_loaded: 0,
-                });
-            }
-        }
-
-        if let Some(node) = self.node_ref(node_id) {
-            if let (Some(encoder), Some(table)) = (&self.pq_encoder, pq_table) {
-                if !node.inline_pq.is_empty() {
-                    let score = encoder.compute_distance_with_table(table, node.inline_pq);
-                    return Ok(CoarseScore {
-                        node_id,
-                        score,
-                        pq_bytes: node.inline_pq.len(),
-                        pages_loaded: 0,
-                    });
-                }
-            }
-            return Ok(CoarseScore {
-                node_id,
-                score: self.exact_distance(query, node.vector),
-                pq_bytes: 0,
-                pages_loaded: 0,
-            });
-        }
-
-        let storage = self
-            .storage
-            .as_ref()
-            .ok_or_else(|| KnowhereError::Storage("missing disk storage for coarse score".to_string()))?;
-        let offset = node_id as usize * self.flash_layout.node_bytes;
-        let page_read = storage.page_cache.read(offset, self.flash_layout.node_bytes)?;
-        let loaded = self.deserialize_node(node_id, &page_read.bytes)?;
-
-        if let (Some(encoder), Some(table)) = (&self.pq_encoder, pq_table) {
-            if !loaded.inline_pq.is_empty() {
-                let score = encoder.compute_distance_with_table(table, &loaded.inline_pq);
-                return Ok(CoarseScore {
-                    node_id,
-                    score,
-                    pq_bytes: loaded.inline_pq.len(),
-                    pages_loaded: page_read.pages_loaded,
-                });
-            }
-        }
-
-        Ok(CoarseScore {
-            node_id,
-            score: self.exact_distance(query, &loaded.vector),
-            pq_bytes: 0,
-            pages_loaded: 0,
-        })
-    }
-
-    fn coarse_distances_for_neighbors(
-        &self,
-        neighbor_ids: &[u32],
-        query: &[f32],
-        pq_table: Option<&[f32]>,
-        io: &mut BeamSearchIO,
-        parallel: bool,
-    ) -> Result<Vec<Candidate>> {
-        if neighbor_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let scored: Vec<CoarseScore> = if parallel && cfg!(feature = "parallel") {
-            #[cfg(feature = "parallel")]
-            {
-                neighbor_ids
-                    .par_iter()
-                    .map(|&node_id| self.coarse_score_with_stats(node_id, query, pq_table))
-                    .collect::<Result<Vec<_>>>()?
-            }
-            #[cfg(not(feature = "parallel"))]
-            {
-                neighbor_ids
-                    .iter()
-                    .map(|&node_id| self.coarse_score_with_stats(node_id, query, pq_table))
-                    .collect::<Result<Vec<_>>>()?
-            }
-        } else {
-            neighbor_ids
-                .iter()
-                .map(|&node_id| self.coarse_score_with_stats(node_id, query, pq_table))
-                .collect::<Result<Vec<_>>>()?
-        };
-
-        for s in &scored {
-            if s.pq_bytes > 0 {
-                io.record_pq_access(s.node_id, s.pq_bytes, s.pages_loaded);
-            }
-        }
-
-        Ok(scored
-            .into_iter()
-            .map(|s| Candidate {
-                node_id: s.node_id,
-                score: s.score,
-            })
-            .collect())
     }
 
     #[inline]
