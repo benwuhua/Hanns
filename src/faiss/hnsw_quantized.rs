@@ -162,11 +162,8 @@ impl HnswSqIndex {
         let k = req.top_k;
         let ef = req.nprobe.max(10);
 
-        // 量化查询向量
-        let query_quantized = self.quantizer.encode(query);
-
         // 搜索
-        let results = self.search_recursive(&query_quantized, k, ef);
+        let results = self.search_recursive(query, k, ef);
 
         let mut all_ids = Vec::new();
         let mut all_dists = Vec::new();
@@ -186,12 +183,12 @@ impl HnswSqIndex {
     }
 
     /// 递归搜索
-    fn search_recursive(&self, query: &[u8], k: usize, _ef: usize) -> Vec<(i64, f32)> {
+    fn search_recursive(&self, query: &[f32], k: usize, _ef: usize) -> Vec<(i64, f32)> {
         if self.graph.is_empty() {
             return vec![];
         }
 
-        // 简化: 暴力搜索量化后的向量
+        // Use asymmetric SQ distance: float query against uint8 database codes.
         let mut results: Vec<(i64, f32)> = (0..self.ids.len())
             .map(|i| {
                 let qv = &self.quantized_vectors[i * self.dim..(i + 1) * self.dim];
@@ -206,15 +203,8 @@ impl HnswSqIndex {
     }
 
     /// 量化向量间的距离 (简化)
-    fn quantized_distance(&self, a: &[u8], b: &[u8]) -> f32 {
-        // 直接比较量化码
-        let mut sum = 0usize;
-        for i in 0..a.len() {
-            if a[i] != b[i] {
-                sum += 1;
-            }
-        }
-        sum as f32
+    fn quantized_distance(&self, query: &[f32], db_code: &[u8]) -> f32 {
+        self.quantizer.sq_l2_asymmetric(query, db_code)
     }
 
     #[inline]
