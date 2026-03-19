@@ -64,6 +64,8 @@ pub struct AisaqConfig {
     pub warm_up: bool,
     pub filter_threshold: f32,
     #[serde(default)]
+    pub search_io_limit: Option<usize>,
+    #[serde(default)]
     pub cache_all_on_load: bool,
     #[serde(default = "default_true")]
     pub run_refine_pass: bool,
@@ -96,6 +98,7 @@ impl Default for AisaqConfig {
             build_search_list_size: 0,
             warm_up: false,
             filter_threshold: -1.0,
+            search_io_limit: None,
             cache_all_on_load: false,
             run_refine_pass: true,
         }
@@ -294,6 +297,7 @@ pub struct BeamSearchIO {
     page_size: usize,
     max_reads_per_iteration: usize,
     pq_cache_capacity: Option<usize>,
+    pages_loaded_total: usize,
     cached_nodes: HashSet<u32>,
     cached_pq_vectors: HashSet<u32>,
     pq_lru: VecDeque<u32>,
@@ -306,6 +310,7 @@ impl BeamSearchIO {
             page_size: layout.page_size.max(1),
             max_reads_per_iteration: config.beamwidth.max(1),
             pq_cache_capacity: (config.pq_cache_size > 0).then_some(config.pq_cache_size),
+            pages_loaded_total: 0,
             cached_nodes: HashSet::new(),
             cached_pq_vectors: HashSet::new(),
             pq_lru: VecDeque::new(),
@@ -315,10 +320,15 @@ impl BeamSearchIO {
 
     pub fn reset_stats(&mut self) {
         self.stats = BeamSearchStats::default();
+        self.pages_loaded_total = 0;
     }
 
     pub fn max_reads_per_iteration(&self) -> usize {
         self.max_reads_per_iteration
+    }
+
+    pub fn pages_loaded_total(&self) -> usize {
+        self.pages_loaded_total
     }
 
     pub fn cache_node(&mut self, node_id: u32) {
@@ -355,6 +365,7 @@ impl BeamSearchIO {
             return;
         }
 
+        self.pages_loaded_total += pages_loaded;
         self.stats.nodes_loaded += 1;
         self.stats.bytes_read += bytes;
         self.stats.pages_read += pages_loaded;
@@ -370,6 +381,7 @@ impl BeamSearchIO {
             return;
         }
 
+        self.pages_loaded_total += pages_loaded;
         self.stats.bytes_read += bytes;
         self.stats.pages_read += pages_loaded;
     }
@@ -1499,6 +1511,12 @@ impl PQFlashIndex {
             }
 
             while scratch.expanded.len() < max_visit {
+                if let Some(io_limit) = self.config.search_io_limit {
+                    if io.pages_loaded_total() > io_limit {
+                        break;
+                    }
+                }
+
                 let candidate = match scratch.frontier.pop() {
                     Some(candidate) => candidate,
                     None => break,
@@ -2333,6 +2351,16 @@ impl PQFlashIndex {
         if neighbor_idx >= self.node_ids.len() {
             return;
         }
+        if self.node_ids.len() > 100_000 {
+            // Skip reverse-edge re-pruning for large graphs. This function uses
+            // nearest-only pruning (keeps R closest neighbors), which differs from
+            // native DiskANN's RobustPrune (diversity-aware). At 1M scale, nearest-only
+            // pruning removes long-range navigability edges, causing -48% search QPS
+            // regression (verified x86 authority, 2026-03-19).
+            // TODO(AISAQ-ARCH-006): implement RobustPrune-style diversity pruning
+            // before removing this guard.
+            return;
+        }
         let stride = self.flat_stride.max(1);
         let start = neighbor_idx * stride;
         let count = self.node_neighbor_counts[neighbor_idx] as usize;
@@ -2383,10 +2411,7 @@ impl PQFlashIndex {
 
     fn refine_flat_graph(&mut self) {
         let n = self.node_ids.len();
-        // O(n²) full-pairwise refinement — only feasible for small graphs.
-        // Correctness at larger scale relies on link_back_with_limit() doing
-        // proper O(R log R) pruning on every reverse edge insertion.
-        if n == 0 || n > 10_000 {
+        if n == 0 || n > 50_000 {
             return;
         }
         let stride = self.flat_stride.max(1);
