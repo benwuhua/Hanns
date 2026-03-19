@@ -390,6 +390,11 @@ impl IvfFlatIndex {
         Ok(n)
     }
 
+    /// Add vectors with external IDs.
+    pub fn add_with_ids(&mut self, vectors: &[f32], ids: &[i64]) -> Result<usize> {
+        self.add(vectors, Some(ids))
+    }
+
     /// Find nearest centroid (使用 l2_distance_sq)
     fn find_nearest_centroid(&self, vector: &[f32]) -> usize {
         let mut min_dist = f32::MAX;
