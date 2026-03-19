@@ -2305,12 +2305,6 @@ impl PQFlashIndex {
             self.node_neighbor_counts[neighbor_idx] += 1;
             return;
         }
-        if self.node_ids.len() > 50_000 {
-            // Build-time fast path on very large graphs: when reverse adjacency is already
-            // full, skip costly O(R log R) re-pruning to keep insertion complexity near linear.
-            return;
-        }
-
         let mut neighbor_list: Vec<u32> = current.to_vec();
         neighbor_list.push(node_id);
         let anchor = self.node_vector(neighbor_idx).to_vec();
@@ -2348,7 +2342,10 @@ impl PQFlashIndex {
 
     fn refine_flat_graph(&mut self) {
         let n = self.node_ids.len();
-        if n == 0 || n > 50_000 {
+        // O(n²) full-pairwise refinement — only feasible for small graphs.
+        // Correctness at larger scale relies on link_back_with_limit() doing
+        // proper O(R log R) pruning on every reverse edge insertion.
+        if n == 0 || n > 10_000 {
             return;
         }
         let stride = self.flat_stride.max(1);

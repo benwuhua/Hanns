@@ -198,6 +198,13 @@ impl Layer0OrderedFrontier {
             .pop()
             .map(|(SearchMinDist(dist), idx)| Layer0PoolEntry { idx, dist })
     }
+
+    fn count_below(&self, thresh: f32) -> usize {
+        self.entries
+            .iter()
+            .filter(|(SearchMinDist(dist), _)| *dist < thresh)
+            .count()
+    }
 }
 
 #[derive(Default)]
@@ -1168,6 +1175,14 @@ impl SearchScratch {
                 .reserve(result_capacity - self.generic_results.capacity());
         }
         self.generic_worst_result_distance = f32::INFINITY;
+    }
+
+    #[inline]
+    fn generic_frontier_count_below(&self, thresh: f32) -> usize {
+        self.generic_frontier
+            .iter()
+            .filter(|(SearchMinDist(dist), _)| *dist < thresh)
+            .count()
     }
 
     #[inline]
@@ -4076,6 +4091,14 @@ impl HnswIndex {
             }
 
             let pruning_start = Instant::now();
+            if scratch.generic_frontier.len() >= ef
+                && scratch.generic_frontier_count_below(cand_dist) >= ef
+            {
+                if let Some(stats) = profile.as_mut() {
+                    stats.record_candidate_pruning(pruning_start.elapsed(), 1);
+                }
+                break;
+            }
             if scratch.generic_results.len() >= ef
                 && cand_dist > scratch.generic_worst_result_distance
             {
@@ -4297,6 +4320,14 @@ impl HnswIndex {
             }
 
             let pruning_start = Instant::now();
+            if scratch.generic_frontier.len() >= ef
+                && scratch.generic_frontier_count_below(cand_dist) >= ef
+            {
+                if let Some(stats) = profile.as_mut() {
+                    stats.record_candidate_pruning(pruning_start.elapsed(), 1);
+                }
+                break;
+            }
             if scratch.generic_results.len() >= ef {
                 if let Some(&(SearchMaxDist(worst_dist), _)) = scratch.generic_results.peek() {
                     if cand_dist > worst_dist {
@@ -4478,6 +4509,9 @@ impl HnswIndex {
                 break;
             };
 
+            if scratch.layer0_frontier.count_below(candidate.dist) >= ef {
+                break;
+            }
             if scratch.layer0_results.len() >= ef
                 && scratch
                     .layer0_results
@@ -4702,6 +4736,12 @@ impl HnswIndex {
             }
 
             let pruning_start = Instant::now();
+            if scratch.layer0_frontier.count_below(candidate.dist) >= ef {
+                if let Some(stats) = profile.as_mut() {
+                    stats.record_candidate_pruning(pruning_start.elapsed(), 1);
+                }
+                break;
+            }
             if scratch.layer0_results.len() >= ef {
                 if let Some(worst_dist) = scratch.layer0_results.worst_dist() {
                     if candidate.dist > worst_dist {
@@ -7216,6 +7256,23 @@ mod tests {
             vec![(13, 0.5), (11, 1.0), (12, 2.0)],
             "ordered results must evict the current worst entry when a nearer candidate arrives"
         );
+    }
+
+    #[test]
+    fn test_layer0_ordered_frontier_count_below_matches_faiss_strict_threshold() {
+        let mut frontier = Layer0OrderedFrontier::default();
+        frontier.prepare(4);
+        frontier.push(Layer0PoolEntry { idx: 10, dist: 1.0 });
+        frontier.push(Layer0PoolEntry { idx: 11, dist: 2.0 });
+        frontier.push(Layer0PoolEntry { idx: 12, dist: 2.0 });
+        frontier.push(Layer0PoolEntry { idx: 13, dist: 3.0 });
+
+        assert_eq!(
+            frontier.count_below(2.0),
+            1,
+            "FAISS count_below uses a strict less-than threshold"
+        );
+        assert_eq!(frontier.count_below(3.0), 3);
     }
 
     #[test]
