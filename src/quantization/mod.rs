@@ -1,5 +1,6 @@
 pub mod kmeans;
 pub mod opq;
+pub mod pca;
 pub mod pq;
 pub mod prq;
 pub mod rabitq;
@@ -10,6 +11,7 @@ pub mod sq;
 
 pub use kmeans::KMeans;
 pub use opq::{OPQConfig, OptimizedProductQuantizer};
+pub use pca::PcaTransform;
 pub use pq::{PQConfig, ProductQuantizer};
 pub use prq::{PRQConfig, ProductResidualQuantizer};
 pub use rabitq::{QueryQuantization, RaBitQEncoder};
