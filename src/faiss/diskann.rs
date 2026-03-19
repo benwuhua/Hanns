@@ -27,6 +27,8 @@ use rand::SeedableRng;
 use crate::api::search::Predicate;
 use crate::api::{IndexConfig, KnowhereError, MetricType, Result, SearchRequest, SearchResult};
 use crate::quantization::kmeans::KMeans;
+use crate::search::io_cutting::IoCuttingState;
+use crate::search::visited_pool::VisitedList;
 use crate::simd;
 
 /// DiskANN configuration parameters
@@ -81,6 +83,10 @@ pub struct DiskAnnConfig {
     pub min_k: usize,
     /// Max K for range search
     pub max_k: usize,
+    /// Enable IO cutting early stop in beam search
+    pub io_cutting_enabled: bool,
+    /// IO cutting threshold ratio in [0.0, 1.0]
+    pub io_cutting_threshold: f32,
 }
 
 impl Default for DiskAnnConfig {
@@ -110,6 +116,8 @@ impl Default for DiskAnnConfig {
             accelerate_build: false,
             min_k: 100,
             max_k: usize::MAX,
+            io_cutting_enabled: false,
+            io_cutting_threshold: 0.9,
         }
     }
 }
@@ -152,6 +160,8 @@ impl DiskAnnConfig {
             accelerate_build: false,
             min_k: 100,
             max_k: usize::MAX,
+            io_cutting_enabled: false,
+            io_cutting_threshold: 0.9,
         }
     }
 
@@ -2142,13 +2152,14 @@ impl DiskAnnIndex {
             pool.pop()
                 .unwrap_or_else(|| SearchScratch::new(effective_l.saturating_mul(2)))
         };
-        scratch.reset();
+        scratch.reset(n);
+        let mut io_state = IoCuttingState::new(effective_l, self.dann_config.io_cutting_threshold);
 
         for (start, dist) in &starts {
             scratch
                 .candidates
                 .push(ReverseOrderedFloat(*dist, *start));
-            scratch.visited.insert(*start);
+            scratch.visited.mark(*start as u32);
         }
 
         // Beam search loop
@@ -2185,7 +2196,7 @@ impl DiskAnnIndex {
                 let mut nbr_dists: Vec<(f32, usize)> = Vec::new();
 
                 for n_idx in neighbor_ids {
-                    if n_idx < n && !scratch.visited.contains(&n_idx) {
+                    if n_idx < n && !scratch.visited.is_visited(n_idx as u32) {
                         // Use PQ distance if available and node is not cached
                         let d = if let Some(pq_codes) = &self.pq_codes {
                             if !self.cached_nodes.contains(&n_idx) {
@@ -2240,10 +2251,44 @@ impl DiskAnnIndex {
                 reranked.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
                 for (exact_d, n_idx) in reranked.into_iter().take(beamwidth) {
-                    scratch.visited.insert(n_idx);
+                    let (is_valid, insert_pos) = if self.dann_config.io_cutting_enabled {
+                        let worst_candidate = if scratch.candidates.len() >= effective_l {
+                            scratch
+                                .candidates
+                                .iter()
+                                .map(|cand| cand.0)
+                                .fold(f32::NEG_INFINITY, f32::max)
+                        } else {
+                            f32::INFINITY
+                        };
+                        let is_valid =
+                            scratch.candidates.len() < effective_l || exact_d < worst_candidate;
+                        let insert_pos = scratch
+                            .candidates
+                            .iter()
+                            .filter(|cand| cand.0 < exact_d)
+                            .count()
+                            .min(effective_l.saturating_sub(1));
+                        (is_valid, insert_pos)
+                    } else {
+                        (true, 0)
+                    };
+
+                    scratch.visited.mark(n_idx as u32);
                     scratch
                         .candidates
                         .push(ReverseOrderedFloat(exact_d, n_idx));
+
+                    if self.dann_config.io_cutting_enabled {
+                        io_state.record(is_valid, insert_pos);
+                        if io_state.should_stop() {
+                            break;
+                        }
+                    }
+                }
+
+                if self.dann_config.io_cutting_enabled && io_state.should_stop() {
+                    break;
                 }
             }
         }
@@ -2729,7 +2774,7 @@ impl DiskAnnIndex {
 struct ReverseOrderedFloat(f32, usize);
 
 struct SearchScratch {
-    visited: HashSet<usize>,
+    visited: VisitedList,
     candidates: BinaryHeap<ReverseOrderedFloat>,
     explored: Vec<(f32, usize)>,
     accepted: Vec<(f32, usize)>,
@@ -2738,15 +2783,15 @@ struct SearchScratch {
 impl SearchScratch {
     fn new(capacity: usize) -> Self {
         Self {
-            visited: HashSet::with_capacity(capacity),
+            visited: VisitedList::new(capacity),
             candidates: BinaryHeap::with_capacity(capacity),
             explored: Vec::with_capacity(capacity),
             accepted: Vec::with_capacity(capacity),
         }
     }
 
-    fn reset(&mut self) {
-        self.visited.clear();
+    fn reset(&mut self, n: usize) {
+        self.visited.reset(n);
         self.candidates.clear();
         self.explored.clear();
         self.accepted.clear();
