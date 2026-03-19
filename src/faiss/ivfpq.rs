@@ -76,7 +76,8 @@ impl IvfPqIndex {
         let use_opq = config.dim >= 64;
         let opq = if use_opq {
             let mut opq_config = OPQConfig::new(config.dim, m, nbits);
-            opq_config.niter = 5;
+            opq_config.niter = 1;
+            opq_config.random_rotation = true;
             Some(OptimizedProductQuantizer::new(opq_config)?)
         } else {
             None
