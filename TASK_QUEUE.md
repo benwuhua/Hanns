@@ -153,13 +153,15 @@
 
 - [ ] **IVFPQ-FIX-001** [P3]: IVF-PQ recall < 0.8 根因分析+修复
 
-- [ ] **HNSW-QUANT-FIX-001** [P3]: 量化 HNSW 变体 recall 修复
-  - HnswSQ8: recall=0.002 (brute force 仍然失败!) — `quantized_distance()` 不保距
-    - 诊断: ID 映射正确; `search_recursive()` 是暴力搜索所有向量
-    - 真正根因: uint8 对称 L2 给出错误排名 (brute force + 正确 IDs 仍 recall=0.002)
-    - 修复方向: 参考 ivf_sq8.rs 中 sq_l2_asymmetric 修复量化距离函数
-  - HnswPQ8: recall=0.047 max — ADC 量化噪声，和 IVF-PQ 同源
-  - HnswPRQ2: recall=0.149 max，非单调 — 图遍历受量化误差破坏
+- [x] **HNSW-QUANT-FIX-001** [P3]: ✅ HnswSQ8 修复完成；PQ8/PRQ2 仍 no-go
+  - HnswSQ8: recall=0.992 @ ef=16 (Mac, 10K) — ✅ **修复**
+    - 根因: quantized_distance() 用 Hamming（逐字节不等计数），毫无意义
+    - 修复: 改为 sq_l2_asymmetric(float_query, uint8_db) — float query vs uint8 database
+    - search() 不再 encode(query)，直接传 float query → search_recursive()
+    - QPS: ~1940 (ef=16, 10K, Mac) — brute-force search，性能上限
+    - 提交: fix(hnsw) 5623546
+  - HnswPQ8: recall=0.047 max — ADC 量化噪声，和 IVF-PQ 同源，no-go
+  - HnswPRQ2: recall=0.149 max，非单调 — no-go
   - Script: examples/hnsw_quantized_recall.rs
 
 ### 本轮已完成 (2026-03-18)
