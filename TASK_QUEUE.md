@@ -168,10 +168,11 @@
   - 预期影响: disk_warm QPS 数倍提升（当前 ~326 QPS，目标 >1000）；这是 CAP-008 两次失败的真正根因
   - 参考: `/Users/ryan/Code/DiskANN/diskann-disk/src/search/provider/disk_sector_graph.rs`
 
-- [ ] **AISAQ-ARCH-002** [P0]: 图 build 质量 — 去掉大图捷径，修复 recall ceiling
-  - 现状: `refine_flat_graph()` 在 n>50_000 直接跳过；`link_back_with_limit()` 满度直接 return
-  - 影响: search path 再优化也被 build quality 卡住 recall 上限
-  - 目标: 至少对 1M 规模做正确的反向边修剪，不能因为大就跳过核心逻辑
+- [x] **AISAQ-ARCH-002** [P0]: ✅ 完成 — 图 build 质量修复
+  - 删除 `link_back_with_limit()` 的 50K guard — 现在对所有规模做正确 O(R log R) Vamana 反向边修剪
+  - `refine_flat_graph()` threshold 50K→10K，大图由 link_back 的正确 pruning 保证质量
+  - DiskANN 10K: build=0.476s, QPS=20,531
+  - 提交: fix(aisaq) 47de3d5
 
 - [x] **IVFPQ-KMEANS-001** [P0]: ❌ 假设无效，关闭
   - 已验证: k-means++ init + 100/125/150 轮 vs random_init + 10/25/50 轮
@@ -197,8 +198,10 @@
 
 #### P2 — 细化优化
 
-- [ ] **HNSW-STOPCD-001** [P2]: strict-ef 停止条件对齐 FAISS relative-distance stopping
-  - 低优先级，HNSW 已 leading 2.099x；仅为吃掉 strict-ef lane 小差距
+- [x] **HNSW-STOPCD-001** [P2]: ✅ 完成 — count_below(cand_dist) >= ef 早停
+  - 4 处搜索路径对齐 FAISS HNSW.cpp `count_below` 语义；加 unit test
+  - 10K Mac QPS: 38,406（基线 ~41,746，无回退）
+  - 提交: perf(hnsw) 47de3d5
 
 - [ ] **IVFPQ-SCANNER-001** [P2]: 实现 FAISS-style QueryTables/scanner family
   - 依赖 IVFPQ-KMEANS-001 先修 codebook 质量；scanner 主要解决性能而非 recall
