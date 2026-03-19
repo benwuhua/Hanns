@@ -167,11 +167,12 @@
   - Mac 10K disk_warm: ~326 → 442 QPS (+35%)；x86 authority 待验证
   - 提交: perf(aisaq) aefbe8c
 
-- [x] **AISAQ-ARCH-002** [P0]: ✅ 完成 — 图 build 质量修复
-  - 删除 `link_back_with_limit()` 的 50K guard — 现在对所有规模做正确 O(R log R) Vamana 反向边修剪
-  - `refine_flat_graph()` threshold 50K→10K，大图由 link_back 的正确 pruning 保证质量
-  - DiskANN 10K: build=0.476s, QPS=20,531
-  - 提交: fix(aisaq) 47de3d5
+- [x] **AISAQ-ARCH-002** [P0]: ⚠️ 部分回滚 — guard 已恢复，原修改引发 x86 -48% 回退
+  - 问题根因: `link_back_with_limit()` 用的是 nearest-only 修剪（保留 R 个最近邻），不是 native 的 RobustPrune（多样性感知）
+  - x86 1M: NoPQ 9,648→4,979 (-48%), PQ32 8,002→5,368 (-33%), build 116.8s→337.8s (+2.9x)
+  - 修复: guard 改为 threshold=100K（原 50K），refine_flat_graph 改回 50K
+  - 真正的修复需要实现 RobustPrune → 见 AISAQ-ARCH-006
+  - 提交: fix(aisaq) 47de3d5 (部分 revert pending)
 
 - [x] **IVFPQ-KMEANS-001** [P0]: ❌ 假设无效，关闭
   - 已验证: k-means++ init + 100/125/150 轮 vs random_init + 10/25/50 轮
@@ -201,6 +202,12 @@
   - 4 处搜索路径对齐 FAISS HNSW.cpp `count_below` 语义；加 unit test
   - 10K Mac QPS: 38,406（基线 ~41,746，无回退）
   - 提交: perf(hnsw) 47de3d5
+
+- [ ] **AISAQ-ARCH-006** [P1]: 实现 RobustPrune-style 多样性感知反向边修剪
+  - 现状: `link_back_with_limit()` 用 nearest-only 修剪，在大图上删掉长距离导航边
+  - 目标: 实现 RobustPrune（alpha 距离阈值 + 角度多样性），取代当前 sort-truncate
+  - 完成后可去掉 100K guard，恢复对任意规模图的正确反向边质量
+  - 参考: DiskANN 论文 Algorithm 2 (RobustPrune)，native `/Users/ryan/Code/DiskANN/` 实现
 
 - [ ] **IVFPQ-SCANNER-001** [P2]: 实现 FAISS-style QueryTables/scanner family
   - 依赖 IVFPQ-KMEANS-001 先修 codebook 质量；scanner 主要解决性能而非 recall
