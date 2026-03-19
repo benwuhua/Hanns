@@ -173,11 +173,12 @@
   - 影响: search path 再优化也被 build quality 卡住 recall 上限
   - 目标: 至少对 1M 规模做正确的反向边修剪，不能因为大就跳过核心逻辑
 
-- [ ] **IVFPQ-KMEANS-001** [P0]: 用更强 KMeans 替换现有 PQ 训练器
-  - 根因: 当前 `src/quantization/pq.rs` KMeans 是 random_init + 10/25/50 轮，码本质量远弱于 FAISS
-  - FAISS 做法: 成熟初始化（k-means++/forgy）+ 稳定收敛 + 按 slice 训练
-  - 最小目标: k-means++ 初始化 + 100 轮 + 更严格 tolerance → 验证 IVF-PQ full-scan recall 是否过 0.95 gate
-  - 影响: IVF-PQ、HnswPQ8、DiskANN PQ32 recall 均受益
+- [x] **IVFPQ-KMEANS-001** [P0]: ❌ 假设无效，关闭
+  - 已验证: k-means++ init + 100/125/150 轮 vs random_init + 10/25/50 轮
+  - 结果: m=8 recall 0.152→0.151, m=32 recall 0.621→0.603（无改善，在噪声内）
+  - 根因: PQ 量化误差 (~5.23) >> 向量间距 (~2.39) — 是随机均匀分布的固有特性，非训练器质量问题
+  - 代价: 训练速度 5-10x 下降，无收益，已 revert
+  - 结论: IVF-PQ recall 问题只能在真实数据集 (SIFT-1M) 上验证；随机数据 PQ recall 低属预期
 
 #### P1 — 算法完整性
 
