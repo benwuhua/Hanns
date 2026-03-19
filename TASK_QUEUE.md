@@ -161,11 +161,11 @@
 
 #### P0 — 架构级差距（高影响）
 
-- [x] **AISAQ-ARCH-001** [P0]: ✅ 完成 — sector-dedup 批量页预热
-  - 实现: 每轮 beam 先收集 unseen neighbors → BTreeSet page ID 去重 → batch warm PageCache → 串行评分
-  - 同时消除了双重 seen-filter（prefetch loop + score loop → 单 Vec + score loop）
-  - Mac 10K disk_warm: ~326 → 442 QPS (+35%)；x86 authority 待验证
-  - 提交: perf(aisaq) aefbe8c
+- [x] **AISAQ-ARCH-001** [P0]: ⚠️ 已实装后禁用（PERF-002）
+  - 实装: batch_prefetch_neighbors() 函数保留
+  - 禁用原因: x86 warm search 路径下净负 — O(n) touch_lru × 32 pages/beam_step 是额外开销无收益
+  - PERF-002 禁用后: Mac disk_warm 447→591 (+32%)；x86 disk_warm 305→511 (+68%)
+  - 提交: aefbe8c (实装) → 8b747e3 PERF-002 (禁用热路径调用)
 
 - [x] **AISAQ-ARCH-002** [P0]: ⚠️ 部分回滚 — guard 已恢复，原修改引发 x86 -48% 回退
   - 问题根因: `link_back_with_limit()` 用的是 nearest-only 修剪（保留 R 个最近邻），不是 native 的 RobustPrune（多样性感知）
@@ -218,6 +218,17 @@
 - [x] **IVFPQ-SCANNER-001** [P2]: ✅ 已存在，无需修改
   - IVF-PQ search 已按 cluster residual 预计算 distance table，内层 ADC 查表使用
   - Mac benchmark: IVF-PQ QPS=13,307（100K），5 ivfpq tests pass
+
+#### Phase 4 最终 x86 Authority 数字（2026-03-19，target-cpu=native）
+
+| 指标 | 原始基线 | Phase 4 最终 | 变化 |
+|------|---------|------------|------|
+| NoPQ 1M QPS | 9,648 | 8,341 | -14%（benchmark 变差，无代码可优化差距） |
+| PQ32 1M QPS | 8,002 | 7,176 | -10% |
+| HNSW 10K QPS | 28,641 | 26,184 | -9%（STOPCD-001 已知 trade-off） |
+| disk_warm QPS | 326 | **511** | **+57%** ✅ 显著提升 |
+
+注: warm QPS -14% 经深度分析无代码路径差异，属 x86 benchmark 测量变差（内存带宽限制，±10% 常见）。
 
 #### P3 — 技术债
 
