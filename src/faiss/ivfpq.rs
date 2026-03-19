@@ -11,6 +11,7 @@ use rand::Rng;
 
 use crate::api::{IndexConfig, Result, SearchRequest, SearchResult};
 use crate::executor::l2_distance;
+use crate::quantization::opq::{OPQConfig, OptimizedProductQuantizer};
 use crate::quantization::pq::{PQConfig, ProductQuantizer};
 use crate::simd::l2_distance_sq;
 
@@ -33,6 +34,10 @@ pub struct IvfPqIndex {
     centroids: Vec<f32>,
     /// Product quantizer (fine quantizer on residuals)
     pq: ProductQuantizer,
+    /// Optional OPQ quantizer for rotated residual encoding
+    opq: Option<OptimizedProductQuantizer>,
+    /// Enable OPQ path (default: true)
+    use_opq: bool,
     /// Inverted lists (Vec 替代 HashMap - 性能优化)
     invlist_ids: Vec<Vec<i64>>, // [nlist] 个 ID 列表
     invlist_codes: Vec<Vec<u8>>, // [nlist] 个 PQ code 列表 (连续存储)
@@ -70,6 +75,14 @@ impl IvfPqIndex {
 
         let pq_config = PQConfig::new(config.dim, m, nbits);
         let pq = ProductQuantizer::new(pq_config);
+        let use_opq = config.dim >= 64;
+        let opq = if use_opq {
+            let mut opq_config = OPQConfig::new(config.dim, m, nbits);
+            opq_config.niter = 5;
+            Some(OptimizedProductQuantizer::new(opq_config)?)
+        } else {
+            None
+        };
 
         // 预分配 Vec 容量（性能优化）
         let invlist_ids = (0..nlist).map(|_| Vec::new()).collect();
@@ -84,6 +97,8 @@ impl IvfPqIndex {
             nbits_per_idx: nbits,
             centroids: Vec::new(),
             pq,
+            opq,
+            use_opq,
             invlist_ids,
             invlist_codes,
             vectors: Vec::new(),
@@ -126,8 +141,8 @@ impl IvfPqIndex {
             }
         }
 
-        // Step 3: Train PQ on residuals
-        self.pq.train(n, &residuals)?;
+        // Step 3: Train fine quantizer on residuals
+        self.train_fine_quantizer(n, &residuals)?;
 
         self.trained = true;
         tracing::info!(
@@ -137,6 +152,43 @@ impl IvfPqIndex {
             self.nbits_per_idx
         );
         Ok(())
+    }
+
+    #[inline]
+    fn opq_enabled(&self) -> bool {
+        self.use_opq
+            && self
+                .opq
+                .as_ref()
+                .map(|opq| opq.is_trained())
+                .unwrap_or(false)
+    }
+
+    #[inline]
+    fn active_code_size(&self) -> usize {
+        if self.opq_enabled() {
+            self.opq.as_ref().map(|opq| opq.code_size()).unwrap_or(self.pq.code_size())
+        } else {
+            self.pq.code_size()
+        }
+    }
+
+    fn train_fine_quantizer(&mut self, n: usize, residuals: &[f32]) -> Result<()> {
+        if self.use_opq {
+            if let Some(opq) = self.opq.as_mut() {
+                return opq.train(n, residuals);
+            }
+        }
+        self.pq.train(n, residuals)
+    }
+
+    fn encode_residual(&self, residual: &[f32]) -> Result<Vec<u8>> {
+        if self.opq_enabled() {
+            if let Some(opq) = self.opq.as_ref() {
+                return opq.encode(residual);
+            }
+        }
+        self.pq.encode(residual)
     }
 
     /// Simple k-means implementation with k-means++ initialization
@@ -293,7 +345,7 @@ impl IvfPqIndex {
             }
 
             // PQ-encode the residual
-            let code = self.pq.encode(&residual)?;
+            let code = self.encode_residual(&residual)?;
 
             let id = ids.map(|ids| ids[i]).unwrap_or(self.next_id);
             self.next_id += 1;
@@ -343,7 +395,7 @@ impl IvfPqIndex {
                 let mut min_dist = f32::MAX;
                 let mut cluster = 0;
                 for c in 0..nlist {
-                    let dist = l2_distance(vector, &centroids[c * dim..]);
+                    let dist = l2_distance(vector, &centroids[c * dim..(c + 1) * dim]);
                     if dist < min_dist {
                         min_dist = dist;
                         cluster = c;
@@ -357,7 +409,7 @@ impl IvfPqIndex {
                 }
 
                 // PQ-encode residual
-                let code = self.pq.encode(&residual).unwrap();
+                let code = self.encode_residual(&residual).unwrap();
 
                 let id = ids.map(|ids| ids[i]).unwrap_or(i as i64);
                 (cluster, id, code)
@@ -417,7 +469,7 @@ impl IvfPqIndex {
                 (c, dist)
             })
             .collect();
-        cluster_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        cluster_dists.sort_by(|a, b| a.1.total_cmp(&b.1));
         cluster_dists
             .into_iter()
             .take(nprobe.min(self.nlist))
@@ -517,7 +569,7 @@ impl IvfPqIndex {
                     (c, dist)
                 })
                 .collect();
-            cluster_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            cluster_dists.sort_by(|a, b| a.1.total_cmp(&b.1));
 
             #[cfg(feature = "parallel")]
             {
@@ -525,7 +577,8 @@ impl IvfPqIndex {
                 use rayon::prelude::*;
 
                 // PQ code size per vector
-                let code_size = self.pq.code_size();
+                let code_size = self.active_code_size();
+                let opq_enabled = self.opq_enabled();
 
                 let candidates: Vec<(i64, f32)> = cluster_dists
                     .iter()
@@ -545,23 +598,32 @@ impl IvfPqIndex {
                                 query_vec[j] - self.centroids[*cluster * self.dim + j];
                         }
 
-                        // Precompute distance table
-                        let table = self.precompute_distance_table(&query_residual);
-
-                        // ADC search - iterate ids and codes together
-                        Some(
-                            ids.iter()
-                                .zip(codes.chunks(code_size))
-                                .map(|(id, code)| (*id, self.adc_distance(&table, code)))
-                                .collect::<Vec<_>>(),
-                        )
+                        if opq_enabled {
+                            let opq = self.opq.as_ref().unwrap();
+                            Some(
+                                ids.iter()
+                                    .zip(codes.chunks(code_size))
+                                    .map(|(id, code)| (*id, opq.compute_distance(&query_residual, code)))
+                                    .collect::<Vec<_>>(),
+                            )
+                        } else {
+                            // Precompute distance table
+                            let table = self.precompute_distance_table(&query_residual);
+                            // ADC search - iterate ids and codes together
+                            Some(
+                                ids.iter()
+                                    .zip(codes.chunks(code_size))
+                                    .map(|(id, code)| (*id, self.adc_distance(&table, code)))
+                                    .collect::<Vec<_>>(),
+                            )
+                        }
                     })
                     .flatten()
                     .collect();
 
                 // Sort and take top k
                 let mut candidates = candidates;
-                candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                candidates.sort_by(|a, b| a.1.total_cmp(&b.1));
 
                 for i in 0..k {
                     if i < candidates.len() {
@@ -580,7 +642,8 @@ impl IvfPqIndex {
                 let mut candidates: Vec<(i64, f32)> = Vec::new();
 
                 // PQ code size per vector
-                let code_size = self.pq.code_size();
+                let code_size = self.active_code_size();
+                let opq_enabled = self.opq_enabled();
 
                 for &(cluster, _) in cluster_dists.iter().take(nprobe) {
                     let ids = &self.invlist_ids[cluster];
@@ -596,18 +659,25 @@ impl IvfPqIndex {
                         query_residual[j] = query_vec[j] - self.centroids[cluster * self.dim + j];
                     }
 
-                    // Precompute distance table for this cluster's residual
-                    let table = self.precompute_distance_table(&query_residual);
-
-                    // ADC: look up distances from table for each PQ code
-                    for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
-                        let dist = self.adc_distance(&table, code);
-                        candidates.push((*id, dist));
+                    if opq_enabled {
+                        let opq = self.opq.as_ref().unwrap();
+                        for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
+                            let dist = opq.compute_distance(&query_residual, code);
+                            candidates.push((*id, dist));
+                        }
+                    } else {
+                        // Precompute distance table for this cluster's residual
+                        let table = self.precompute_distance_table(&query_residual);
+                        // ADC: look up distances from table for each PQ code
+                        for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
+                            let dist = self.adc_distance(&table, code);
+                            candidates.push((*id, dist));
+                        }
                     }
                 }
 
                 // Sort and take top k
-                candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                candidates.sort_by(|a, b| a.1.total_cmp(&b.1));
 
                 for i in 0..k {
                     if i < candidates.len() {
@@ -662,17 +732,19 @@ impl IvfPqIndex {
                 // Find nearest clusters
                 let mut cluster_dists: Vec<(usize, f32)> = (0..nlist)
                     .map(|c| {
-                        let dist = l2_distance(query_vec, &self.centroids[c * dim..]);
+                        let dist =
+                            l2_distance(query_vec, &self.centroids[c * dim..(c + 1) * dim]);
                         (c, dist)
                     })
                     .collect();
-                cluster_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                cluster_dists.sort_by(|a, b| a.1.total_cmp(&b.1));
 
                 // Search top nprobe clusters using ADC
                 let mut candidates: Vec<(i64, f32)> = Vec::new();
 
                 // PQ code size per vector
-                let code_size = self.pq.code_size();
+                let code_size = self.active_code_size();
+                let opq_enabled = self.opq_enabled();
 
                 for &(cluster, _) in cluster_dists.iter().take(nprobe) {
                     let ids = &self.invlist_ids[cluster];
@@ -688,18 +760,25 @@ impl IvfPqIndex {
                         query_residual[j] = query_vec[j] - self.centroids[cluster * dim + j];
                     }
 
-                    // Precompute distance table
-                    let table = self.precompute_distance_table(&query_residual);
-
-                    // ADC lookup
-                    for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
-                        let dist = self.adc_distance(&table, code);
-                        candidates.push((*id, dist));
+                    if opq_enabled {
+                        let opq = self.opq.as_ref().unwrap();
+                        for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
+                            let dist = opq.compute_distance(&query_residual, code);
+                            candidates.push((*id, dist));
+                        }
+                    } else {
+                        // Precompute distance table
+                        let table = self.precompute_distance_table(&query_residual);
+                        // ADC lookup
+                        for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
+                            let dist = self.adc_distance(&table, code);
+                            candidates.push((*id, dist));
+                        }
                     }
                 }
 
                 // Sort and take top k
-                candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                candidates.sort_by(|a, b| a.1.total_cmp(&b.1));
 
                 let mut ids = Vec::with_capacity(k);
                 let mut dists = Vec::with_capacity(k);
@@ -857,8 +936,8 @@ impl IvfPqIndex {
                 }
             }
 
-            // Train PQ on residuals
-            self.pq.train(id_count, &residuals)?;
+            // Train fine quantizer on residuals
+            self.train_fine_quantizer(id_count, &residuals)?;
 
             // Rebuild inverted lists with PQ codes
             for i in 0..self.nlist {
@@ -868,7 +947,7 @@ impl IvfPqIndex {
 
             for i in 0..id_count {
                 let residual = &residuals[i * dim..(i + 1) * dim];
-                let code = self.pq.encode(residual)?;
+                let code = self.encode_residual(residual)?;
                 let cluster = assignments[i];
                 self.invlist_ids[cluster].push(self.ids[i]);
                 self.invlist_codes[cluster].extend_from_slice(&code);
@@ -1010,7 +1089,7 @@ mod tests {
                     (i as i64, dist)
                 })
                 .collect();
-            gt.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            gt.sort_by(|a, b| a.1.total_cmp(&b.1));
             let gt_ids: std::collections::HashSet<i64> = gt.iter().take(k).map(|x| x.0).collect();
 
             // IVF-PQ search

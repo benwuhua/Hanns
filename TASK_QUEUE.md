@@ -29,10 +29,11 @@
   - 影响: cold/disk QPS
   - 复杂度: 小到中
 
-- [ ] **IVFPQ-ADC-001** [P0]: IVF-PQ ADC 根因隔离实验（进行中）
-  - 实验: 用 `pq.compute_distance(query_residual, code)` 替代 table-based ADC
-  - 判断: recall 提升 → ADC table bug；recall 不变 → 训练质量问题
-  - 结论决定下一步（IVFPQ-FIX-002 或 IVFPQ-TRAIN-001）
+- [x] **IVFPQ-ADC-001** [P0]: ✅ 根因确认（2026-03-19）
+  - 诊断结果: reconstruction_error=62.38, avg_rel_err=27.14%, brute_recall=1.000
+  - 结论: 不是代码 bug，是 plain PQ M=32 sub_dim=4 的固有质量上限（理论相对误差 ≈25%）
+  - ADC table 正确，IVF 路由正确，recall=0.719@nprobe=256 是 PQ 量化噪声导致的天花板
+  - 修复方向: IVF-OPQ 集成（opq.rs 已有实现，需接入 IvfPqIndex）
 
 ### P1 — 下一 sprint（中等复杂度）
 
@@ -48,10 +49,10 @@
   - 思路: PCA 降维 → SQ8 量化 → DiskANN graph，降低 build time
   - 复杂度: 中大
 
-- [ ] **IVFPQ-FIX-002** [P1]: IVF-PQ 修复（根据 ADC-001 结论）
-  - 如果 ADC bug: 修 `precompute_distance_table()` / `adc_distance()`
-  - 如果训练质量: 改进 PQ k-means 策略（assignment refinement 等）
-  - 依赖: IVFPQ-ADC-001 结论
+- [ ] **IVFPQ-FIX-002** [P1]: IVF-OPQ 集成
+  - 方案: 在 `IvfPqIndex::train()` 中用 `OptimizedProductQuantizer`（opq.rs 已有）替换 plain PQ
+  - 预期: recall@10 从 0.72 提升到 ~0.88+（OPQ 旋转消除维度间相关性）
+  - 注意: add_parallel/search_parallel 有 `&centroids[c * dim..]` 越界 bug，需同时修复
 
 ### P2 — 待 P1 稳定后
 
