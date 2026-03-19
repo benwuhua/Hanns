@@ -5,7 +5,78 @@
 
 ## 当前大任务面板
 
-> 优先级重排 2026-03-19: native 对比分析完成，AISAQ sector-dedup + IVF-PQ KMeans 质量为新 P0。
+> 优先级重排 2026-03-19 (v2): 引入 HANNS feature 集成计划。AISAQ 结构性工作暂停；新 P0 为 HANNS 轻量优化 + IVF-PQ 根因确认。
+
+---
+
+## Phase 5: HANNS Feature Integration (2026-03-19 开启)
+
+参考: HANNS 设计文档（用户提供，knowhere-2.3.1 增强版）
+
+### P0 — 立即（轻量、高收益）
+
+- [ ] **HANNS-VIS-001** [P0]: Thread-local Visited Pool
+  - 目标: `src/search/visited_pool.rs` — generation counter O(1) reset，替代当前每次查询的 visited set allocate/clear
+  - 实现要点: `thread_local! { static VISITED: RefCell<VisitedList> }`（不用 HashMap，文档版本有 lifetime bug）
+  - 集成: AISAQ `search_internal` + DiskANN Vamana search
+  - 影响: warm QPS，per-query 分配开销
+  - 复杂度: 小
+
+- [ ] **HANNS-IOC-001** [P0]: IO Cutting 早停
+  - 目标: `src/search/io_cutting.rs` — beam search 候选列表收敛后按比例早停
+  - 核心: `stable_count / remaining >= threshold`，叠加在现有 `max_visit` + `search_io_limit` 之上
+  - 集成: AISAQ `search_internal`（beam loop 中每次 insert 后判断）
+  - 影响: cold/disk QPS
+  - 复杂度: 小到中
+
+- [ ] **IVFPQ-ADC-001** [P0]: IVF-PQ ADC 根因隔离实验（进行中）
+  - 实验: 用 `pq.compute_distance(query_residual, code)` 替代 table-based ADC
+  - 判断: recall 提升 → ADC table bug；recall 不变 → 训练质量问题
+  - 结论决定下一步（IVFPQ-FIX-002 或 IVFPQ-TRAIN-001）
+
+### P1 — 下一 sprint（中等复杂度）
+
+- [ ] **HANNS-PCA-001** [P1]: PCA 模块
+  - 目标: `src/quantization/pca.rs`
+  - 实现: nalgebra SVD（纯 Rust，无系统依赖），不用 openblas-system
+  - 接口: `PcaTransform::train(data, n, dim, pca_dim)` + `transform_query(query)`
+  - 复杂度: 中
+
+- [ ] **HANNS-SQ-001** [P1]: SQ Flash Index + PCA 加速 build
+  - 目标: `src/faiss/diskann_sq.rs`（新文件）+ `src/quantization/sq.rs` 增强
+  - 依赖: HANNS-PCA-001
+  - 思路: PCA 降维 → SQ8 量化 → DiskANN graph，降低 build time
+  - 复杂度: 中大
+
+- [ ] **IVFPQ-FIX-002** [P1]: IVF-PQ 修复（根据 ADC-001 结论）
+  - 如果 ADC bug: 修 `precompute_distance_table()` / `adc_distance()`
+  - 如果训练质量: 改进 PQ k-means 策略（assignment refinement 等）
+  - 依赖: IVFPQ-ADC-001 结论
+
+### P2 — 待 P1 稳定后
+
+- [ ] **HANNS-HVQ-001** [P2]: HVQ 量化器
+  - 前置条件: 需要看到 HANNS 实际 SIFT-1M recall 数字再决定是否值得实现
+  - 核心: 随机旋转（nalgebra QR）+ code refinement（6 次迭代）+ bit packing（1/2/4/8 bit）
+  - 复杂度: 大
+
+- [ ] **HANNS-VNNI-001** [P2]: AVX512 VNNI SIMD
+  - 依赖: HANNS-HVQ-001（针对 HVQ 的 u8×i8 点积）
+  - 核心: `_mm512_dpbusd_epi32`，2/4/8-bit unpack + inner product
+  - 复杂度: 中（SIMD intrinsic + bit unpack）
+
+- [ ] **AISAQ-ARCH-008** [P2]: Sector-batch I/O 重构（暂停）
+  - 设计报告: `/tmp/arch008_design.md`（Codex 已完成分析）
+  - 暂停原因: 结构性工作量大；先推 HANNS 轻量优化收割低垂果实
+  - 恢复时机: HANNS P0/P1 完成后
+
+### P3 — 低优先级 / 有依赖
+
+- [ ] **IVFPQ-FIX-001** [P3]: IVF-PQ SIFT-1M recall 提升（等 ADC-001/FIX-002）
+- [ ] **AISAQ-ARCH-007 guard** [P3]: 100K guard 去掉（需要新 build 架构，ARCH-007 验证为负向）
+- [ ] **HANNS-HPC-001** [P3]: High Precision Scan（large topk 场景 offset_delta + calc_cnt）
+
+---
 
 ### Phase 3: 多 Index 能力验证 + 修复 (2026-03-18 开启)
 
