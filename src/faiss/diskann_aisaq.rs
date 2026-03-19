@@ -22,6 +22,9 @@ use crate::bitset::BitsetView;
 use crate::dataset::Dataset;
 use crate::faiss::pq::PqEncoder;
 use crate::index::{Index, IndexError};
+use crate::search::{
+    is_visited_thread_local, mark_thread_local, reset_thread_local, with_visited,
+};
 use crate::simd;
 #[cfg(all(feature = "async-io", target_os = "linux"))]
 use io_uring::{opcode, types, IoUring};
@@ -705,7 +708,6 @@ impl Ord for Candidate {
 
 struct AisaqScratch {
     frontier: BinaryHeap<Candidate>,
-    seen: HashSet<u32>,
     expanded: Vec<Candidate>,
     accepted: Vec<Candidate>,
 }
@@ -714,7 +716,6 @@ impl AisaqScratch {
     fn new(capacity: usize) -> Self {
         Self {
             frontier: BinaryHeap::with_capacity(capacity),
-            seen: HashSet::with_capacity(capacity.saturating_mul(2)),
             expanded: Vec::with_capacity(capacity),
             accepted: Vec::with_capacity(capacity),
         }
@@ -722,7 +723,6 @@ impl AisaqScratch {
 
     fn reset(&mut self) {
         self.frontier.clear();
-        self.seen.clear();
         self.expanded.clear();
         self.accepted.clear();
     }
@@ -1504,133 +1504,136 @@ impl PQFlashIndex {
         };
         scratch.reset();
 
-        let outcome: Result<SearchResult> = (|| {
-            for candidate in self.rank_entry_candidates(
-                query,
-                pq_table_slice,
-                &mut io,
-            )? {
-                scratch.frontier.push(candidate);
-            }
-
-            while scratch.expanded.len() < max_visit {
-                if let Some(io_limit) = self.config.search_io_limit {
-                    if io.pages_loaded_total() > io_limit {
-                        break;
-                    }
+        let outcome: Result<SearchResult> = with_visited(self.node_count, |visited| {
+            (|| {
+                for candidate in self.rank_entry_candidates(query, pq_table_slice, &mut io)? {
+                    scratch.frontier.push(candidate);
                 }
 
-                let candidate = match scratch.frontier.pop() {
-                    Some(candidate) => candidate,
-                    None => break,
-                };
-
-                if !scratch.seen.insert(candidate.node_id) {
-                    continue;
-                }
-
-                scratch.expanded.push(candidate);
-                if self.node_allowed(candidate.node_id, bitset) {
-                    scratch.accepted.push(candidate);
-                }
-
-                let mut neighbor_scores = if let Some(node) = self.node_ref(candidate.node_id) {
-                    io.record_node_read(candidate.node_id, self.flash_layout.node_bytes);
-                    let mut scores = Vec::with_capacity(node.neighbors.len());
-                    for &neighbor in node.neighbors {
-                        if scratch.seen.contains(&neighbor) {
-                            continue;
+                while scratch.expanded.len() < max_visit {
+                    if let Some(io_limit) = self.config.search_io_limit {
+                        if io.pages_loaded_total() > io_limit {
+                            break;
                         }
-                        let score = if let Some(neighbor_node) = self.node_ref(neighbor) {
-                            if let (Some(encoder), Some(table)) = (&self.pq_encoder, pq_table_slice) {
-                                if !neighbor_node.inline_pq.is_empty() {
-                                    io.record_pq_read(neighbor, neighbor_node.inline_pq.len());
-                                    encoder.compute_distance_with_table(table, neighbor_node.inline_pq)
+                    }
+
+                    let candidate = match scratch.frontier.pop() {
+                        Some(candidate) => candidate,
+                        None => break,
+                    };
+
+                    if visited.is_visited(candidate.node_id) {
+                        continue;
+                    }
+                    visited.mark(candidate.node_id);
+
+                    scratch.expanded.push(candidate);
+                    if self.node_allowed(candidate.node_id, bitset) {
+                        scratch.accepted.push(candidate);
+                    }
+
+                    let mut neighbor_scores = if let Some(node) = self.node_ref(candidate.node_id) {
+                        io.record_node_read(candidate.node_id, self.flash_layout.node_bytes);
+                        let mut scores = Vec::with_capacity(node.neighbors.len());
+                        for &neighbor in node.neighbors {
+                            if visited.is_visited(neighbor) {
+                                continue;
+                            }
+                            let score = if let Some(neighbor_node) = self.node_ref(neighbor) {
+                                if let (Some(encoder), Some(table)) = (&self.pq_encoder, pq_table_slice)
+                                {
+                                    if !neighbor_node.inline_pq.is_empty() {
+                                        io.record_pq_read(neighbor, neighbor_node.inline_pq.len());
+                                        encoder.compute_distance_with_table(
+                                            table,
+                                            neighbor_node.inline_pq,
+                                        )
+                                    } else {
+                                        self.exact_distance(query, neighbor_node.vector)
+                                    }
                                 } else {
                                     self.exact_distance(query, neighbor_node.vector)
                                 }
                             } else {
-                                self.exact_distance(query, neighbor_node.vector)
-                            }
-                        } else {
-                            self.coarse_distance(neighbor, query, pq_table_slice, &mut io)?
-                        };
-                        scores.push(Candidate {
-                            node_id: neighbor,
-                            score,
-                        });
-                    }
-                    scores
-                } else {
-                    let node = self.load_node(candidate.node_id, NodeAccessMode::Node, &mut io)?;
-                    let unseen: Vec<u32> = node
-                        .neighbors
-                        .iter()
-                        .filter(|&&neighbor| !scratch.seen.contains(&neighbor))
-                        .copied()
-                        .collect();
-                    // self.batch_prefetch_neighbors(&unseen); // disabled: net negative on x86 warm path
-                    let mut scores = Vec::with_capacity(unseen.len());
-                    for &neighbor in &unseen {
-                        let score =
-                            self.coarse_distance(neighbor, query, pq_table_slice, &mut io)?;
-                        scores.push(Candidate {
-                            node_id: neighbor,
-                            score,
-                        });
-                    }
-                    scores
-                };
-
-                neighbor_scores.sort_by(|left, right| left.score.total_cmp(&right.score));
-                let expand_limit = self.compute_expand_limit(&io);
-                for neighbor in neighbor_scores.into_iter().take(expand_limit) {
-                    scratch.frontier.push(neighbor);
-                }
-            }
-
-            if scratch.accepted.len() < k {
-                self.fill_from_allowed_exact(
-                    query,
-                    bitset,
-                    &scratch.seen,
-                    k,
-                    &mut scratch.accepted,
-                    &mut io,
-                )?;
-            }
-
-            let rerank_pool = self.compute_rerank_pool_size(k, scratch.accepted.len());
-            scratch
-                .accepted
-                .sort_by(|left, right| left.score.total_cmp(&right.score));
-            let mut scored: Vec<(i64, f32)> = scratch
-                .accepted
-                .iter()
-                .take(rerank_pool)
-                .map(|candidate| {
-                    if let Some(node) = self.node_ref(candidate.node_id) {
-                        let distance = self.exact_distance(query, node.vector);
-                        Ok((node.id, distance))
+                                self.coarse_distance(neighbor, query, pq_table_slice, &mut io)?
+                            };
+                            scores.push(Candidate {
+                                node_id: neighbor,
+                                score,
+                            });
+                        }
+                        scores
                     } else {
-                        let node =
-                            self.load_node(candidate.node_id, NodeAccessMode::None, &mut io)?;
-                        let distance = self.exact_distance(query, &node.vector);
-                        Ok((node.id, distance))
-                    }
-                })
-                .collect::<Result<Vec<_>>>()?;
-            scored.sort_by(|left, right| left.1.total_cmp(&right.1));
-            scored.truncate(k.min(scored.len()));
+                        let node = self.load_node(candidate.node_id, NodeAccessMode::Node, &mut io)?;
+                        let unseen: Vec<u32> = node
+                            .neighbors
+                            .iter()
+                            .filter(|&&neighbor| !visited.is_visited(neighbor))
+                            .copied()
+                            .collect();
+                        // self.batch_prefetch_neighbors(&unseen); // disabled: net negative on x86 warm path
+                        let mut scores = Vec::with_capacity(unseen.len());
+                        for &neighbor in &unseen {
+                            let score =
+                                self.coarse_distance(neighbor, query, pq_table_slice, &mut io)?;
+                            scores.push(Candidate {
+                                node_id: neighbor,
+                                score,
+                            });
+                        }
+                        scores
+                    };
 
-            let mut result = SearchResult::new(
-                scored.iter().map(|(id, _)| *id).collect(),
-                scored.iter().map(|(_, distance)| *distance).collect(),
-                0.0,
-            );
-            result.num_visited = io.stats().nodes_visited;
-            Ok(result)
-        })();
+                    neighbor_scores.sort_by(|left, right| left.score.total_cmp(&right.score));
+                    let expand_limit = self.compute_expand_limit(&io);
+                    for neighbor in neighbor_scores.into_iter().take(expand_limit) {
+                        scratch.frontier.push(neighbor);
+                    }
+                }
+
+                if scratch.accepted.len() < k {
+                    self.fill_from_allowed_exact(
+                        query,
+                        bitset,
+                        |id| visited.is_visited(id),
+                        k,
+                        &mut scratch.accepted,
+                        &mut io,
+                    )?;
+                }
+
+                let rerank_pool = self.compute_rerank_pool_size(k, scratch.accepted.len());
+                scratch
+                    .accepted
+                    .sort_by(|left, right| left.score.total_cmp(&right.score));
+                let mut scored: Vec<(i64, f32)> = scratch
+                    .accepted
+                    .iter()
+                    .take(rerank_pool)
+                    .map(|candidate| {
+                        if let Some(node) = self.node_ref(candidate.node_id) {
+                            let distance = self.exact_distance(query, node.vector);
+                            Ok((node.id, distance))
+                        } else {
+                            let node =
+                                self.load_node(candidate.node_id, NodeAccessMode::None, &mut io)?;
+                            let distance = self.exact_distance(query, &node.vector);
+                            Ok((node.id, distance))
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                scored.sort_by(|left, right| left.1.total_cmp(&right.1));
+                scored.truncate(k.min(scored.len()));
+
+                let mut result = SearchResult::new(
+                    scored.iter().map(|(id, _)| *id).collect(),
+                    scored.iter().map(|(_, distance)| *distance).collect(),
+                    0.0,
+                );
+                result.num_visited = io.stats().nodes_visited;
+                Ok(result)
+            })()
+        });
 
         let mut pool = self.scratch_pool.lock();
         pool.push(scratch);
@@ -1730,9 +1733,9 @@ impl PQFlashIndex {
             .map(|encoder| encoder.build_distance_table(query));
 
         let mut frontier = BinaryHeap::new();
-        let mut seen = HashSet::new();
         let mut expanded = Vec::new();
         let mut accepted = Vec::new();
+        reset_thread_local(self.node_count);
 
         for candidate in self
             .rank_entry_candidates_async(
@@ -1754,9 +1757,10 @@ impl PQFlashIndex {
                 let Some(candidate) = frontier.pop() else {
                     break;
                 };
-                if !seen.insert(candidate.node_id) {
+                if is_visited_thread_local(candidate.node_id) {
                     continue;
                 }
+                mark_thread_local(candidate.node_id);
                 expanded.push(candidate);
                 if self.node_allowed(candidate.node_id, bitset) {
                     accepted.push(candidate);
@@ -1768,10 +1772,10 @@ impl PQFlashIndex {
                 break;
             }
 
-            let loaded_batch = self.load_node_batch_async(&batch, &mut io).await?;
+                let loaded_batch = self.load_node_batch_async(&batch, &mut io).await?;
             for (_, node) in loaded_batch {
                 for &neighbor in &node.neighbors {
-                    if seen.contains(&neighbor) {
+                    if is_visited_thread_local(neighbor) {
                         continue;
                     }
                     self.prefetch_node(neighbor);
@@ -1779,7 +1783,7 @@ impl PQFlashIndex {
 
                 let mut neighbor_scores = Vec::with_capacity(node.neighbors.len());
                 for &neighbor in &node.neighbors {
-                    if seen.contains(&neighbor) {
+                    if is_visited_thread_local(neighbor) {
                         continue;
                     }
                     let score = self
@@ -1805,7 +1809,14 @@ impl PQFlashIndex {
         }
 
         if accepted.len() < k {
-            self.fill_from_allowed_exact(query, bitset, &seen, k, &mut accepted, &mut io)?;
+            self.fill_from_allowed_exact(
+                query,
+                bitset,
+                is_visited_thread_local,
+                k,
+                &mut accepted,
+                &mut io,
+            )?;
         }
 
         let rerank_pool = self.compute_rerank_pool_size(k, accepted.len());
@@ -1951,15 +1962,18 @@ impl PQFlashIndex {
         Ok(result)
     }
 
-    fn fill_from_allowed_exact(
+    fn fill_from_allowed_exact<F>(
         &self,
         query: &[f32],
         bitset: Option<&BitsetView>,
-        seen: &HashSet<u32>,
+        mut seen_contains: F,
         k: usize,
         accepted: &mut Vec<Candidate>,
         io: &mut BeamSearchIO,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        F: FnMut(u32) -> bool,
+    {
         if accepted.len() >= k {
             return Ok(());
         }
@@ -1970,7 +1984,7 @@ impl PQFlashIndex {
         }
 
         for node_id in 0..self.len() as u32 {
-            if seen.contains(&node_id) || in_accepted.contains(&node_id) {
+            if seen_contains(node_id) || in_accepted.contains(&node_id) {
                 continue;
             }
             if !self.node_allowed(node_id, bitset) {

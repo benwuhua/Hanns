@@ -30,6 +30,7 @@ pub mod once_cell;
 pub mod prealloc;
 pub mod quantization;
 pub mod ring;
+pub mod search;
 pub mod serialize;
 pub mod simd;
 pub mod skiplist;
