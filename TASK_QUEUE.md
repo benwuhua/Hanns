@@ -144,16 +144,17 @@
   - 修复: `.cargo/config.toml` 已加 target-cpu=native for x86_64 + aarch64
   - 新 x86 authority baseline: HNSW **28,641 QPS** (取代旧 23,474)
 
-- [ ] **AISAQ-CAP-008** [P2]: Async IO / 冷 disk 路径优化
-  - 现状: 冷盘 ~326 QPS；目标提升 >2x
-  - ⚠️ **已验证失败方案**: rayon parallel within beam iteration (caa1e37 已 revert)
+- [x] **AISAQ-CAP-008** [P2]: ❌ 两种方案均失败，暂搁置
+  - 现状: 冷盘 ~326 QPS；目标 >2x，**未达成**
+  - ⚠️ **已验证失败方案 1**: rayon parallel within beam iteration (已 revert)
     - NoPQ 1M: 9,648 → 1,722 QPS (-82%); PQ32 1M: 8,002 → 3,235 (-60%)
-    - 根因: NoPQ path 所有邻居争抢 node_ref() LRU 锁 / page_cache lock
-    - PQ32 略好（disk_pq_codes 无锁），但仍严重回退
-  - 正确方向（待实现）:
-    1. OS readahead hints: `posix_fadvise(POSIX_FADV_WILLNEED)` 无锁预读
-    2. 真正的 io_uring: 队列化异步 IO，批量等待完成（lock-free IO）
-    3. 不要在 beam search 内部用 rayon（破坏 LRU 和 page_cache 访问模式）
+    - 根因: 邻居争抢 node_ref() LRU 锁 / page_cache lock
+  - ⚠️ **已验证失败方案 2**: posix_fadvise(POSIX_FADV_WILLNEED) (已丢弃，未提交)
+    - disk_warm QPS: 326 → 296 (-9%)；syscall 开销 > 预读收益
+    - cached QPS 不受影响 (13,217)
+  - 下一个可行方向 (复杂度高，暂搁置):
+    - io_uring: 队列化异步 IO，真正的 lock-free IO，需引入 tokio-uring 或 rio crate
+  - 结论: 在不引入 async runtime 的前提下，beam search 内部无简单加速手段
 
 - [ ] **IVFPQ-FIX-001** [P3]: IVF-PQ recall < 0.8 根因分析+修复
 
