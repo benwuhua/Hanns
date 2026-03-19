@@ -1,10 +1,11 @@
 # Builder 任务队列
-> 最后更新: 2026-03-18 | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
+> 最后更新: 2026-03-19 | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
 > 详细 gap analysis: `docs/superpowers/specs/2026-03-18-diskann-aisaq-gap-analysis.md`
+> Native 对比分析 (2026-03-19): `/tmp/native_gap_analysis.md`
 
 ## 当前大任务面板
 
-> 优先级调整 2026-03-18: HNSW/DiskANN/PQ/SQ/IVF/ScaNN 整体上移；AISAQ 降级。
+> 优先级重排 2026-03-19: native 对比分析完成，AISAQ sector-dedup + IVF-PQ KMeans 质量为新 P0。
 
 ### Phase 3: 多 Index 能力验证 + 修复 (2026-03-18 开启)
 
@@ -156,7 +157,54 @@
     - io_uring: 队列化异步 IO，真正的 lock-free IO，需引入 tokio-uring 或 rio crate
   - 结论: 在不引入 async runtime 的前提下，beam search 内部无简单加速手段
 
-- [ ] **IVFPQ-FIX-001** [P3]: IVF-PQ recall < 0.8 根因分析+修复
+### Phase 4: DiskANN 架构闭环 + IVF-PQ 质量修复 (2026-03-19 开启)
+
+#### P0 — 架构级差距（高影响）
+
+- [ ] **AISAQ-ARCH-001** [P0]: Sector-dedup + 批量对齐读 — disk beam search 架构根修
+  - 现状: `search_internal()` 每个邻居独立触发 `load_node()` / `PageCache::read()`，node-by-node 模式
+  - native 做法: `nodes_to_fetch → sectors_to_fetch` 去重 → 一次对齐批读（`disk_sector_graph.rs::ensure_loaded()`）
+  - 目标: 把 beam 每一轮的邻居集 → sector ID set → batch read，消除重复扇区访问
+  - 预期影响: disk_warm QPS 数倍提升（当前 ~326 QPS，目标 >1000）；这是 CAP-008 两次失败的真正根因
+  - 参考: `/Users/ryan/Code/DiskANN/diskann-disk/src/search/provider/disk_sector_graph.rs`
+
+- [ ] **AISAQ-ARCH-002** [P0]: 图 build 质量 — 去掉大图捷径，修复 recall ceiling
+  - 现状: `refine_flat_graph()` 在 n>50_000 直接跳过；`link_back_with_limit()` 满度直接 return
+  - 影响: search path 再优化也被 build quality 卡住 recall 上限
+  - 目标: 至少对 1M 规模做正确的反向边修剪，不能因为大就跳过核心逻辑
+
+- [ ] **IVFPQ-KMEANS-001** [P0]: 用更强 KMeans 替换现有 PQ 训练器
+  - 根因: 当前 `src/quantization/pq.rs` KMeans 是 random_init + 10/25/50 轮，码本质量远弱于 FAISS
+  - FAISS 做法: 成熟初始化（k-means++/forgy）+ 稳定收敛 + 按 slice 训练
+  - 最小目标: k-means++ 初始化 + 100 轮 + 更严格 tolerance → 验证 IVF-PQ full-scan recall 是否过 0.95 gate
+  - 影响: IVF-PQ、HnswPQ8、DiskANN PQ32 recall 均受益
+
+#### P1 — 算法完整性
+
+- [ ] **AISAQ-ARCH-003** [P1]: 全局 I/O budget 终止语义
+  - 让 beam search 在 disk lane 受真实 sector 访问成本约束（对齐 `io_count > search_io_limit` 语义）
+  - 依赖 AISAQ-ARCH-001 完成后再做，sector-dedup 先建立再加 budget 控制
+
+- [ ] **AISAQ-ARCH-004** [P1]: 完善 cache list / warmup — BFS cache + sample-query warmup
+  - 现状: `warm_up_cache()` 只 warm entry points 及其 PQ 码
+  - 目标: 实现 `cache_bfs_levels()` + `generate_cache_list_from_sample_queries()` 语义
+  - 影响: 冷启动 QPS 和 steady-state cache hit rate
+
+- [ ] **AISAQ-ARCH-005** [P1]: async disk path 真正批量化
+  - 现状: `search_async_internal()` 仍是逐点 `await load_node_async()`，rerank 回退 sync
+  - 目标: 每轮 beam 以 batch 为单位 await，依赖 AISAQ-ARCH-001 的 sector-batch 结构
+
+#### P2 — 细化优化
+
+- [ ] **HNSW-STOPCD-001** [P2]: strict-ef 停止条件对齐 FAISS relative-distance stopping
+  - 低优先级，HNSW 已 leading 2.099x；仅为吃掉 strict-ef lane 小差距
+
+- [ ] **IVFPQ-SCANNER-001** [P2]: 实现 FAISS-style QueryTables/scanner family
+  - 依赖 IVFPQ-KMEANS-001 先修 codebook 质量；scanner 主要解决性能而非 recall
+
+#### P3 — 技术债
+
+- [ ] **IVFPQ-FIX-001** [P3]: IVF-PQ recall < 0.8 根因分析+修复（旧任务，已被 IVFPQ-KMEANS-001 覆盖）
 
 - [x] **HNSW-QUANT-FIX-001** [P3]: ✅ HnswSQ8 修复完成；PQ8/PRQ2 仍 no-go
   - HnswSQ8: recall=0.992 @ ef=16 (Mac, 10K) — ✅ **修复**
