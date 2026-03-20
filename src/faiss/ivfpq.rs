@@ -222,6 +222,8 @@ impl IvfPqIndex {
             return self.add_parallel(vectors, ids, rayon::current_num_threads());
         }
 
+        // Sequential path — unreachable when `parallel` feature is enabled.
+        #[allow(unreachable_code)]
         let n = vectors.len() / self.dim;
 
         for i in 0..n {
