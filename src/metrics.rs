@@ -418,3 +418,137 @@ mod tests {
         assert!((jaccard.compute(&a, &b) - (2.0 / 3.0)).abs() < 1e-6);
     }
 }
+
+// Optional Prometheus metrics for knowhere-rs operations.
+// Enable with `--features metrics`.
+
+#[cfg(feature = "metrics")]
+pub use inner::*;
+
+#[cfg(feature = "metrics")]
+mod inner {
+    use prometheus_client::encoding::text::encode;
+    use prometheus_client::metrics::counter::Counter;
+    use prometheus_client::metrics::gauge::Gauge;
+    use prometheus_client::metrics::histogram::{exponential_buckets, Histogram};
+    use prometheus_client::registry::Registry;
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    static REGISTRY: OnceLock<Arc<Mutex<Registry>>> = OnceLock::new();
+    static METRICS: OnceLock<KnowhereMetrics> = OnceLock::new();
+
+    pub struct KnowhereMetrics {
+        pub train_duration_seconds: Histogram,
+        pub add_duration_seconds: Histogram,
+        pub search_duration_seconds: Histogram,
+        pub search_requests_total: Counter,
+        pub index_vector_count: Gauge<i64>,
+    }
+
+    pub fn init_metrics() -> &'static KnowhereMetrics {
+        METRICS.get_or_init(|| {
+            let mut registry = Registry::default();
+
+            let train_hist = Histogram::new(exponential_buckets(0.001, 2.0, 16));
+            let add_hist = Histogram::new(exponential_buckets(0.0001, 2.0, 16));
+            let search_hist = Histogram::new(exponential_buckets(0.00001, 2.0, 20));
+            let search_total = Counter::default();
+            let vec_count = Gauge::<i64>::default();
+
+            registry.register(
+                "knowhere_train_duration_seconds",
+                "Train duration",
+                train_hist.clone(),
+            );
+            registry.register(
+                "knowhere_add_duration_seconds",
+                "Add duration",
+                add_hist.clone(),
+            );
+            registry.register(
+                "knowhere_search_duration_seconds",
+                "Search duration",
+                search_hist.clone(),
+            );
+            registry.register(
+                "knowhere_search_requests_total",
+                "Search requests",
+                search_total.clone(),
+            );
+            registry.register(
+                "knowhere_index_vector_count",
+                "Indexed vector count",
+                vec_count.clone(),
+            );
+
+            let _ = REGISTRY.set(Arc::new(Mutex::new(registry)));
+
+            KnowhereMetrics {
+                train_duration_seconds: train_hist,
+                add_duration_seconds: add_hist,
+                search_duration_seconds: search_hist,
+                search_requests_total: search_total,
+                index_vector_count: vec_count,
+            }
+        })
+    }
+
+    pub fn gather_metrics() -> String {
+        let registry = REGISTRY.get().expect("metrics not initialized");
+        let registry = registry.lock().expect("registry mutex poisoned");
+        let mut buf = String::new();
+        let _ = encode(&mut buf, &registry);
+        buf
+    }
+
+    /// Convenience timer RAII guard
+    pub struct Timer {
+        start: std::time::Instant,
+        histogram: Histogram,
+    }
+
+    impl Timer {
+        pub fn new(histogram: Histogram) -> Self {
+            Self {
+                start: std::time::Instant::now(),
+                histogram,
+            }
+        }
+    }
+
+    impl Drop for Timer {
+        fn drop(&mut self) {
+            self.histogram.observe(self.start.elapsed().as_secs_f64());
+        }
+    }
+
+    #[cfg(test)]
+    #[cfg(feature = "metrics")]
+    mod tests {
+        #[test]
+        fn test_metrics_gather() {
+            let m = super::init_metrics();
+            m.search_requests_total.inc();
+            m.search_duration_seconds.observe(0.001);
+            let output = super::gather_metrics();
+            assert!(
+                output.contains("knowhere_search"),
+                "metrics output missing: {}",
+                output
+            );
+            println!(
+                "metrics output sample:\n{}",
+                &output[..output.len().min(500)]
+            );
+        }
+    }
+}
+
+/// No-op stubs when metrics feature is disabled
+#[cfg(not(feature = "metrics"))]
+pub fn init_metrics() {}
+
+#[cfg(not(feature = "metrics"))]
+pub fn gather_metrics() -> String {
+    String::new()
+}
