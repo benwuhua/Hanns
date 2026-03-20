@@ -6,6 +6,10 @@
 use crate::metrics::Distance;
 use std::sync::OnceLock;
 
+#[path = "simd/l2.rs"]
+pub mod l2;
+pub use l2::l2_sq;
+
 /// CPU 特性检测
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SimdLevel {
