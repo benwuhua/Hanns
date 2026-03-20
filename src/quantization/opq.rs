@@ -145,20 +145,21 @@ impl OptimizedProductQuantizer {
             *value = rng.gen::<f32>() * 2.0 - 1.0;
         }
 
-        // Gram-Schmidt orthonormalization
+        // Modified Gram-Schmidt orthonormalization.
+        // Project against the NORMALIZED previous rows (stored in self.rotation),
+        // not the raw matrix rows, to avoid float32 overflow for large dim.
         for i in 0..dim {
             let row_offset = i * dim;
 
-            // Subtract projections onto previous rows
+            // Subtract projections onto already-normalized previous rows
             for j in 0..i {
                 let prev_offset = j * dim;
                 let mut dot = 0.0f32;
                 for k in 0..dim {
-                    dot += matrix[row_offset + k] * matrix[prev_offset + k];
+                    dot += matrix[row_offset + k] * self.rotation[prev_offset + k];
                 }
-
                 for k in 0..dim {
-                    matrix[row_offset + k] -= dot * matrix[prev_offset + k];
+                    matrix[row_offset + k] -= dot * self.rotation[prev_offset + k];
                 }
             }
 

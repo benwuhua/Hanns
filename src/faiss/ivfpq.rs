@@ -1040,6 +1040,105 @@ mod tests {
         );
     }
 
+    /// Verify that IVF-PQ with OPQ (dim=128 triggers use_opq=true) achieves reasonable recall.
+    /// This test exercises the full OPQ encode → ADC decode path.
+    #[test]
+    fn test_ivfpq_opq_recall_dim128() {
+        let dim = 128;
+        let n_clusters = 16;
+        let n_per_cluster = 100;
+        let n = n_clusters * n_per_cluster;
+        let n_queries = 20;
+        let k = 10;
+
+        let config = IndexConfig {
+            index_type: IndexType::IvfPq,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                nlist: Some(n_clusters),
+                nprobe: Some(n_clusters), // full scan
+                m: Some(8),
+                nbits_per_idx: Some(8),
+                ..Default::default()
+            },
+        };
+
+        // Well-separated clusters: cluster i is centered at (i*50, 0, ..., 0)
+        let mut vectors = Vec::with_capacity(n * dim);
+        for c in 0..n_clusters {
+            for v in 0..n_per_cluster {
+                for j in 0..dim {
+                    let base = if j == 0 { (c as f32) * 50.0 } else { 0.0 };
+                    let noise = ((c * 7919 + v * 6271 + j * 3137) % 100) as f32 / 100.0;
+                    vectors.push(base + noise);
+                }
+            }
+        }
+
+        let mut index = IvfPqIndex::new(&config).unwrap();
+        assert!(index.use_opq, "OPQ should be enabled for dim=128");
+
+        index.train(&vectors).unwrap();
+        assert!(index.opq_enabled(), "OPQ must be trained");
+
+        let ids: Vec<i64> = (0..n as i64).collect();
+        index.add(&vectors, Some(&ids)).unwrap();
+
+        let queries = &vectors[0..n_queries * dim];
+        let mut total_recall = 0.0f32;
+
+        for q in 0..n_queries {
+            let query = &queries[q * dim..(q + 1) * dim];
+
+            // Brute-force ground truth
+            let mut gt: Vec<(i64, f32)> = (0..n)
+                .map(|i| {
+                    let v = &vectors[i * dim..(i + 1) * dim];
+                    let dist: f32 = query.iter().zip(v).map(|(a, b)| (a - b) * (a - b)).sum();
+                    (i as i64, dist)
+                })
+                .collect();
+            gt.sort_by(|a, b| a.1.total_cmp(&b.1));
+            let gt_ids: std::collections::HashSet<i64> =
+                gt.iter().take(k).map(|x| x.0).collect();
+
+            let req = SearchRequest {
+                top_k: k,
+                nprobe: n_clusters,
+                filter: None,
+                params: None,
+                radius: None,
+            };
+            let result = index.search(query, &req).unwrap();
+
+            // q==0: searching for exact self — must be rank 1
+            if q == 0 {
+                assert_eq!(
+                    result.ids[0], 0,
+                    "Exact-match query must return itself at rank 1. Got ids={:?}, dists={:?}",
+                    &result.ids[..k.min(result.ids.len())],
+                    &result.distances[..k.min(result.distances.len())]
+                );
+            }
+
+            let found: std::collections::HashSet<i64> =
+                result.ids.iter().filter(|&&id| id >= 0).copied().collect();
+            let recall = gt_ids.intersection(&found).count() as f32 / k as f32;
+            total_recall += recall;
+        }
+
+        let avg_recall = total_recall / n_queries as f32;
+        eprintln!("IVF-PQ OPQ (dim=128) R@{}: {:.1}%", k, avg_recall * 100.0);
+        assert!(
+            avg_recall > 0.50,
+            "OPQ R@{} = {:.1}% (expected > 50%)",
+            k,
+            avg_recall * 100.0
+        );
+    }
+
     #[test]
     fn ivfpq_hot_path_audit_exposes_residual_pq_state() {
         let config = IndexConfig {
