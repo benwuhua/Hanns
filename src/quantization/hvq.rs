@@ -55,6 +55,11 @@ impl HvqQuantizer {
         out
     }
 
+    /// Explicit query rotation helper for search path.
+    pub fn rotate_query(&self, query: &[f32]) -> Vec<f32> {
+        self.rotate(query)
+    }
+
     pub fn inverse_rotate(&self, v: &[f32]) -> Vec<f32> {
         assert_eq!(v.len(), self.config.dim);
         let dim = self.config.dim;
@@ -222,12 +227,66 @@ impl HvqQuantizer {
 
     pub fn adc_distance(&self, query: &[f32], code: &[u8], base_dist: f32) -> f32 {
         let q_rot = self.rotate(query);
+        self.adc_distance_prerotated(&q_rot, code, base_dist)
+    }
+
+    pub fn adc_distance_prerotated(&self, q_rot: &[f32], code: &[u8], base_dist: f32) -> f32 {
+        assert_eq!(q_rot.len(), self.config.dim);
         let recon = self.reconstruct_rotated(code);
 
         let q_norm2: f32 = q_rot.iter().map(|x| x * x).sum();
         let dot: f32 = q_rot.iter().zip(recon.iter()).map(|(a, b)| a * b).sum();
         q_norm2 - 2.0 * dot + base_dist
     }
+}
+
+/// dot product of u8 query codes × i8 database codes.
+/// Falls back to scalar on non-x86_64 or when avx512vnni is unavailable.
+pub fn dot_u8_i8_avx512(a: &[u8], b: &[i8]) -> i32 {
+    assert_eq!(a.len(), b.len());
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::arch::is_x86_feature_detected!("avx512vnni")
+            && std::arch::is_x86_feature_detected!("avx512f")
+            && a.len() >= 64
+        {
+            // SAFETY: feature detection is done at runtime, and slices are valid for loads.
+            return unsafe { dot_u8_i8_avx512_impl(a, b) };
+        }
+    }
+    a.iter()
+        .zip(b.iter())
+        .map(|(&x, &y)| x as i32 * y as i32)
+        .sum()
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512vnni")]
+unsafe fn dot_u8_i8_avx512_impl(a: &[u8], b: &[i8]) -> i32 {
+    use std::arch::x86_64::*;
+
+    let n = a.len();
+    let chunks = n / 64;
+    let mut acc = _mm512_setzero_si512();
+
+    for i in 0..chunks {
+        let off = i * 64;
+        // SAFETY: off..off+64 are in-bounds by chunk construction.
+        let va = unsafe { _mm512_loadu_si512(a[off..].as_ptr() as *const __m512i) };
+        // SAFETY: same bounds as above; raw bytes are interpreted as signed i8 lanes.
+        let vb = unsafe { _mm512_loadu_si512(b[off..].as_ptr() as *const __m512i) };
+        acc = _mm512_dpbusd_epi32(acc, va, vb);
+    }
+
+    // Reduce 16 i32 lanes manually for compatibility.
+    // SAFETY: __m512i is exactly 64 bytes, same as [i32; 16].
+    let lanes: [i32; 16] = unsafe { std::mem::transmute(acc) };
+    let mut total = lanes.iter().sum::<i32>();
+
+    for i in (chunks * 64)..n {
+        total += a[i] as i32 * b[i] as i32;
+    }
+    total
 }
 
 #[cfg(test)]
@@ -322,5 +381,19 @@ mod tests {
         let recall = hits as f32 / total as f32;
         println!("hvq_recall@10={:.3}", recall);
         assert!(recall.is_finite());
+    }
+
+    #[test]
+    fn test_dot_u8_i8() {
+        let a: Vec<u8> = (0..128).map(|i| (i % 200) as u8).collect();
+        let b: Vec<i8> = (0..128).map(|i| (i as i32 - 64) as i8).collect();
+        let scalar: i32 = a
+            .iter()
+            .zip(b.iter())
+            .map(|(&x, &y)| x as i32 * y as i32)
+            .sum();
+        let simd = dot_u8_i8_avx512(&a, &b);
+        assert_eq!(scalar, simd, "SIMD result must match scalar");
+        println!("dot_u8_i8 scalar={} simd={}", scalar, simd);
     }
 }
