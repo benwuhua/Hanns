@@ -72,10 +72,9 @@
   - 目标: SIFT-1M 上评估 OPQ 效果，与 Faiss IVF-OPQ 对比
   - 复杂度: 中
 
-- [ ] **GAP-REFINE-001** [P2]: Refinement 策略完善
-  - 当前状态: 部分实现，C++ 支持 SQ4/SQ6/SQ8/FP16/BF16/FP32 全类型
-  - 目标: 补全缺失的精化量化类型
-  - 复杂度: 低中
+- [x] **GAP-REFINE-001** [P2]: ✅ 已完成 (2026-03-20, commit 917a4a2)
+  - `src/quantization/refine.rs`: DataView(≡FP32)/SQ8/FP16/BF16/SQ4/SQ6 全类型实现
+  - SQ4 nibble packing (15 levels), SQ6 bit-stream (63 levels), 测试通过
 
 - [x] **GAP-SEARCH-003** [P2]: ✅ 已完成 (2026-03-20, commit 027c0d4)
   - 实现: `src/faiss/lazy_index.rs` — LazyIndex<T> 泛型延迟加载封装
