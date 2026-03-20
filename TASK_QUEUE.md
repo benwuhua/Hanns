@@ -129,15 +129,15 @@
 
 ### P2 — 待 P1 稳定后
 
-- [ ] **HANNS-HVQ-001** [P2]: HVQ 量化器
-  - 前置条件: 需要看到 HANNS 实际 SIFT-1M recall 数字再决定是否值得实现
-  - 核心: 随机旋转（nalgebra QR）+ code refinement（6 次迭代）+ bit packing（1/2/4/8 bit）
-  - 复杂度: 大
+- [x] **HANNS-HVQ-001** [P2]: ✅ 完成 (2026-03-20, commit e2c9985)
+  - 实现: `src/quantization/hvq.rs` — 随机正交旋转（nalgebra QR）+ 标量量化（1/2/4/8 bit）+ 最多 6 轮迭代 refinement
+  - 编码格式: 4 bytes scale + 4 bytes offset + dim bytes codes
+  - encode_batch: `parallel` feature 下用 rayon par_iter
+  - 测试: roundtrip avg_rel_err < 0.5%, recall@10=0.523 (dim=128, nbits=4)
 
-- [ ] **HANNS-VNNI-001** [P2]: AVX512 VNNI SIMD
-  - 依赖: HANNS-HVQ-001（针对 HVQ 的 u8×i8 点积）
-  - 核心: `_mm512_dpbusd_epi32`，2/4/8-bit unpack + inner product
-  - 复杂度: 中（SIMD intrinsic + bit unpack）
+- [x] **HANNS-VNNI-001** [P2]: ✅ 完成 (2026-03-20, commit b30a1b5)
+  - 实现: `hvq.rs::dot_u8_i8_avx512()` — 运行时 cpuid 分发，`_mm512_dpbusd_epi32`
+  - scalar=simd=170688 验证通过；非 x86_64 自动回退 scalar
 
 - [ ] **AISAQ-ARCH-008** [P2]: Sector-batch I/O 重构（暂停）
   - 设计报告: `/tmp/arch008_design.md`（Codex 已完成分析）
@@ -171,6 +171,7 @@
 - [x] **IVF-FLAT-001** [P0]: ✅ 完成 — nprobe sweep done (Mac + x86)
   - Mac (100K, nlist=256): nprobe=256: recall=1.000, QPS=2,014
   - x86 (100K, nlist=256): nprobe=256: recall=1.000, QPS=344
+  - **x86 SIFT-1M (2026-03-20): nprobe=32: recall@10=0.997, QPS=827** ← 权威
   - Mac/x86 ratio: 5.85x — IVF-Flat highly sensitive to memory bandwidth (Apple Silicon advantage)
   - 结论: nlist=256 需全扫 (nprobe=256) 才过 0.95 gate on random data
   - Script: examples/ivf_flat_nprobe_sweep.rs
@@ -245,6 +246,7 @@
   - Phase 3: par_iter 并行扫描 + TopKAccumulator（消除 collect-all + sort）: 190→1180 QPS (+6.3x)
   - Mac 最终 (nprobe=256, 100K): recall=0.990, QPS=1180
   - x86 authority (nprobe=256, 100K): recall=0.985, QPS=397 ← passes 0.95 gate
+  - **x86 SIFT-1M (2026-03-20): nprobe=256: recall@10=0.982, QPS=59** ← SIFT-1M 权威
   - min nprobe for recall≥0.95: 256 (full scan needed due to SQ8 quantization)
   - Mac/x86 ratio: ~2.97x — consistent with HNSW/IVF-Flat ratios
   - Script: examples/ivf_sq8_authority_baseline.rs
