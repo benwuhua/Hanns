@@ -147,23 +147,15 @@ impl IvfIndex {
 
     #[inline]
     fn l2_dist(&self, v: &[f32], c: usize) -> f32 {
-        let mut sum = 0.0f32;
-        for (i, &value) in v.iter().enumerate().take(self.dim) {
-            let diff = value - self.centroids[c * self.dim + i];
-            sum += diff * diff;
-        }
-        sum
+        crate::simd::l2_sq(
+            &v[..self.dim],
+            &self.centroids[c * self.dim..(c + 1) * self.dim],
+        )
     }
 
     #[inline]
     fn l2_dist_query(&self, query: &[f32], idx: usize) -> f32 {
-        let start = idx * self.dim;
-        let mut sum = 0.0f32;
-        for (i, &value) in query.iter().enumerate().take(self.dim) {
-            let diff = value - self.vectors[start + i];
-            sum += diff * diff;
-        }
-        sum
+        crate::simd::l2_sq(query, &self.vectors[idx * self.dim..(idx + 1) * self.dim])
     }
 }
 
