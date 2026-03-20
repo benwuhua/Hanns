@@ -21,6 +21,7 @@ pub mod ivf_rabitq;
 pub mod ivf_sq8;
 pub mod ivf_sq_cc;
 pub mod ivfpq;
+pub mod lazy_index;
 pub mod mem_index;
 pub mod pq;
 pub mod pq_simd;
