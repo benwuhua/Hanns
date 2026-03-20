@@ -54,10 +54,9 @@
   - 实现: `src/search/emb_list.rs` — EmbeddingList + search() + calc_dist_by_ids()
   - BinaryHeap top-k，parallel feature 下 rayon par_iter，3 tests pass
 
-- [ ] **GAP-SEARCH-002** [P1]: Materialized View 标量过滤优化
-  - 当前状态: C++ 有，Rust 缺失
-  - 用途: 向量+标量字段混合过滤，避免全量过滤开销
-  - 复杂度: 中高
+- [x] **GAP-SEARCH-002** [P1]: ✅ 已完成 (2026-03-20, commit e67554a)
+  - 实现: `src/search/materialized_view.rs` — FilterExpr 表达式树 + filter/scan
+  - scan() parallel feature 下用 rayon par_iter，4 tests pass
 
 - [x] **GAP-OBS-001** [P1]: ✅ 已完成 (2026-03-20, commit fed7fa4 + 14de5aa)
   - 实现: `src/metrics.rs` — Prometheus metrics framework (feature gate `metrics`)
