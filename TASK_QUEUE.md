@@ -241,10 +241,12 @@
   - Phase 3: par_iter 并行扫描 + TopKAccumulator（消除 collect-all + sort）: 190→1180 QPS (+6.3x)
   - Mac 最终 (nprobe=256, 100K): recall=0.990, QPS=1180
   - x86 authority (nprobe=256, 100K): recall=0.985, QPS=397 ← passes 0.95 gate
-  - **x86 SIFT-1M (2026-03-20): nprobe=256: recall@10=0.982, QPS=59** ← SIFT-1M 权威
-  - min nprobe for recall≥0.95: 256 (full scan needed due to SQ8 quantization)
+  - **x86 SIFT-1M nprobe sweep (2026-03-20)**: nprobe=32: recall=0.980, **QPS=417** ← 最优点
+    nprobe=256: recall=0.982, QPS=60（overkill，过了 SQ8 量化天花板）
+  - nlist 优化验证 (2026-03-21): nlist=256 是 SIFT-1M 最优；nlist=1024/4096 需 nprobe 等比扩大，无 QPS 收益
+  - **推荐配置**: nlist=256, nprobe=32 → recall=0.980, QPS=417 x86
   - Mac/x86 ratio: ~2.97x — consistent with HNSW/IVF-Flat ratios
-  - Script: examples/ivf_sq8_authority_baseline.rs
+  - Script: examples/ivf_sq8_authority_baseline.rs, examples/ivf_sq8_1m_nlist.rs
 
 ### AISAQ Phase 2: 能力补全 + 生产就绪 (2026-03-18 开启, 降级为 P2+)
 
