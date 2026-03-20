@@ -128,6 +128,12 @@ impl ScalarQuantizer {
         debug_assert_eq!(q_residual.len(), db_code.len());
         let inv_scale = 1.0 / self.scale;
 
+        #[cfg(target_arch = "x86_64")]
+        if std::arch::is_x86_feature_detected!("avx2") && q_residual.len() >= 8 {
+            // SAFETY: AVX2 path is guarded by runtime feature detection.
+            return unsafe { sq_l2_asymmetric_avx2(q_residual, db_code, inv_scale, self.offset) };
+        }
+
         q_residual
             .iter()
             .zip(db_code.iter())
@@ -187,6 +193,60 @@ impl Sq4Quantizer {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+#[inline]
+unsafe fn hsum_avx2(v: std::arch::x86_64::__m256) -> f32 {
+    use std::arch::x86_64::{_mm_add_ps, _mm_cvtss_f32, _mm_movehl_ps, _mm_shuffle_ps};
+    let hi = std::arch::x86_64::_mm256_extractf128_ps(v, 1);
+    let lo = std::arch::x86_64::_mm256_castps256_ps128(v);
+    let sum128 = _mm_add_ps(lo, hi);
+    let shuf = _mm_movehl_ps(sum128, sum128);
+    let sums = _mm_add_ps(sum128, shuf);
+    let shuf2 = _mm_shuffle_ps(sums, sums, 0x55);
+    let sums2 = _mm_add_ps(sums, shuf2);
+    _mm_cvtss_f32(sums2)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn sq_l2_asymmetric_avx2(
+    q_residual: &[f32],
+    db_code: &[u8],
+    inv_scale: f32,
+    offset: f32,
+) -> f32 {
+    use std::arch::x86_64::*;
+
+    let len = q_residual.len().min(db_code.len());
+    let mut i = 0usize;
+    let mut acc = _mm256_setzero_ps();
+    let inv_scale_vec = _mm256_set1_ps(inv_scale);
+    let offset_vec = _mm256_set1_ps(offset);
+
+    while i + 8 <= len {
+        let qv = _mm256_loadu_ps(q_residual.as_ptr().add(i));
+
+        // Load 8 u8 and widen to 8 i32 lanes.
+        let bytes64 = _mm_loadl_epi64(db_code.as_ptr().add(i) as *const __m128i);
+        let codes_i32 = _mm256_cvtepu8_epi32(bytes64);
+        let dbf = _mm256_cvtepi32_ps(codes_i32);
+
+        let db_res = _mm256_add_ps(_mm256_mul_ps(dbf, inv_scale_vec), offset_vec);
+        let diff = _mm256_sub_ps(qv, db_res);
+        acc = _mm256_add_ps(acc, _mm256_mul_ps(diff, diff));
+        i += 8;
+    }
+
+    // SAFETY: same target feature context and valid register value.
+    let mut sum = unsafe { hsum_avx2(acc) };
+    for (&qr, &db) in q_residual[i..len].iter().zip(db_code[i..len].iter()) {
+        let db_residual = db as f32 * inv_scale + offset;
+        let diff = qr - db_residual;
+        sum += diff * diff;
+    }
+    sum
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,5 +296,42 @@ mod tests {
 
         let decoded = sq4.decode(&codes);
         assert_eq!(decoded.len(), 4);
+    }
+
+    #[test]
+    fn test_sq_l2_asymmetric_avx2_matches_scalar() {
+        let dim = 33usize; // non-multiple of 8 to exercise tail path
+        let mut sq = ScalarQuantizer::new(dim, 8);
+        let train: Vec<f32> = (0..dim).map(|i| i as f32 * 0.25 - 3.0).collect();
+        sq.train(&train);
+
+        let q: Vec<f32> = (0..dim).map(|i| (i as f32 * 0.37).sin() * 5.0).collect();
+        let db: Vec<f32> = (0..dim).map(|i| (i as f32 * 0.21).cos() * 4.0).collect();
+        let db_code = sq.encode(&db);
+        let inv_scale = 1.0 / sq.scale;
+
+        let scalar: f32 = q
+            .iter()
+            .zip(db_code.iter())
+            .map(|(&qr, &dbq)| {
+                let db_residual = dbq as f32 * inv_scale + sq.offset;
+                let diff = qr - db_residual;
+                diff * diff
+            })
+            .sum();
+        let dispatch = sq.sq_l2_asymmetric(&q, &db_code);
+        assert!(
+            (dispatch - scalar).abs() < 1e-4,
+            "dispatch={} scalar={}",
+            dispatch,
+            scalar
+        );
+
+        #[cfg(target_arch = "x86_64")]
+        if std::arch::is_x86_feature_detected!("avx2") {
+            // SAFETY: guarded by AVX2 runtime check.
+            let avx = unsafe { sq_l2_asymmetric_avx2(&q, &db_code, inv_scale, sq.offset) };
+            assert!((avx - scalar).abs() < 1e-4, "avx={} scalar={}", avx, scalar);
+        }
     }
 }
