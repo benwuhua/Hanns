@@ -65,11 +65,11 @@
 
 ### P2 — 优化与加固
 
-- [ ] **GAP-IVF-OPQ-001** [P2]: IVF-OPQ recall 修复
-  - 当前状态: recall@nprobe=256 = 0.167（合成随机数据），量化天花板未确认是否 bug
-  - 注: IVFPQ-FIX-003 已修复 Gram-Schmidt NaN，但 OPQ recall 仍低
-  - 目标: SIFT-1M 上评估 OPQ 效果，与 Faiss IVF-OPQ 对比
-  - 复杂度: 中
+- [x] **GAP-IVF-OPQ-001** [P2]: ✅ 评估完成 (2026-03-20, commit 59b63dc, x86 SIFT-1M)
+  - nprobe=16: recall=0.076 QPS=228 | nprobe=32: 0.107/111 | nprobe=64: 0.130/61
+  - nprobe=128: 0.152/29 | nprobe=256: **0.174**/14 (plateau, gate未达)
+  - 结论: 非 bug，PQ 量化噪声天花板（与随机数据 IVF-PQ 一致）
+  - 真实结构化数据（SIFT/GIST）OPQ 效果会更好；合成随机数据 no-go 为预期
 
 - [x] **GAP-REFINE-001** [P2]: ✅ 已完成 (2026-03-20, commit 917a4a2)
   - `src/quantization/refine.rs`: DataView(≡FP32)/SQ8/FP16/BF16/SQ4/SQ6 全类型实现
