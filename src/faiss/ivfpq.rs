@@ -109,6 +109,12 @@ impl IvfPqIndex {
 
     /// Train: k-means clustering for coarse quantizer + PQ training on residuals
     pub fn train(&mut self, vectors: &[f32]) -> Result<()> {
+        #[cfg(feature = "metrics")]
+        let _timer = {
+            let m = crate::metrics::init_metrics();
+            crate::metrics::Timer::new(m.train_duration_seconds.clone())
+        };
+
         let n = vectors.len() / self.dim;
         if n * self.dim != vectors.len() {
             return Err(crate::api::KnowhereError::InvalidArg(
@@ -199,6 +205,12 @@ impl IvfPqIndex {
 
     /// Add vectors to index
     pub fn add(&mut self, vectors: &[f32], ids: Option<&[i64]>) -> Result<usize> {
+        #[cfg(feature = "metrics")]
+        let _timer = {
+            let m = crate::metrics::init_metrics();
+            crate::metrics::Timer::new(m.add_duration_seconds.clone())
+        };
+
         if !self.trained {
             return Err(crate::api::KnowhereError::InvalidArg(
                 "index must be trained first".to_string(),
@@ -450,6 +462,14 @@ impl IvfPqIndex {
 
     /// Search using Asymmetric Distance Computation (ADC) - 优化版：并行 nprobe
     pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<SearchResult> {
+        #[cfg(feature = "metrics")]
+        let _timer = {
+            let m = crate::metrics::init_metrics();
+            crate::metrics::Timer::new(m.search_duration_seconds.clone())
+        };
+        #[cfg(feature = "metrics")]
+        crate::metrics::init_metrics().search_requests_total.inc();
+
         if self.ids.is_empty() {
             return Err(crate::api::KnowhereError::InvalidArg(
                 "index is empty".to_string(),

@@ -1521,6 +1521,12 @@ impl HnswIndex {
     }
 
     pub fn train(&mut self, vectors: &[f32]) -> Result<()> {
+        #[cfg(feature = "metrics")]
+        let _timer = {
+            let m = crate::metrics::init_metrics();
+            crate::metrics::Timer::new(m.train_duration_seconds.clone())
+        };
+
         let n = vectors.len() / self.dim;
         if n * self.dim != vectors.len() {
             return Err(crate::api::KnowhereError::InvalidArg(
@@ -1542,6 +1548,12 @@ impl HnswIndex {
     ///
     /// This improves cache locality and reduces memory fragmentation during bulk insert.
     pub fn add(&mut self, vectors: &[f32], ids: Option<&[i64]>) -> Result<usize> {
+        #[cfg(feature = "metrics")]
+        let _timer = {
+            let m = crate::metrics::init_metrics();
+            crate::metrics::Timer::new(m.add_duration_seconds.clone())
+        };
+
         if !self.trained {
             return Err(crate::api::KnowhereError::InvalidArg(
                 "index must be trained first".to_string(),
@@ -3580,6 +3592,14 @@ impl HnswIndex {
     }
 
     pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<ApiSearchResult> {
+        #[cfg(feature = "metrics")]
+        let _timer = {
+            let m = crate::metrics::init_metrics();
+            crate::metrics::Timer::new(m.search_duration_seconds.clone())
+        };
+        #[cfg(feature = "metrics")]
+        crate::metrics::init_metrics().search_requests_total.inc();
+
         if self.vectors.is_empty() {
             return Err(crate::api::KnowhereError::InvalidArg(
                 "index is empty".to_string(),
