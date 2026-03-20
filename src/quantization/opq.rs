@@ -189,7 +189,7 @@ impl OptimizedProductQuantizer {
     }
 
     /// Apply rotation to vectors
-    fn apply_rotation(&self, vectors: &[f32], n: usize) -> Vec<f32> {
+    pub fn apply_rotation(&self, vectors: &[f32], n: usize) -> Vec<f32> {
         let dim = self.config.dim;
         let mut rotated = vec![0.0f32; n * dim];
 
@@ -207,6 +207,25 @@ impl OptimizedProductQuantizer {
         }
 
         rotated
+    }
+
+    /// Apply rotation to a single vector, returning rotated vector
+    pub fn apply_rotation_single(&self, x: &[f32]) -> Vec<f32> {
+        let dim = self.config.dim;
+        let mut rotated = vec![0.0f32; dim];
+        for (j, rv) in rotated.iter_mut().enumerate() {
+            let mut sum = 0.0f32;
+            for (k, &xk) in x.iter().enumerate().take(dim) {
+                sum += self.rotation[j * dim + k] * xk;
+            }
+            *rv = sum;
+        }
+        rotated
+    }
+
+    /// Get a reference to OPQ centroids (m * ksub * sub_dim layout)
+    pub fn centroids(&self) -> &[f32] {
+        &self.centroids
     }
 
     /// Apply inverse rotation to vectors

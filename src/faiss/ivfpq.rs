@@ -388,6 +388,38 @@ impl IvfPqIndex {
         table
     }
 
+    /// Precompute ADC distance table using OPQ centroids and rotated query residual.
+    fn precompute_distance_table_opq(
+        &self,
+        opq: &OptimizedProductQuantizer,
+        rotated_residual: &[f32],
+    ) -> Vec<Vec<f32>> {
+        let m = opq.config().m;
+        let ksub = opq.config().ksub();
+        let sub_dim = opq.config().sub_dim();
+        let centroids = opq.centroids();
+
+        let mut table = Vec::with_capacity(m);
+        for sub_q in 0..m {
+            let q_sub_offset = sub_q * sub_dim;
+            let query_sub = &rotated_residual[q_sub_offset..q_sub_offset + sub_dim];
+
+            let mut dists = Vec::with_capacity(ksub);
+            for c in 0..ksub {
+                let centroid_offset = sub_q * ksub * sub_dim + c * sub_dim;
+                let centroid = &centroids[centroid_offset..centroid_offset + sub_dim];
+                let mut dist = 0.0f32;
+                for i in 0..sub_dim {
+                    let d = query_sub[i] - centroid[i];
+                    dist += d * d;
+                }
+                dists.push(dist);
+            }
+            table.push(dists);
+        }
+        table
+    }
+
     /// Compute ADC distance using precomputed table
     fn adc_distance(&self, table: &[Vec<f32>], code: &[u8]) -> f32 {
         let m = self.pq.config().m;
@@ -482,10 +514,13 @@ impl IvfPqIndex {
 
                         if opq_enabled {
                             let opq = self.opq.as_ref().unwrap();
+                            // Apply rotation once per cluster residual, then do ADC lookup.
+                            let rotated_residual = opq.apply_rotation_single(&query_residual);
+                            let table = self.precompute_distance_table_opq(opq, &rotated_residual);
                             Some(
                                 ids.iter()
                                     .zip(codes.chunks(code_size))
-                                    .map(|(id, code)| (*id, opq.compute_distance(&query_residual, code)))
+                                    .map(|(id, code)| (*id, self.adc_distance(&table, code)))
                                     .collect::<Vec<_>>(),
                             )
                         } else {
@@ -543,8 +578,10 @@ impl IvfPqIndex {
 
                     if opq_enabled {
                         let opq = self.opq.as_ref().unwrap();
+                        let rotated_residual = opq.apply_rotation_single(&query_residual);
+                        let table = self.precompute_distance_table_opq(opq, &rotated_residual);
                         for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
-                            let dist = opq.compute_distance(&query_residual, code);
+                            let dist = self.adc_distance(&table, code);
                             candidates.push((*id, dist));
                         }
                     } else {
@@ -644,8 +681,10 @@ impl IvfPqIndex {
 
                     if opq_enabled {
                         let opq = self.opq.as_ref().unwrap();
+                        let rotated_residual = opq.apply_rotation_single(&query_residual);
+                        let table = self.precompute_distance_table_opq(opq, &rotated_residual);
                         for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
-                            let dist = opq.compute_distance(&query_residual, code);
+                            let dist = self.adc_distance(&table, code);
                             candidates.push((*id, dist));
                         }
                     } else {
