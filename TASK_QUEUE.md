@@ -1,11 +1,103 @@
 # Builder 任务队列
-> 最后更新: 2026-03-19 | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
+> 最后更新: 2026-03-20 | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
 > 详细 gap analysis: `docs/superpowers/specs/2026-03-18-diskann-aisaq-gap-analysis.md`
-> Native 对比分析 (2026-03-19): `/tmp/native_gap_analysis.md`
+> Native 对比分析: `docs/EVALUATION_KNOWHERE_RS_vs_CPP.md` (2026-03-20, 全面评估)
 
 ## 当前大任务面板
 
-> 优先级重排 2026-03-19 (v2): 引入 HANNS feature 集成计划。AISAQ 结构性工作暂停；新 P0 为 HANNS 轻量优化 + IVF-PQ 根因确认。
+> 优先级重排 2026-03-20 (v3): 引入 Phase 6 生产级平替差距闭环。GPU 暂不考虑。IVF-PQ 已确认实现正确，recall 为压缩率上限，不是 bug。
+
+---
+
+## Phase 6: 生产级平替差距闭环 (2026-03-20 开启)
+
+> 来源: `docs/EVALUATION_KNOWHERE_RS_vs_CPP.md` 差距分析（不含 GPU）
+
+### P0 — 核心阻断项
+
+- [ ] **GAP-DISKANN-001** [P0]: DiskANN 完整生产实现
+  - 当前状态: 简化 Vamana，内存驻留，非 SSD 分页，与 C++ DiskANN 无法直接对比
+  - 实现要点:
+    1. 完整 SSD 分页机制（sector-aligned read，SSD layout 与 C++ DiskANN 对齐）
+    2. PQ 压缩 + SSD 布局（inline PQ codes in sector）
+    3. 频率感知缓存预热（BFS-based cache warmup，已有雏形）
+    4. io_uring 异步 IO 路径（feature gate，需 tokio-uring 或 rio crate）
+  - 目标: SIFT-1M 上与 C++ DiskANN 做正式对比基准
+  - 复杂度: 极高，建议拆子任务
+
+- [ ] **GAP-MILVUS-001** [P0]: Milvus FFI 集成验证
+  - 当前状态: `src/ffi.rs` 7318 行有 C ABI 框架，未经 Milvus 实战验证
+  - 实现要点:
+    1. 对齐 C++ knowhere 完整 FFI ABI 合约（函数签名、错误码、内存所有权语义）
+    2. 序列化格式兼容性验证（二进制格式 round-trip 与 C++ 对齐）
+    3. 编写 Milvus segment 层 drop-in 替换测试
+  - 前置条件: 需要 Milvus 测试环境
+  - 复杂度: 高
+
+- [ ] **GAP-IVFPQ-SIFT-001** [P0]: IVF-PQ 在真实 SIFT-1M 数据集上的 recall 评估
+  - 当前状态: 仅在合成随机数据上验证（recall 上限由压缩率决定，是预期行为）
+  - 目标: 在 SIFT-1M 真实分布数据上评估 m=8/16/32 实际 recall，判断是否需要额外优化
+  - 期望结果: SIFT-1M 分布数据 recall 应显著高于随机均匀数据
+  - 依赖: x86 上 SIFT-1M 数据集路径 `/data/work/datasets/sift-1m`（examples/sift1m_recall.rs 已有框架）
+  - 复杂度: 小（跑现有 benchmark 即可）
+
+### P1 — 功能完备性
+
+- [ ] **GAP-METRIC-001** [P1]: BM25 评分实现
+  - 当前状态: C++ knowhere 支持，Rust 缺失
+  - 用途: 全文检索场景（Milvus 2.x 核心特性）
+  - 实现路径: 稀疏索引路径扩展，BM25 IDF/TF 评分公式
+  - 复杂度: 中
+
+- [ ] **GAP-METRIC-002** [P1]: MAX_SIM 系列度量
+  - 当前状态: C++ 支持 6 种 MAX_SIM 变体，Rust 缺失
+  - 用途: 多向量检索（ColBERT 等模型的 late interaction）
+  - 复杂度: 中
+
+- [ ] **GAP-SEARCH-001** [P1]: Embedding List 多向量检索
+  - 当前状态: C++ 有 `SearchEmbList()` + `CalcDistByIDs()`，Rust 缺失
+  - 用途: 多向量 per-document 检索管线
+  - 依赖: GAP-METRIC-002（MAX_SIM）
+  - 复杂度: 中
+
+- [ ] **GAP-SEARCH-002** [P1]: Materialized View 标量过滤优化
+  - 当前状态: C++ 有，Rust 缺失
+  - 用途: 向量+标量字段混合过滤，避免全量过滤开销
+  - 复杂度: 中高
+
+- [ ] **GAP-OBS-001** [P1]: Prometheus + OpenTelemetry 可观测性
+  - 当前状态: C++ 有，Rust 缺失
+  - 实现: `prometheus-client` crate + `tracing-opentelemetry` crate
+  - 内容: 每次操作（train/add/search）的 latency、QPS、内存使用导出
+  - 复杂度: 低（主要是接口接入，不涉及核心算法）
+
+### P2 — 优化与加固
+
+- [ ] **GAP-IVF-OPQ-001** [P2]: IVF-OPQ recall 修复
+  - 当前状态: recall@nprobe=256 = 0.167（合成随机数据），量化天花板未确认是否 bug
+  - 注: IVFPQ-FIX-003 已修复 Gram-Schmidt NaN，但 OPQ recall 仍低
+  - 目标: SIFT-1M 上评估 OPQ 效果，与 Faiss IVF-OPQ 对比
+  - 复杂度: 中
+
+- [ ] **GAP-REFINE-001** [P2]: Refinement 策略完善
+  - 当前状态: 部分实现，C++ 支持 SQ4/SQ6/SQ8/FP16/BF16/FP32 全类型
+  - 目标: 补全缺失的精化量化类型
+  - 复杂度: 低中
+
+- [ ] **GAP-SEARCH-003** [P2]: Lazy Load 延迟加载
+  - 当前状态: C++ 有，Rust 缺失
+  - 用途: 大索引延迟加载，降低启动内存占用
+  - 复杂度: 低
+
+- [ ] **GAP-INDEX-001** [P2]: PageANN 索引
+  - 当前状态: C++ 有，Rust 缺失（DiskANN 页面优化变体）
+  - 前置条件: GAP-DISKANN-001（完整 SSD DiskANN）
+  - 复杂度: 高
+
+- [ ] **GAP-DTW-001** [P2]: DTW 系列度量（动态时间规整）
+  - 当前状态: C++ 支持 6 种 DTW 变体，Rust 缺失
+  - 用途: 时序数据相似性（边缘场景）
+  - 复杂度: 中
 
 ---
 
