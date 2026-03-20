@@ -205,6 +205,11 @@ impl IvfPqIndex {
             ));
         }
 
+        #[cfg(feature = "parallel")]
+        {
+            return self.add_parallel(vectors, ids, rayon::current_num_threads());
+        }
+
         let n = vectors.len() / self.dim;
 
         for i in 0..n {
