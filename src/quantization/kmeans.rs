@@ -288,36 +288,13 @@ impl KMeans {
             let mut new_centroids = vec![0.0f32; self.k * self.dim];
             let mut counts = vec![0usize; self.k];
 
-            // 使用并行迭代聚合
-            let result: (Vec<f32>, Vec<usize>) = (0..n)
-                .into_par_iter()
-                .map(|i| {
-                    let c = assignments[i];
-                    let mut local_centroids = vec![0.0f32; self.k * self.dim];
-                    let mut local_counts = vec![0usize; self.k];
-
-                    for j in 0..self.dim {
-                        local_centroids[c * self.dim + j] = vectors[i * self.dim + j];
-                    }
-                    local_counts[c] = 1;
-
-                    (local_centroids, local_counts)
-                })
-                .reduce(
-                    || (vec![0.0f32; self.k * self.dim], vec![0usize; self.k]),
-                    |(mut acc_centroids, mut acc_counts), (local_centroids, local_counts)| {
-                        for i in 0..self.k * self.dim {
-                            acc_centroids[i] += local_centroids[i];
-                        }
-                        for i in 0..self.k {
-                            acc_counts[i] += local_counts[i];
-                        }
-                        (acc_centroids, acc_counts)
-                    },
-                );
-
-            new_centroids = result.0;
-            counts = result.1;
+            for i in 0..n {
+                let c = assignments[i];
+                for j in 0..self.dim {
+                    new_centroids[c * self.dim + j] += vectors[i * self.dim + j];
+                }
+                counts[c] += 1;
+            }
 
             // 计算收敛
             let mut max_shift = 0.0f32;
