@@ -50,11 +50,9 @@
   - 实现: `src/search/max_sim.rs` — IP/cosine/L2/Hamming/Jaccard + 字符串分发
   - score = Σ_i max_j sim(q_i, d_j)，支持 parallel feature，3 tests pass
 
-- [ ] **GAP-SEARCH-001** [P1]: Embedding List 多向量检索
-  - 当前状态: C++ 有 `SearchEmbList()` + `CalcDistByIDs()`，Rust 缺失
-  - 用途: 多向量 per-document 检索管线
-  - 依赖: GAP-METRIC-002（MAX_SIM）
-  - 复杂度: 中
+- [x] **GAP-SEARCH-001** [P1]: ✅ 已完成 (2026-03-20, commit b12c4c9)
+  - 实现: `src/search/emb_list.rs` — EmbeddingList + search() + calc_dist_by_ids()
+  - BinaryHeap top-k，parallel feature 下 rayon par_iter，3 tests pass
 
 - [ ] **GAP-SEARCH-002** [P1]: Materialized View 标量过滤优化
   - 当前状态: C++ 有，Rust 缺失
