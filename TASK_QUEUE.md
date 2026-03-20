@@ -42,16 +42,13 @@
 
 ### P1 — 功能完备性
 
-- [ ] **GAP-METRIC-001** [P1]: BM25 评分实现
-  - 当前状态: C++ knowhere 支持，Rust 缺失
-  - 用途: 全文检索场景（Milvus 2.x 核心特性）
-  - 实现路径: 稀疏索引路径扩展，BM25 IDF/TF 评分公式
-  - 复杂度: 中
+- [x] **GAP-METRIC-001** [P1]: ✅ 已完成 (2026-03-20，发现已有实现)
+  - `src/faiss/sparse.rs` 已有完整 BM25: `score_tf`, `bm25_idf`, `Bm25Params`, `SparseMetricType::Bm25`
+  - 评估文档描述有误，实际 Rust 侧已实现
 
-- [ ] **GAP-METRIC-002** [P1]: MAX_SIM 系列度量
-  - 当前状态: C++ 支持 6 种 MAX_SIM 变体，Rust 缺失
-  - 用途: 多向量检索（ColBERT 等模型的 late interaction）
-  - 复杂度: 中
+- [x] **GAP-METRIC-002** [P1]: ✅ 已完成 (2026-03-20, commit b15cd92)
+  - 实现: `src/search/max_sim.rs` — IP/cosine/L2/Hamming/Jaccard + 字符串分发
+  - score = Σ_i max_j sim(q_i, d_j)，支持 parallel feature，3 tests pass
 
 - [ ] **GAP-SEARCH-001** [P1]: Embedding List 多向量检索
   - 当前状态: C++ 有 `SearchEmbList()` + `CalcDistByIDs()`，Rust 缺失
@@ -64,11 +61,10 @@
   - 用途: 向量+标量字段混合过滤，避免全量过滤开销
   - 复杂度: 中高
 
-- [ ] **GAP-OBS-001** [P1]: Prometheus + OpenTelemetry 可观测性
-  - 当前状态: C++ 有，Rust 缺失
-  - 实现: `prometheus-client` crate + `tracing-opentelemetry` crate
-  - 内容: 每次操作（train/add/search）的 latency、QPS、内存使用导出
-  - 复杂度: 低（主要是接口接入，不涉及核心算法）
+- [x] **GAP-OBS-001** [P1]: ✅ 已完成 (2026-03-20, commit fed7fa4 + 14de5aa)
+  - 实现: `src/metrics.rs` — Prometheus metrics framework (feature gate `metrics`)
+  - HNSW + IVF-PQ 已接入 train/add/search latency histograms + search_requests counter
+  - `examples/metrics_demo.rs` end-to-end 演示
 
 ### P2 — 优化与加固
 
@@ -83,10 +79,9 @@
   - 目标: 补全缺失的精化量化类型
   - 复杂度: 低中
 
-- [ ] **GAP-SEARCH-003** [P2]: Lazy Load 延迟加载
-  - 当前状态: C++ 有，Rust 缺失
-  - 用途: 大索引延迟加载，降低启动内存占用
-  - 复杂度: 低
+- [x] **GAP-SEARCH-003** [P2]: ✅ 已完成 (2026-03-20, commit 027c0d4)
+  - 实现: `src/faiss/lazy_index.rs` — LazyIndex<T> 泛型延迟加载封装
+  - 首次 get() 触发 loader，Arc<T> 缓存，锁外执行 loader 防 I/O 阻塞
 
 - [ ] **GAP-INDEX-001** [P2]: PageANN 索引
   - 当前状态: C++ 有，Rust 缺失（DiskANN 页面优化变体）
