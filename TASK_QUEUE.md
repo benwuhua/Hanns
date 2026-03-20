@@ -84,10 +84,9 @@
   - 前置条件: GAP-DISKANN-001（完整 SSD DiskANN）
   - 复杂度: 高
 
-- [ ] **GAP-DTW-001** [P2]: DTW 系列度量（动态时间规整）
-  - 当前状态: C++ 支持 6 种 DTW 变体，Rust 缺失
-  - 用途: 时序数据相似性（边缘场景）
-  - 复杂度: 中
+- [x] **GAP-DTW-001** [P2]: ✅ 已完成 (2026-03-20, commit 5bc2da3)
+  - 实现: `src/metrics/dtw.rs` — dtw/sakoe_chiba/itakura/l2/cosine/ip + dispatch
+  - dtw_core 泛型 DP，滚动数组 O(m) 空间。5 tests pass
 
 ---
 
