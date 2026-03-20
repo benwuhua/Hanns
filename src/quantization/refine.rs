@@ -12,6 +12,8 @@ pub enum RefineType {
     Uint8Quant = 1,
     Float16Quant = 2,
     Bfloat16Quant = 3,
+    Sq4Quant = 4,
+    Sq6Quant = 5,
 }
 
 impl RefineType {
@@ -21,6 +23,8 @@ impl RefineType {
             1 => Ok(Self::Uint8Quant),
             2 => Ok(Self::Float16Quant),
             3 => Ok(Self::Bfloat16Quant),
+            4 => Ok(Self::Sq4Quant),
+            5 => Ok(Self::Sq6Quant),
             _ => Err(KnowhereError::InvalidArg(format!(
                 "unknown refine type: {}",
                 value
@@ -38,6 +42,8 @@ enum RefineStorage {
     },
     Float16Quant(Vec<u16>),
     Bfloat16Quant(Vec<u16>),
+    Sq4Quant { codes: Vec<u8>, min: f32, scale: f32 },
+    Sq6Quant { codes: Vec<u8>, min: f32, scale: f32 },
 }
 
 #[derive(Clone, Debug)]
@@ -107,6 +113,32 @@ impl RefineIndex {
             RefineType::Bfloat16Quant => RefineStorage::Bfloat16Quant(
                 data.iter().map(|&v| Bf16::from_f32(v).to_bits()).collect(),
             ),
+            RefineType::Sq4Quant => {
+                let min = data.iter().copied().fold(f32::INFINITY, f32::min);
+                let max = data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                let mut scale = (max - min) / 15.0;
+                if scale.abs() < 1e-6 {
+                    scale = 1e-6;
+                }
+                RefineStorage::Sq4Quant {
+                    codes: encode_sq4(data, dim, min, scale),
+                    min,
+                    scale,
+                }
+            }
+            RefineType::Sq6Quant => {
+                let min = data.iter().copied().fold(f32::INFINITY, f32::min);
+                let max = data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                let mut scale = (max - min) / 63.0;
+                if scale.abs() < 1e-6 {
+                    scale = 1e-6;
+                }
+                RefineStorage::Sq6Quant {
+                    codes: encode_sq6(data, dim, min, scale),
+                    min,
+                    scale,
+                }
+            }
         };
 
         let mut id_to_offset = HashMap::with_capacity(ids.len());
@@ -163,6 +195,12 @@ impl RefineIndex {
             RefineStorage::Bfloat16Quant(values) => {
                 values.extend(data.iter().map(|&v| Bf16::from_f32(v).to_bits()));
             }
+            RefineStorage::Sq4Quant { codes, min, scale } => {
+                codes.extend(encode_sq4(data, self.dim, *min, *scale));
+            }
+            RefineStorage::Sq6Quant { codes, min, scale } => {
+                codes.extend(encode_sq6(data, self.dim, *min, *scale));
+            }
         }
 
         Ok(())
@@ -194,6 +232,18 @@ impl RefineIndex {
             RefineStorage::Bfloat16Quant(data) => {
                 let base = offset * self.dim;
                 compute_bf16_distance(self.metric_type, query, &data[base..base + self.dim])
+            }
+            RefineStorage::Sq4Quant { codes, min, scale } => {
+                let bytes_per_vec = sq4_bytes_per_vec(self.dim);
+                let base = offset * bytes_per_vec;
+                let decoded = decode_sq4(&codes[base..base + bytes_per_vec], self.dim, *min, *scale);
+                compute_distance(self.metric_type, query, &decoded)
+            }
+            RefineStorage::Sq6Quant { codes, min, scale } => {
+                let bytes_per_vec = sq6_bytes_per_vec(self.dim);
+                let base = offset * bytes_per_vec;
+                let decoded = decode_sq6(&codes[base..base + bytes_per_vec], self.dim, *min, *scale);
+                compute_distance(self.metric_type, query, &decoded)
             }
         })
     }
@@ -269,6 +319,16 @@ impl RefineIndex {
                     writer.write_all(&value.to_le_bytes())?;
                 }
             }
+            RefineStorage::Sq4Quant { codes, min, scale } => {
+                writer.write_all(&min.to_le_bytes())?;
+                writer.write_all(&scale.to_le_bytes())?;
+                writer.write_all(codes)?;
+            }
+            RefineStorage::Sq6Quant { codes, min, scale } => {
+                writer.write_all(&min.to_le_bytes())?;
+                writer.write_all(&scale.to_le_bytes())?;
+                writer.write_all(codes)?;
+            }
         }
         Ok(())
     }
@@ -338,6 +398,20 @@ impl RefineIndex {
                 }
                 RefineStorage::Bfloat16Quant(values)
             }
+            RefineType::Sq4Quant => {
+                let min = read_f32(reader)?;
+                let scale = read_f32(reader)?;
+                let mut codes = vec![0u8; len * sq4_bytes_per_vec(dim)];
+                reader.read_exact(&mut codes)?;
+                RefineStorage::Sq4Quant { codes, min, scale }
+            }
+            RefineType::Sq6Quant => {
+                let min = read_f32(reader)?;
+                let scale = read_f32(reader)?;
+                let mut codes = vec![0u8; len * sq6_bytes_per_vec(dim)];
+                reader.read_exact(&mut codes)?;
+                RefineStorage::Sq6Quant { codes, min, scale }
+            }
         };
 
         Ok(Some(Self {
@@ -366,6 +440,100 @@ fn encode_sq8(quantizer: &ScalarQuantizer, data: &[f32], dim: usize) -> Vec<u8> 
     data.chunks(dim)
         .flat_map(|vector| quantizer.encode(vector))
         .collect()
+}
+
+fn sq4_bytes_per_vec(dim: usize) -> usize {
+    (dim + 1) / 2
+}
+
+fn encode_sq4(data: &[f32], dim: usize, min: f32, scale: f32) -> Vec<u8> {
+    let n = data.len() / dim;
+    let bytes_per_vec = sq4_bytes_per_vec(dim);
+    let mut codes = vec![0u8; n * bytes_per_vec];
+    let inv = 1.0 / scale.max(1e-6);
+    for (vi, chunk) in data.chunks(dim).enumerate() {
+        let base = vi * bytes_per_vec;
+        for (i, &v) in chunk.iter().enumerate() {
+            let code = ((v - min) * inv).round().clamp(0.0, 15.0) as u8;
+            if i % 2 == 0 {
+                codes[base + i / 2] = code;
+            } else {
+                codes[base + i / 2] |= code << 4;
+            }
+        }
+    }
+    codes
+}
+
+fn decode_sq4(codes: &[u8], dim: usize, min: f32, scale: f32) -> Vec<f32> {
+    let bytes_per_vec = sq4_bytes_per_vec(dim);
+    let n = codes.len() / bytes_per_vec;
+    let mut out = Vec::with_capacity(n * dim);
+    for vi in 0..n {
+        let base = vi * bytes_per_vec;
+        for i in 0..dim {
+            let byte = codes[base + i / 2];
+            let nibble = if i % 2 == 0 { byte & 0x0F } else { byte >> 4 };
+            out.push(nibble as f32 * scale + min);
+        }
+    }
+    out
+}
+
+fn sq6_bytes_per_vec(dim: usize) -> usize {
+    (dim * 6 + 7) / 8
+}
+
+fn encode_sq6(data: &[f32], dim: usize, min: f32, scale: f32) -> Vec<u8> {
+    let n = data.len() / dim;
+    let bytes_per_vec = sq6_bytes_per_vec(dim);
+    let inv = 1.0 / scale.max(1e-6);
+    let mut codes = vec![0u8; n * bytes_per_vec];
+    for (vi, chunk) in data.chunks(dim).enumerate() {
+        let base = vi * bytes_per_vec;
+        let mut bitbuf = 0u32;
+        let mut bitcnt = 0usize;
+        let mut byte_idx = 0usize;
+        for &v in chunk {
+            let q = ((v - min) * inv).round().clamp(0.0, 63.0) as u32;
+            bitbuf |= q << bitcnt;
+            bitcnt += 6;
+            while bitcnt >= 8 {
+                codes[base + byte_idx] = (bitbuf & 0xFF) as u8;
+                bitbuf >>= 8;
+                bitcnt -= 8;
+                byte_idx += 1;
+            }
+        }
+        if bitcnt > 0 && byte_idx < bytes_per_vec {
+            codes[base + byte_idx] = (bitbuf & 0xFF) as u8;
+        }
+    }
+    codes
+}
+
+fn decode_sq6(codes: &[u8], dim: usize, min: f32, scale: f32) -> Vec<f32> {
+    let bytes_per_vec = sq6_bytes_per_vec(dim);
+    let n = codes.len() / bytes_per_vec;
+    let mut out = Vec::with_capacity(n * dim);
+    for vi in 0..n {
+        let base = vi * bytes_per_vec;
+        let mut bitbuf = 0u32;
+        let mut bitcnt = 0usize;
+        let mut byte_idx = 0usize;
+        for _ in 0..dim {
+            while bitcnt < 6 && byte_idx < bytes_per_vec {
+                bitbuf |= (codes[base + byte_idx] as u32) << bitcnt;
+                bitcnt += 8;
+                byte_idx += 1;
+            }
+            let q = (bitbuf & 0x3F) as f32;
+            out.push(q * scale + min);
+            bitbuf >>= 6;
+            bitcnt -= 6;
+        }
+    }
+    out
 }
 
 fn compute_distance(metric_type: MetricType, query: &[f32], vector: &[f32]) -> f32 {
@@ -522,5 +690,43 @@ mod tests {
         assert_eq!(reranked.len(), 2);
         assert_eq!(reranked[0][0].0, 10);
         assert_eq!(reranked[1][0].0, 11);
+    }
+
+    #[test]
+    fn test_sq4_refine_roundtrip() {
+        let dim = 7usize;
+        let data: Vec<f32> = (0..(16 * dim)).map(|i| (i % 31) as f32 * 0.3 - 2.0).collect();
+        let min = data.iter().copied().fold(f32::INFINITY, f32::min);
+        let max = data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let range = max - min;
+        let scale = (range / 15.0).max(1e-6);
+        let codes = encode_sq4(&data, dim, min, scale);
+        let decoded = decode_sq4(&codes, dim, min, scale);
+        let max_err = data
+            .iter()
+            .zip(decoded.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        println!("sq4_roundtrip max_err={:.6} range={:.6}", max_err, range);
+        assert!(max_err <= range / 15.0 + 1e-5);
+    }
+
+    #[test]
+    fn test_sq6_refine_roundtrip() {
+        let dim = 11usize;
+        let data: Vec<f32> = (0..(16 * dim)).map(|i| (i % 47) as f32 * 0.2 - 3.0).collect();
+        let min = data.iter().copied().fold(f32::INFINITY, f32::min);
+        let max = data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let range = max - min;
+        let scale = (range / 63.0).max(1e-6);
+        let codes = encode_sq6(&data, dim, min, scale);
+        let decoded = decode_sq6(&codes, dim, min, scale);
+        let max_err = data
+            .iter()
+            .zip(decoded.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        println!("sq6_roundtrip max_err={:.6} range={:.6}", max_err, range);
+        assert!(max_err <= range / 63.0 + 1e-5);
     }
 }
