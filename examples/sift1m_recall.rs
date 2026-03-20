@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 use knowhere_rs::faiss::{IvfFlatIndex, IvfPqIndex, IvfSq8Index};
+use knowhere_rs::quantization::pq::{PQConfig, ProductQuantizer};
 
 const DEFAULT_SIFT_ROOT: &str = "/data/work/datasets/sift-1m";
 const DEFAULT_TRAIN_SIZE: usize = 100_000;
@@ -185,8 +186,13 @@ fn run_ivf_pq(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cfg = make_cfg(IndexType::IvfPq, NLIST, 1, Some(m));
     let mut index = IvfPqIndex::new(&cfg)?;
+    let train_start = Instant::now();
     index.train(train)?;
+    let train_elapsed = train_start.elapsed().as_secs_f64();
+    let add_start = Instant::now();
     index.add(base, None)?;
+    let add_elapsed = add_start.elapsed().as_secs_f64();
+    println!("IVF-PQ m={m} train={train_elapsed:.1}s add={add_elapsed:.1}s");
 
     for &nprobe in &[32usize, 64, 128, 256] {
         let req = SearchRequest {
@@ -202,6 +208,107 @@ fn run_ivf_pq(
         let qps = n_queries as f64 / elapsed;
         print_result("IVF-PQ", NLIST, nprobe, Some(m), recall, qps);
     }
+    Ok(())
+}
+
+fn run_ivf_pq_plain_diagnostic(
+    base: &[f32],
+    train: &[f32],
+    queries: &[f32],
+    gt: &[i32],
+    n_queries: usize,
+    gt_width: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("--- Plain IVF-PQ (IVFPQ_NO_OPQ=1) diagnostic ---");
+    unsafe { std::env::set_var("IVFPQ_NO_OPQ", "1") };
+
+    for &m in &[8usize, 16, 32] {
+        let cfg = make_cfg(IndexType::IvfPq, NLIST, 1, Some(m));
+        let mut index = IvfPqIndex::new(&cfg)?;
+        index.train(train)?;
+        index.add(base, None)?;
+
+        let req = SearchRequest {
+            top_k: TOP_K,
+            nprobe: 64,
+            ..Default::default()
+        };
+
+        let start = Instant::now();
+        let result = index.search(queries, &req)?;
+        let elapsed = start.elapsed().as_secs_f64().max(f64::EPSILON);
+        let recall = recall_at_k(gt, &result.ids, TOP_K, n_queries, gt_width);
+        let qps = n_queries as f64 / elapsed;
+        print_result("IVF-PQ-Plain", NLIST, 64, Some(m), recall, qps);
+    }
+
+    unsafe { std::env::remove_var("IVFPQ_NO_OPQ") };
+    Ok(())
+}
+
+fn run_pq_only_diagnostic(
+    base: &[f32],
+    train: &[f32],
+    queries: &[f32],
+    gt: &[i32],
+    n_queries: usize,
+    gt_width: usize,
+    m: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let base_n = base.len() / DIM_EXPECTED;
+    let diag_base_n = base_n; // Use full 1M base so GT is valid
+    let diag_queries = n_queries.min(100); // 100 × 1M ADC comparisons
+    let diag_base = &base[..diag_base_n * DIM_EXPECTED];
+    let diag_query = &queries[..diag_queries * DIM_EXPECTED];
+    let diag_gt = &gt[..diag_queries * gt_width];
+
+    let config = PQConfig::new(DIM_EXPECTED, m, 8);
+    let mut pq = ProductQuantizer::new(config);
+    pq.train(train.len() / DIM_EXPECTED, train)?;
+
+    // Reconstruction MSE on first 100 training vectors
+    let sample_n = (train.len() / DIM_EXPECTED).min(100);
+    let mut mse_sum = 0.0f64;
+    let mut mse_count = 0usize;
+    for i in 0..sample_n {
+        let x = &train[i * DIM_EXPECTED..(i + 1) * DIM_EXPECTED];
+        let code = pq.encode(x)?;
+        let recon = pq.decode(&code)?;
+        for d in 0..DIM_EXPECTED {
+            let diff = x[d] - recon[d];
+            mse_sum += (diff * diff) as f64;
+            mse_count += 1;
+        }
+    }
+    let mse = if mse_count == 0 {
+        0.0
+    } else {
+        (mse_sum / mse_count as f64) as f32
+    };
+
+    let codes = pq.encode_batch(diag_base_n, diag_base)?;
+    let code_size = pq.code_size();
+    let mut all_ids = Vec::with_capacity(diag_queries * TOP_K);
+
+    for q in 0..diag_queries {
+        let qv = &diag_query[q * DIM_EXPECTED..(q + 1) * DIM_EXPECTED];
+        let mut scored = Vec::with_capacity(diag_base_n);
+        for i in 0..diag_base_n {
+            let code = &codes[i * code_size..(i + 1) * code_size];
+            let dist = pq.compute_distance(qv, code);
+            scored.push((i, dist));
+        }
+        scored.sort_by(|a, b| a.1.total_cmp(&b.1));
+        for (idx, _) in scored.into_iter().take(TOP_K) {
+            all_ids.push(idx as i64);
+        }
+    }
+
+    let recall = recall_at_k(diag_gt, &all_ids, TOP_K, diag_queries, gt_width);
+    println!(
+        "PQ-Only m={} reconstruction_mse={:.4}: recall@10={:.3}",
+        m, mse, recall
+    );
     Ok(())
 }
 
@@ -251,10 +358,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         used_base, used_queries, used_queries, gt_width
     );
 
-    run_ivf_flat(base, train, queries, gt, used_queries, gt_width)?;
-    run_ivf_sq8(base, train, queries, gt, used_queries, gt_width)?;
+    let ivfpq_only = std::env::var("IVFPQ_ONLY").is_ok();
+    if !ivfpq_only {
+        run_ivf_flat(base, train, queries, gt, used_queries, gt_width)?;
+        run_ivf_sq8(base, train, queries, gt, used_queries, gt_width)?;
+    }
     for &m in &[8usize, 16, 32] {
         run_ivf_pq(base, train, queries, gt, used_queries, gt_width, m)?;
+    }
+    if !ivfpq_only {
+        run_ivf_pq_plain_diagnostic(base, train, queries, gt, used_queries, gt_width)?;
+    } else {
+        for &m in &[8usize, 16, 32] {
+            run_pq_only_diagnostic(base, train, queries, gt, used_queries, gt_width, m)?;
+        }
     }
 
     Ok(())

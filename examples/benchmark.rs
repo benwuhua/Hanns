@@ -116,9 +116,13 @@ fn benchmark_hnsw_index() {
 fn benchmark_ivfpq_index() {
     println!("\n=== IVF-PQ Index Benchmark ===");
 
-    let params = IndexParams::ivf(100, 10);
+    let mut params = IndexParams::default();
+    params.nlist = Some(32);
+    params.nprobe = Some(8);
+    params.m = Some(8);
+    params.nbits_per_idx = Some(8);
     let config = IndexConfig {
-        index_type: IndexType::IvfFlat,
+        index_type: IndexType::IvfPq,
         metric_type: MetricType::L2,
         data_type: knowhere_rs::api::DataType::Float,
         dim: DIM,
@@ -150,7 +154,7 @@ fn benchmark_ivfpq_index() {
 
     let req = SearchRequest {
         top_k: TOP_K,
-        nprobe: 10,
+        nprobe: 8,
         filter: None,
         params: None,
         radius: None,
@@ -166,6 +170,58 @@ fn benchmark_ivfpq_index() {
         "  QPS: {:.2} queries/sec",
         100.0 / search_time.as_secs_f64()
     );
+}
+
+fn benchmark_ivfpq_100k() {
+    const NUM_VECTORS: usize = 100_000;
+    const DIM: usize = 128;
+    const TOP_K: usize = 10;
+    const NUM_QPS_QUERIES: usize = 1_000;
+
+    println!("\n=== IVF-PQ 100K Benchmark ===");
+
+    let mut params = IndexParams::default();
+    params.nlist = Some(256);
+    params.nprobe = Some(64);
+    params.m = Some(8);
+    params.nbits_per_idx = Some(8);
+
+    let config = IndexConfig {
+        index_type: IndexType::IvfPq,
+        metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
+        dim: DIM,
+        params,
+    };
+
+    let mut index = IvfPqIndex::new(&config).unwrap();
+    let vectors = generate_vectors(NUM_VECTORS, DIM);
+    let queries = generate_vectors(NUM_QPS_QUERIES, DIM);
+
+    let t0 = Instant::now();
+    index.train(&vectors).unwrap();
+    let train_s = t0.elapsed().as_secs_f64();
+
+    let t1 = Instant::now();
+    index.add(&vectors, None).unwrap();
+    let add_s = t1.elapsed().as_secs_f64();
+    let add_tput = NUM_VECTORS as f64 / add_s.max(f64::EPSILON);
+
+    let req = SearchRequest {
+        top_k: TOP_K,
+        nprobe: 64,
+        filter: None,
+        params: None,
+        radius: None,
+    };
+
+    let t2 = Instant::now();
+    let _ = index.search(&queries, &req).unwrap();
+    let qps = NUM_QPS_QUERIES as f64 / t2.elapsed().as_secs_f64().max(f64::EPSILON);
+
+    println!("Train time: {:.2}s", train_s);
+    println!("Add time: {:.2}s (throughput {:.0} vec/s)", add_s, add_tput);
+    println!("Search QPS: {:.0}", qps);
 }
 
 fn benchmark_diskann_index() {
@@ -596,6 +652,7 @@ fn main() {
     benchmark_flat_index();
     benchmark_hnsw_index();
     benchmark_ivfpq_index();
+    benchmark_ivfpq_100k();
     benchmark_diskann_index();
     benchmark_diskann();
     benchmark_pqflash();

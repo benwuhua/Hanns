@@ -38,7 +38,7 @@ impl KMeans {
     pub fn new(k: usize, dim: usize) -> Self {
         Self {
             k,
-            max_iter: 10,
+            max_iter: 25,
             tolerance: 1e-2,
             centroids: vec![0.0; k * dim],
             dim,
@@ -109,6 +109,55 @@ impl KMeans {
         }
     }
 
+    /// k-means++ 初始化
+    fn kmeanspp_init(&mut self, vectors: &[f32], n: usize) {
+        if n == 0 {
+            return;
+        }
+
+        // Step 1: pick first centroid uniformly at random
+        let first = self.rng.gen_range(0..n);
+        self.centroids[..self.dim]
+            .copy_from_slice(&vectors[first * self.dim..first * self.dim + self.dim]);
+
+        // Step 2: pick subsequent centroids proportional to min_dist^2
+        let mut min_dists = vec![f32::MAX; n];
+        for c in 1..self.k {
+            let prev_centroid = &self.centroids[(c - 1) * self.dim..c * self.dim];
+            for i in 0..n {
+                let d = compute_l2_distance_sq(
+                    &vectors[i * self.dim..(i + 1) * self.dim],
+                    prev_centroid,
+                );
+                if d < min_dists[i] {
+                    min_dists[i] = d;
+                }
+            }
+
+            // Weighted sampling by min_dists
+            let total: f64 = min_dists.iter().map(|&d| d as f64).sum();
+            if total <= 0.0 {
+                let idx = self.rng.gen_range(0..n);
+                self.centroids[c * self.dim..(c + 1) * self.dim]
+                    .copy_from_slice(&vectors[idx * self.dim..(idx + 1) * self.dim]);
+                continue;
+            }
+
+            let target = self.rng.gen::<f64>() * total;
+            let mut cumsum = 0.0f64;
+            let mut chosen = n - 1;
+            for (i, &d) in min_dists.iter().enumerate().take(n) {
+                cumsum += d as f64;
+                if cumsum >= target {
+                    chosen = i;
+                    break;
+                }
+            }
+            self.centroids[c * self.dim..(c + 1) * self.dim]
+                .copy_from_slice(&vectors[chosen * self.dim..(chosen + 1) * self.dim]);
+        }
+    }
+
     /// 训练 K-means (速度优化版)
     /// 自动使用并行训练 (如果 parallel feature 启用)
     pub fn train(&mut self, vectors: &[f32]) -> usize {
@@ -131,7 +180,7 @@ impl KMeans {
         }
 
         // 简化初始化 (速度优先)
-        self.random_init(vectors, n);
+        self.kmeanspp_init(vectors, n);
 
         // 迭代优化
         let mut assignments = vec![0usize; n];
@@ -254,7 +303,7 @@ impl KMeans {
         }
 
         // 简化初始化 (速度优先)
-        self.random_init(vectors, n);
+        self.kmeanspp_init(vectors, n);
 
         let _assignments = vec![0usize; n];
 

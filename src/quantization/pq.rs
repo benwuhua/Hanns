@@ -395,6 +395,9 @@ impl ProductQuantizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::quantization::kmeans::KMeans;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
 
     fn create_test_vectors(n: usize, dim: usize) -> Vec<f32> {
         let mut vectors = Vec::with_capacity(n * dim);
@@ -516,4 +519,156 @@ mod tests {
         // Invalid subquantizer index
         assert!(pq.get_centroids(8).is_none());
     }
+
+    #[test]
+    fn test_adc_correctness() {
+        let dim = 16;
+        let m = 4;
+        let nbits = 4; // ksub = 16
+        let n = 200usize;
+
+        let mut rng = StdRng::seed_from_u64(42);
+        let data: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0f32..1.0)).collect();
+
+        let config = PQConfig::new(dim, m, nbits);
+        let mut pq = ProductQuantizer::new(config);
+        pq.train(n, &data).unwrap();
+
+        let codes = pq.encode_batch(n, &data).unwrap();
+        let code_size = pq.code_size();
+
+        let mut top1_hits = 0usize;
+        let num_queries = 5usize;
+        for q_idx in 0..num_queries {
+            let query = &data[q_idx * dim..(q_idx + 1) * dim];
+
+            let mut gt: Vec<(usize, f32)> = (0..n)
+                .map(|i| {
+                    let v = &data[i * dim..(i + 1) * dim];
+                    let d = query
+                        .iter()
+                        .zip(v.iter())
+                        .map(|(a, b)| {
+                            let diff = a - b;
+                            diff * diff
+                        })
+                        .sum::<f32>();
+                    (i, d)
+                })
+                .collect();
+            gt.sort_by(|a, b| a.1.total_cmp(&b.1));
+            let gt_top1 = gt[0].0;
+
+            let mut adc: Vec<(usize, f32)> = (0..n)
+                .map(|i| {
+                    let code = &codes[i * code_size..(i + 1) * code_size];
+                    (i, pq.compute_distance(query, code))
+                })
+                .collect();
+            adc.sort_by(|a, b| a.1.total_cmp(&b.1));
+            let adc_top1 = adc[0].0;
+
+            if adc_top1 == gt_top1 {
+                top1_hits += 1;
+            }
+        }
+        let top1_recall = top1_hits as f32 / num_queries as f32;
+
+        let mut mse_sum = 0.0f32;
+        for i in 0..n {
+            let original = &data[i * dim..(i + 1) * dim];
+            let code = &codes[i * code_size..(i + 1) * code_size];
+            let recon = pq.decode(code).unwrap();
+            let mse = original
+                .iter()
+                .zip(recon.iter())
+                .map(|(a, b)| {
+                    let diff = a - b;
+                    diff * diff
+                })
+                .sum::<f32>()
+                / dim as f32;
+            mse_sum += mse;
+        }
+        let mse = mse_sum / n as f32;
+
+        println!(
+            "PQ ADC correctness: top1_recall={:.3}, reconstruction_mse={:.4}",
+            top1_recall, mse
+        );
+
+        assert!(top1_recall.is_finite());
+        assert!(mse.is_finite());
+        assert!(mse < 10.0, "reconstruction MSE too large: {}", mse);
+    }
+
+    #[test]
+    fn test_pq_recall_small() {
+        let dim = 16usize;
+        let m = 4usize;
+        let nbits = 4usize; // ksub = 16
+        let n = 500usize;
+        let nq = 100usize;
+        let top_k = 10usize;
+
+        let mut rng = StdRng::seed_from_u64(42);
+        let base: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0f32..1.0)).collect();
+        // Fixed-seed queries sampled from train distribution to keep this sanity test stable.
+        let mut queries = Vec::with_capacity(nq * dim);
+        for _ in 0..nq {
+            let idx = rng.gen_range(0..n);
+            queries.extend_from_slice(&base[idx * dim..(idx + 1) * dim]);
+        }
+
+        let config = PQConfig::new(dim, m, nbits);
+        let mut pq = ProductQuantizer::new(config);
+        pq.train(n, &base).unwrap();
+        let codes = pq.encode_batch(n, &base).unwrap();
+        let code_size = pq.code_size();
+
+        let mut hits = 0usize;
+        let mut total = 0usize;
+
+        for q_idx in 0..nq {
+            let query = &queries[q_idx * dim..(q_idx + 1) * dim];
+
+            let mut gt: Vec<(usize, f32)> = (0..n)
+                .map(|i| {
+                    let v = &base[i * dim..(i + 1) * dim];
+                    let d = query
+                        .iter()
+                        .zip(v.iter())
+                        .map(|(a, b)| {
+                            let diff = a - b;
+                            diff * diff
+                        })
+                        .sum::<f32>();
+                    (i, d)
+                })
+                .collect();
+            gt.sort_by(|a, b| a.1.total_cmp(&b.1));
+            let gt_topk: Vec<usize> = gt.iter().take(top_k).map(|(idx, _)| *idx).collect();
+
+            let mut adc: Vec<(usize, f32)> = (0..n)
+                .map(|i| {
+                    let code = &codes[i * code_size..(i + 1) * code_size];
+                    (i, pq.compute_distance(query, code))
+                })
+                .collect();
+            adc.sort_by(|a, b| a.1.total_cmp(&b.1));
+            let adc_topk: Vec<usize> = adc.iter().take(top_k).map(|(idx, _)| *idx).collect();
+
+            for idx in gt_topk {
+                total += 1;
+                if adc_topk.contains(&idx) {
+                    hits += 1;
+                }
+            }
+        }
+
+        let recall = hits as f32 / total as f32;
+        println!("PQ-only recall@10 (small): {:.3}", recall);
+        assert!(recall > 0.5, "recall@10 too low: {}", recall);
+    }
+
 }

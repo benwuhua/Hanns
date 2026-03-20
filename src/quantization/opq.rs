@@ -396,7 +396,7 @@ impl OptimizedProductQuantizer {
                 }
             }
 
-            // Orthonormalize (Gram-Schmidt)
+            // Orthonormalize (Modified Gram-Schmidt)
             for i in 0..dim {
                 let row_offset = i * dim;
 
@@ -404,11 +404,11 @@ impl OptimizedProductQuantizer {
                     let prev_offset = j * dim;
                     let mut dot = 0.0f32;
                     for k in 0..dim {
-                        dot += temp[row_offset + k] * temp[prev_offset + k];
+                        dot += temp[row_offset + k] * new_rotation[prev_offset + k];
                     }
 
                     for k in 0..dim {
-                        temp[row_offset + k] -= dot * temp[prev_offset + k];
+                        temp[row_offset + k] -= dot * new_rotation[prev_offset + k];
                     }
                 }
 
@@ -422,6 +422,9 @@ impl OptimizedProductQuantizer {
                     for k in 0..dim {
                         new_rotation[row_offset + k] = temp[row_offset + k] / norm;
                     }
+                } else {
+                    // degenerate: keep identity basis vector
+                    new_rotation[row_offset + i] = 1.0;
                 }
             }
         }

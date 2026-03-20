@@ -73,7 +73,7 @@ impl IvfPqIndex {
 
         let pq_config = PQConfig::new(config.dim, m, nbits);
         let pq = ProductQuantizer::new(pq_config);
-        let use_opq = config.dim >= 64;
+        let use_opq = false; // Disabled: power-iteration Procrustes diverges on SIFT-1M (plain PQ > OPQ)
         let opq = if use_opq {
             let mut opq_config = OPQConfig::new(config.dim, m, nbits);
             opq_config.niter = 1;
@@ -1040,8 +1040,7 @@ mod tests {
         );
     }
 
-    /// Verify that IVF-PQ with OPQ (dim=128 triggers use_opq=true) achieves reasonable recall.
-    /// This test exercises the full OPQ encode → ADC decode path.
+    /// Verify that IVF-PQ (dim=128) achieves reasonable recall with plain PQ (OPQ disabled).
     #[test]
     fn test_ivfpq_opq_recall_dim128() {
         let dim = 128;
@@ -1078,10 +1077,8 @@ mod tests {
         }
 
         let mut index = IvfPqIndex::new(&config).unwrap();
-        assert!(index.use_opq, "OPQ should be enabled for dim=128");
 
         index.train(&vectors).unwrap();
-        assert!(index.opq_enabled(), "OPQ must be trained");
 
         let ids: Vec<i64> = (0..n as i64).collect();
         index.add(&vectors, Some(&ids)).unwrap();
@@ -1130,10 +1127,10 @@ mod tests {
         }
 
         let avg_recall = total_recall / n_queries as f32;
-        eprintln!("IVF-PQ OPQ (dim=128) R@{}: {:.1}%", k, avg_recall * 100.0);
+        eprintln!("IVF-PQ (dim=128) R@{}: {:.1}%", k, avg_recall * 100.0);
         assert!(
             avg_recall > 0.50,
-            "OPQ R@{} = {:.1}% (expected > 50%)",
+            "IVF-PQ R@{} = {:.1}% (expected > 50%)",
             k,
             avg_recall * 100.0
         );
