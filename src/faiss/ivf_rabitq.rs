@@ -415,6 +415,8 @@ impl IvfRaBitqIndex {
                 RefineType::Float16Quant | RefineType::Bfloat16Quant => {
                     refine.len() * self.config.dim * std::mem::size_of::<u16>()
                 }
+                RefineType::Sq4Quant => refine.len() * self.config.dim.div_ceil(2),
+                RefineType::Sq6Quant => refine.len() * ((self.config.dim * 6).div_ceil(8)),
             },
             None => 0,
         };
