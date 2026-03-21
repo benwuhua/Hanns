@@ -144,6 +144,54 @@ impl ScalarQuantizer {
             })
             .sum()
     }
+
+    /// Precompute query values in quantized integer domain.
+    ///
+    /// q_i16[i] = round((q[i] - offset) * scale)
+    pub fn precompute_query(&self, q_residual: &[f32]) -> Vec<i16> {
+        q_residual
+            .iter()
+            .map(|&v| ((v - self.offset) * self.scale).round() as i16)
+            .collect()
+    }
+
+    /// Compute SQ8 asymmetric L2 distance using a precomputed integer-domain query.
+    ///
+    /// Returns distance in original float domain (L2^2).
+    pub fn sq_l2_precomputed(&self, q_i16: &[i16], db_code: &[u8]) -> f32 {
+        debug_assert_eq!(q_i16.len(), db_code.len());
+        let inv_scale = 1.0 / self.scale;
+        let acc: i64 = {
+            #[cfg(target_arch = "x86_64")]
+            {
+                if std::arch::is_x86_feature_detected!("avx2") && q_i16.len() >= 16 {
+                    // SAFETY: AVX2 path is guarded by runtime feature detection.
+                    unsafe { sq_l2_precomputed_avx2(q_i16, db_code) }
+                } else {
+                    q_i16
+                        .iter()
+                        .zip(db_code.iter())
+                        .map(|(&qv, &db)| {
+                            let diff = qv as i32 - db as i32;
+                            (diff * diff) as i64
+                        })
+                        .sum()
+                }
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                q_i16
+                    .iter()
+                    .zip(db_code.iter())
+                    .map(|(&qv, &db)| {
+                        let diff = qv as i32 - db as i32;
+                        (diff * diff) as i64
+                    })
+                    .sum()
+            }
+        };
+        acc as f32 * inv_scale * inv_scale
+    }
 }
 
 /// SQ8 量化器 (8-bit, 简化别名)
@@ -247,6 +295,42 @@ unsafe fn sq_l2_asymmetric_avx2(
     sum
 }
 
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn sq_l2_precomputed_avx2(q_i16: &[i16], db_code: &[u8]) -> i64 {
+    use std::arch::x86_64::*;
+
+    let len = q_i16.len().min(db_code.len());
+    let mut i = 0usize;
+    let mut acc = _mm256_setzero_si256();
+
+    while i + 16 <= len {
+        // SAFETY: pointers are in-bounds due loop condition and slices are contiguous.
+        let qv = unsafe { _mm256_loadu_si256(q_i16.as_ptr().add(i) as *const __m256i) };
+        // SAFETY: pointers are in-bounds due loop condition and slices are contiguous.
+        let db_bytes = unsafe { _mm_loadu_si128(db_code.as_ptr().add(i) as *const __m128i) };
+        let dbv = _mm256_cvtepu8_epi16(db_bytes);
+        let diff = _mm256_sub_epi16(qv, dbv);
+        let sq_pairs = _mm256_madd_epi16(diff, diff);
+        acc = _mm256_add_epi32(acc, sq_pairs);
+        i += 16;
+    }
+
+    let lo = _mm256_castsi256_si128(acc);
+    let hi = _mm256_extracti128_si256(acc, 1);
+    let sum128 = _mm_add_epi32(lo, hi);
+    let mut lanes = [0i32; 4];
+    // SAFETY: lanes has exact space for one 128-bit store.
+    unsafe { _mm_storeu_si128(lanes.as_mut_ptr() as *mut __m128i, sum128) };
+    let mut total = lanes.iter().map(|&v| v as i64).sum::<i64>();
+
+    for (&qv, &db) in q_i16[i..len].iter().zip(db_code[i..len].iter()) {
+        let diff = qv as i32 - db as i32;
+        total += (diff * diff) as i64;
+    }
+    total
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,5 +417,27 @@ mod tests {
             let avx = unsafe { sq_l2_asymmetric_avx2(&q, &db_code, inv_scale, sq.offset) };
             assert!((avx - scalar).abs() < 1e-4, "avx={} scalar={}", avx, scalar);
         }
+    }
+
+    #[test]
+    fn test_sq_l2_precomputed_matches_asymmetric() {
+        let dim = 128usize;
+        let mut sq = ScalarQuantizer::new(dim, 8);
+        let train: Vec<f32> = (0..dim).map(|i| (i as f32 * 0.11).sin() * 4.0).collect();
+        sq.train(&train);
+
+        let q: Vec<f32> = (0..dim).map(|i| (i as f32 * 0.07).cos() * 3.0).collect();
+        let db: Vec<f32> = (0..dim).map(|i| (i as f32 * 0.13).sin() * 2.5).collect();
+        let db_code = sq.encode(&db);
+
+        let q_i16 = sq.precompute_query(&q);
+        let int_dist = sq.sq_l2_precomputed(&q_i16, &db_code);
+        let float_dist = sq.sq_l2_asymmetric(&q, &db_code);
+        assert!(
+            (int_dist - float_dist).abs() < 1.0,
+            "int_dist={} float_dist={}",
+            int_dist,
+            float_dist
+        );
     }
 }

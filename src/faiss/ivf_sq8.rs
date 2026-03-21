@@ -376,12 +376,13 @@ impl IvfSq8Index {
                 .zip(centroid_vec.iter())
                 .map(|(a, b)| a - b)
                 .collect();
+            let q_precomputed = self.quantizer.precompute_query(&q_residual);
 
             let n = ids.len().min(codes.len() / self.dim);
             acc.visited = n;
             for i in 0..n {
                 let code = &codes[i * self.dim..(i + 1) * self.dim];
-                let dist = self.quantizer.sq_l2_asymmetric(&q_residual, code);
+                let dist = self.quantizer.sq_l2_precomputed(&q_precomputed, code);
                 acc.push(ids[i], dist);
             }
         }
