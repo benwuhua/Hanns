@@ -188,11 +188,12 @@ impl HnswSqIndex {
             return vec![];
         }
 
-        // Use asymmetric SQ distance: float query against uint8 database codes.
+        // Precompute query once in integer domain, then use integer hot path per vector.
+        let q_precomputed = self.quantizer.precompute_query(query);
         let mut results: Vec<(i64, f32)> = (0..self.ids.len())
             .map(|i| {
                 let qv = &self.quantized_vectors[i * self.dim..(i + 1) * self.dim];
-                let dist = self.quantized_distance(query, qv);
+                let dist = self.quantizer.sq_l2_precomputed(&q_precomputed, qv);
                 (self.ids[i], dist)
             })
             .collect();
