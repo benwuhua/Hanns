@@ -222,41 +222,42 @@ impl IvfPqIndex {
             return self.add_parallel(vectors, ids, rayon::current_num_threads());
         }
 
-        // Sequential path — unreachable when `parallel` feature is enabled.
-        #[allow(unreachable_code)]
-        let n = vectors.len() / self.dim;
+        #[cfg(not(feature = "parallel"))]
+        {
+            let n = vectors.len() / self.dim;
 
-        for i in 0..n {
-            let start = i * self.dim;
-            let end = start + self.dim;
-            let vector = &vectors[start..end];
+            for i in 0..n {
+                let start = i * self.dim;
+                let end = start + self.dim;
+                let vector = &vectors[start..end];
 
-            // Find nearest centroid
-            let cluster = self.find_nearest_centroid(vector);
+                // Find nearest centroid
+                let cluster = self.find_nearest_centroid(vector);
 
-            // Compute residual
-            let mut residual = vec![0.0f32; self.dim];
-            for j in 0..self.dim {
-                residual[j] = vector[j] - self.centroids[cluster * self.dim + j];
+                // Compute residual
+                let mut residual = vec![0.0f32; self.dim];
+                for j in 0..self.dim {
+                    residual[j] = vector[j] - self.centroids[cluster * self.dim + j];
+                }
+
+                // PQ-encode the residual
+                let code = self.encode_residual(&residual)?;
+
+                let id = ids.map(|ids| ids[i]).unwrap_or(self.next_id);
+                self.next_id += 1;
+
+                // Add to inverted lists (Vec optimization)
+                self.invlist_ids[cluster].push(id);
+                self.invlist_codes[cluster].extend_from_slice(&code);
+
+                // Store original vector for save/load
+                self.ids.push(id);
+                self.vectors.extend_from_slice(vector);
             }
 
-            // PQ-encode the residual
-            let code = self.encode_residual(&residual)?;
-
-            let id = ids.map(|ids| ids[i]).unwrap_or(self.next_id);
-            self.next_id += 1;
-
-            // Add to inverted lists (Vec optimization)
-            self.invlist_ids[cluster].push(id);
-            self.invlist_codes[cluster].extend_from_slice(&code);
-
-            // Store original vector for save/load
-            self.ids.push(id);
-            self.vectors.extend_from_slice(vector);
+            tracing::debug!("Added {} vectors to IVF-PQ", n);
+            return Ok(n);
         }
-
-        tracing::debug!("Added {} vectors to IVF-PQ", n);
-        Ok(n)
     }
 
     /// Add vectors in parallel (requires rayon)

@@ -88,6 +88,7 @@ impl KMeans {
     }
 
     /// 简化初始化 - 直接随机选择 k 个点 (放弃 k-means++ 的质量)
+    #[allow(dead_code)]
     fn random_init(&mut self, vectors: &[f32], n: usize) {
         if n == 0 {
             return;

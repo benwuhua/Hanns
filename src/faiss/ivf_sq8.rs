@@ -334,7 +334,7 @@ impl IvfSq8Index {
             let clusters = self.search_clusters(query_vec, nprobe);
 
             #[cfg(feature = "parallel")]
-            let mut merged = {
+            let merged = {
                 use rayon::prelude::*;
                 let partials: Vec<TopKAccumulator> = clusters
                     .par_iter()
@@ -348,7 +348,7 @@ impl IvfSq8Index {
             };
 
             #[cfg(not(feature = "parallel"))]
-            let mut merged = {
+            let merged = {
                 let mut merged = TopKAccumulator::new(k);
                 for cluster_id in clusters {
                     merged.merge(self.scan_cluster(cluster_id, query_vec, k));

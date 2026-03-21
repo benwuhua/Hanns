@@ -1180,7 +1180,7 @@ impl PQFlashIndex {
 
         let mut data_file = File::create(file_group.data_path())?;
         if let Some(storage) = &self.storage {
-            let mut input = File::open(storage.file_group.data_path())?;
+            let input = File::open(storage.file_group.data_path())?;
             let node_bytes_len = self.len().saturating_mul(self.flash_layout.node_bytes) as u64;
             std::io::copy(&mut input.take(node_bytes_len), &mut data_file)?;
         } else {
@@ -2241,6 +2241,7 @@ impl PQFlashIndex {
             .prefetch(offset, self.flash_layout.node_bytes);
     }
 
+    #[allow(dead_code)]
     fn batch_prefetch_neighbors(&self, neighbor_ids: &[u32]) {
         let Some(storage) = &self.storage else {
             return;

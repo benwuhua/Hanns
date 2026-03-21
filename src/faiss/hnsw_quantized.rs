@@ -204,6 +204,7 @@ impl HnswSqIndex {
     }
 
     /// 量化向量间的距离 (简化)
+    #[allow(dead_code)]
     fn quantized_distance(&self, query: &[f32], db_code: &[u8]) -> f32 {
         self.quantizer.sq_l2_asymmetric(query, db_code)
     }
