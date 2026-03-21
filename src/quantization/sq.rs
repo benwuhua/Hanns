@@ -174,6 +174,10 @@ impl ScalarQuantizer {
         let acc: i64 = {
             #[cfg(target_arch = "x86_64")]
             {
+                if std::arch::is_x86_feature_detected!("avx512bw") && q_i16.len() >= 32 {
+                    // SAFETY: AVX-512 path is guarded by runtime feature detection.
+                    unsafe { sq_l2_precomputed_avx512(q_i16, db_code) }
+                } else
                 if std::arch::is_x86_feature_detected!("avx2") && q_i16.len() >= 16 {
                     // SAFETY: AVX2 path is guarded by runtime feature detection.
                     unsafe { sq_l2_precomputed_avx2(q_i16, db_code) }
@@ -366,6 +370,72 @@ unsafe fn sq_l2_precomputed_avx2(q_i16: &[i16], db_code: &[u8]) -> i64 {
     let mut lanes = [0i32; 4];
     // SAFETY: lanes has exact space for one 128-bit store.
     unsafe { _mm_storeu_si128(lanes.as_mut_ptr() as *mut __m128i, sum128) };
+    let mut total = lanes.iter().map(|&v| v as i64).sum::<i64>();
+
+    for (&qv, &db) in q_i16[i..len].iter().zip(db_code[i..len].iter()) {
+        let diff = qv as i32 - db as i32;
+        total += (diff * diff) as i64;
+    }
+    total
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
+unsafe fn sq_l2_precomputed_avx512(q_i16: &[i16], db_code: &[u8]) -> i64 {
+    use std::arch::x86_64::*;
+
+    let len = q_i16.len().min(db_code.len());
+    let mut i = 0usize;
+    let mut acc0 = _mm512_setzero_si512();
+    let mut acc1 = _mm512_setzero_si512();
+    let mut acc2 = _mm512_setzero_si512();
+    let mut acc3 = _mm512_setzero_si512();
+
+    while i + 128 <= len {
+        // chunk 0: 32 elements
+        let q0 = _mm512_loadu_si512(q_i16.as_ptr().add(i) as *const __m512i);
+        let cbytes0 = _mm256_loadu_si256(db_code.as_ptr().add(i) as *const __m256i);
+        let c0 = _mm512_cvtepu8_epi16(cbytes0);
+        let d0 = _mm512_sub_epi16(q0, c0);
+        acc0 = _mm512_add_epi32(acc0, _mm512_madd_epi16(d0, d0));
+
+        // chunk 1
+        let q1 = _mm512_loadu_si512(q_i16.as_ptr().add(i + 32) as *const __m512i);
+        let cbytes1 = _mm256_loadu_si256(db_code.as_ptr().add(i + 32) as *const __m256i);
+        let c1 = _mm512_cvtepu8_epi16(cbytes1);
+        let d1 = _mm512_sub_epi16(q1, c1);
+        acc1 = _mm512_add_epi32(acc1, _mm512_madd_epi16(d1, d1));
+
+        // chunk 2
+        let q2 = _mm512_loadu_si512(q_i16.as_ptr().add(i + 64) as *const __m512i);
+        let cbytes2 = _mm256_loadu_si256(db_code.as_ptr().add(i + 64) as *const __m256i);
+        let c2 = _mm512_cvtepu8_epi16(cbytes2);
+        let d2 = _mm512_sub_epi16(q2, c2);
+        acc2 = _mm512_add_epi32(acc2, _mm512_madd_epi16(d2, d2));
+
+        // chunk 3
+        let q3 = _mm512_loadu_si512(q_i16.as_ptr().add(i + 96) as *const __m512i);
+        let cbytes3 = _mm256_loadu_si256(db_code.as_ptr().add(i + 96) as *const __m256i);
+        let c3 = _mm512_cvtepu8_epi16(cbytes3);
+        let d3 = _mm512_sub_epi16(q3, c3);
+        acc3 = _mm512_add_epi32(acc3, _mm512_madd_epi16(d3, d3));
+
+        i += 128;
+    }
+
+    let mut acc = _mm512_add_epi32(acc0, _mm512_add_epi32(acc1, _mm512_add_epi32(acc2, acc3)));
+
+    while i + 32 <= len {
+        let q = _mm512_loadu_si512(q_i16.as_ptr().add(i) as *const __m512i);
+        let cbytes = _mm256_loadu_si256(db_code.as_ptr().add(i) as *const __m256i);
+        let c = _mm512_cvtepu8_epi16(cbytes);
+        let d = _mm512_sub_epi16(q, c);
+        acc = _mm512_add_epi32(acc, _mm512_madd_epi16(d, d));
+        i += 32;
+    }
+
+    let mut lanes = [0i32; 16];
+    _mm512_storeu_si512(lanes.as_mut_ptr() as *mut __m512i, acc);
     let mut total = lanes.iter().map(|&v| v as i64).sum::<i64>();
 
     for (&qv, &db) in q_i16[i..len].iter().zip(db_code[i..len].iter()) {
