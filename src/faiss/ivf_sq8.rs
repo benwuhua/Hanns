@@ -485,8 +485,14 @@ impl IvfSq8Index {
             })
             .collect();
 
-        distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        distances.into_iter().take(nprobe).map(|(i, _)| i).collect()
+        if nprobe >= distances.len() {
+            distances.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
+            return distances.into_iter().map(|(i, _)| i).collect();
+        }
+
+        distances.select_nth_unstable_by(nprobe, |a, b| a.1.total_cmp(&b.1));
+        distances[..nprobe].sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
+        distances[..nprobe].iter().map(|(i, _)| *i).collect()
     }
 
     /// Compute residual

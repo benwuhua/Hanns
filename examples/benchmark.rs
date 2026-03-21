@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 use knowhere_rs::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
-use knowhere_rs::faiss::{DiskAnnIndex, HnswIndex, IvfPqIndex, MemIndex};
+use knowhere_rs::faiss::{DiskAnnIndex, HnswIndex, IvfPqIndex, IvfSq8Index, MemIndex};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -222,6 +222,140 @@ fn benchmark_ivfpq_100k() {
     println!("Train time: {:.2}s", train_s);
     println!("Add time: {:.2}s (throughput {:.0} vec/s)", add_s, add_tput);
     println!("Search QPS: {:.0}", qps);
+}
+
+fn overlap_at_k(a: &[i64], b: &[i64]) -> usize {
+    let mut hits = 0usize;
+    for &id in b.iter().take(TOP_K) {
+        if a.iter().take(TOP_K).any(|&x| x == id) {
+            hits += 1;
+        }
+    }
+    hits
+}
+
+fn benchmark_ivf_sq8() {
+    const BASE_SIZE: usize = 100_000;
+    const DIM: usize = 128;
+    const NLIST: usize = 256;
+    const RECALL_QUERIES: usize = 200;
+    const QPS_QUERIES: usize = 1_000;
+    const NPROBES: [usize; 4] = [32, 64, 128, 256];
+
+    println!("\n=== IVF-SQ8 100K Benchmark ===");
+    println!(
+        "base={} dim={} nlist={} top_k={} seed=42",
+        BASE_SIZE, DIM, NLIST, TOP_K
+    );
+
+    let mut rng = StdRng::seed_from_u64(42);
+    let base: Vec<f32> = (0..BASE_SIZE * DIM).map(|_| rng.r#gen::<f32>()).collect();
+    let recall_queries: Vec<f32> = (0..RECALL_QUERIES * DIM).map(|_| rng.r#gen::<f32>()).collect();
+    let qps_queries: Vec<f32> = (0..QPS_QUERIES * DIM).map(|_| rng.r#gen::<f32>()).collect();
+
+    let flat_cfg = IndexConfig::new(IndexType::Flat, MetricType::L2, DIM);
+    let mut gt_index = MemIndex::new(&flat_cfg).unwrap();
+    gt_index.add(&base, None).unwrap();
+
+    let mut params = IndexParams::default();
+    params.nlist = Some(NLIST);
+    params.nprobe = Some(32);
+    let cfg = IndexConfig {
+        index_type: IndexType::IvfSq8,
+        metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
+        dim: DIM,
+        params,
+    };
+    let mut index = IvfSq8Index::new(&cfg).unwrap();
+
+    let t0 = Instant::now();
+    index.train(&base).unwrap();
+    let train_s = t0.elapsed().as_secs_f64();
+
+    let t1 = Instant::now();
+    index.add(&base, None).unwrap();
+    let add_s = t1.elapsed().as_secs_f64();
+    println!(
+        "Train {:.2}s, Add {:.2}s ({:.0} vec/s)",
+        train_s,
+        add_s,
+        BASE_SIZE as f64 / add_s.max(f64::EPSILON)
+    );
+
+    let gt_req = SearchRequest {
+        top_k: TOP_K,
+        ..Default::default()
+    };
+    let gt_top10: Vec<Vec<i64>> = (0..RECALL_QUERIES)
+        .map(|i| {
+            let q = &recall_queries[i * DIM..(i + 1) * DIM];
+            gt_index.search(q, &gt_req).unwrap().ids
+        })
+        .collect();
+
+    println!("single-query sweep:");
+    println!("nprobe | recall@10 | qps");
+    println!("-------|-----------|------");
+
+    for &nprobe in &NPROBES {
+        let req = SearchRequest {
+            top_k: TOP_K,
+            nprobe,
+            ..Default::default()
+        };
+
+        let qps_start = Instant::now();
+        for q in qps_queries.chunks(DIM) {
+            let _ = index.search(q, &req).unwrap();
+        }
+        let qps = (QPS_QUERIES as f64 / qps_start.elapsed().as_secs_f64().max(f64::EPSILON)).round()
+            as u64;
+
+        let mut recall_sum = 0.0;
+        for (i, gt_ids) in gt_top10.iter().enumerate() {
+            let q = &recall_queries[i * DIM..(i + 1) * DIM];
+            let res = index.search(q, &req).unwrap();
+            recall_sum += overlap_at_k(gt_ids, &res.ids) as f64 / TOP_K as f64;
+        }
+        let recall = recall_sum / RECALL_QUERIES as f64;
+
+        println!("{:>6} | {:>9.3} | {}", nprobe, recall, qps);
+    }
+
+    #[cfg(feature = "parallel")]
+    {
+        let req = SearchRequest {
+            top_k: TOP_K,
+            nprobe: 32,
+            ..Default::default()
+        };
+
+        let t = Instant::now();
+        let _ = index.search_parallel(&qps_queries, &req, 0).unwrap();
+        let batch_qps =
+            (QPS_QUERIES as f64 / t.elapsed().as_secs_f64().max(f64::EPSILON)).round() as u64;
+
+        let batch_recall_res = index.search_parallel(&recall_queries, &req, 0).unwrap();
+        let mut recall_sum = 0.0;
+        for (i, gt_ids) in gt_top10.iter().enumerate() {
+            let start = i * TOP_K;
+            let end = start + TOP_K;
+            recall_sum += overlap_at_k(gt_ids, &batch_recall_res.ids[start..end]) as f64
+                / TOP_K as f64;
+        }
+        let batch_recall = recall_sum / RECALL_QUERIES as f64;
+
+        println!(
+            "batch parallel (nprobe=32): recall@10={:.3}, qps={}",
+            batch_recall, batch_qps
+        );
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    {
+        println!("batch parallel (nprobe=32): skipped (feature \"parallel\" not enabled)");
+    }
 }
 
 fn benchmark_diskann_index() {
@@ -653,6 +787,7 @@ fn main() {
     benchmark_hnsw_index();
     benchmark_ivfpq_index();
     benchmark_ivfpq_100k();
+    benchmark_ivf_sq8();
     benchmark_diskann_index();
     benchmark_diskann();
     benchmark_pqflash();

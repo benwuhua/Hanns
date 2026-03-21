@@ -128,23 +128,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "parallel")]
     {
-        let best_nprobe = min_gate.map(|r| r.nprobe).unwrap_or(256);
         println!("\n=== Batch parallel mode (search_parallel) ===");
-        let req_batch = SearchRequest {
-            top_k: TOP_K,
-            nprobe: best_nprobe,
-            ..Default::default()
-        };
+        let test_nprobes = vec![32, 64, min_gate.map(|r| r.nprobe).unwrap_or(256)];
+        let test_nprobes: Vec<usize> = test_nprobes
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
 
         let batch_queries: Vec<f32> = qps_queries[..QPS_QUERIES * DIM].to_vec();
-        let batch_start = Instant::now();
-        let _ = ivf_sq8.search_parallel(&batch_queries, &req_batch, 0)?;
-        let batch_secs = batch_start.elapsed().as_secs_f64();
-        let batch_qps = (QPS_QUERIES as f64 / batch_secs).round() as u64;
-        println!(
-            "batch parallel: {} queries, {} QPS (nprobe={})",
-            QPS_QUERIES, batch_qps, best_nprobe
-        );
+        for &np in &test_nprobes {
+            let req_batch = SearchRequest {
+                top_k: TOP_K,
+                nprobe: np,
+                ..Default::default()
+            };
+            let batch_start = Instant::now();
+            let _ = ivf_sq8.search_parallel(&batch_queries, &req_batch, 0)?;
+            let batch_secs = batch_start.elapsed().as_secs_f64();
+            let batch_qps = (QPS_QUERIES as f64 / batch_secs).round() as u64;
+            println!("  nprobe={}: {} QPS", np, batch_qps);
+        }
     }
 
     #[cfg(not(feature = "parallel"))]
