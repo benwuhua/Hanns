@@ -15,8 +15,6 @@ use crate::index::{
 };
 use crate::quantization::ScalarQuantizer;
 
-type IvfSq8InvertedListSnapshot = HashMap<usize, (Vec<i64>, Vec<u8>)>;
-
 #[derive(Debug, Clone, Copy)]
 struct SearchHit {
     id: i64,
@@ -168,6 +166,30 @@ fn insert_sorted_vec(storage: &mut Vec<SearchHit>, limit: usize, candidate: Sear
 #[inline]
 fn is_better(candidate: SearchHit, existing: SearchHit) -> bool {
     candidate < existing
+}
+
+#[allow(dead_code)]
+#[inline]
+fn prefetch_sq_code(codes: &[u8], i: usize, n: usize, dim: usize) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if i + 2 < n {
+            let base = (i + 2) * dim;
+            use std::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
+            // SAFETY: base is in-bounds because i + 2 < n and n <= codes.len() / dim.
+            unsafe {
+                let ptr = codes.as_ptr().add(base) as *const i8;
+                _mm_prefetch(ptr, _MM_HINT_T0);
+                if dim > 64 {
+                    _mm_prefetch(ptr.add(64), _MM_HINT_T0);
+                }
+            }
+        }
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let _ = (codes, i, n, dim);
+    }
 }
 
 /// IVF-SQ8 Index
@@ -589,9 +611,6 @@ impl IvfSq8Index {
         let k = req.top_k;
         let nprobe = req.nprobe.min(self.nlist);
         let dim = self.dim;
-        let nlist = self.nlist;
-        let centroids = self.centroids.clone();
-        let inverted_lists: IvfSq8InvertedListSnapshot = self.inverted_lists.clone();
 
         // Parallel search for each query
         let results: Vec<Vec<(i64, f32)>> = (0..n_queries)
@@ -599,46 +618,38 @@ impl IvfSq8Index {
             .map(|q_idx| {
                 let q_start = q_idx * dim;
                 let query_vec = &query[q_start..q_start + dim];
+                let clusters = self.search_clusters(query_vec, nprobe);
+                let mut q_residual_buf = vec![0.0f32; dim];
+                let mut q_precomputed_buf = vec![0i16; dim];
+                let mut acc = TopKAccumulator::new(k);
 
-                // Find nearest clusters
-                let mut cluster_dists: Vec<(usize, f32)> = (0..nlist)
-                    .map(|c| {
-                        let centroid = &centroids[c * dim..(c + 1) * dim];
-                        let dist = l2_distance(query_vec, centroid);
-                        (c, dist)
-                    })
-                    .collect();
-                cluster_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-                let clusters: Vec<usize> = cluster_dists
-                    .into_iter()
-                    .take(nprobe)
-                    .map(|(i, _)| i)
-                    .collect();
-
-                // Search clusters
-                let mut candidates: Vec<(i64, f32)> = Vec::new();
-
-                for &cluster_id in &clusters {
-                    if let Some((ids, codes)) = inverted_lists.get(&cluster_id) {
-                        let centroid_vec = &centroids[cluster_id * dim..(cluster_id + 1) * dim];
-                        let q_residual: Vec<f32> = query_vec
-                            .iter()
-                            .zip(centroid_vec.iter())
-                            .map(|(a, b)| a - b)
-                            .collect();
+                for cluster_id in clusters {
+                    if let Some((ids, codes)) = self.inverted_lists.get(&cluster_id) {
+                        let centroid_vec = &self.centroids[cluster_id * dim..(cluster_id + 1) * dim];
+                        for i in 0..dim {
+                            q_residual_buf[i] = query_vec[i] - centroid_vec[i];
+                        }
+                        self.quantizer.precompute_query_into(
+                            q_residual_buf.as_slice(),
+                            q_precomputed_buf.as_mut_slice(),
+                        );
 
                         let n = ids.len().min(codes.len() / dim);
+                        acc.visited += n;
                         for i in 0..n {
                             let code = &codes[i * dim..(i + 1) * dim];
-                            let dist = self.quantizer.sq_l2_asymmetric(&q_residual, code);
-                            candidates.push((ids[i], dist));
+                            let dist = self
+                                .quantizer
+                                .sq_l2_precomputed(q_precomputed_buf.as_slice(), code);
+                            acc.push(ids[i], dist);
                         }
                     }
                 }
 
-                candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-                candidates.truncate(k);
-                candidates
+                acc.into_hits()
+                    .into_iter()
+                    .map(|h| (h.id, h.dist))
+                    .collect::<Vec<_>>()
             })
             .collect();
 

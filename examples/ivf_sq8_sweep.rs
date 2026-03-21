@@ -126,6 +126,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("summary: no nprobe reached recall>=0.95");
     }
 
+    #[cfg(feature = "parallel")]
+    {
+        let best_nprobe = min_gate.map(|r| r.nprobe).unwrap_or(256);
+        println!("\n=== Batch parallel mode (search_parallel) ===");
+        let req_batch = SearchRequest {
+            top_k: TOP_K,
+            nprobe: best_nprobe,
+            ..Default::default()
+        };
+
+        let batch_queries: Vec<f32> = qps_queries[..QPS_QUERIES * DIM].to_vec();
+        let batch_start = Instant::now();
+        let _ = ivf_sq8.search_parallel(&batch_queries, &req_batch, 0)?;
+        let batch_secs = batch_start.elapsed().as_secs_f64();
+        let batch_qps = (QPS_QUERIES as f64 / batch_secs).round() as u64;
+        println!(
+            "batch parallel: {} queries, {} QPS (nprobe={})",
+            QPS_QUERIES, batch_qps, best_nprobe
+        );
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    {
+        println!("\n=== Batch parallel mode (search_parallel) ===");
+        println!("batch parallel: skipped (feature \"parallel\" not enabled)");
+    }
+
     let json_rows: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
