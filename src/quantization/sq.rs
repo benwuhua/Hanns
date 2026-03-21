@@ -149,10 +149,20 @@ impl ScalarQuantizer {
     ///
     /// q_i16[i] = round((q[i] - offset) * scale)
     pub fn precompute_query(&self, q_residual: &[f32]) -> Vec<i16> {
-        q_residual
-            .iter()
-            .map(|&v| ((v - self.offset) * self.scale).round() as i16)
-            .collect()
+        let mut out = vec![0i16; q_residual.len()];
+        self.precompute_query_into(q_residual, &mut out);
+        out
+    }
+
+    /// Precompute query values into a caller-provided buffer to avoid allocations.
+    pub fn precompute_query_into(&self, q_residual: &[f32], out: &mut [i16]) {
+        debug_assert_eq!(q_residual.len(), out.len());
+        for (&v, o) in q_residual.iter().zip(out.iter_mut()) {
+            let q = ((v - self.offset) * self.scale)
+                .round()
+                .clamp(i16::MIN as f32, i16::MAX as f32);
+            *o = q as i16;
+        }
     }
 
     /// Compute SQ8 asymmetric L2 distance using a precomputed integer-domain query.
@@ -302,17 +312,51 @@ unsafe fn sq_l2_precomputed_avx2(q_i16: &[i16], db_code: &[u8]) -> i64 {
 
     let len = q_i16.len().min(db_code.len());
     let mut i = 0usize;
-    let mut acc = _mm256_setzero_si256();
+    let mut acc0 = _mm256_setzero_si256();
+    let mut acc1 = _mm256_setzero_si256();
+    let mut acc2 = _mm256_setzero_si256();
+    let mut acc3 = _mm256_setzero_si256();
+
+    while i + 64 <= len {
+        // chunk 0
+        let qv0 = unsafe { _mm256_loadu_si256(q_i16.as_ptr().add(i) as *const __m256i) };
+        let db0 = unsafe { _mm_loadu_si128(db_code.as_ptr().add(i) as *const __m128i) };
+        let dbv0 = _mm256_cvtepu8_epi16(db0);
+        let d0 = _mm256_sub_epi16(qv0, dbv0);
+        acc0 = _mm256_add_epi32(acc0, _mm256_madd_epi16(d0, d0));
+
+        // chunk 1
+        let qv1 = unsafe { _mm256_loadu_si256(q_i16.as_ptr().add(i + 16) as *const __m256i) };
+        let db1 = unsafe { _mm_loadu_si128(db_code.as_ptr().add(i + 16) as *const __m128i) };
+        let dbv1 = _mm256_cvtepu8_epi16(db1);
+        let d1 = _mm256_sub_epi16(qv1, dbv1);
+        acc1 = _mm256_add_epi32(acc1, _mm256_madd_epi16(d1, d1));
+
+        // chunk 2
+        let qv2 = unsafe { _mm256_loadu_si256(q_i16.as_ptr().add(i + 32) as *const __m256i) };
+        let db2 = unsafe { _mm_loadu_si128(db_code.as_ptr().add(i + 32) as *const __m128i) };
+        let dbv2 = _mm256_cvtepu8_epi16(db2);
+        let d2 = _mm256_sub_epi16(qv2, dbv2);
+        acc2 = _mm256_add_epi32(acc2, _mm256_madd_epi16(d2, d2));
+
+        // chunk 3
+        let qv3 = unsafe { _mm256_loadu_si256(q_i16.as_ptr().add(i + 48) as *const __m256i) };
+        let db3 = unsafe { _mm_loadu_si128(db_code.as_ptr().add(i + 48) as *const __m128i) };
+        let dbv3 = _mm256_cvtepu8_epi16(db3);
+        let d3 = _mm256_sub_epi16(qv3, dbv3);
+        acc3 = _mm256_add_epi32(acc3, _mm256_madd_epi16(d3, d3));
+
+        i += 64;
+    }
+
+    let mut acc = _mm256_add_epi32(acc0, _mm256_add_epi32(acc1, _mm256_add_epi32(acc2, acc3)));
 
     while i + 16 <= len {
-        // SAFETY: pointers are in-bounds due loop condition and slices are contiguous.
         let qv = unsafe { _mm256_loadu_si256(q_i16.as_ptr().add(i) as *const __m256i) };
-        // SAFETY: pointers are in-bounds due loop condition and slices are contiguous.
         let db_bytes = unsafe { _mm_loadu_si128(db_code.as_ptr().add(i) as *const __m128i) };
         let dbv = _mm256_cvtepu8_epi16(db_bytes);
         let diff = _mm256_sub_epi16(qv, dbv);
-        let sq_pairs = _mm256_madd_epi16(diff, diff);
-        acc = _mm256_add_epi32(acc, sq_pairs);
+        acc = _mm256_add_epi32(acc, _mm256_madd_epi16(diff, diff));
         i += 16;
     }
 

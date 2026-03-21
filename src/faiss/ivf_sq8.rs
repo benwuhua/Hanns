@@ -336,9 +336,21 @@ impl IvfSq8Index {
             #[cfg(feature = "parallel")]
             let merged = {
                 use rayon::prelude::*;
+                let dim = self.dim;
                 let partials: Vec<TopKAccumulator> = clusters
                     .par_iter()
-                    .map(|&cluster_id| self.scan_cluster(cluster_id, query_vec, k))
+                    .map_init(
+                        || (vec![0.0f32; dim], vec![0i16; dim]),
+                        |(q_residual_buf, q_precomputed_buf), &cluster_id| {
+                            self.scan_cluster_with_buf(
+                                cluster_id,
+                                query_vec,
+                                k,
+                                q_residual_buf,
+                                q_precomputed_buf,
+                            )
+                        },
+                    )
                     .collect();
                 let mut merged = TopKAccumulator::new(k);
                 for partial in partials {
@@ -349,9 +361,17 @@ impl IvfSq8Index {
 
             #[cfg(not(feature = "parallel"))]
             let merged = {
+                let mut q_residual_buf = vec![0.0f32; self.dim];
+                let mut q_precomputed_buf = vec![0i16; self.dim];
                 let mut merged = TopKAccumulator::new(k);
                 for cluster_id in clusters {
-                    merged.merge(self.scan_cluster(cluster_id, query_vec, k));
+                    merged.merge(self.scan_cluster_with_buf(
+                        cluster_id,
+                        query_vec,
+                        k,
+                        &mut q_residual_buf,
+                        &mut q_precomputed_buf,
+                    ));
                 }
                 merged
             };
@@ -367,26 +387,54 @@ impl IvfSq8Index {
         Ok(SearchResult::new(all_ids, all_dists, 0.0))
     }
 
-    fn scan_cluster(&self, cluster_id: usize, query_vec: &[f32], top_k: usize) -> TopKAccumulator {
+    fn scan_cluster_with_buf(
+        &self,
+        cluster_id: usize,
+        query_vec: &[f32],
+        top_k: usize,
+        q_residual_buf: &mut Vec<f32>,
+        q_precomputed_buf: &mut Vec<i16>,
+    ) -> TopKAccumulator {
         let mut acc = TopKAccumulator::new(top_k);
         if let Some((ids, codes)) = self.inverted_lists.get(&cluster_id) {
             let centroid_vec = &self.centroids[cluster_id * self.dim..(cluster_id + 1) * self.dim];
-            let q_residual: Vec<f32> = query_vec
-                .iter()
-                .zip(centroid_vec.iter())
-                .map(|(a, b)| a - b)
-                .collect();
-            let q_precomputed = self.quantizer.precompute_query(&q_residual);
+            q_residual_buf.clear();
+            q_residual_buf.extend(
+                query_vec
+                    .iter()
+                    .zip(centroid_vec.iter())
+                    .map(|(a, b)| a - b),
+            );
+            if q_precomputed_buf.len() != q_residual_buf.len() {
+                q_precomputed_buf.resize(q_residual_buf.len(), 0);
+            }
+            self.quantizer
+                .precompute_query_into(q_residual_buf, q_precomputed_buf.as_mut_slice());
 
             let n = ids.len().min(codes.len() / self.dim);
             acc.visited = n;
             for i in 0..n {
                 let code = &codes[i * self.dim..(i + 1) * self.dim];
-                let dist = self.quantizer.sq_l2_precomputed(&q_precomputed, code);
+                let dist = self
+                    .quantizer
+                    .sq_l2_precomputed(q_precomputed_buf.as_slice(), code);
                 acc.push(ids[i], dist);
             }
         }
         acc
+    }
+
+    #[allow(dead_code)]
+    fn scan_cluster(&self, cluster_id: usize, query_vec: &[f32], top_k: usize) -> TopKAccumulator {
+        let mut q_residual_buf = vec![0.0f32; self.dim];
+        let mut q_precomputed_buf = vec![0i16; self.dim];
+        self.scan_cluster_with_buf(
+            cluster_id,
+            query_vec,
+            top_k,
+            &mut q_residual_buf,
+            &mut q_precomputed_buf,
+        )
     }
 
     /// Find nearest centroid

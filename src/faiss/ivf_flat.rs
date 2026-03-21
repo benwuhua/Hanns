@@ -543,6 +543,57 @@ impl IvfFlatIndex {
         }
     }
 
+    /// Search multiple queries in parallel (requires rayon)
+    #[cfg(feature = "parallel")]
+    pub fn search_parallel(
+        &self,
+        queries: &[f32],
+        top_k: usize,
+        nprobe: usize,
+    ) -> std::result::Result<Vec<Vec<(usize, f32)>>, Box<dyn std::error::Error>> {
+        if !queries.len().is_multiple_of(self.dim) {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "query dimension mismatch: len {} not divisible by dim {}",
+                    queries.len(),
+                    self.dim
+                ),
+            )));
+        }
+
+        let n_queries = queries.len() / self.dim;
+        let req = SearchRequest {
+            top_k,
+            nprobe,
+            ..Default::default()
+        };
+
+        let results: Result<Vec<Vec<(usize, f32)>>> = (0..n_queries)
+            .into_par_iter()
+            .map(|q_idx| {
+                let start = q_idx * self.dim;
+                let end = start + self.dim;
+                let query = &queries[start..end];
+                let result = self.search(query, &req)?;
+                Ok(result
+                    .ids
+                    .into_iter()
+                    .zip(result.distances.into_iter())
+                    .filter_map(|(id, dist)| {
+                        if id >= 0 {
+                            Some((id as usize, dist))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect())
+            })
+            .collect();
+
+        results.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    }
+
     /// Get number of vectors
     pub fn ntotal(&self) -> usize {
         self.ids.len()

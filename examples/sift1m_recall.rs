@@ -141,6 +141,29 @@ fn run_ivf_flat(
         let recall = recall_at_k(gt, &all_ids, TOP_K, n_queries, gt_width);
         let qps = n_queries as f64 / elapsed;
         print_result("IVF-Flat", NLIST, nprobe, None, recall, qps);
+
+        #[cfg(feature = "parallel")]
+        {
+            let start = Instant::now();
+            let batch_results = index.search_parallel(queries, TOP_K, nprobe)?;
+            let elapsed = start.elapsed().as_secs_f64().max(f64::EPSILON);
+
+            let mut all_ids_parallel = Vec::with_capacity(n_queries * TOP_K);
+            for row in batch_results.iter().take(n_queries) {
+                for &(id, _) in row.iter().take(TOP_K) {
+                    all_ids_parallel.push(id as i64);
+                }
+                for _ in row.len()..TOP_K {
+                    all_ids_parallel.push(-1);
+                }
+            }
+            let recall_parallel = recall_at_k(gt, &all_ids_parallel, TOP_K, n_queries, gt_width);
+            let qps_parallel = n_queries as f64 / elapsed;
+            println!(
+                "IVF-Flat-Parallel nlist={} nprobe={}: recall@10={:.3}, QPS={:.0}",
+                NLIST, nprobe, recall_parallel, qps_parallel
+            );
+        }
     }
     Ok(())
 }
