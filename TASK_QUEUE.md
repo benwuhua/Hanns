@@ -235,18 +235,15 @@
   - Mac/x86 ratio: ~1.79x consistent across ef values
   - x86 improvement larger than Mac — heap ops benefit from x86 branch predictor
   - 提交: perf(hnsw) cd0a24d
-- [x] **IVF-SQ8-PERF-001** [P2]: ✅ 完成 — 3 阶段优化
-  - Phase 1: decode 路径改为 uint8 domain sq_l2_asymmetric: 114→190 QPS
-  - Phase 2: 重构 inverted list 为 flat 连续内存（消除 per-vector Vec<u8>）
-  - Phase 3: par_iter 并行扫描 + TopKAccumulator（消除 collect-all + sort）: 190→1180 QPS (+6.3x)
-  - Mac 最终 (nprobe=256, 100K): recall=0.990, QPS=1180
-  - x86 authority (nprobe=256, 100K): recall=0.985, QPS=397 ← passes 0.95 gate
-  - **x86 SIFT-1M nprobe sweep (2026-03-20)**: nprobe=32: recall=0.980, **QPS=417** ← 最优点
-    nprobe=256: recall=0.982, QPS=60（overkill，过了 SQ8 量化天花板）
-  - nlist 优化验证 (2026-03-21): nlist=256 是 SIFT-1M 最优；nlist=1024/4096 需 nprobe 等比扩大，无 QPS 收益
-  - **推荐配置**: nlist=256, nprobe=32 → recall=0.980, QPS=417 x86
-  - Mac/x86 ratio: ~2.97x — consistent with HNSW/IVF-Flat ratios
-  - Script: examples/ivf_sq8_authority_baseline.rs, examples/ivf_sq8_1m_nlist.rs
+- [x] **IVF-SQ8-PERF-001** [P2]: ✅ 完成 — 3 阶段优化 + 2 轮 SIMD 提升
+  - Phase 1: sq_l2_asymmetric (uint8 domain): 114→190 QPS
+  - Phase 2: inverted list flat 连续内存重构
+  - Phase 3: par_iter + TopKAccumulator: 190→1180 QPS
+  - Phase 4 (2026-03-21, f453894): f32 AVX2 8-lane → x86 100K: 558→**1646 QPS** (+195%)
+  - Phase 5 (2026-03-21, 7f8cde4): 整数 AVX2 16-lane (precompute_query + sq_l2_precomputed): 1646→**2475 QPS** (+50%)
+  - **x86 100K nprobe=256 final: recall=0.977, QPS=2475** — 比 IVF-Flat (1628) 快 **52%** ✅
+  - x86 SIFT-1M est: ~248 QPS @nprobe=256 (×10 scale-down)
+  - Script: examples/ivf_sq8_sweep.rs
 
 ### AISAQ Phase 2: 能力补全 + 生产就绪 (2026-03-18 开启, 降级为 P2+)
 
