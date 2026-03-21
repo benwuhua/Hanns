@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::time::Instant;
 
-use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType};
-use knowhere_rs::faiss::IvfSq8Index;
+use knowhere_rs::quantization::{KMeans, ScalarQuantizer};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -94,18 +94,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut rng = StdRng::seed_from_u64(SEED);
     let base = gen_vectors(&mut rng, BASE_SIZE, DIM);
     let queries = gen_vectors(&mut rng, QUERIES, DIM);
+    let mut km = KMeans::new(NLIST, DIM);
+    km.train(&base);
+    let centroids: Vec<f32> = km.centroids().to_vec();
 
-    let config = IndexConfig {
-        index_type: IndexType::IvfSq8,
-        metric_type: MetricType::L2,
-        data_type: DataType::Float,
-        dim: DIM,
-        params: IndexParams::ivf(NLIST, NPROBE),
-    };
+    let mut train_residuals = Vec::with_capacity(BASE_SIZE * DIM);
+    let mut assignments = Vec::with_capacity(BASE_SIZE);
+    for vector in base.chunks(DIM) {
+        let mut best_c = 0usize;
+        let mut best_d = f32::INFINITY;
+        for c in 0..NLIST {
+            let centroid = &centroids[c * DIM..(c + 1) * DIM];
+            let d = l2_sq(vector, centroid);
+            if d < best_d {
+                best_d = d;
+                best_c = c;
+            }
+        }
+        assignments.push(best_c);
+        let centroid = &centroids[best_c * DIM..(best_c + 1) * DIM];
+        for j in 0..DIM {
+            train_residuals.push(vector[j] - centroid[j]);
+        }
+    }
 
-    let mut index = IvfSq8Index::new(&config)?;
-    index.train(&base)?;
-    index.add(&base, None)?;
+    let mut quantizer = ScalarQuantizer::new(DIM, 8);
+    quantizer.train(&train_residuals);
+
+    let mut inverted_lists: HashMap<usize, (Vec<i64>, Vec<u8>)> = HashMap::new();
+    for (i, vector) in base.chunks(DIM).enumerate() {
+        let cluster_id = assignments[i];
+        let centroid = &centroids[cluster_id * DIM..(cluster_id + 1) * DIM];
+        let mut residual = vec![0.0f32; DIM];
+        for j in 0..DIM {
+            residual[j] = vector[j] - centroid[j];
+        }
+        let code = quantizer.encode(&residual);
+        let entry = inverted_lists
+            .entry(cluster_id)
+            .or_insert_with(|| (Vec::new(), Vec::new()));
+        entry.0.push(i as i64);
+        entry.1.extend_from_slice(&code);
+    }
 
     let mut timing = Timing::default();
     let mut checksum: i64 = 0;
@@ -114,9 +144,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let total_start = Instant::now();
 
         let c_start = Instant::now();
-        let mut dists: Vec<(usize, f32)> = index
-            .centroids()
-            .chunks(index.dim())
+        let mut dists: Vec<(usize, f32)> = centroids
+            .chunks(DIM)
             .enumerate()
             .map(|(i, centroid)| (i, l2_sq(q, centroid)))
             .collect();
@@ -126,9 +155,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut global_topk: Vec<Hit> = Vec::with_capacity(TOP_K);
 
-        let dim = index.dim();
+        let dim = DIM;
         for &cluster_id in &clusters {
-            let centroid = &index.centroids()[cluster_id * dim..(cluster_id + 1) * dim];
+            let centroid = &centroids[cluster_id * dim..(cluster_id + 1) * dim];
 
             let pre_start = Instant::now();
             let mut q_residual = vec![0.0f32; dim];
@@ -136,21 +165,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 q_residual[i] = q[i] - centroid[i];
             }
             let mut q_precomputed = vec![0i16; dim];
-            index
-                .quantizer()
-                .precompute_query_into(&q_residual, &mut q_precomputed);
+            quantizer.precompute_query_into(&q_residual, &mut q_precomputed);
             timing.precompute_query_ns += pre_start.elapsed().as_nanos();
 
             let dist_start = Instant::now();
             let mut local_distances: Vec<Hit> = Vec::new();
-            if let Some((ids, codes)) = index.inverted_lists().get(&cluster_id) {
+            if let Some((ids, codes)) = inverted_lists.get(&cluster_id) {
                 let n = ids.len().min(codes.len() / dim);
                 local_distances.reserve(n);
                 for i in 0..n {
                     let code = &codes[i * dim..(i + 1) * dim];
-                    let dist = index
-                        .quantizer()
-                        .sq_l2_precomputed(&q_precomputed, code);
+                    let dist = quantizer.sq_l2_precomputed(&q_precomputed, code);
                     local_distances.push(Hit { id: ids[i], dist });
                 }
             }
