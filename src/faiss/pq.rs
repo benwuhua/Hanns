@@ -261,6 +261,14 @@ impl PqEncoder {
         table
     }
 
+    /// Build ADC table for a query.
+    ///
+    /// Alias of `build_distance_table` with explicit ADC naming for call sites.
+    #[inline]
+    pub fn build_adc_table(&self, query: &[f32]) -> Vec<f32> {
+        self.build_distance_table(query)
+    }
+
     /// 使用距离表计算与编码向量的距离 (ADC)
     #[inline(always)]
     pub fn compute_distance_with_table(&self, table: &[f32], codes: &[u8]) -> f32 {

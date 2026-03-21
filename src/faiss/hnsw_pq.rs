@@ -249,16 +249,13 @@ impl HnswPqIndex {
 
     /// Compute distance between a query and a stored PQ code using lookup table
     fn compute_distance_to_code(&self, query: &[f32], code: &[u8]) -> f32 {
-        // Build distance table for this query
-        let table = self.pq.build_distance_table(query);
+        let table = self.pq.build_adc_table(query);
+        self.compute_distance_to_code_with_table(&table, code)
+    }
 
-        // Compute ADC (Asymmetric Distance Computation)
-        let mut sum = 0.0f32;
-        for m_idx in 0..self.config.pq_m {
-            let c = code[m_idx] as usize;
-            sum += table[m_idx * self.pq.k + c];
-        }
-        sum
+    #[inline]
+    fn compute_distance_to_code_with_table(&self, table: &[f32], code: &[u8]) -> f32 {
+        self.pq.compute_distance_with_table(table, code)
     }
 
     /// Train the PQ encoder
@@ -441,10 +438,11 @@ impl HnswPqIndex {
         let mut visited = HashSet::new();
         let mut candidates: BinaryHeap<(OrderedDist, usize)> = BinaryHeap::new();
         let mut results: Vec<(usize, f32)> = Vec::new();
+        let table = self.pq.build_adc_table(query);
 
         // Initialize with entry point
         let entry_dist =
-            self.compute_distance_to_code(query, &self.node_info[entry_point_idx].code);
+            self.compute_distance_to_code_with_table(&table, &self.node_info[entry_point_idx].code);
         candidates.push((OrderedDist(entry_dist), entry_point_idx));
         visited.insert(entry_point_idx);
 
@@ -459,8 +457,8 @@ impl HnswPqIndex {
                     if let Some(&neighbor_idx) = self.id_to_idx.get(&neighbor_id) {
                         if !visited.contains(&neighbor_idx) {
                             visited.insert(neighbor_idx);
-                            let neighbor_dist = self.compute_distance_to_code(
-                                query,
+                            let neighbor_dist = self.compute_distance_to_code_with_table(
+                                &table,
                                 &self.node_info[neighbor_idx].code,
                             );
                             candidates.push((OrderedDist(neighbor_dist), neighbor_idx));
@@ -579,10 +577,11 @@ impl HnswPqIndex {
         let mut visited = HashSet::new();
         let mut candidates: BinaryHeap<(OrderedDist, usize)> = BinaryHeap::new();
         let mut results: BinaryHeap<(OrderedDist, usize)> = BinaryHeap::new();
+        let table = self.pq.build_adc_table(query);
 
         // Initialize with entry point
         let entry_dist =
-            self.compute_distance_to_code(query, &self.node_info[entry_point_idx].code);
+            self.compute_distance_to_code_with_table(&table, &self.node_info[entry_point_idx].code);
         candidates.push((OrderedDist(entry_dist), entry_point_idx));
         results.push((OrderedDist(entry_dist), entry_point_idx));
         visited.insert(entry_point_idx);
@@ -604,8 +603,8 @@ impl HnswPqIndex {
                     if let Some(&neighbor_idx) = self.id_to_idx.get(&neighbor_id) {
                         if !visited.contains(&neighbor_idx) {
                             visited.insert(neighbor_idx);
-                            let neighbor_dist = self.compute_distance_to_code(
-                                query,
+                            let neighbor_dist = self.compute_distance_to_code_with_table(
+                                &table,
                                 &self.node_info[neighbor_idx].code,
                             );
 
