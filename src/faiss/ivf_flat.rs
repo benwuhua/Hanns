@@ -14,7 +14,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 
-use crate::api::{IndexConfig, Result, SearchRequest, SearchResult};
+use crate::api::{IndexConfig, MetricType, Result, SearchRequest, SearchResult};
 use crate::simd::{l2_batch_4_ptr, l2_distance_sq, l2_distance_sq_ptr};
 
 #[cfg(feature = "parallel")]
@@ -192,11 +192,17 @@ fn is_better(candidate: SearchHit, existing: SearchHit) -> bool {
     candidate < existing
 }
 
+#[inline]
+fn dot_product(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()
+}
+
 /// IVF-Flat Index - stores raw vectors in flattened inverted lists
 pub struct IvfFlatIndex {
     dim: usize,
     nlist: usize,
     nprobe: usize,
+    metric_type: MetricType,
 
     /// Cluster centroids (连续内存)
     centroids: Vec<f32>,
@@ -230,6 +236,7 @@ impl IvfFlatIndex {
             dim: config.dim,
             nlist,
             nprobe,
+            metric_type: config.metric_type,
             centroids: Vec::new(),
             invlist_ids: Vec::new(),
             invlist_vectors: Vec::new(),
@@ -395,21 +402,36 @@ impl IvfFlatIndex {
         self.add(vectors, Some(ids))
     }
 
-    /// Find nearest centroid (使用 l2_distance_sq)
+    /// Find nearest centroid based on configured metric.
     fn find_nearest_centroid(&self, vector: &[f32]) -> usize {
-        let mut min_dist = f32::MAX;
-        let mut best = 0;
-
-        for c in 0..self.nlist {
-            let centroid = &self.centroids[c * self.dim..(c + 1) * self.dim];
-            let dist = l2_distance_sq(vector, centroid);
-            if dist < min_dist {
-                min_dist = dist;
-                best = c;
+        match self.metric_type {
+            MetricType::L2 | MetricType::Hamming => {
+                let mut min_dist = f32::MAX;
+                let mut best = 0;
+                for c in 0..self.nlist {
+                    let centroid = &self.centroids[c * self.dim..(c + 1) * self.dim];
+                    let dist = l2_distance_sq(vector, centroid);
+                    if dist < min_dist {
+                        min_dist = dist;
+                        best = c;
+                    }
+                }
+                best
+            }
+            MetricType::Ip | MetricType::Cosine => {
+                let mut best_score = f32::NEG_INFINITY;
+                let mut best = 0;
+                for c in 0..self.nlist {
+                    let centroid = &self.centroids[c * self.dim..(c + 1) * self.dim];
+                    let score = dot_product(vector, centroid);
+                    if score > best_score {
+                        best_score = score;
+                        best = c;
+                    }
+                }
+                best
             }
         }
-
-        best
     }
 
     #[inline]
@@ -434,45 +456,80 @@ impl IvfFlatIndex {
 
         match filter {
             Some(predicate) => {
-                let query_ptr = query.as_ptr();
-                let base_ptr = vectors.as_ptr();
-                for (idx, &id) in ids.iter().enumerate().take(size) {
-                    if predicate.evaluate(id) {
-                        // SAFETY:
-                        // - `base_ptr` 指向当前 cluster 的连续向量区间，长度为 `size * dim`
-                        // - `idx < size`，因此 `idx * dim .. idx * dim + dim` 始终落在该区间内
-                        // - `query_ptr` 来自 `query` 切片，长度与 `self.dim` 一致
-                        let dist = unsafe {
-                            l2_distance_sq_ptr(query_ptr, base_ptr.add(idx * self.dim), self.dim)
-                        };
-                        acc.push(id, dist);
+                match self.metric_type {
+                    MetricType::L2 | MetricType::Hamming => {
+                        let query_ptr = query.as_ptr();
+                        let base_ptr = vectors.as_ptr();
+                        for (idx, &id) in ids.iter().enumerate().take(size) {
+                            if predicate.evaluate(id) {
+                                // SAFETY:
+                                // - `base_ptr` 指向当前 cluster 的连续向量区间，长度为 `size * dim`
+                                // - `idx < size`，因此 `idx * dim .. idx * dim + dim` 始终落在该区间内
+                                // - `query_ptr` 来自 `query` 切片，长度与 `self.dim` 一致
+                                let dist = unsafe {
+                                    l2_distance_sq_ptr(
+                                        query_ptr,
+                                        base_ptr.add(idx * self.dim),
+                                        self.dim,
+                                    )
+                                };
+                                acc.push(id, dist);
+                            }
+                        }
+                    }
+                    MetricType::Ip | MetricType::Cosine => {
+                        for (idx, &id) in ids.iter().enumerate().take(size) {
+                            if predicate.evaluate(id) {
+                                let start = idx * self.dim;
+                                let end = start + self.dim;
+                                let vec = &vectors[start..end];
+                                // Store negative dot so that smaller is better in TopKAccumulator.
+                                let dist = -dot_product(query, vec);
+                                acc.push(id, dist);
+                            }
+                        }
                     }
                 }
             }
-            None => unsafe {
-                // SAFETY:
-                // - `vectors` 是紧凑连续布局，每个向量占 `dim` 个 `f32`
-                // - 当 `idx + 4 <= size` 时，`l2_batch_4_ptr` 读取的 4 个向量都在该切片边界内
-                // - remainder 路径使用相同边界条件逐个读取，不会越界
-                let query_ptr = query.as_ptr();
-                let base_ptr = vectors.as_ptr();
-                let mut idx = 0usize;
+            None => match self.metric_type {
+                MetricType::L2 | MetricType::Hamming => unsafe {
+                    // SAFETY:
+                    // - `vectors` 是紧凑连续布局，每个向量占 `dim` 个 `f32`
+                    // - 当 `idx + 4 <= size` 时，`l2_batch_4_ptr` 读取的 4 个向量都在该切片边界内
+                    // - remainder 路径使用相同边界条件逐个读取，不会越界
+                    let query_ptr = query.as_ptr();
+                    let base_ptr = vectors.as_ptr();
+                    let mut idx = 0usize;
 
-                while idx + 4 <= size {
-                    let dists =
-                        l2_batch_4_ptr(query_ptr, base_ptr.add(idx * self.dim), self.dim, self.dim);
-                    acc.push(ids[idx], dists[0]);
-                    acc.push(ids[idx + 1], dists[1]);
-                    acc.push(ids[idx + 2], dists[2]);
-                    acc.push(ids[idx + 3], dists[3]);
-                    idx += 4;
-                }
+                    while idx + 4 <= size {
+                        let dists = l2_batch_4_ptr(
+                            query_ptr,
+                            base_ptr.add(idx * self.dim),
+                            self.dim,
+                            self.dim,
+                        );
+                        acc.push(ids[idx], dists[0]);
+                        acc.push(ids[idx + 1], dists[1]);
+                        acc.push(ids[idx + 2], dists[2]);
+                        acc.push(ids[idx + 3], dists[3]);
+                        idx += 4;
+                    }
 
-                while idx < size {
-                    let dist =
-                        l2_distance_sq_ptr(query_ptr, base_ptr.add(idx * self.dim), self.dim);
-                    acc.push(ids[idx], dist);
-                    idx += 1;
+                    while idx < size {
+                        let dist =
+                            l2_distance_sq_ptr(query_ptr, base_ptr.add(idx * self.dim), self.dim);
+                        acc.push(ids[idx], dist);
+                        idx += 1;
+                    }
+                },
+                MetricType::Ip | MetricType::Cosine => {
+                    for (idx, &id) in ids.iter().enumerate().take(size) {
+                        let start = idx * self.dim;
+                        let end = start + self.dim;
+                        let vec = &vectors[start..end];
+                        let dist = -dot_product(query, vec);
+                        acc.push(id, dist);
+                    }
                 }
             },
         }
@@ -509,7 +566,11 @@ impl IvfFlatIndex {
         let mut cluster_dists = Vec::with_capacity(self.nlist);
         for c in 0..self.nlist {
             let centroid = &self.centroids[c * self.dim..(c + 1) * self.dim];
-            cluster_dists.push((c, l2_distance_sq(query, centroid)));
+            let score = match self.metric_type {
+                MetricType::L2 | MetricType::Hamming => l2_distance_sq(query, centroid),
+                MetricType::Ip | MetricType::Cosine => -dot_product(query, centroid),
+            };
+            cluster_dists.push((c, score));
         }
 
         if nprobe < cluster_dists.len() {
@@ -633,6 +694,13 @@ impl IvfFlatIndex {
         writer.write_all(&(self.dim as u32).to_le_bytes())?;
         writer.write_all(&(self.nlist as u32).to_le_bytes())?;
         writer.write_all(&(self.nprobe as u32).to_le_bytes())?;
+        let metric_byte = match self.metric_type {
+            MetricType::L2 => 0u8,
+            MetricType::Ip => 1u8,
+            MetricType::Cosine => 2u8,
+            MetricType::Hamming => 3u8,
+        };
+        writer.write_all(&[metric_byte])?;
         writer.write_all(&self.next_id.to_le_bytes())?;
 
         for &v in &self.centroids {
@@ -690,6 +758,9 @@ impl IvfFlatIndex {
         let nlist = u32::from_le_bytes(u32_buf) as usize;
         reader.read_exact(&mut u32_buf)?;
         let nprobe = u32::from_le_bytes(u32_buf) as usize;
+        let mut metric_buf = [0u8; 1];
+        reader.read_exact(&mut metric_buf)?;
+        let metric_type = MetricType::from_bytes(metric_buf[0]);
 
         let mut i64_buf = [0u8; 8];
         reader.read_exact(&mut i64_buf)?;
@@ -755,6 +826,7 @@ impl IvfFlatIndex {
             dim: stored_dim,
             nlist,
             nprobe,
+            metric_type,
             centroids,
             invlist_ids,
             invlist_vectors,
