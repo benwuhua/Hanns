@@ -6,7 +6,7 @@
 //!
 //! OPT-003: 内存布局优化 - 使用 Vec 替代 HashMap
 
-use crate::api::{IndexConfig, Result, SearchRequest, SearchResult};
+use crate::api::{DataType, IndexConfig, IndexType, MetricType, Result, SearchRequest, SearchResult};
 use crate::executor::l2_distance;
 use crate::quantization::KMeans;
 use crate::quantization::opq::{OPQConfig, OptimizedProductQuantizer};
@@ -800,6 +800,60 @@ impl IvfPqIndex {
         }
 
         Ok(())
+    }
+
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>> {
+        let tmp = tempfile::NamedTempFile::new()?;
+        self.save(tmp.path())?;
+        let bytes = std::fs::read(tmp.path())?;
+        Ok(bytes)
+    }
+
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self> {
+        const HEADER_LEN: usize = 5 + 4 + 4 + 4 + 4 + 4; // magic + version + dim/nlist/m/nbits
+        if bytes.len() < HEADER_LEN {
+            return Err(crate::api::KnowhereError::Codec(
+                "ivfpq bytes too short".to_string(),
+            ));
+        }
+        if &bytes[..5] != b"IVFPQ" {
+            return Err(crate::api::KnowhereError::Codec(
+                "invalid magic".to_string(),
+            ));
+        }
+
+        let dim = u32::from_le_bytes(bytes[9..13].try_into().map_err(|_| {
+            crate::api::KnowhereError::Codec("invalid dim bytes".to_string())
+        })?) as usize;
+        let nlist = u32::from_le_bytes(bytes[13..17].try_into().map_err(|_| {
+            crate::api::KnowhereError::Codec("invalid nlist bytes".to_string())
+        })?) as usize;
+        let m = u32::from_le_bytes(bytes[17..21].try_into().map_err(|_| {
+            crate::api::KnowhereError::Codec("invalid m bytes".to_string())
+        })?) as usize;
+        let nbits_per_idx = u32::from_le_bytes(bytes[21..25].try_into().map_err(|_| {
+            crate::api::KnowhereError::Codec("invalid nbits bytes".to_string())
+        })?) as usize;
+
+        let cfg = IndexConfig {
+            index_type: IndexType::IvfPq,
+            metric_type: MetricType::L2,
+            data_type: DataType::Float,
+            dim,
+            params: crate::api::IndexParams {
+                nlist: Some(nlist),
+                nprobe: Some(nlist.min(8).max(1)),
+                m: Some(m),
+                nbits_per_idx: Some(nbits_per_idx),
+                ..Default::default()
+            },
+        };
+
+        let tmp = tempfile::NamedTempFile::new()?;
+        std::fs::write(tmp.path(), bytes)?;
+        let mut index = Self::new(&cfg)?;
+        index.load(tmp.path())?;
+        Ok(index)
     }
 
     pub fn load(&mut self, path: &std::path::Path) -> Result<()> {

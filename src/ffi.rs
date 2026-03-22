@@ -1675,7 +1675,7 @@ impl IndexWrapper {
         } else if self.ivf_pq.is_some() {
             PersistenceSemantics {
                 file_save_load: "supported",
-                memory_serialize: "unsupported",
+                memory_serialize: "supported",
                 deserialize_from_file: "supported",
             }
         } else {
@@ -1929,6 +1929,8 @@ impl IndexWrapper {
             idx.serialize_to_bytes().map_err(|_| CError::Internal)
         } else if let Some(ref idx) = self.hnsw {
             idx.serialize_to_bytes().map_err(|_| CError::Internal)
+        } else if let Some(ref idx) = self.ivf_pq {
+            idx.serialize_to_bytes().map_err(|_| CError::Internal)
         } else if let Some(ref _idx) = self.scann {
             // ScaNN 暂不支持内存序列化
             Err(CError::NotImplemented)
@@ -1956,6 +1958,11 @@ impl IndexWrapper {
             Ok(())
         } else if let Some(ref mut idx) = self.hnsw {
             let loaded = crate::faiss::HnswIndex::deserialize_from_bytes(data)
+                .map_err(|_| CError::Internal)?;
+            *idx = loaded;
+            Ok(())
+        } else if let Some(ref mut idx) = self.ivf_pq {
+            let loaded = crate::faiss::IvfPqIndex::deserialize_from_bytes(data)
                 .map_err(|_| CError::Internal)?;
             *idx = loaded;
             Ok(())
@@ -4625,7 +4632,7 @@ mod tests {
         );
         assert_eq!(
             hnsw_meta_json["semantics"]["persistence_mode"],
-            "file_save_load"
+            "file_save_load+memory_serialize"
         );
         assert_eq!(
             hnsw_meta_json["semantics"]["persistence"]["file_save_load"],
@@ -4633,7 +4640,7 @@ mod tests {
         );
         assert_eq!(
             hnsw_meta_json["semantics"]["persistence"]["memory_serialize"],
-            "unsupported"
+            "supported"
         );
         assert_eq!(
             hnsw_meta_json["semantics"]["persistence"]["deserialize_from_file"],
@@ -4679,19 +4686,19 @@ mod tests {
         );
         assert_eq!(
             ivf_meta_json["semantics"]["persistence_mode"],
-            "constrained_file_save_load"
+            "file_save_load+memory_serialize"
         );
         assert_eq!(
             ivf_meta_json["semantics"]["persistence"]["file_save_load"],
-            "constrained"
+            "supported"
         );
         assert_eq!(
             ivf_meta_json["semantics"]["persistence"]["memory_serialize"],
-            "unsupported"
+            "supported"
         );
         assert_eq!(
             ivf_meta_json["semantics"]["persistence"]["deserialize_from_file"],
-            "unsupported"
+            "supported"
         );
         assert_eq!(
             ivf_meta_json["capabilities"]["get_vector_by_ids"],
@@ -4737,7 +4744,7 @@ mod tests {
         );
         assert_eq!(
             ivfpq_meta_json["semantics"]["persistence_mode"],
-            "file_save_load"
+            "file_save_load+memory_serialize"
         );
         assert_eq!(
             ivfpq_meta_json["semantics"]["persistence"]["file_save_load"],
@@ -4745,7 +4752,7 @@ mod tests {
         );
         assert_eq!(
             ivfpq_meta_json["semantics"]["persistence"]["memory_serialize"],
-            "unsupported"
+            "supported"
         );
         assert_eq!(
             ivfpq_meta_json["semantics"]["persistence"]["deserialize_from_file"],
