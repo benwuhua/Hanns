@@ -11,10 +11,11 @@ use std::time::Instant;
 
 use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 use knowhere_rs::faiss::HnswIndex;
+use rayon::prelude::*;
 
 const TOP_K: usize = 10;
-const M: usize = 32;
-const EF_CONSTRUCTION: usize = 128;
+const M: usize = 16;
+const EF_CONSTRUCTION: usize = 200;
 const LEVEL_MULTIPLIER: f32 = 0.5;
 const EF_SWEEP: [usize; 6] = [16, 32, 50, 60, 100, 138];
 const QPS_QUERIES: usize = 1000;
@@ -235,6 +236,40 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if let Some((qps, recall)) = ef138 {
         println!("marker ef=138: qps={} recall@10={:.4}", qps, recall);
+    }
+
+    println!("batch parallel sweep (all {} queries):", query_n);
+    let mut ef60_parallel_qps: Option<u64> = None;
+    let mut ef138_parallel_qps: Option<u64> = None;
+    for &ef in &[60usize, 138usize] {
+        let req = SearchRequest {
+            top_k: TOP_K,
+            nprobe: ef,
+            params: Some(format!(r#"{{\"ef\": {ef}}}"#)),
+            ..Default::default()
+        };
+
+        let t = Instant::now();
+        queries
+            .par_chunks(base_dim)
+            .for_each(|q| {
+                let _ = index.search(q, &req);
+            });
+        let qps = (query_n as f64 / t.elapsed().as_secs_f64().max(f64::EPSILON)).round() as u64;
+        println!("batch ef={:>4} qps={}", ef, qps);
+
+        if ef == 60 {
+            ef60_parallel_qps = Some(qps);
+        } else if ef == 138 {
+            ef138_parallel_qps = Some(qps);
+        }
+    }
+
+    if let Some(qps) = ef60_parallel_qps {
+        println!("marker batch ef=60: qps={}", qps);
+    }
+    if let Some(qps) = ef138_parallel_qps {
+        println!("marker batch ef=138: qps={}", qps);
     }
 
     Ok(())
