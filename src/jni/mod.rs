@@ -642,11 +642,92 @@ pub extern "system" fn Java_io_milvus_knowhere_KnowhereNative_deserializeIndex(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::{IndexParams, IndexType, MetricType, SearchRequest};
 
     #[test]
     fn test_registry() {
         init();
         let guard = get_registry();
         assert!(guard.is_some());
+    }
+
+    fn gen_vectors(n: usize, dim: usize) -> Vec<f32> {
+        (0..n * dim).map(|i| ((i % 97) as f32) / 97.0).collect()
+    }
+
+    fn train_registered_index(index: &mut RegisteredIndex, vectors: &[f32]) -> crate::api::Result<()> {
+        match index {
+            RegisteredIndex::Mem(_) => Ok(()),
+            RegisteredIndex::Hnsw(idx) => idx.train(vectors).map(|_| ()),
+            RegisteredIndex::IvfFlat(idx) => idx.train(vectors).map(|_| ()),
+            RegisteredIndex::IvfPq(idx) => idx.train(vectors).map(|_| ()),
+            RegisteredIndex::IvfSq8(idx) => idx.train(vectors).map(|_| ()),
+            RegisteredIndex::DiskAnn(idx) => idx.train(vectors).map(|_| ()),
+        }
+    }
+
+    fn run_round_trip(index_type: IndexType) {
+        let dim = 16usize;
+        let n = 100usize;
+        let qn = 5usize;
+        let vectors = gen_vectors(n, dim);
+        let queries = vectors[..qn * dim].to_vec();
+        let ids: Vec<i64> = (1000..1000 + n as i64).collect();
+
+        let params = IndexParams {
+            nlist: Some(16),
+            nprobe: Some(8),
+            ..Default::default()
+        };
+        let config = build_config(index_type, dim, MetricType::L2, params);
+        let mut index = build_registered_index(&config).expect("create index");
+        train_registered_index(&mut index, &vectors).expect("train index");
+        index
+            .add(&vectors, Some(&ids))
+            .expect("add vectors with ids");
+
+        let req = SearchRequest {
+            top_k: 5,
+            nprobe: 8,
+            ..Default::default()
+        };
+
+        let before: Vec<ApiSearchResult> = queries
+            .chunks(dim)
+            .map(|q| index.search(q, &req).expect("search before serialize"))
+            .collect();
+
+        for result in &before {
+            assert!(!result.ids.is_empty());
+            assert!(result.ids[0] >= 0);
+            assert!(ids.contains(&result.ids[0]));
+        }
+
+        let bytes = index.serialize_to_bytes().expect("serialize");
+        let restored = deserialize_registered_index(&bytes).expect("deserialize");
+
+        let after: Vec<ApiSearchResult> = queries
+            .chunks(dim)
+            .map(|q| restored.search(q, &req).expect("search after deserialize"))
+            .collect();
+
+        assert_eq!(before.len(), after.len());
+        for (b, a) in before.iter().zip(after.iter()) {
+            assert_eq!(b.ids, a.ids);
+            assert_eq!(b.distances.len(), a.distances.len());
+            for (bd, ad) in b.distances.iter().zip(a.distances.iter()) {
+                assert_eq!(bd.to_bits(), ad.to_bits());
+            }
+        }
+    }
+
+    #[test]
+    fn test_jni_ivf_flat_round_trip() {
+        run_round_trip(IndexType::IvfFlat);
+    }
+
+    #[test]
+    fn test_jni_ivf_sq8_round_trip() {
+        run_round_trip(IndexType::IvfSq8);
     }
 }
