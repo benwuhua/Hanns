@@ -120,7 +120,7 @@ impl RegisteredIndex {
             RegisteredIndex::Hnsw(idx) => save_to_temp_bytes(|path| idx.save(path)),
             RegisteredIndex::IvfFlat(idx) => save_to_temp_bytes(|path| idx.save(path)),
             RegisteredIndex::IvfPq(idx) => save_to_temp_bytes(|path| idx.save(path)),
-            RegisteredIndex::IvfSq8(idx) => save_to_temp_bytes(|path| idx.save(path)),
+            RegisteredIndex::IvfSq8(idx) => idx.serialize_to_bytes(),
             RegisteredIndex::DiskAnn(idx) => save_to_temp_bytes(|path| idx.save(path)),
         }
     }
@@ -356,9 +356,7 @@ fn deserialize_registered_index(bytes: &[u8]) -> crate::api::Result<RegisteredIn
 
     if bytes.starts_with(b"IVFSQ8") {
         let dim = read_u32_at(bytes, 6)? as usize;
-        let file = NamedTempFile::new()?;
-        fs::write(file.path(), bytes)?;
-        let index = IvfSq8Index::load(file.path(), dim)?;
+        let index = IvfSq8Index::deserialize_from_bytes(bytes, dim)?;
         return Ok(RegisteredIndex::IvfSq8(Box::new(index)));
     }
 

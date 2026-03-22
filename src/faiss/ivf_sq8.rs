@@ -3,8 +3,8 @@
 //! IVF (Inverted File) + SQ8 (Scalar Quantization 8-bit)
 //! 内存优化索引，适合大规模数据
 
-use std::collections::HashMap;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use crate::api::{IndexConfig, Result, SearchRequest, SearchResult};
 use crate::bitset::BitsetView;
@@ -678,21 +678,15 @@ impl IvfSq8Index {
         self.ids.len()
     }
 
-    /// Save index
-    pub fn save(&self, path: &std::path::Path) -> Result<()> {
-        use std::fs::File;
-        use std::io::Write;
-
-        let mut file = File::create(path)?;
-
+    fn write_to<W: std::io::Write>(&self, writer: &mut W) -> Result<()> {
         // Magic
-        file.write_all(b"IVFSQ8")?;
+        writer.write_all(b"IVFSQ8")?;
 
         // Dim
-        file.write_all(&(self.dim as u32).to_le_bytes())?;
+        writer.write_all(&(self.dim as u32).to_le_bytes())?;
 
         // Nlist
-        file.write_all(&(self.nlist as u32).to_le_bytes())?;
+        writer.write_all(&(self.nlist as u32).to_le_bytes())?;
 
         // Centroids
         let centroid_bytes: Vec<u8> = self
@@ -700,32 +694,32 @@ impl IvfSq8Index {
             .iter()
             .flat_map(|&f| f.to_le_bytes())
             .collect();
-        file.write_all(&centroid_bytes)?;
+        writer.write_all(&centroid_bytes)?;
 
         // Quantizer params
-        file.write_all(&self.quantizer.min_val.to_le_bytes())?;
-        file.write_all(&self.quantizer.max_val.to_le_bytes())?;
-        file.write_all(&self.quantizer.scale.to_le_bytes())?;
+        writer.write_all(&self.quantizer.min_val.to_le_bytes())?;
+        writer.write_all(&self.quantizer.max_val.to_le_bytes())?;
+        writer.write_all(&self.quantizer.scale.to_le_bytes())?;
 
         // IDs
-        file.write_all(&(self.ids.len() as u64).to_le_bytes())?;
+        writer.write_all(&(self.ids.len() as u64).to_le_bytes())?;
         for &id in &self.ids {
-            file.write_all(&id.to_le_bytes())?;
+            writer.write_all(&id.to_le_bytes())?;
         }
 
         // Vectors
         let vec_bytes: Vec<u8> = self.vectors.iter().flat_map(|&f| f.to_le_bytes()).collect();
-        file.write_all(&vec_bytes)?;
+        writer.write_all(&vec_bytes)?;
 
         // Inverted lists (flat layout): cluster_id + n + ids + codes
-        file.write_all(&(self.inverted_lists.len() as u64).to_le_bytes())?;
+        writer.write_all(&(self.inverted_lists.len() as u64).to_le_bytes())?;
         for (&cluster_id, (ids, codes)) in &self.inverted_lists {
             let n = ids.len();
-            file.write_all(&(cluster_id as u64).to_le_bytes())?;
-            file.write_all(&(n as u64).to_le_bytes())?;
+            writer.write_all(&(cluster_id as u64).to_le_bytes())?;
+            writer.write_all(&(n as u64).to_le_bytes())?;
 
             for &id in ids {
-                file.write_all(&id.to_le_bytes())?;
+                writer.write_all(&id.to_le_bytes())?;
             }
 
             let expected = n * self.dim;
@@ -737,21 +731,15 @@ impl IvfSq8Index {
                     expected
                 )));
             }
-            file.write_all(codes)?;
+            writer.write_all(codes)?;
         }
 
         Ok(())
     }
 
-    /// Load index
-    pub fn load(path: &std::path::Path, dim: usize) -> Result<Self> {
-        use std::fs::File;
-        use std::io::Read;
-
-        let mut file = File::open(path)?;
-
+    fn read_from<R: std::io::Read>(reader: &mut R, dim: usize) -> Result<Self> {
         let mut magic = [0u8; 6];
-        file.read_exact(&mut magic)?;
+        reader.read_exact(&mut magic)?;
         if &magic != b"IVFSQ8" {
             return Err(crate::api::KnowhereError::Codec(
                 "invalid IVFSQ8 magic".to_string(),
@@ -759,7 +747,7 @@ impl IvfSq8Index {
         }
 
         let mut u32_buf = [0u8; 4];
-        file.read_exact(&mut u32_buf)?;
+        reader.read_exact(&mut u32_buf)?;
         let stored_dim = u32::from_le_bytes(u32_buf) as usize;
         if stored_dim != dim {
             return Err(crate::api::KnowhereError::InvalidArg(format!(
@@ -768,62 +756,62 @@ impl IvfSq8Index {
             )));
         }
 
-        file.read_exact(&mut u32_buf)?;
+        reader.read_exact(&mut u32_buf)?;
         let nlist = u32::from_le_bytes(u32_buf) as usize;
 
         let mut centroids = vec![0.0f32; nlist * stored_dim];
         for value in &mut centroids {
             let mut buf = [0u8; 4];
-            file.read_exact(&mut buf)?;
+            reader.read_exact(&mut buf)?;
             *value = f32::from_le_bytes(buf);
         }
 
         let mut f32_buf = [0u8; 4];
-        file.read_exact(&mut f32_buf)?;
+        reader.read_exact(&mut f32_buf)?;
         let min_val = f32::from_le_bytes(f32_buf);
-        file.read_exact(&mut f32_buf)?;
+        reader.read_exact(&mut f32_buf)?;
         let max_val = f32::from_le_bytes(f32_buf);
-        file.read_exact(&mut f32_buf)?;
+        reader.read_exact(&mut f32_buf)?;
         let scale = f32::from_le_bytes(f32_buf);
 
         let mut u64_buf = [0u8; 8];
-        file.read_exact(&mut u64_buf)?;
+        reader.read_exact(&mut u64_buf)?;
         let n = u64::from_le_bytes(u64_buf) as usize;
 
         let mut ids = vec![0i64; n];
         for id in &mut ids {
             let mut ibuf = [0u8; 8];
-            file.read_exact(&mut ibuf)?;
+            reader.read_exact(&mut ibuf)?;
             *id = i64::from_le_bytes(ibuf);
         }
 
         let mut vectors = vec![0.0f32; n * stored_dim];
         for value in &mut vectors {
             let mut vbuf = [0u8; 4];
-            file.read_exact(&mut vbuf)?;
+            reader.read_exact(&mut vbuf)?;
             *value = f32::from_le_bytes(vbuf);
         }
 
-        file.read_exact(&mut u64_buf)?;
+        reader.read_exact(&mut u64_buf)?;
         let inverted_count = u64::from_le_bytes(u64_buf) as usize;
         let mut inverted_lists: HashMap<usize, (Vec<i64>, Vec<u8>)> =
             HashMap::with_capacity(inverted_count);
         for _ in 0..inverted_count {
-            file.read_exact(&mut u64_buf)?;
+            reader.read_exact(&mut u64_buf)?;
             let cluster_id = u64::from_le_bytes(u64_buf) as usize;
 
-            file.read_exact(&mut u64_buf)?;
+            reader.read_exact(&mut u64_buf)?;
             let list_n = u64::from_le_bytes(u64_buf) as usize;
 
             let mut list_ids = vec![0i64; list_n];
             for id in &mut list_ids {
                 let mut ibuf = [0u8; 8];
-                file.read_exact(&mut ibuf)?;
+                reader.read_exact(&mut ibuf)?;
                 *id = i64::from_le_bytes(ibuf);
             }
 
             let mut list_codes = vec![0u8; list_n * stored_dim];
-            file.read_exact(&mut list_codes)?;
+            reader.read_exact(&mut list_codes)?;
             inverted_lists.insert(cluster_id, (list_ids, list_codes));
         }
 
@@ -856,6 +844,35 @@ impl IvfSq8Index {
         index.next_id = index.ids.iter().copied().max().map_or(0, |m| m + 1);
 
         Ok(index)
+    }
+
+    /// Save index
+    pub fn save(&self, path: &std::path::Path) -> Result<()> {
+        use std::fs::File;
+
+        let mut file = File::create(path)?;
+        self.write_to(&mut file)
+    }
+
+    /// Load index
+    pub fn load(path: &std::path::Path, dim: usize) -> Result<Self> {
+        use std::fs::File;
+
+        let mut file = File::open(path)?;
+        Self::read_from(&mut file, dim)
+    }
+
+    /// Serialize index into an in-memory byte buffer.
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        self.write_to(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    /// Deserialize index from an in-memory byte buffer.
+    pub fn deserialize_from_bytes(bytes: &[u8], dim: usize) -> Result<Self> {
+        let mut cursor = std::io::Cursor::new(bytes);
+        Self::read_from(&mut cursor, dim)
     }
 }
 
@@ -1126,6 +1143,47 @@ mod tests {
             "save/load ivf-sq8 recall@10 too low: {:.3}",
             recall
         );
+    }
+
+    #[test]
+    fn test_ivf_sq8_serialize_deserialize_bytes_roundtrip() {
+        let dim = 16usize;
+        let n = 320usize;
+        let nlist = 16usize;
+        let mut rng = StdRng::seed_from_u64(42);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.r#gen::<f32>()).collect();
+
+        let config = IndexConfig {
+            index_type: IndexType::IvfSq8,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: IndexParams::ivf(nlist, 8),
+        };
+
+        let mut index = IvfSq8Index::new(&config).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        let bytes = index.serialize_to_bytes().unwrap();
+        let restored = IvfSq8Index::deserialize_from_bytes(&bytes, dim).unwrap();
+
+        let query = &vectors[..dim];
+        let req = SearchRequest {
+            top_k: 10,
+            nprobe: 8,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+
+        let before = index.search(query, &req).unwrap();
+        let after = restored.search(query, &req).unwrap();
+        assert_eq!(before.ids, after.ids);
+        assert_eq!(before.distances.len(), after.distances.len());
+        for (lhs, rhs) in before.distances.iter().zip(after.distances.iter()) {
+            assert!((lhs - rhs).abs() < 1e-6);
+        }
     }
 
     #[test]

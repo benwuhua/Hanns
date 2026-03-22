@@ -1557,9 +1557,9 @@ impl IndexWrapper {
             }
         } else if self.ivf_sq8.is_some() {
             PersistenceSemantics {
-                file_save_load: "constrained",
-                memory_serialize: "unsupported",
-                deserialize_from_file: "unsupported",
+                file_save_load: "supported",
+                memory_serialize: "supported",
+                deserialize_from_file: "supported",
             }
         } else if self.ivf_pq.is_some() {
             PersistenceSemantics {
@@ -1797,6 +1797,8 @@ impl IndexWrapper {
     fn serialize(&self) -> Result<Vec<u8>, CError> {
         if let Some(ref idx) = self.flat {
             idx.serialize_to_memory().map_err(|_| CError::Internal)
+        } else if let Some(ref idx) = self.ivf_sq8 {
+            idx.serialize_to_bytes().map_err(|_| CError::Internal)
         } else if let Some(ref _idx) = self.hnsw {
             // HNSW 目前只支持文件序列化，返回 NotImplemented
             Err(CError::NotImplemented)
@@ -1815,6 +1817,11 @@ impl IndexWrapper {
         if let Some(ref mut idx) = self.flat {
             idx.deserialize_from_memory(data)
                 .map_err(|_| CError::Internal)
+        } else if let Some(ref mut idx) = self.ivf_sq8 {
+            let loaded = crate::faiss::IvfSq8Index::deserialize_from_bytes(data, idx.dim())
+                .map_err(|_| CError::Internal)?;
+            *idx = loaded;
+            Ok(())
         } else if let Some(ref _idx) = self.hnsw {
             Err(CError::NotImplemented)
         } else if let Some(ref _idx) = self.scann {
@@ -4804,7 +4811,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ffi_persistence_ivf_sq8_reports_constrained_deserialize_from_file() {
+    fn test_ffi_persistence_ivf_sq8_reports_memory_serialize_supported() {
         let ivf = knowhere_create_index(CIndexConfig {
             index_type: CIndexType::IvfSq8,
             metric_type: CMetricType::L2,
@@ -4821,11 +4828,15 @@ mod tests {
         let meta_json: serde_json::Value = serde_json::from_str(meta_str).unwrap();
         assert_eq!(
             meta_json["semantics"]["persistence"]["file_save_load"],
-            "constrained"
+            "supported"
+        );
+        assert_eq!(
+            meta_json["semantics"]["persistence"]["memory_serialize"],
+            "supported"
         );
         assert_eq!(
             meta_json["semantics"]["persistence"]["deserialize_from_file"],
-            "unsupported"
+            "supported"
         );
 
         knowhere_free_cstring(meta_ptr);
