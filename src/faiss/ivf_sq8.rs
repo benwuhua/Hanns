@@ -6,7 +6,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use crate::api::{IndexConfig, Result, SearchRequest, SearchResult};
+use crate::api::{IndexConfig, MetricType, Result, SearchRequest, SearchResult};
 use crate::bitset::BitsetView;
 use crate::dataset::Dataset;
 use crate::executor::l2_distance;
@@ -168,6 +168,11 @@ fn is_better(candidate: SearchHit, existing: SearchHit) -> bool {
     candidate < existing
 }
 
+#[inline]
+fn dot_product(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()
+}
+
 #[allow(dead_code)]
 #[inline]
 fn prefetch_sq_code(codes: &[u8], i: usize, n: usize, dim: usize) {
@@ -199,6 +204,7 @@ pub struct IvfSq8Index {
     dim: usize,
     nlist: usize,  // Number of clusters
     nprobe: usize, // Number of clusters to search
+    metric_type: MetricType,
 
     /// Cluster centroids
     centroids: Vec<f32>,
@@ -229,6 +235,7 @@ impl IvfSq8Index {
             dim: config.dim,
             nlist,
             nprobe,
+            metric_type: config.metric_type,
             centroids: Vec::new(),
             inverted_lists: HashMap::new(),
             quantizer: ScalarQuantizer::new(config.dim, 8),
@@ -420,27 +427,44 @@ impl IvfSq8Index {
         let mut acc = TopKAccumulator::new(top_k);
         if let Some((ids, codes)) = self.inverted_lists.get(&cluster_id) {
             let centroid_vec = &self.centroids[cluster_id * self.dim..(cluster_id + 1) * self.dim];
-            q_residual_buf.clear();
-            q_residual_buf.extend(
-                query_vec
-                    .iter()
-                    .zip(centroid_vec.iter())
-                    .map(|(a, b)| a - b),
-            );
-            if q_precomputed_buf.len() != q_residual_buf.len() {
-                q_precomputed_buf.resize(q_residual_buf.len(), 0);
-            }
-            self.quantizer
-                .precompute_query_into(q_residual_buf, q_precomputed_buf.as_mut_slice());
-
             let n = ids.len().min(codes.len() / self.dim);
             acc.visited = n;
-            for i in 0..n {
-                let code = &codes[i * self.dim..(i + 1) * self.dim];
-                let dist = self
-                    .quantizer
-                    .sq_l2_precomputed(q_precomputed_buf.as_slice(), code);
-                acc.push(ids[i], dist);
+
+            match self.metric_type {
+                MetricType::L2 | MetricType::Hamming => {
+                    q_residual_buf.clear();
+                    q_residual_buf.extend(
+                        query_vec
+                            .iter()
+                            .zip(centroid_vec.iter())
+                            .map(|(a, b)| a - b),
+                    );
+                    if q_precomputed_buf.len() != q_residual_buf.len() {
+                        q_precomputed_buf.resize(q_residual_buf.len(), 0);
+                    }
+                    self.quantizer
+                        .precompute_query_into(q_residual_buf, q_precomputed_buf.as_mut_slice());
+
+                    for i in 0..n {
+                        let code = &codes[i * self.dim..(i + 1) * self.dim];
+                        let dist = self
+                            .quantizer
+                            .sq_l2_precomputed(q_precomputed_buf.as_slice(), code);
+                        acc.push(ids[i], dist);
+                    }
+                }
+                MetricType::Ip | MetricType::Cosine => {
+                    // Scheme A: decode SQ8 residual and score with negative dot product.
+                    // Keep "smaller is better" convention for TopKAccumulator.
+                    let centroid_dot = dot_product(query_vec, centroid_vec);
+                    for i in 0..n {
+                        let code = &codes[i * self.dim..(i + 1) * self.dim];
+                        let decoded_residual = self.quantizer.decode(code);
+                        let residual_dot = dot_product(query_vec, &decoded_residual);
+                        let dist = -(centroid_dot + residual_dot);
+                        acc.push(ids[i], dist);
+                    }
+                }
             }
         }
         acc
@@ -461,18 +485,32 @@ impl IvfSq8Index {
 
     /// Find nearest centroid
     fn find_nearest_centroid(&self, vector: &[f32]) -> usize {
-        let mut min_dist = f32::MAX;
-        let mut best = 0;
-
-        for (i, centroid) in self.centroids.chunks(self.dim).enumerate() {
-            let dist = l2_distance(vector, centroid);
-            if dist < min_dist {
-                min_dist = dist;
-                best = i;
+        match self.metric_type {
+            MetricType::L2 | MetricType::Hamming => {
+                let mut min_dist = f32::MAX;
+                let mut best = 0;
+                for (i, centroid) in self.centroids.chunks(self.dim).enumerate() {
+                    let dist = l2_distance(vector, centroid);
+                    if dist < min_dist {
+                        min_dist = dist;
+                        best = i;
+                    }
+                }
+                best
+            }
+            MetricType::Ip | MetricType::Cosine => {
+                let mut best_score = f32::NEG_INFINITY;
+                let mut best = 0;
+                for (i, centroid) in self.centroids.chunks(self.dim).enumerate() {
+                    let score = dot_product(vector, centroid);
+                    if score > best_score {
+                        best_score = score;
+                        best = i;
+                    }
+                }
+                best
             }
         }
-
-        best
     }
 
     /// Search clusters
@@ -480,7 +518,10 @@ impl IvfSq8Index {
         let mut distances: Vec<(usize, f32)> = (0..self.nlist)
             .map(|i| {
                 let centroid = &self.centroids[i * self.dim..(i + 1) * self.dim];
-                let dist = l2_distance(query, centroid);
+                let dist = match self.metric_type {
+                    MetricType::L2 | MetricType::Hamming => l2_distance(query, centroid),
+                    MetricType::Ip | MetricType::Cosine => -dot_product(query, centroid),
+                };
                 (i, dist)
             })
             .collect();
@@ -531,13 +572,27 @@ impl IvfSq8Index {
                 let vector = &vectors[start..start + dim];
 
                 // Find nearest centroid
-                let mut min_dist = f32::MAX;
-                let mut cluster = 0;
-                for c in 0..nlist {
-                    let dist = l2_distance(vector, &centroids[c * dim..]);
-                    if dist < min_dist {
-                        min_dist = dist;
-                        cluster = c;
+                let mut cluster = 0usize;
+                match self.metric_type {
+                    MetricType::L2 | MetricType::Hamming => {
+                        let mut min_dist = f32::MAX;
+                        for c in 0..nlist {
+                            let dist = l2_distance(vector, &centroids[c * dim..(c + 1) * dim]);
+                            if dist < min_dist {
+                                min_dist = dist;
+                                cluster = c;
+                            }
+                        }
+                    }
+                    MetricType::Ip | MetricType::Cosine => {
+                        let mut best_score = f32::NEG_INFINITY;
+                        for c in 0..nlist {
+                            let score = dot_product(vector, &centroids[c * dim..(c + 1) * dim]);
+                            if score > best_score {
+                                best_score = score;
+                                cluster = c;
+                            }
+                        }
                     }
                 }
 
@@ -630,26 +685,13 @@ impl IvfSq8Index {
                 let mut acc = TopKAccumulator::new(k);
 
                 for cluster_id in clusters {
-                    if let Some((ids, codes)) = self.inverted_lists.get(&cluster_id) {
-                        let centroid_vec = &self.centroids[cluster_id * dim..(cluster_id + 1) * dim];
-                        for i in 0..dim {
-                            q_residual_buf[i] = query_vec[i] - centroid_vec[i];
-                        }
-                        self.quantizer.precompute_query_into(
-                            q_residual_buf.as_slice(),
-                            q_precomputed_buf.as_mut_slice(),
-                        );
-
-                        let n = ids.len().min(codes.len() / dim);
-                        acc.visited += n;
-                        for i in 0..n {
-                            let code = &codes[i * dim..(i + 1) * dim];
-                            let dist = self
-                                .quantizer
-                                .sq_l2_precomputed(q_precomputed_buf.as_slice(), code);
-                            acc.push(ids[i], dist);
-                        }
-                    }
+                    acc.merge(self.scan_cluster_with_buf(
+                        cluster_id,
+                        query_vec,
+                        k,
+                        &mut q_residual_buf,
+                        &mut q_precomputed_buf,
+                    ));
                 }
 
                 acc.into_hits()
@@ -687,6 +729,14 @@ impl IvfSq8Index {
 
         // Nlist
         writer.write_all(&(self.nlist as u32).to_le_bytes())?;
+        // Metric type
+        let metric_byte = match self.metric_type {
+            MetricType::L2 => 0u8,
+            MetricType::Ip => 1u8,
+            MetricType::Cosine => 2u8,
+            MetricType::Hamming => 3u8,
+        };
+        writer.write_all(&[metric_byte])?;
 
         // Centroids
         let centroid_bytes: Vec<u8> = self
@@ -758,6 +808,9 @@ impl IvfSq8Index {
 
         reader.read_exact(&mut u32_buf)?;
         let nlist = u32::from_le_bytes(u32_buf) as usize;
+        let mut metric_buf = [0u8; 1];
+        reader.read_exact(&mut metric_buf)?;
+        let metric_type = MetricType::from_bytes(metric_buf[0]);
 
         let mut centroids = vec![0.0f32; nlist * stored_dim];
         for value in &mut centroids {
@@ -824,7 +877,7 @@ impl IvfSq8Index {
         let mut index = Self {
             config: IndexConfig {
                 index_type: crate::api::IndexType::IvfSq8,
-                metric_type: crate::api::MetricType::L2,
+                metric_type,
                 dim: stored_dim,
                 data_type: crate::api::DataType::Float,
                 params: crate::api::IndexParams::ivf(nlist, 8),
@@ -832,6 +885,7 @@ impl IvfSq8Index {
             dim: stored_dim,
             nlist,
             nprobe: 8,
+            metric_type,
             centroids,
             inverted_lists,
             quantizer,
