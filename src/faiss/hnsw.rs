@@ -20,7 +20,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use crate::api::{
-    DataType, IndexConfig, MetricType, Predicate, Result, SearchRequest,
+    DataType, IndexConfig, IndexType, MetricType, Predicate, Result, SearchRequest,
     SearchResult as ApiSearchResult,
 };
 use crate::bitset::BitsetView;
@@ -5678,6 +5678,29 @@ impl HnswIndex {
         }
 
         Ok(())
+    }
+
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>> {
+        let tmp = tempfile::NamedTempFile::new()?;
+        self.save(tmp.path())?;
+        let bytes = std::fs::read(tmp.path())?;
+        Ok(bytes)
+    }
+
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self> {
+        let tmp = tempfile::NamedTempFile::new()?;
+        std::fs::write(tmp.path(), bytes)?;
+
+        let bootstrap = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            data_type: DataType::Float,
+            dim: 1,
+            params: Default::default(),
+        };
+        let mut index = Self::new(&bootstrap)?;
+        index.load(tmp.path())?;
+        Ok(index)
     }
 
     pub fn load(&mut self, path: &std::path::Path) -> Result<()> {

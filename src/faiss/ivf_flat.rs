@@ -599,6 +599,14 @@ impl IvfFlatIndex {
         self.ids.len()
     }
 
+    pub fn is_trained(&self) -> bool {
+        self.trained
+    }
+
+    pub fn has_raw_data(&self) -> bool {
+        true
+    }
+
     /// Get dimension
     pub fn dim(&self) -> usize {
         self.dim
@@ -620,52 +628,48 @@ impl IvfFlatIndex {
             .collect()
     }
 
-    pub fn save(&self, path: &Path) -> Result<()> {
-        let mut file = File::create(path)?;
-
-        file.write_all(b"IVFFLAT")?;
-        file.write_all(&(self.dim as u32).to_le_bytes())?;
-        file.write_all(&(self.nlist as u32).to_le_bytes())?;
-        file.write_all(&(self.nprobe as u32).to_le_bytes())?;
-        file.write_all(&self.next_id.to_le_bytes())?;
+    fn write_to<W: Write>(&self, writer: &mut W) -> Result<()> {
+        writer.write_all(b"IVFFLAT")?;
+        writer.write_all(&(self.dim as u32).to_le_bytes())?;
+        writer.write_all(&(self.nlist as u32).to_le_bytes())?;
+        writer.write_all(&(self.nprobe as u32).to_le_bytes())?;
+        writer.write_all(&self.next_id.to_le_bytes())?;
 
         for &v in &self.centroids {
-            file.write_all(&v.to_le_bytes())?;
+            writer.write_all(&v.to_le_bytes())?;
         }
 
         for &off in &self.invlist_offsets {
-            file.write_all(&(off as u64).to_le_bytes())?;
+            writer.write_all(&(off as u64).to_le_bytes())?;
         }
         for &sz in &self.invlist_sizes {
-            file.write_all(&(sz as u64).to_le_bytes())?;
+            writer.write_all(&(sz as u64).to_le_bytes())?;
         }
 
         let n_total = self.invlist_ids.len() as u64;
-        file.write_all(&n_total.to_le_bytes())?;
+        writer.write_all(&n_total.to_le_bytes())?;
         for &id in &self.invlist_ids {
-            file.write_all(&id.to_le_bytes())?;
+            writer.write_all(&id.to_le_bytes())?;
         }
         for &v in &self.invlist_vectors {
-            file.write_all(&v.to_le_bytes())?;
+            writer.write_all(&v.to_le_bytes())?;
         }
 
         let n_ordered = self.ids.len() as u64;
-        file.write_all(&n_ordered.to_le_bytes())?;
+        writer.write_all(&n_ordered.to_le_bytes())?;
         for &id in &self.ids {
-            file.write_all(&id.to_le_bytes())?;
+            writer.write_all(&id.to_le_bytes())?;
         }
         for &v in &self.vectors {
-            file.write_all(&v.to_le_bytes())?;
+            writer.write_all(&v.to_le_bytes())?;
         }
 
         Ok(())
     }
 
-    pub fn load(path: &Path, dim: usize) -> Result<Self> {
-        let mut file = File::open(path)?;
-
+    fn read_from<R: Read>(reader: &mut R, dim: usize) -> Result<Self> {
         let mut magic = [0u8; 7];
-        file.read_exact(&mut magic)?;
+        reader.read_exact(&mut magic)?;
         if &magic != b"IVFFLAT" {
             return Err(crate::api::KnowhereError::Codec(
                 "invalid IVFFLAT magic".to_string(),
@@ -673,7 +677,7 @@ impl IvfFlatIndex {
         }
 
         let mut u32_buf = [0u8; 4];
-        file.read_exact(&mut u32_buf)?;
+        reader.read_exact(&mut u32_buf)?;
         let stored_dim = u32::from_le_bytes(u32_buf) as usize;
         if stored_dim != dim {
             return Err(crate::api::KnowhereError::InvalidArg(format!(
@@ -682,68 +686,68 @@ impl IvfFlatIndex {
             )));
         }
 
-        file.read_exact(&mut u32_buf)?;
+        reader.read_exact(&mut u32_buf)?;
         let nlist = u32::from_le_bytes(u32_buf) as usize;
-        file.read_exact(&mut u32_buf)?;
+        reader.read_exact(&mut u32_buf)?;
         let nprobe = u32::from_le_bytes(u32_buf) as usize;
 
         let mut i64_buf = [0u8; 8];
-        file.read_exact(&mut i64_buf)?;
+        reader.read_exact(&mut i64_buf)?;
         let next_id = i64::from_le_bytes(i64_buf);
 
         let mut centroids = vec![0.0f32; nlist * stored_dim];
         for value in &mut centroids {
             let mut fbuf = [0u8; 4];
-            file.read_exact(&mut fbuf)?;
+            reader.read_exact(&mut fbuf)?;
             *value = f32::from_le_bytes(fbuf);
         }
 
         let mut invlist_offsets = vec![0usize; nlist];
         for off in &mut invlist_offsets {
             let mut ubuf = [0u8; 8];
-            file.read_exact(&mut ubuf)?;
+            reader.read_exact(&mut ubuf)?;
             *off = u64::from_le_bytes(ubuf) as usize;
         }
 
         let mut invlist_sizes = vec![0usize; nlist];
         for sz in &mut invlist_sizes {
             let mut ubuf = [0u8; 8];
-            file.read_exact(&mut ubuf)?;
+            reader.read_exact(&mut ubuf)?;
             *sz = u64::from_le_bytes(ubuf) as usize;
         }
 
         let mut u64_buf = [0u8; 8];
-        file.read_exact(&mut u64_buf)?;
+        reader.read_exact(&mut u64_buf)?;
         let n_total = u64::from_le_bytes(u64_buf) as usize;
 
         let mut invlist_ids = vec![0i64; n_total];
         for id in &mut invlist_ids {
             let mut ibuf = [0u8; 8];
-            file.read_exact(&mut ibuf)?;
+            reader.read_exact(&mut ibuf)?;
             *id = i64::from_le_bytes(ibuf);
         }
 
         let mut invlist_vectors = vec![0.0f32; n_total * stored_dim];
         for value in &mut invlist_vectors {
             let mut fbuf = [0u8; 4];
-            file.read_exact(&mut fbuf)?;
+            reader.read_exact(&mut fbuf)?;
             *value = f32::from_le_bytes(fbuf);
         }
 
-        file.read_exact(&mut u64_buf)?;
+        reader.read_exact(&mut u64_buf)?;
         let n_ordered = u64::from_le_bytes(u64_buf) as usize;
 
         let mut ids = vec![0i64; n_ordered];
         for id in &mut ids {
             let mut ibuf = [0u8; 8];
-            file.read_exact(&mut ibuf)?;
+            reader.read_exact(&mut ibuf)?;
             *id = i64::from_le_bytes(ibuf);
         }
 
         let mut vectors = vec![0.0f32; n_ordered * stored_dim];
         for value in &mut vectors {
             let mut fbuf = [0u8; 4];
-            file.read_exact(&mut fbuf)?;
+            reader.read_exact(&mut fbuf)?;
             *value = f32::from_le_bytes(fbuf);
         }
 
@@ -761,6 +765,27 @@ impl IvfFlatIndex {
             next_id,
             trained: true,
         })
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        let mut file = File::create(path)?;
+        self.write_to(&mut file)
+    }
+
+    pub fn load(path: &Path, dim: usize) -> Result<Self> {
+        let mut file = File::open(path)?;
+        Self::read_from(&mut file, dim)
+    }
+
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        self.write_to(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    pub fn deserialize_from_bytes(bytes: &[u8], dim: usize) -> Result<Self> {
+        let mut cursor = std::io::Cursor::new(bytes);
+        Self::read_from(&mut cursor, dim)
     }
 }
 
