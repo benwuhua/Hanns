@@ -38,12 +38,14 @@ use crate::api::{
     DataType, IndexConfig, IndexParams, IndexType, KnowhereError, MetricType, SearchRequest,
     SearchResult as ApiSearchResult,
 };
-use crate::faiss::{DiskAnnIndex, HnswIndex, IvfPqIndex, MemIndex};
+use crate::faiss::{DiskAnnIndex, HnswIndex, IvfFlatIndex, IvfPqIndex, IvfSq8Index, MemIndex};
 
 enum RegisteredIndex {
     Mem(Box<MemIndex>),
     Hnsw(Box<HnswIndex>),
+    IvfFlat(Box<IvfFlatIndex>),
     IvfPq(Box<IvfPqIndex>),
+    IvfSq8(Box<IvfSq8Index>),
     DiskAnn(Box<DiskAnnIndex>),
 }
 
@@ -66,7 +68,23 @@ impl RegisteredIndex {
                 }
                 Err(err) => Err(err),
             },
+            RegisteredIndex::IvfFlat(idx) => match idx.add(vectors, ids) {
+                Ok(count) => Ok(count),
+                Err(err) if needs_training(&err) => {
+                    idx.train(vectors)?;
+                    idx.add(vectors, ids)
+                }
+                Err(err) => Err(err),
+            },
             RegisteredIndex::IvfPq(idx) => match idx.add(vectors, ids) {
+                Ok(count) => Ok(count),
+                Err(err) if needs_training(&err) => {
+                    idx.train(vectors)?;
+                    idx.add(vectors, ids)
+                }
+                Err(err) => Err(err),
+            },
+            RegisteredIndex::IvfSq8(idx) => match idx.add(vectors, ids) {
                 Ok(count) => Ok(count),
                 Err(err) if needs_training(&err) => {
                     idx.train(vectors)?;
@@ -89,7 +107,9 @@ impl RegisteredIndex {
         match self {
             RegisteredIndex::Mem(idx) => idx.search(query, req),
             RegisteredIndex::Hnsw(idx) => idx.search(query, req),
+            RegisteredIndex::IvfFlat(idx) => idx.search(query, req),
             RegisteredIndex::IvfPq(idx) => idx.search(query, req),
+            RegisteredIndex::IvfSq8(idx) => idx.search(query, req),
             RegisteredIndex::DiskAnn(idx) => idx.search(query, req),
         }
     }
@@ -98,7 +118,9 @@ impl RegisteredIndex {
         match self {
             RegisteredIndex::Mem(idx) => idx.serialize_to_memory(),
             RegisteredIndex::Hnsw(idx) => save_to_temp_bytes(|path| idx.save(path)),
+            RegisteredIndex::IvfFlat(idx) => save_to_temp_bytes(|path| idx.save(path)),
             RegisteredIndex::IvfPq(idx) => save_to_temp_bytes(|path| idx.save(path)),
+            RegisteredIndex::IvfSq8(idx) => save_to_temp_bytes(|path| idx.save(path)),
             RegisteredIndex::DiskAnn(idx) => save_to_temp_bytes(|path| idx.save(path)),
         }
     }
@@ -155,6 +177,7 @@ fn parse_index_type(t: i32) -> IndexType {
         2 => IndexType::IvfFlat,
         3 => IndexType::IvfPq,
         4 => IndexType::DiskAnn,
+        5 => IndexType::IvfSq8,
         _ => IndexType::Flat,
     }
 }
@@ -186,11 +209,11 @@ fn build_config(
 
 fn build_registered_index(config: &IndexConfig) -> crate::api::Result<RegisteredIndex> {
     match config.index_type {
-        IndexType::Flat | IndexType::IvfFlat => {
-            Ok(RegisteredIndex::Mem(Box::new(MemIndex::new(config)?)))
-        }
+        IndexType::Flat => Ok(RegisteredIndex::Mem(Box::new(MemIndex::new(config)?))),
         IndexType::Hnsw => Ok(RegisteredIndex::Hnsw(Box::new(HnswIndex::new(config)?))),
+        IndexType::IvfFlat => Ok(RegisteredIndex::IvfFlat(Box::new(IvfFlatIndex::new(config)?))),
         IndexType::IvfPq => Ok(RegisteredIndex::IvfPq(Box::new(IvfPqIndex::new(config)?))),
+        IndexType::IvfSq8 => Ok(RegisteredIndex::IvfSq8(Box::new(IvfSq8Index::new(config)?))),
         IndexType::DiskAnn => Ok(RegisteredIndex::DiskAnn(Box::new(DiskAnnIndex::new(
             config,
         )?))),
@@ -321,6 +344,22 @@ fn deserialize_registered_index(bytes: &[u8]) -> crate::api::Result<RegisteredIn
         let mut index = IvfPqIndex::new(&config)?;
         load_from_temp_bytes(bytes, |path| index.load(path))?;
         return Ok(RegisteredIndex::IvfPq(Box::new(index)));
+    }
+
+    if bytes.starts_with(b"IVFFLAT") {
+        let dim = read_u32_at(bytes, 7)? as usize;
+        let file = NamedTempFile::new()?;
+        fs::write(file.path(), bytes)?;
+        let index = IvfFlatIndex::load(file.path(), dim)?;
+        return Ok(RegisteredIndex::IvfFlat(Box::new(index)));
+    }
+
+    if bytes.starts_with(b"IVFSQ8") {
+        let dim = read_u32_at(bytes, 6)? as usize;
+        let file = NamedTempFile::new()?;
+        fs::write(file.path(), bytes)?;
+        let index = IvfSq8Index::load(file.path(), dim)?;
+        return Ok(RegisteredIndex::IvfSq8(Box::new(index)));
     }
 
     Err(KnowhereError::Codec(
