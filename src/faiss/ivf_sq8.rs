@@ -14,6 +14,7 @@ use crate::index::{
     AnnIterator, Index as IndexTrait, IndexError, SearchResult as IndexSearchResult,
 };
 use crate::quantization::ScalarQuantizer;
+use crate::simd::dot_product_f32;
 
 #[derive(Debug, Clone, Copy)]
 struct SearchHit {
@@ -166,11 +167,6 @@ fn insert_sorted_vec(storage: &mut Vec<SearchHit>, limit: usize, candidate: Sear
 #[inline]
 fn is_better(candidate: SearchHit, existing: SearchHit) -> bool {
     candidate < existing
-}
-
-#[inline]
-fn dot_product(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()
 }
 
 #[allow(dead_code)]
@@ -456,11 +452,11 @@ impl IvfSq8Index {
                 MetricType::Ip | MetricType::Cosine => {
                     // Scheme A: decode SQ8 residual and score with negative dot product.
                     // Keep "smaller is better" convention for TopKAccumulator.
-                    let centroid_dot = dot_product(query_vec, centroid_vec);
+                    let centroid_dot = dot_product_f32(query_vec, centroid_vec);
                     for i in 0..n {
                         let code = &codes[i * self.dim..(i + 1) * self.dim];
                         let decoded_residual = self.quantizer.decode(code);
-                        let residual_dot = dot_product(query_vec, &decoded_residual);
+                        let residual_dot = dot_product_f32(query_vec, &decoded_residual);
                         let dist = -(centroid_dot + residual_dot);
                         acc.push(ids[i], dist);
                     }
@@ -502,7 +498,7 @@ impl IvfSq8Index {
                 let mut best_score = f32::NEG_INFINITY;
                 let mut best = 0;
                 for (i, centroid) in self.centroids.chunks(self.dim).enumerate() {
-                    let score = dot_product(vector, centroid);
+                    let score = dot_product_f32(vector, centroid);
                     if score > best_score {
                         best_score = score;
                         best = i;
@@ -520,7 +516,7 @@ impl IvfSq8Index {
                 let centroid = &self.centroids[i * self.dim..(i + 1) * self.dim];
                 let dist = match self.metric_type {
                     MetricType::L2 | MetricType::Hamming => l2_distance(query, centroid),
-                    MetricType::Ip | MetricType::Cosine => -dot_product(query, centroid),
+                    MetricType::Ip | MetricType::Cosine => -dot_product_f32(query, centroid),
                 };
                 (i, dist)
             })
@@ -587,7 +583,8 @@ impl IvfSq8Index {
                     MetricType::Ip | MetricType::Cosine => {
                         let mut best_score = f32::NEG_INFINITY;
                         for c in 0..nlist {
-                            let score = dot_product(vector, &centroids[c * dim..(c + 1) * dim]);
+                            let score =
+                                dot_product_f32(vector, &centroids[c * dim..(c + 1) * dim]);
                             if score > best_score {
                                 best_score = score;
                                 cluster = c;

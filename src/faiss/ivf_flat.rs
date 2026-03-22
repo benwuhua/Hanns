@@ -15,7 +15,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use crate::api::{IndexConfig, MetricType, Result, SearchRequest, SearchResult};
-use crate::simd::{l2_batch_4_ptr, l2_distance_sq, l2_distance_sq_ptr};
+use crate::simd::{dot_product_f32, l2_batch_4_ptr, l2_distance_sq, l2_distance_sq_ptr};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -190,11 +190,6 @@ fn insert_sorted_vec(storage: &mut Vec<SearchHit>, limit: usize, candidate: Sear
 #[inline]
 fn is_better(candidate: SearchHit, existing: SearchHit) -> bool {
     candidate < existing
-}
-
-#[inline]
-fn dot_product(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()
 }
 
 /// IVF-Flat Index - stores raw vectors in flattened inverted lists
@@ -423,7 +418,7 @@ impl IvfFlatIndex {
                 let mut best = 0;
                 for c in 0..self.nlist {
                     let centroid = &self.centroids[c * self.dim..(c + 1) * self.dim];
-                    let score = dot_product(vector, centroid);
+                    let score = dot_product_f32(vector, centroid);
                     if score > best_score {
                         best_score = score;
                         best = c;
@@ -484,7 +479,7 @@ impl IvfFlatIndex {
                                 let end = start + self.dim;
                                 let vec = &vectors[start..end];
                                 // Store negative dot so that smaller is better in TopKAccumulator.
-                                let dist = -dot_product(query, vec);
+                                let dist = -dot_product_f32(query, vec);
                                 acc.push(id, dist);
                             }
                         }
@@ -527,7 +522,7 @@ impl IvfFlatIndex {
                         let start = idx * self.dim;
                         let end = start + self.dim;
                         let vec = &vectors[start..end];
-                        let dist = -dot_product(query, vec);
+                        let dist = -dot_product_f32(query, vec);
                         acc.push(id, dist);
                     }
                 }
@@ -568,7 +563,7 @@ impl IvfFlatIndex {
             let centroid = &self.centroids[c * self.dim..(c + 1) * self.dim];
             let score = match self.metric_type {
                 MetricType::L2 | MetricType::Hamming => l2_distance_sq(query, centroid),
-                MetricType::Ip | MetricType::Cosine => -dot_product(query, centroid),
+                MetricType::Ip | MetricType::Cosine => -dot_product_f32(query, centroid),
             };
             cluster_dists.push((c, score));
         }

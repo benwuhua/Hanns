@@ -9,6 +9,9 @@ use std::sync::OnceLock;
 #[path = "simd/l2.rs"]
 pub mod l2;
 pub use l2::l2_sq;
+#[path = "simd/ip.rs"]
+pub mod ip;
+pub use ip::dot_product_f32;
 
 /// CPU 特性检测
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
