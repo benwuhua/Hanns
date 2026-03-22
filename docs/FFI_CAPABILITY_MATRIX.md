@@ -1,6 +1,6 @@
 # FFI Capability Matrix
 
-Last updated: 2026-03-12 05:36
+Last updated: 2026-03-22
 
 ## Purpose
 
@@ -21,14 +21,15 @@ Document the capability matrix for all FFI-exposed index types, showing which op
 | Index Type | Train | Add | Search | Range Search | Ann Iterator | Get By ID | File Save/Load | Memory Serialize | DeserializeFromFile |
 |---|---|---|---|---|---|---|---|---|---|
 | Flat | ✅ | ✅ | ✅ | ⚠️ | ❌ | ✅ | ✅ | ✅ | ✅ |
-| HNSW | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| HNSW | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | ScaNN | ✅ | ✅ | ✅ | ❌ | ✅ | ⚠️ | ✅ | ❌ | ✅ |
 | HNSW-PRQ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ |
 | IVF-RaBitQ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | HNSW-SQ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | HNSW-PQ | ✅ | ✅ | ✅ | ❌ | ✅ | ⚠️ | ❌ | ❌ | ❌ |
 | DiskANN | ✅ | ✅ | ✅ | ❌ | ✅ | ⚠️ | ❌ | ❌ | ❌ |
-| IVF-SQ8 | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ⚠️ | ❌ | ❌ |
+| IVF-Flat | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| IVF-SQ8 | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ |
 | BinFlat | ✅ | ✅ | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | BinaryHNSW | ✅ | ✅ | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | BinIVF-Flat | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -64,8 +65,21 @@ Document the capability matrix for all FFI-exposed index types, showing which op
 ### Serialization
 - `PERSIST-P3-003` 已把 `file_save_load` / `memory_serialize` / `deserialize_from_file` 的 supported / constrained / unsupported 语义重新拉齐到 audit 基线。
 - 当前矩阵里 `File Save/Load` 与 `DeserializeFromFile` 表示“FFI/运行时已有稳定 contract”，不要求所有索引都支持内存序列化。
+- 2026-03-22 更新：`HNSW` memory serialize 已接通；`IVF-SQ8` 已接通 file/memory/deserialize_from_file；`IVF-Flat`（float）已作为独立 C FFI 类型接入并支持 file/memory/deserialize_from_file。
 - `HNSW-PQ` 继续维持稳定 `Unsupported`：`has_raw_data=false`，`get_vector_by_ids` 与 persistence 都是显式受限语义，而不是待补实现。
 - `SparseWand` 现已具备文件级 save/load 与 `DeserializeFromFile` contract；`SparseWandCC` 仍不纳入统一 persistence 承诺。
+
+## JNI Layer
+
+当前 JNI `RegisteredIndex` 已接入以下索引：
+- `Flat` (`MemIndex`)
+- `HNSW`
+- `IVF-Flat`
+- `IVF-PQ`
+- `IVF-SQ8`
+- `DiskANN`
+
+其中 `IVF-Flat` 与 `IVF-SQ8` 已接入 JNI 序列化/反序列化流程（内存字节路径）。
 
 ### Observability / Trace / Resource Contract
 - `OBS-P3-005` 已把最小 runtime governance contract 收口到 `knowhere_get_index_meta` 返回 JSON。
@@ -119,6 +133,11 @@ This matrix is a contract view, not a performance-leadership claim. Family-level
 
 ## Changes
 
+- 2026-03-22: Updated matrix for latest FFI/JNI integration:
+  - HNSW `memory_serialize` -> ✅
+  - IVF-SQ8 `file_save_load`/`memory_serialize`/`deserialize_from_file` -> ✅
+  - Added IVF-Flat (float) C FFI row with full persistence support
+  - Added JNI Layer summary for Flat/HNSW/IVF-Flat/IVF-PQ/IVF-SQ8/DiskANN
 - 2026-03-06 01:35: Added FFI AnnIterator interface (`knowhere_create_ann_iterator`/`knowhere_ann_iterator_next`/`knowhere_free_ann_iterator`), supports HNSW/ScaNN/HNSW-PQ
 - 2026-03-06: Updated AnnIterator status for HNSW/ScaNN/HNSW-PQ/DiskANN (now ✅); HNSW GetByID ✅; ScaNN GetByID ⚠️
 - 2026-03-08: Marked HNSW-PQ advanced-path semantics as constrained and stable: AnnIterator ✅, `get_vector_by_ids` ⚠️ (stable Unsupported due to lossy PQ), save/load ⚠️ (stable Unsupported pending persistence)
