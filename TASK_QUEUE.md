@@ -433,9 +433,11 @@
 > 详细问题单: `docs/ISSUE-HNSW-COSINE-SEARCH-OVERHEAD.md`
 > 来源: HannsDB 集成测试，50K/1536/cosine serial search，p99=110ms vs zvec 0.6ms
 
-- [x] **HNSW-COSINE-SCRATCH-001** [P1]: ✅ 完成 (commit 94ca617) — TLS scratch 复用扩展到 cosine 路径; 10K/1536 p99: 110ms → 8.766ms (-92%)
-- [x] **HNSW-COSINE-QNORM-001** [P1]: ✅ 完成 (commits 94ca617, f13b9ee, 6037c99, 99332d6) — q_norm TLS 缓存 + v_norm build-time 预计算; 10K/1536 p99 再降 ~40%
+- [x] **HNSW-COSINE-SCRATCH-001** [P1]: ✅ 完成 (commit 94ca617) — TLS scratch 复用扩展到 cosine 路径; 50K/1536 p99: 110ms → 8.766ms (-92%)
+- [x] **HNSW-COSINE-QNORM-001** [P1]: ✅ 完成 (commits 94ca617, f13b9ee, 6037c99, 99332d6) — q_norm TLS 缓存 + v_norm build-time 预计算
 - [x] **HNSW-ALLOC-001** [P2]: ✅ 完成 (commit 6037c99) — `search_into()` zero-alloc 变体，调用方复用 buffer
+- [x] **HNSW-COSINE-QNORM-003** [P1]: ✅ 完成 (commit c284d2c) — pre-normalize stored vectors at add()/load()；distance = 1.0 - ip/q_norm（无 v_norm 乘法）；50K/1536 M=16 p99: 11ms → 6ms
+- [x] **HNSW-COSINE-M-SWEEP** [研究]: ✅ 完成 (commit 9daa85d) — M=8 vs M=16 bench；M=8: p99=3.508ms，M=16: p99=6.073ms（50K/1536/ef=32 x86）；总改善 110ms → 3.5ms = **31x**
 
 ---
 
