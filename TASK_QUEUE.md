@@ -426,6 +426,19 @@
   - 证据: `benchmark_results/final_production_acceptance.json`、`benchmark_results/final_core_path_classification.json`、`benchmark_results/final_performance_leadership_proof.json`
   - 下一步: 无；除非新的 authority artifact 实质改变 leadership 或 core-path verdict chain。
 
+---
+
+## Phase 7: HannsDB 集成性能差距闭环 (2026-03-23 开启)
+
+> 详细问题单: `docs/ISSUE-HNSW-COSINE-SEARCH-OVERHEAD.md`
+> 来源: HannsDB 集成测试，50K/1536/cosine serial search，p99=110ms vs zvec 0.6ms
+
+- [ ] **HNSW-COSINE-SCRATCH-001** [P1]: Cosine 路径缺少 TLS scratch 复用 → `hnsw.rs:5299`
+- [ ] **HNSW-COSINE-QNORM-001** [P1]: `distance_to_idx_cosine_dispatch` 每次重算 query norm → `hnsw.rs:1280`
+- [ ] **HNSW-ALLOC-001** [P2]: `search()` 入口每次分配 all_ids/all_dists Vec → `hnsw.rs:3623`
+
+---
+
 ## 粒度约定
 
 - `task_id` 只表示大任务，不表示 blocker、脚本问题或证据缺口
