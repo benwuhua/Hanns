@@ -72,10 +72,17 @@ pub struct AisaqConfig {
     pub cache_all_on_load: bool,
     #[serde(default = "default_true")]
     pub run_refine_pass: bool,
+    /// Number of full-graph Vamana refinement passes after insertion (0 = disabled, default = 2)
+    #[serde(default = "default_refine_passes")]
+    pub num_refine_passes: usize,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_refine_passes() -> usize {
+    2
 }
 
 impl Default for AisaqConfig {
@@ -104,6 +111,7 @@ impl Default for AisaqConfig {
             search_io_limit: None,
             cache_all_on_load: false,
             run_refine_pass: true,
+            num_refine_passes: 2,
         }
     }
 }
@@ -1109,7 +1117,10 @@ impl PQFlashIndex {
         if n_nodes > 100_000 {
             let stride = self.flat_stride.max(1);
             let build_l = (stride * 3).max(32).min(n_nodes);
-            self.vamana_refine_pass(n_nodes, build_l);
+            let passes = self.config.num_refine_passes;
+            for _ in 0..passes {
+                self.vamana_refine_pass(n_nodes, build_l);
+            }
         }
         self.refresh_entry_points();
         if self.config.warm_up {
@@ -2614,11 +2625,32 @@ impl PQFlashIndex {
 
     fn vamana_refine_pass(&mut self, n_nodes: usize, build_l: usize) {
         let stride = self.flat_stride.max(1);
-        for i in 0..n_nodes {
-            let vector_i = self.node_vector(i).to_vec();
-            let cands = self.vamana_build_search(&vector_i, build_l, n_nodes);
-            let new_neighbors = self.robust_prune_scored(i, &cands, stride, 1.2);
 
+        #[cfg(feature = "parallel")]
+        let results: Vec<(usize, Vec<u32>)> = {
+            use rayon::prelude::*;
+            (0..n_nodes)
+                .into_par_iter()
+                .map(|i| {
+                    let vector_i = self.node_vector(i).to_vec();
+                    let cands = self.vamana_build_search(&vector_i, build_l, n_nodes);
+                    let new_neighbors = self.robust_prune_scored(i, &cands, stride, 1.2);
+                    (i, new_neighbors)
+                })
+                .collect()
+        };
+
+        #[cfg(not(feature = "parallel"))]
+        let results: Vec<(usize, Vec<u32>)> = (0..n_nodes)
+            .map(|i| {
+                let vector_i = self.node_vector(i).to_vec();
+                let cands = self.vamana_build_search(&vector_i, build_l, n_nodes);
+                let new_neighbors = self.robust_prune_scored(i, &cands, stride, 1.2);
+                (i, new_neighbors)
+            })
+            .collect();
+
+        for (i, new_neighbors) in results {
             let start = i * stride;
             let count = new_neighbors.len().min(stride);
             self.node_neighbor_counts[i] = count as u32;
