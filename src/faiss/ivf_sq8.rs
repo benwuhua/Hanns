@@ -453,10 +453,11 @@ impl IvfSq8Index {
                     // Scheme A: decode SQ8 residual and score with negative dot product.
                     // Keep "smaller is better" convention for TopKAccumulator.
                     let centroid_dot = dot_product_f32(query_vec, centroid_vec);
+                    let mut decoded_buf = vec![0.0f32; self.dim];
                     for i in 0..n {
                         let code = &codes[i * self.dim..(i + 1) * self.dim];
-                        let decoded_residual = self.quantizer.decode(code);
-                        let residual_dot = dot_product_f32(query_vec, &decoded_residual);
+                        self.quantizer.decode_into(code, &mut decoded_buf);
+                        let residual_dot = dot_product_f32(query_vec, &decoded_buf);
                         let dist = -(centroid_dot + residual_dot);
                         acc.push(ids[i], dist);
                     }

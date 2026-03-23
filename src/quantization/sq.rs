@@ -89,6 +89,14 @@ impl ScalarQuantizer {
             .collect()
     }
 
+    /// 解码到预分配 buffer（零分配）
+    pub fn decode_into(&self, codes: &[u8], out: &mut [f32]) {
+        debug_assert_eq!(codes.len(), out.len());
+        for (o, &c) in out.iter_mut().zip(codes.iter()) {
+            *o = (c as f32 / self.scale + self.offset).clamp(self.min_val, self.max_val);
+        }
+    }
+
     /// 计算量化误差
     pub fn compute_error(&self, original: &[f32], reconstructed: &[f32]) -> f32 {
         original
