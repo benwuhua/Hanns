@@ -1104,6 +1104,13 @@ impl PQFlashIndex {
         }
 
         self.node_count = self.node_ids.len();
+        // 1M 规模时跑全图精化 pass，修复 Phase 2 节点无反向边问题
+        let n_nodes = self.node_ids.len();
+        if n_nodes > 100_000 {
+            let stride = self.flat_stride.max(1);
+            let build_l = (stride * 3).max(32).min(n_nodes);
+            self.vamana_refine_pass(n_nodes, build_l);
+        }
         self.refresh_entry_points();
         if self.config.warm_up {
             self.warm_up_cache();
@@ -2566,6 +2573,66 @@ impl PQFlashIndex {
             self.node_neighbor_ids[start + i] = 0;
         }
         self.node_neighbor_counts[neighbor_idx] = new_count as u32;
+    }
+
+    fn link_back_no_guard(&mut self, neighbor: u32, node_id: u32, degree_limit: usize) {
+        let neighbor_idx = neighbor as usize;
+        if neighbor_idx >= self.node_ids.len() || node_id == neighbor {
+            return;
+        }
+        let stride = self.flat_stride.max(1);
+        let start = neighbor_idx * stride;
+        let count = self.node_neighbor_counts[neighbor_idx] as usize;
+        let effective_limit = stride.min(degree_limit.max(1));
+        let current = &self.node_neighbor_ids[start..start + count];
+        if current.contains(&node_id) {
+            return;
+        }
+        if count < effective_limit {
+            self.node_neighbor_ids[start + count] = node_id;
+            self.node_neighbor_counts[neighbor_idx] += 1;
+            return;
+        }
+        let mut neighbor_list: Vec<u32> = current.to_vec();
+        neighbor_list.push(node_id);
+        let anchor = self.node_vector(neighbor_idx).to_vec();
+        let mut scored: Vec<(u32, f32)> = neighbor_list
+            .iter()
+            .map(|&nb| (nb, self.exact_distance(&anchor, self.node_vector(nb as usize))))
+            .collect();
+        scored.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let selected = self.robust_prune_scored(neighbor_idx, &scored, effective_limit, 1.2);
+        let new_count = selected.len();
+        for (i, nb) in selected.into_iter().enumerate() {
+            self.node_neighbor_ids[start + i] = nb;
+        }
+        for i in new_count..stride {
+            self.node_neighbor_ids[start + i] = 0;
+        }
+        self.node_neighbor_counts[neighbor_idx] = new_count as u32;
+    }
+
+    fn vamana_refine_pass(&mut self, n_nodes: usize, build_l: usize) {
+        let stride = self.flat_stride.max(1);
+        for i in 0..n_nodes {
+            let vector_i = self.node_vector(i).to_vec();
+            let cands = self.vamana_build_search(&vector_i, build_l, n_nodes);
+            let new_neighbors = self.robust_prune_scored(i, &cands, stride, 1.2);
+
+            let start = i * stride;
+            let count = new_neighbors.len().min(stride);
+            self.node_neighbor_counts[i] = count as u32;
+            for j in 0..count {
+                self.node_neighbor_ids[start + j] = new_neighbors[j];
+            }
+            for j in count..stride {
+                self.node_neighbor_ids[start + j] = 0;
+            }
+
+            for &nb in &new_neighbors {
+                self.link_back_no_guard(nb, i as u32, stride);
+            }
+        }
     }
 
     fn prune_graph_to_target_degree(&mut self) {
