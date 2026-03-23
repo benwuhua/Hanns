@@ -46,6 +46,7 @@ const HNSW_SEARCH_BF_TOPK_THRESHOLD: f32 = 0.5;
 
 thread_local! {
     static HNSW_SEARCH_SCRATCH_TLS: RefCell<SearchScratch> = RefCell::new(SearchScratch::new());
+    static HNSW_COSINE_QUERY_NORM_TLS: std::cell::Cell<f32> = std::cell::Cell::new(0.0);
 }
 
 /// BUG-001 FIX: Reference M value for level multiplier calculation.
@@ -1283,9 +1284,13 @@ impl HnswIndex {
         };
         let stored = &index.vectors[start..start + index.dim];
         let ip = simd::inner_product(query, stored);
-        let q_norm_sq = simd::inner_product(query, query);
+        let q_norm = HNSW_COSINE_QUERY_NORM_TLS.with(|c| c.get());
+        let q_norm = if q_norm > 0.0 {
+            q_norm
+        } else {
+            simd::inner_product(query, query).sqrt()
+        };
         let v_norm_sq = simd::inner_product(stored, stored);
-        let q_norm = q_norm_sq.sqrt();
         let v_norm = v_norm_sq.sqrt();
         if q_norm > 0.0 && v_norm > 0.0 {
             1.0 - ip / (q_norm * v_norm)
@@ -5294,6 +5299,10 @@ impl HnswIndex {
             return self.brute_force_search(query, k, |id, _idx| filter_fn(id));
         }
 
+        if self.metric_type == MetricType::Cosine && filter.is_none() {
+            return self.search_single_cosine_unfiltered(query, ef, k);
+        }
+
         // OPT-021: Multi-layer search with improved layer descent
         // Start from top layer and greedily search down.
         let mut scratch = SearchScratch::new();
@@ -5423,6 +5432,66 @@ impl HnswIndex {
             let mut scratch = scratch_cell.borrow_mut();
             self.search_single_l2_unfiltered_with_scratch(query, ef, k, &mut scratch)
         })
+    }
+
+    fn search_single_cosine_unfiltered_with_scratch(
+        &self,
+        query: &[f32],
+        ef: usize,
+        k: usize,
+        scratch: &mut SearchScratch,
+    ) -> Vec<(i64, f32)> {
+        if self.ids.is_empty() || self.entry_point.is_none() {
+            return vec![];
+        }
+
+        let mut curr_ep_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
+        let mut best_ep_idx = curr_ep_idx;
+        let mut curr_ep_dist = self.distance(query, curr_ep_idx);
+        let mut best_ep_dist = curr_ep_dist;
+
+        for level in (1..=self.max_level).rev() {
+            let (next_idx, next_dist) = self.greedy_upper_layer_descent_idx_with_entry_dist(
+                query,
+                curr_ep_idx,
+                level,
+                curr_ep_dist,
+            );
+            curr_ep_idx = next_idx;
+            curr_ep_dist = next_dist;
+            if next_dist < best_ep_dist {
+                best_ep_idx = next_idx;
+                best_ep_dist = next_dist;
+            }
+        }
+
+        let results = self.search_layer_idx_with_scratch(query, best_ep_idx, 0, ef, scratch);
+
+        let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
+        for (idx, dist) in results {
+            final_results.push((self.get_id_from_idx(idx), dist));
+            if final_results.len() >= k {
+                break;
+            }
+        }
+
+        final_results
+    }
+
+    fn search_single_cosine_unfiltered(
+        &self,
+        query: &[f32],
+        ef: usize,
+        k: usize,
+    ) -> Vec<(i64, f32)> {
+        let q_norm = simd::inner_product(query, query).sqrt();
+        HNSW_COSINE_QUERY_NORM_TLS.with(|c| c.set(q_norm));
+        let result = HNSW_SEARCH_SCRATCH_TLS.with(|scratch_cell| {
+            let mut scratch = scratch_cell.borrow_mut();
+            self.search_single_cosine_unfiltered_with_scratch(query, ef, k, &mut scratch)
+        });
+        HNSW_COSINE_QUERY_NORM_TLS.with(|c| c.set(0.0));
+        result
     }
 
     /// Search single query with bitset filtering
