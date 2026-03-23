@@ -1634,6 +1634,9 @@ pub fn inner_product(a: &[f32], b: &[f32]) -> f32 {
         if std::is_x86_feature_detected!("avx512f") {
             return unsafe { ip_avx512(a, b) };
         }
+        if std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma") {
+            return unsafe { ip_avx2_fma(a, b) };
+        }
         if std::is_x86_feature_detected!("avx2") {
             return unsafe { ip_avx2(a, b) };
         }
@@ -1686,19 +1689,99 @@ unsafe fn ip_sse(a: &[f32], b: &[f32]) -> f32 {
 #[target_feature(enable = "avx2")]
 unsafe fn ip_avx2(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::*;
-    let mut sum = _mm256_setzero_ps();
-    let chunks = a.len() / 8;
+    let len = a.len();
+    let chunks4 = len / 32;
+    let mut acc0 = _mm256_setzero_ps();
+    let mut acc1 = _mm256_setzero_ps();
+    let mut acc2 = _mm256_setzero_ps();
+    let mut acc3 = _mm256_setzero_ps();
 
-    for i in 0..chunks {
-        let va = _mm256_loadu_ps(&a[i * 8]);
-        let vb = _mm256_loadu_ps(&b[i * 8]);
-        let prod = _mm256_mul_ps(va, vb);
-        sum = _mm256_add_ps(sum, prod);
+    for i in 0..chunks4 {
+        let off = i * 32;
+
+        let va0 = _mm256_loadu_ps(&a[off]);
+        let vb0 = _mm256_loadu_ps(&b[off]);
+        acc0 = _mm256_add_ps(acc0, _mm256_mul_ps(va0, vb0));
+
+        let va1 = _mm256_loadu_ps(&a[off + 8]);
+        let vb1 = _mm256_loadu_ps(&b[off + 8]);
+        acc1 = _mm256_add_ps(acc1, _mm256_mul_ps(va1, vb1));
+
+        let va2 = _mm256_loadu_ps(&a[off + 16]);
+        let vb2 = _mm256_loadu_ps(&b[off + 16]);
+        acc2 = _mm256_add_ps(acc2, _mm256_mul_ps(va2, vb2));
+
+        let va3 = _mm256_loadu_ps(&a[off + 24]);
+        let vb3 = _mm256_loadu_ps(&b[off + 24]);
+        acc3 = _mm256_add_ps(acc3, _mm256_mul_ps(va3, vb3));
+    }
+
+    let mut sum = _mm256_add_ps(_mm256_add_ps(acc0, acc1), _mm256_add_ps(acc2, acc3));
+    let remaining_start = chunks4 * 32;
+    let chunks_remain = (len - remaining_start) / 8;
+
+    for i in 0..chunks_remain {
+        let off = remaining_start + i * 8;
+        let va = _mm256_loadu_ps(&a[off]);
+        let vb = _mm256_loadu_ps(&b[off]);
+        sum = _mm256_add_ps(sum, _mm256_mul_ps(va, vb));
     }
 
     let mut result = horizontal_sum_avx2(sum);
+    let scalar_start = remaining_start + chunks_remain * 8;
+    for i in scalar_start..len {
+        result += a[i] * b[i];
+    }
+    result
+}
 
-    for i in (chunks * 8)..a.len() {
+/// 内积（AVX2 + FMA）
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn ip_avx2_fma(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+    let len = a.len();
+    let chunks4 = len / 32;
+    let mut acc0 = _mm256_setzero_ps();
+    let mut acc1 = _mm256_setzero_ps();
+    let mut acc2 = _mm256_setzero_ps();
+    let mut acc3 = _mm256_setzero_ps();
+
+    for i in 0..chunks4 {
+        let off = i * 32;
+
+        let va0 = _mm256_loadu_ps(&a[off]);
+        let vb0 = _mm256_loadu_ps(&b[off]);
+        acc0 = _mm256_fmadd_ps(va0, vb0, acc0);
+
+        let va1 = _mm256_loadu_ps(&a[off + 8]);
+        let vb1 = _mm256_loadu_ps(&b[off + 8]);
+        acc1 = _mm256_fmadd_ps(va1, vb1, acc1);
+
+        let va2 = _mm256_loadu_ps(&a[off + 16]);
+        let vb2 = _mm256_loadu_ps(&b[off + 16]);
+        acc2 = _mm256_fmadd_ps(va2, vb2, acc2);
+
+        let va3 = _mm256_loadu_ps(&a[off + 24]);
+        let vb3 = _mm256_loadu_ps(&b[off + 24]);
+        acc3 = _mm256_fmadd_ps(va3, vb3, acc3);
+    }
+
+    let mut sum = _mm256_add_ps(_mm256_add_ps(acc0, acc1), _mm256_add_ps(acc2, acc3));
+    let remaining_start = chunks4 * 32;
+    let chunks_remain = (len - remaining_start) / 8;
+
+    for i in 0..chunks_remain {
+        let off = remaining_start + i * 8;
+        let va = _mm256_loadu_ps(&a[off]);
+        let vb = _mm256_loadu_ps(&b[off]);
+        sum = _mm256_fmadd_ps(va, vb, sum);
+    }
+
+    let mut result = horizontal_sum_avx2(sum);
+    let scalar_start = remaining_start + chunks_remain * 8;
+    for i in scalar_start..len {
         result += a[i] * b[i];
     }
     result
@@ -1746,8 +1829,7 @@ unsafe fn ip_avx512(a: &[f32], b: &[f32]) -> f32 {
     for i in 0..chunks {
         let va = _mm512_loadu_ps(&a[i * 16]);
         let vb = _mm512_loadu_ps(&b[i * 16]);
-        let prod = _mm512_mul_ps(va, vb);
-        sum = _mm512_add_ps(sum, prod);
+        sum = _mm512_fmadd_ps(va, vb, sum);
     }
 
     // Horizontal add of 512-bit
