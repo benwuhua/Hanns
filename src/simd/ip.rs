@@ -9,6 +9,13 @@ pub fn dot_product_f32(a: &[f32], b: &[f32]) -> f32 {
             // SAFETY: guarded by runtime feature detection and equal lengths.
             return unsafe { dot_product_avx512(a, b) };
         }
+        if std::arch::is_x86_feature_detected!("avx2")
+            && std::arch::is_x86_feature_detected!("fma")
+            && a.len() >= 8
+        {
+            // SAFETY: guarded by runtime feature detection and equal lengths.
+            return unsafe { dot_product_avx2_fma(a, b) };
+        }
         if std::arch::is_x86_feature_detected!("avx2") && a.len() >= 8 {
             // SAFETY: guarded by runtime feature detection and equal lengths.
             return unsafe { dot_product_avx2(a, b) };
@@ -43,6 +50,41 @@ unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
         let vb = unsafe { _mm256_loadu_ps(b.as_ptr().add(off)) };
         let prod = _mm256_mul_ps(va, vb);
         acc = _mm256_add_ps(acc, prod);
+    }
+
+    let lo = _mm256_castps256_ps128(acc);
+    let hi = _mm256_extractf128_ps(acc, 1);
+    let mut sum4 = _mm_add_ps(lo, hi);
+    let shuf1 = _mm_movehdup_ps(sum4);
+    sum4 = _mm_add_ps(sum4, shuf1);
+    let shuf2 = _mm_movehl_ps(shuf1, sum4);
+    let total = _mm_add_ss(sum4, shuf2);
+    let mut result = _mm_cvtss_f32(total);
+
+    for i in (chunks * 8)..n {
+        result += a[i] * b[i];
+    }
+
+    result
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn dot_product_avx2_fma(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+
+    let n = a.len();
+    let chunks = n / 8;
+    let mut acc = _mm256_setzero_ps();
+
+    for i in 0..chunks {
+        let off = i * 8;
+        // SAFETY: off..off+8 is in-bounds; loadu supports unaligned access.
+        let va = unsafe { _mm256_loadu_ps(a.as_ptr().add(off)) };
+        // SAFETY: off..off+8 is in-bounds; loadu supports unaligned access.
+        let vb = unsafe { _mm256_loadu_ps(b.as_ptr().add(off)) };
+        // fmadd: acc += va * vb
+        acc = _mm256_fmadd_ps(va, vb, acc);
     }
 
     let lo = _mm256_castps256_ps128(acc);

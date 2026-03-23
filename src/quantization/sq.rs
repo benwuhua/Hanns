@@ -97,6 +97,40 @@ impl ScalarQuantizer {
         }
     }
 
+    /// Fused decode + dot product（一次扫描，零中间 buffer）
+    ///
+    /// 等价于: decode_into(codes, buf); dot_product_f32(query, buf)
+    /// 但只读一次 codes，不写中间 float buffer。
+    pub fn decode_dot_f32(&self, codes: &[u8], query: &[f32]) -> f32 {
+        debug_assert_eq!(codes.len(), query.len());
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::arch::is_x86_feature_detected!("avx2") && codes.len() >= 8 {
+                // SAFETY: AVX2 path is guarded by runtime feature detection.
+                return unsafe {
+                    decode_dot_avx2(
+                        codes,
+                        query,
+                        self.scale,
+                        self.offset,
+                        self.min_val,
+                        self.max_val,
+                    )
+                };
+            }
+        }
+
+        codes
+            .iter()
+            .zip(query.iter())
+            .map(|(&c, &q)| {
+                let v = (c as f32 / self.scale + self.offset).clamp(self.min_val, self.max_val);
+                v * q
+            })
+            .sum()
+    }
+
     /// 计算量化误差
     pub fn compute_error(&self, original: &[f32], reconstructed: &[f32]) -> f32 {
         original
@@ -315,6 +349,50 @@ unsafe fn sq_l2_asymmetric_avx2(
         sum += diff * diff;
     }
     sum
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn decode_dot_avx2(
+    codes: &[u8],
+    query: &[f32],
+    scale: f32,
+    offset: f32,
+    min_val: f32,
+    max_val: f32,
+) -> f32 {
+    use std::arch::x86_64::*;
+
+    let len = codes.len().min(query.len());
+    let chunks = len / 8;
+    let mut acc = _mm256_setzero_ps();
+    let v_inv_scale = _mm256_set1_ps(1.0 / scale);
+    let v_offset = _mm256_set1_ps(offset);
+    let v_min = _mm256_set1_ps(min_val);
+    let v_max = _mm256_set1_ps(max_val);
+
+    for i in 0..chunks {
+        let off = i * 8;
+        let c8 = _mm_loadl_epi64(codes.as_ptr().add(off) as *const __m128i);
+        let c32 = _mm256_cvtepu8_epi32(c8);
+        let cf = _mm256_cvtepi32_ps(c32);
+
+        // decode: c / scale + offset = c * (1 / scale) + offset
+        let decoded = _mm256_add_ps(_mm256_mul_ps(cf, v_inv_scale), v_offset);
+        let clamped = _mm256_min_ps(_mm256_max_ps(decoded, v_min), v_max);
+
+        let q = _mm256_loadu_ps(query.as_ptr().add(off));
+        acc = _mm256_add_ps(acc, _mm256_mul_ps(clamped, q));
+    }
+
+    // SAFETY: same target feature context and valid register value.
+    let mut result = unsafe { hsum_avx2(acc) };
+    for i in (chunks * 8)..len {
+        let v = (codes[i] as f32 / scale + offset).clamp(min_val, max_val);
+        result += v * query[i];
+    }
+
+    result
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -560,6 +638,31 @@ mod tests {
             "int_dist={} float_dist={}",
             int_dist,
             float_dist
+        );
+    }
+
+    #[test]
+    fn test_decode_dot_matches_scalar() {
+        let dim = 768usize;
+        let mut sq = ScalarQuantizer::new(dim, 8);
+        let train: Vec<f32> = (0..(dim * 2))
+            .map(|i| (i as f32 * 0.013).sin() * 10.0)
+            .collect();
+        sq.train(&train);
+
+        let v: Vec<f32> = (0..dim).map(|i| (i as f32 * 0.021).cos() * 5.0).collect();
+        let q: Vec<f32> = (0..dim).map(|i| (i as f32 * 0.017).sin() * 3.0).collect();
+        let code = sq.encode(&v);
+
+        let decoded = sq.decode(&code);
+        let scalar: f32 = decoded.iter().zip(q.iter()).map(|(&a, &b)| a * b).sum();
+        let fused = sq.decode_dot_f32(&code, &q);
+
+        assert!(
+            (scalar - fused).abs() < 1e-3,
+            "scalar={} fused={}",
+            scalar,
+            fused
         );
     }
 }
