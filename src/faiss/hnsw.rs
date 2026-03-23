@@ -4133,8 +4133,7 @@ impl HnswIndex {
         let profile_enabled = profile.is_some();
 
         let num_nodes = self.node_info.len();
-        let use_layer0_flat_graph =
-            use_l2_ptr_dispatch && level == 0 && self.layer0_flat_graph.is_enabled_for(num_nodes);
+        let use_layer0_flat_graph = level == 0 && self.layer0_flat_graph.is_enabled_for(num_nodes);
         let visited_start = profile_enabled.then(Instant::now);
         scratch.prepare(num_nodes);
         scratch.prepare_generic_heaps(ef);
