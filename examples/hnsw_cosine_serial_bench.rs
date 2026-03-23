@@ -10,7 +10,7 @@ use knowhere_rs::api::{
 use knowhere_rs::faiss::HnswIndex;
 use std::time::Instant;
 
-fn run_bench(label: &str, n: usize, dim: usize, ef_search: usize) {
+fn run_bench(n: usize, dim: usize, m: usize, ef_search: usize) {
     let mut rng_state: u64 = 0xdeadbeef_u64.wrapping_add(dim as u64);
     let mut next = || -> f32 {
         rng_state ^= rng_state << 13;
@@ -27,7 +27,7 @@ fn run_bench(label: &str, n: usize, dim: usize, ef_search: usize) {
     let params = IndexParams {
         nlist: None,
         nprobe: Some(ef_search),
-        m: Some(16),
+        m: Some(m),
         ef_construction: Some(200),
         ..Default::default()
     };
@@ -66,18 +66,20 @@ fn run_bench(label: &str, n: usize, dim: usize, ef_search: usize) {
     let p99 = latencies_us[n_q * 99 / 100];
     let mean_us = latencies_us.iter().sum::<u64>() / n_q as u64;
     let qps = 1_000_000.0 / mean_us as f64;
+    let n_k = n / 1_000;
 
     println!(
-        "{}: n={} dim={} ef={} build={:.1}s  p50={}µs p95={}µs p99={}µs mean={}µs QPS={:.0}",
-        label, n, dim, ef_search, build_s, p50, p95, p99, mean_us, qps
+        "{}K/{}/cosine/M={}/ef={}: build={:.1}s  p50={}µs p95={}µs p99={}µs mean={}µs QPS={:.0}",
+        n_k, dim, m, ef_search, build_s, p50, p95, p99, mean_us, qps
     );
 }
 
 fn main() {
     println!("=== HNSW Cosine Serial Search Latency Benchmark ===");
-    run_bench("10K/768/cosine/ef=32", 10_000, 768, 32);
-    run_bench("50K/768/cosine/ef=32", 50_000, 768, 32);
-    run_bench("10K/1536/cosine/ef=32", 10_000, 1536, 32);
-    run_bench("50K/1536/cosine/ef=32", 50_000, 1536, 32);
-    run_bench("50K/1536/cosine/ef=64", 50_000, 1536, 64);
+    for &m in &[8usize, 16usize] {
+        run_bench(10_000, 768, m, 32);
+        run_bench(50_000, 768, m, 32);
+        run_bench(10_000, 1536, m, 32);
+        run_bench(50_000, 1536, m, 32);
+    }
 }
