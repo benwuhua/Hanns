@@ -106,6 +106,22 @@ impl ScalarQuantizer {
 
         #[cfg(target_arch = "x86_64")]
         {
+            if std::arch::is_x86_feature_detected!("avx2")
+                && std::arch::is_x86_feature_detected!("fma")
+                && codes.len() >= 8
+            {
+                // SAFETY: AVX2+FMA path is guarded by runtime feature detection.
+                return unsafe {
+                    decode_dot_avx2_fma(
+                        codes,
+                        query,
+                        self.scale,
+                        self.offset,
+                        self.min_val,
+                        self.max_val,
+                    )
+                };
+            }
             if std::arch::is_x86_feature_detected!("avx2") && codes.len() >= 8 {
                 // SAFETY: AVX2 path is guarded by runtime feature detection.
                 return unsafe {
@@ -383,6 +399,50 @@ unsafe fn decode_dot_avx2(
 
         let q = _mm256_loadu_ps(query.as_ptr().add(off));
         acc = _mm256_add_ps(acc, _mm256_mul_ps(clamped, q));
+    }
+
+    // SAFETY: same target feature context and valid register value.
+    let mut result = unsafe { hsum_avx2(acc) };
+    for i in (chunks * 8)..len {
+        let v = (codes[i] as f32 / scale + offset).clamp(min_val, max_val);
+        result += v * query[i];
+    }
+
+    result
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn decode_dot_avx2_fma(
+    codes: &[u8],
+    query: &[f32],
+    scale: f32,
+    offset: f32,
+    min_val: f32,
+    max_val: f32,
+) -> f32 {
+    use std::arch::x86_64::*;
+
+    let len = codes.len().min(query.len());
+    let chunks = len / 8;
+    let mut acc = _mm256_setzero_ps();
+    let v_inv_scale = _mm256_set1_ps(1.0 / scale);
+    let v_offset = _mm256_set1_ps(offset);
+    let v_min = _mm256_set1_ps(min_val);
+    let v_max = _mm256_set1_ps(max_val);
+
+    for i in 0..chunks {
+        let off = i * 8;
+        let c8 = _mm_loadl_epi64(codes.as_ptr().add(off) as *const __m128i);
+        let c32 = _mm256_cvtepu8_epi32(c8);
+        let cf = _mm256_cvtepi32_ps(c32);
+
+        // decode: c / scale + offset = c * (1 / scale) + offset
+        let decoded = _mm256_fmadd_ps(cf, v_inv_scale, v_offset);
+        let clamped = _mm256_min_ps(_mm256_max_ps(decoded, v_min), v_max);
+
+        let q = _mm256_loadu_ps(query.as_ptr().add(off));
+        acc = _mm256_fmadd_ps(clamped, q, acc);
     }
 
     // SAFETY: same target feature context and valid register value.
