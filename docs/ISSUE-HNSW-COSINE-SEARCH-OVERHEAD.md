@@ -6,11 +6,11 @@
 
 ---
 
-## 问题 1: HNSW-COSINE-SCRATCH-001
+## 问题 1: HNSW-COSINE-SCRATCH-001 ✅ FIXED (commit 94ca617)
 
 **标题**: Cosine 搜索路径缺少 TLS scratch 复用
 
-**优先级**: P1
+**优先级**: P1 → 已修复
 
 **文件**: `src/faiss/hnsw.rs:5267–5369`
 
@@ -51,7 +51,7 @@ let mut scratch = SearchScratch::new();  // ← 问题所在
 
 ---
 
-## 问题 2: HNSW-COSINE-QNORM-001
+## 问题 2: HNSW-COSINE-QNORM-001 ✅ FIXED (commits 94ca617, f13b9ee)
 
 **标题**: `distance_to_idx_cosine_dispatch` 每次调用重算 query norm
 
