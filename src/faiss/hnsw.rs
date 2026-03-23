@@ -3664,6 +3664,55 @@ impl HnswIndex {
         Ok(ApiSearchResult::new(all_ids, all_dists, 0.0))
     }
 
+    /// Zero-allocation search variant for serial hot-path usage.
+    ///
+    /// Writes up to `ids.len()` results into caller-provided buffers.
+    /// Caller must ensure `ids.len() == dists.len()` and target length is `req.top_k`.
+    /// Returns the number of results actually written.
+    pub fn search_into(
+        &self,
+        query: &[f32],
+        req: &SearchRequest,
+        ids: &mut [i64],
+        dists: &mut [f32],
+    ) -> Result<usize> {
+        let k = ids.len().min(dists.len()).min(req.top_k);
+        if k == 0 || query.len() != self.dim {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "invalid args".to_string(),
+            ));
+        }
+        if self.vectors.is_empty() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "index is empty".to_string(),
+            ));
+        }
+
+        let ef = self
+            .config
+            .params
+            .effective_hnsw_ef_search(self.ef_search, req.nprobe, k);
+        let filter = req.filter.clone();
+        let results = self.search_single(query, ef, k, &filter);
+
+        let dist_finalize: fn(f32) -> f32 = match self.metric_type {
+            MetricType::L2 => |d| d.sqrt(),
+            MetricType::Ip => |d| -d,
+            _ => |d| d,
+        };
+
+        let n = results.len().min(k);
+        for (i, (id, dist)) in results.into_iter().take(n).enumerate() {
+            ids[i] = id;
+            dists[i] = dist_finalize(dist);
+        }
+        for i in n..k {
+            ids[i] = -1;
+            dists[i] = f32::MAX;
+        }
+        Ok(n)
+    }
+
     /// Search with Bitset filtering
     ///
     /// Bitset is used to filter out certain vectors (e.g., soft-deleted vectors).
