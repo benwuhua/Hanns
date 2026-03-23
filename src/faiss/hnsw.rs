@@ -1224,6 +1224,9 @@ pub struct HnswIndex {
     entry_point: Option<i64>,
     max_level: usize,
     vectors: Vec<f32>,
+    /// Cached L2 norms for each stored vector (only populated for Cosine metric).
+    /// cosine_vnorms[idx] = ||vectors[idx * dim..(idx+1)*dim]||
+    cosine_vnorms: Vec<f32>,
     bf16_vectors: Vec<u16>,
     use_bf16_storage: bool,
     // OPT-015: ids Vec kept only for custom ID support, not used in hot path
@@ -1292,8 +1295,11 @@ impl HnswIndex {
         } else {
             simd::inner_product(query, query).sqrt()
         };
-        let v_norm_sq = simd::inner_product(stored, stored);
-        let v_norm = v_norm_sq.sqrt();
+        let v_norm = if idx < index.cosine_vnorms.len() {
+            index.cosine_vnorms[idx]
+        } else {
+            simd::inner_product(stored, stored).sqrt()
+        };
         if q_norm > 0.0 && v_norm > 0.0 {
             1.0 - ip / (q_norm * v_norm)
         } else {
@@ -1384,6 +1390,7 @@ impl HnswIndex {
             config: config.clone(),
             entry_point: None,
             vectors: Vec::new(),
+            cosine_vnorms: Vec::new(),
             bf16_vectors: Vec::new(),
             use_bf16_storage,
             ids: Vec::new(),
@@ -1414,6 +1421,11 @@ impl HnswIndex {
         if self.use_bf16_storage {
             self.bf16_vectors
                 .extend(vector.iter().map(|&v| Bf16::from_f32(v).to_bits()));
+        }
+        // Cache v_norm for cosine metric (eliminates inner_product(v,v) per distance call)
+        if self.metric_type == MetricType::Cosine {
+            let norm_sq = simd::inner_product(vector, vector);
+            self.cosine_vnorms.push(norm_sq.sqrt());
         }
     }
 
@@ -6008,6 +6020,7 @@ impl HnswIndex {
 
         // Vectors
         self.vectors = vec![0.0f32; total_f32];
+        self.cosine_vnorms.clear();
         for i in 0..total_f32 {
             let mut buf = [0u8; 4];
             file.read_exact(&mut buf)?;
