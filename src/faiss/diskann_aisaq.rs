@@ -1098,35 +1098,6 @@ impl PQFlashIndex {
                 }
             }
         }
-
-        // Backward edge consolidation pass: fix connectivity for nodes inserted
-        // after the link_back guard kicked in (>100K). O(N*R), no distance computations.
-        if self.node_ids.len() > 100_000 {
-            let stride = self.flat_stride.max(1);
-            let n = self.node_ids.len();
-            for v in 0..n {
-                let v_count = self.node_neighbor_counts[v] as usize;
-                for k in 0..v_count {
-                    let nb = self.node_neighbor_ids[v * stride + k] as usize;
-                    if nb >= n || nb == v {
-                        continue;
-                    }
-                    let nb_count = self.node_neighbor_counts[nb] as usize;
-                    if nb_count >= stride {
-                        continue; // neighbor's list full, skip (no expensive prune)
-                    }
-                    // check if v already present
-                    if self.node_neighbor_ids[nb * stride..nb * stride + nb_count]
-                        .contains(&(v as u32))
-                    {
-                        continue;
-                    }
-                    self.node_neighbor_ids[nb * stride + nb_count] = v as u32;
-                    self.node_neighbor_counts[nb] += 1;
-                }
-            }
-        }
-
         self.prune_graph_to_target_degree();
         if self.config.run_refine_pass {
             self.refine_flat_graph();
