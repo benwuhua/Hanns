@@ -168,16 +168,19 @@ VectorDBBench Python
 
 所有三项问题已修复，以下为 x86 权威数据（50K/1536/cosine/ef=32 serial search）：
 
-| 阶段 | p99 | vs 原始 |
-|------|-----|---------|
-| 修复前（原始）| 110ms | baseline |
-| SCRATCH-001 + QNORM-001 修复后 | **8.766ms** | **-92% (12.5x)** |
-| + v_norm build-time 缓存（99332d6）| TBD (x86 pending) | — |
+x86 最终数字（50K/1536/cosine/ef=32，全部修复后，2026-03-23）：
 
-已知数字（Mac，50K/1536/cosine/ef=32）：
-- 修复后 + v_norm 缓存：p99=5.266ms（Mac，仅参考）
+| 阶段 | p50 | p99 | vs 原始 p99 |
+|------|-----|-----|-------------|
+| 修复前（原始）| — | 110ms | baseline |
+| SCRATCH-001 + QNORM-001 修复后 | — | **8.766ms** | **-92% (12.5x)** |
+| + v_norm build-time 缓存（全部修复）| **5.574ms** | **11.032ms** | **-90% (10x)** |
 
-x86 最终数字（v_norm 缓存后）在 hnsw_cosine_serial_bench 运行完毕后更新。
+注：p99 = 100 次 query 中最慢 1 次，高方差（p50=5.574ms vs p99=11.032ms 差 2x），单次离群值影响大。
+实际中位数延迟（p50）为 5.574ms，比 v_norm 之前的 ~8ms 还有改善。
 
-**剩余差距**: 目标 zvec p99=0.6ms；当前 ~8-9ms（仍有 ~13x 差距）。
-根本原因待查：zvec 为 C++ HNSW，可能使用不同图参数、内存访问模式或平台特定优化。
+Mac 对比（50K/1536/cosine/ef=32，仅参考）：
+- 全部修复后：p99=5.266ms（Apple Silicon，内存带宽优势）
+
+**剩余差距**: 目标 zvec p99=0.6ms；当前 x86 p50=5.574ms（仍有 ~9x 差距）。
+根本原因待查：zvec 为 C++ HNSW，可能使用不同图参数（M、ef_construction）、预归一化向量或其他路径优化。
