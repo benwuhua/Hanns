@@ -433,9 +433,9 @@
 > 详细问题单: `docs/ISSUE-HNSW-COSINE-SEARCH-OVERHEAD.md`
 > 来源: HannsDB 集成测试，50K/1536/cosine serial search，p99=110ms vs zvec 0.6ms
 
-- [ ] **HNSW-COSINE-SCRATCH-001** [P1]: Cosine 路径缺少 TLS scratch 复用 → `hnsw.rs:5299`
-- [ ] **HNSW-COSINE-QNORM-001** [P1]: `distance_to_idx_cosine_dispatch` 每次重算 query norm → `hnsw.rs:1280`
-- [ ] **HNSW-ALLOC-001** [P2]: `search()` 入口每次分配 all_ids/all_dists Vec → `hnsw.rs:3623`
+- [x] **HNSW-COSINE-SCRATCH-001** [P1]: ✅ 完成 (commit 94ca617) — TLS scratch 复用扩展到 cosine 路径; 10K/1536 p99: 110ms → 8.766ms (-92%)
+- [x] **HNSW-COSINE-QNORM-001** [P1]: ✅ 完成 (commits 94ca617, f13b9ee, 6037c99, 99332d6) — q_norm TLS 缓存 + v_norm build-time 预计算; 10K/1536 p99 再降 ~40%
+- [x] **HNSW-ALLOC-001** [P2]: ✅ 完成 (commit 6037c99) — `search_into()` zero-alloc 变体，调用方复用 buffer
 
 ---
 

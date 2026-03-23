@@ -102,7 +102,7 @@ fn distance_to_idx_cosine_dispatch(index: &HnswIndex, query: &[f32], idx: usize)
 
 ---
 
-## 问题 3: HNSW-ALLOC-001
+## 问题 3: HNSW-ALLOC-001 ✅ FIXED (commit 6037c99)
 
 **标题**: `search()` 入口每次调用分配 `all_ids`/`all_dists` Vec
 
@@ -161,3 +161,23 @@ VectorDBBench Python
 - HNSW 图搜索本体（knowhere-rs cosine）：~70–90ms
 - Python binding / PyDoc 构造：~8–15ms
 - wrapper/mapping/lock：~8–20ms
+
+---
+
+## 修复结果（2026-03-23）
+
+所有三项问题已修复，以下为 x86 权威数据（50K/1536/cosine/ef=32 serial search）：
+
+| 阶段 | p99 | vs 原始 |
+|------|-----|---------|
+| 修复前（原始）| 110ms | baseline |
+| SCRATCH-001 + QNORM-001 修复后 | **8.766ms** | **-92% (12.5x)** |
+| + v_norm build-time 缓存（99332d6）| TBD (x86 pending) | — |
+
+已知数字（Mac，50K/1536/cosine/ef=32）：
+- 修复后 + v_norm 缓存：p99=5.266ms（Mac，仅参考）
+
+x86 最终数字（v_norm 缓存后）在 hnsw_cosine_serial_bench 运行完毕后更新。
+
+**剩余差距**: 目标 zvec p99=0.6ms；当前 ~8-9ms（仍有 ~13x 差距）。
+根本原因待查：zvec 为 C++ HNSW，可能使用不同图参数、内存访问模式或平台特定优化。
