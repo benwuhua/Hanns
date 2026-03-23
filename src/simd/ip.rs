@@ -118,8 +118,7 @@ unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
         let va = unsafe { _mm512_loadu_ps(a.as_ptr().add(off)) };
         // SAFETY: off..off+16 is in-bounds; loadu supports unaligned access.
         let vb = unsafe { _mm512_loadu_ps(b.as_ptr().add(off)) };
-        let prod = _mm512_mul_ps(va, vb);
-        acc = _mm512_add_ps(acc, prod);
+        acc = _mm512_fmadd_ps(va, vb, acc);
     }
 
     // SAFETY: local stack array is valid for unaligned store.

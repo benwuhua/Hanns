@@ -104,11 +104,24 @@ impl ScalarQuantizer {
     pub fn decode_dot_f32(&self, codes: &[u8], query: &[f32]) -> f32 {
         debug_assert_eq!(codes.len(), query.len());
 
-        #[cfg(target_arch = "x86_64")]
-        {
-            if std::arch::is_x86_feature_detected!("avx2")
-                && std::arch::is_x86_feature_detected!("fma")
-                && codes.len() >= 8
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::arch::is_x86_feature_detected!("avx512f") && codes.len() >= 16 {
+            // SAFETY: AVX-512F path is guarded by runtime feature detection.
+            return unsafe {
+                decode_dot_avx512(
+                    codes,
+                    query,
+                    self.scale,
+                    self.offset,
+                    self.min_val,
+                    self.max_val,
+                )
+            };
+        }
+        if std::arch::is_x86_feature_detected!("avx2")
+            && std::arch::is_x86_feature_detected!("fma")
+            && codes.len() >= 8
             {
                 // SAFETY: AVX2+FMA path is guarded by runtime feature detection.
                 return unsafe {
@@ -452,6 +465,47 @@ unsafe fn decode_dot_avx2_fma(
         result += v * query[i];
     }
 
+    result
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+unsafe fn decode_dot_avx512(
+    codes: &[u8],
+    query: &[f32],
+    scale: f32,
+    offset: f32,
+    min_val: f32,
+    max_val: f32,
+) -> f32 {
+    use std::arch::x86_64::*;
+
+    let len = codes.len().min(query.len());
+    let chunks = len / 16;
+    let mut acc = _mm512_setzero_ps();
+    let v_inv_scale = _mm512_set1_ps(1.0 / scale);
+    let v_offset = _mm512_set1_ps(offset);
+    let v_min = _mm512_set1_ps(min_val);
+    let v_max = _mm512_set1_ps(max_val);
+
+    for i in 0..chunks {
+        let off = i * 16;
+        let c16 = _mm_loadu_si128(codes.as_ptr().add(off) as *const __m128i);
+        let c32 = _mm512_cvtepu8_epi32(c16);
+        let cf = _mm512_cvtepi32_ps(c32);
+
+        let decoded = _mm512_fmadd_ps(cf, v_inv_scale, v_offset);
+        let clamped = _mm512_min_ps(_mm512_max_ps(decoded, v_min), v_max);
+
+        let q = _mm512_loadu_ps(query.as_ptr().add(off));
+        acc = _mm512_fmadd_ps(clamped, q, acc);
+    }
+
+    let mut result = _mm512_reduce_add_ps(acc);
+    for i in (chunks * 16)..len {
+        let v = (codes[i] as f32 / scale + offset).clamp(min_val, max_val);
+        result += v * query[i];
+    }
     result
 }
 
