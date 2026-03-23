@@ -395,6 +395,7 @@ struct SearchScratch {
     layer0_frontier: Layer0OrderedFrontier,
     layer0_results: Layer0OrderedResults,
     query_bf16_scratch: Vec<u16>,
+    query_norm_cache: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1121,6 +1122,7 @@ impl SearchScratch {
             layer0_frontier: Layer0OrderedFrontier::default(),
             layer0_results: Layer0OrderedResults::default(),
             query_bf16_scratch: Vec::new(),
+            query_norm_cache: 0.0,
         }
     }
 
@@ -5306,6 +5308,10 @@ impl HnswIndex {
         // OPT-021: Multi-layer search with improved layer descent
         // Start from top layer and greedily search down.
         let mut scratch = SearchScratch::new();
+        if self.metric_type == MetricType::Cosine {
+            scratch.query_norm_cache = simd::inner_product(query, query).sqrt();
+            HNSW_COSINE_QUERY_NORM_TLS.with(|c| c.set(scratch.query_norm_cache));
+        }
         let mut curr_ep_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
         let mut best_ep_idx = curr_ep_idx;
         let mut curr_ep_dist = self.distance(query, curr_ep_idx);
@@ -5372,6 +5378,10 @@ impl HnswIndex {
                     break;
                 }
             }
+        }
+
+        if self.metric_type == MetricType::Cosine {
+            HNSW_COSINE_QUERY_NORM_TLS.with(|c| c.set(0.0));
         }
 
         final_results
