@@ -2682,17 +2682,6 @@ impl PQFlashIndex {
             );
         }
 
-        if final_alpha > 1.0 {
-            for &(candidate_id, _) in &filtered {
-                if selected.len() >= degree_limit {
-                    break;
-                }
-                if selected_ids.insert(candidate_id) {
-                    selected.push(candidate_id);
-                }
-            }
-        }
-
         selected
     }
 
@@ -2701,11 +2690,10 @@ impl PQFlashIndex {
         if neighbor_idx >= self.node_ids.len() || node_id == neighbor {
             return;
         }
-        if self.node_ids.len() > 100_000 {
-            // Guard retained: removing this causes -41% QPS and 9x build time regression
-            // at 1M scale (ARCH-007 validated negative, 2026-03-19). The incremental
-            // per-insertion robust_prune_scored() call is O(N*R^2) - not viable at 1M.
-            // True fix requires a full-graph prune pass (different build architecture).
+        if self.node_ids.len() > 500_000 {
+            // For very large graphs, incremental reverse-link maintenance is expensive.
+            // We still keep it enabled up to 500K and rely on vamana_refine_pass() for
+            // full-graph reverse-edge recovery beyond that size.
             return;
         }
         let stride = self.flat_stride.max(1);
