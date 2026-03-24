@@ -1216,6 +1216,112 @@ impl PQFlashIndex {
         Ok(())
     }
 
+    pub fn export_native_diskann_pq(&self, prefix: &str) -> Result<()> {
+        let encoder = self.pq_encoder.as_ref().ok_or_else(|| {
+            KnowhereError::InvalidArg("cannot export native PQ: pq_encoder is None".to_string())
+        })?;
+        if self.node_pq_codes.is_empty() {
+            return Err(KnowhereError::InvalidArg(
+                "cannot export native PQ: node_pq_codes is empty".to_string(),
+            ));
+        }
+
+        let n = self.node_ids.len();
+        let m = encoder.m;
+        let k = encoder.k;
+        let total_dim = encoder.dim;
+        let sub_dim = encoder.sub_dim;
+        if k != 256 {
+            return Err(KnowhereError::InvalidArg(format!(
+                "native DiskANN PQ export requires k=256, got k={k}"
+            )));
+        }
+        if total_dim != self.dim {
+            return Err(KnowhereError::InvalidArg(format!(
+                "encoder dim {} does not match index dim {}",
+                total_dim, self.dim
+            )));
+        }
+        if self.pq_code_size != m {
+            return Err(KnowhereError::InvalidArg(format!(
+                "pq_code_size {} does not match encoder.m {}",
+                self.pq_code_size, m
+            )));
+        }
+        if self.node_pq_codes.len() != n.saturating_mul(m) {
+            return Err(KnowhereError::InvalidArg(format!(
+                "node_pq_codes size mismatch: got {}, expected {}",
+                self.node_pq_codes.len(),
+                n.saturating_mul(m)
+            )));
+        }
+
+        let n_i32 = i32::try_from(n)
+            .map_err(|_| KnowhereError::InvalidArg(format!("too many points for i32: {n}")))?;
+        let dim_i32 = i32::try_from(total_dim).map_err(|_| {
+            KnowhereError::InvalidArg(format!("dimension too large for i32: {total_dim}"))
+        })?;
+        let m_i32 = i32::try_from(m)
+            .map_err(|_| KnowhereError::InvalidArg(format!("m too large for i32: {m}")))?;
+        let m_plus_one_i32 = i32::try_from(m + 1)
+            .map_err(|_| KnowhereError::InvalidArg(format!("m+1 too large for i32: {}", m + 1)))?;
+
+        // 1) {prefix}_pq_pivots.bin : [256 x total_dim] f32
+        let pivots_path = format!("{prefix}_pq_pivots.bin");
+        let mut pivots = vec![0.0f32; 256 * total_dim];
+        for centroid_id in 0..256usize {
+            for mi in 0..m {
+                for d in 0..sub_dim {
+                    let src = mi * 256 * sub_dim + centroid_id * sub_dim + d;
+                    let dst = centroid_id * total_dim + mi * sub_dim + d;
+                    pivots[dst] = encoder.codebooks[src];
+                }
+            }
+        }
+        let mut file = File::create(&pivots_path)?;
+        file.write_all(&(256i32).to_le_bytes())?;
+        file.write_all(&dim_i32.to_le_bytes())?;
+        for v in pivots {
+            file.write_all(&v.to_le_bytes())?;
+        }
+
+        // 2) {prefix}_pq_pivots.bin_rearrangement_perm.bin : [total_dim x 1] u32 identity
+        let perm_path = format!("{prefix}_pq_pivots.bin_rearrangement_perm.bin");
+        let mut file = File::create(&perm_path)?;
+        file.write_all(&dim_i32.to_le_bytes())?;
+        file.write_all(&(1i32).to_le_bytes())?;
+        for i in 0..total_dim {
+            file.write_all(&(i as u32).to_le_bytes())?;
+        }
+
+        // 3) {prefix}_pq_pivots.bin_chunk_offsets.bin : [m+1 x 1] u32 boundaries
+        let chunk_offsets_path = format!("{prefix}_pq_pivots.bin_chunk_offsets.bin");
+        let mut file = File::create(&chunk_offsets_path)?;
+        file.write_all(&m_plus_one_i32.to_le_bytes())?;
+        file.write_all(&(1i32).to_le_bytes())?;
+        for i in 0..=m {
+            file.write_all(&((i * sub_dim) as u32).to_le_bytes())?;
+        }
+
+        // 4) {prefix}_pq_pivots.bin_centroid.bin : [total_dim x 1] f32 zeros
+        let centroid_path = format!("{prefix}_pq_pivots.bin_centroid.bin");
+        let mut file = File::create(&centroid_path)?;
+        file.write_all(&dim_i32.to_le_bytes())?;
+        file.write_all(&(1i32).to_le_bytes())?;
+        for _ in 0..total_dim {
+            file.write_all(&0.0f32.to_le_bytes())?;
+        }
+
+        // 5) {prefix}_pq_compressed.bin : [N x M] u8 codes
+        let compressed_path = format!("{prefix}_pq_compressed.bin");
+        let mut file = File::create(&compressed_path)?;
+        file.write_all(&n_i32.to_le_bytes())?;
+        file.write_all(&m_i32.to_le_bytes())?;
+        file.write_all(&self.node_pq_codes)?;
+
+        Ok(())
+    }
+
     fn compute_build_max_degree(&self) -> usize {
         let slack = self.config.build_degree_slack_pct.max(100);
         self.config
@@ -4377,6 +4483,91 @@ mod tests {
         let gt = brute_force_topk_l2(&vectors, &queries, dim, k);
         let recall = compute_recall(&loaded_results, &gt, k);
         assert!(recall >= 0.65, "loaded pq recall@5 too low: {recall:.4}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_export_native_diskann_pq_format() {
+        use std::io::Read;
+
+        fn read_header(path: &std::path::Path) -> (i32, i32) {
+            let mut f = std::fs::File::open(path).unwrap();
+            let mut b = [0u8; 8];
+            f.read_exact(&mut b).unwrap();
+            let npts = i32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+            let ndims = i32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+            (npts, ndims)
+        }
+
+        let dim = 16usize;
+        let n = 300usize; // ensure resolve_pq_centroids -> 256
+        let mut rng = StdRng::seed_from_u64(123);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+
+        let config = AisaqConfig {
+            disk_pq_dims: 4,
+            max_degree: 16,
+            search_list_size: 32,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, dim).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+
+        let dir = make_temp_dir("pqflash_native_export");
+        fs::create_dir_all(&dir).unwrap();
+        let prefix = dir.join("native");
+        index
+            .export_native_diskann_pq(prefix.to_str().unwrap())
+            .unwrap();
+
+        let pivots = dir.join("native_pq_pivots.bin");
+        let perm = dir.join("native_pq_pivots.bin_rearrangement_perm.bin");
+        let chunk_offsets = dir.join("native_pq_pivots.bin_chunk_offsets.bin");
+        let centroid = dir.join("native_pq_pivots.bin_centroid.bin");
+        let compressed = dir.join("native_pq_compressed.bin");
+
+        let (npts, ndims) = read_header(&pivots);
+        assert_eq!(npts, 256);
+        assert_eq!(ndims, dim as i32);
+        assert_eq!(
+            std::fs::metadata(&pivots).unwrap().len() as usize,
+            8 + 256 * dim * std::mem::size_of::<f32>()
+        );
+
+        let (npts, ndims) = read_header(&perm);
+        assert_eq!(npts, dim as i32);
+        assert_eq!(ndims, 1);
+        assert_eq!(
+            std::fs::metadata(&perm).unwrap().len() as usize,
+            8 + dim * std::mem::size_of::<u32>()
+        );
+
+        let m = index.pq_code_size;
+        let (npts, ndims) = read_header(&chunk_offsets);
+        assert_eq!(npts, (m + 1) as i32);
+        assert_eq!(ndims, 1);
+        assert_eq!(
+            std::fs::metadata(&chunk_offsets).unwrap().len() as usize,
+            8 + (m + 1) * std::mem::size_of::<u32>()
+        );
+
+        let (npts, ndims) = read_header(&centroid);
+        assert_eq!(npts, dim as i32);
+        assert_eq!(ndims, 1);
+        assert_eq!(
+            std::fs::metadata(&centroid).unwrap().len() as usize,
+            8 + dim * std::mem::size_of::<f32>()
+        );
+
+        let (npts, ndims) = read_header(&compressed);
+        assert_eq!(npts, index.node_ids.len() as i32);
+        assert_eq!(ndims, m as i32);
+        assert_eq!(
+            std::fs::metadata(&compressed).unwrap().len() as usize,
+            8 + index.node_ids.len() * m
+        );
+
         let _ = fs::remove_dir_all(&dir);
     }
 
