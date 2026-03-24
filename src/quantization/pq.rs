@@ -115,6 +115,27 @@ impl ProductQuantizer {
         self.config.code_size()
     }
 
+    /// Return the full centroid table in `[m][ksub][sub_dim]` flattened order.
+    pub fn centroids(&self) -> &[f32] {
+        &self.centroids
+    }
+
+    /// Restore a trained centroid table without re-running k-means.
+    pub fn set_centroids(&mut self, centroids: Vec<f32>) -> Result<()> {
+        self.config.validate()?;
+        let expected = self.config.m * self.config.ksub() * self.config.sub_dim();
+        if centroids.len() != expected {
+            return Err(KnowhereError::InvalidArg(format!(
+                "Expected {} PQ centroids, got {}",
+                expected,
+                centroids.len()
+            )));
+        }
+        self.centroids = centroids;
+        self.is_trained = true;
+        Ok(())
+    }
+
     /// Train the product quantizer
     pub fn train(&mut self, n: usize, x: &[f32]) -> Result<()> {
         self.config.validate()?;

@@ -836,7 +836,7 @@ impl IvfPqIndex {
         let mut file = std::fs::File::create(path)?;
 
         file.write_all(b"IVFPQ")?;
-        file.write_all(&3u32.to_le_bytes())?; // version 3: add nprobe + metric_type
+        file.write_all(&4u32.to_le_bytes())?; // version 4: persist PQ codebook + per-list ids/codes
         file.write_all(&(self.dim as u32).to_le_bytes())?;
         file.write_all(&(self.nlist as u32).to_le_bytes())?;
         file.write_all(&(self.m as u32).to_le_bytes())?;
@@ -862,13 +862,27 @@ impl IvfPqIndex {
         let vec_bytes: Vec<u8> = self.vectors.iter().flat_map(|f| f.to_le_bytes()).collect();
         file.write_all(&vec_bytes)?;
 
-        // Inverted lists with PQ codes
+        // Persist trained PQ codebook to avoid load-time retraining.
+        let pq_centroids = self
+            .imported_pq_centroids
+            .as_deref()
+            .unwrap_or(self.pq.centroids());
+        file.write_all(&(pq_centroids.len() as u64).to_le_bytes())?;
+        let pq_bytes: Vec<u8> = pq_centroids.iter().flat_map(|f| f.to_le_bytes()).collect();
+        file.write_all(&pq_bytes)?;
+
+        // Inverted lists with ids + PQ codes
         for i in 0..self.nlist {
             let count = self.invlist_ids[i].len() as u32;
             file.write_all(&count.to_le_bytes())?;
         }
 
-        // Write all PQ codes
+        for i in 0..self.nlist {
+            for &id in &self.invlist_ids[i] {
+                file.write_all(&id.to_le_bytes())?;
+            }
+        }
+
         for i in 0..self.nlist {
             file.write_all(&self.invlist_codes[i])?;
         }
@@ -1336,6 +1350,55 @@ impl IvfPqIndex {
                 .push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
         }
 
+        if version >= 4 {
+            let mut pq_count_bytes = [0u8; 8];
+            file.read_exact(&mut pq_count_bytes)?;
+            let pq_count = u64::from_le_bytes(pq_count_bytes) as usize;
+            let mut pq_bytes = vec![0u8; pq_count * 4];
+            file.read_exact(&mut pq_bytes)?;
+            let mut pq_centroids = Vec::with_capacity(pq_count);
+            for chunk in pq_bytes.chunks_exact(4) {
+                pq_centroids.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+            }
+            self.pq.set_centroids(pq_centroids)?;
+            self.imported_pq_centroids = None;
+
+            let mut list_counts = vec![0usize; self.nlist];
+            for count in &mut list_counts {
+                let mut count_bytes = [0u8; 4];
+                file.read_exact(&mut count_bytes)?;
+                *count = u32::from_le_bytes(count_bytes) as usize;
+            }
+
+            for (cluster, &count) in list_counts.iter().enumerate() {
+                self.invlist_ids[cluster].clear();
+                self.invlist_ids[cluster].reserve(count);
+                for _ in 0..count {
+                    let mut id_bytes = [0u8; 8];
+                    file.read_exact(&mut id_bytes)?;
+                    self.invlist_ids[cluster].push(i64::from_le_bytes(id_bytes));
+                }
+            }
+
+            let code_size = self.active_code_size();
+            for (cluster, &count) in list_counts.iter().enumerate() {
+                let mut codes = vec![0u8; count * code_size];
+                if !codes.is_empty() {
+                    file.read_exact(&mut codes)?;
+                }
+                self.invlist_codes[cluster] = codes;
+            }
+
+            self.trained = true;
+            self.next_id = self.ids.iter().copied().max().map(|id| id + 1).unwrap_or(0);
+            return Ok(());
+        }
+
+        eprintln!(
+            "warning: loading legacy IVFPQ v{} format; retraining fine quantizer as fallback",
+            version
+        );
+
         // Retrain PQ from loaded vectors and rebuild inverted lists
         if id_count > 0 {
             // Compute all residuals
@@ -1375,7 +1438,7 @@ impl IvfPqIndex {
         }
 
         self.trained = true;
-        self.next_id = self.ids.last().map(|&id| id + 1).unwrap_or(0);
+        self.next_id = self.ids.iter().copied().max().map(|id| id + 1).unwrap_or(0);
         Ok(())
     }
 
@@ -1673,6 +1736,52 @@ mod tests {
             ivf.lists.iter().flatten().count() >= n,
             "placeholder IVF scaffold still stores raw vector positions in coarse lists"
         );
+    }
+
+    #[test]
+    fn test_ivfpq_save_load_preserves_pq_state_and_lists() {
+        let config = IndexConfig {
+            index_type: IndexType::IvfPq,
+            metric_type: MetricType::L2,
+            dim: 16,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                nlist: Some(4),
+                nprobe: Some(2),
+                m: Some(4),
+                nbits_per_idx: Some(8),
+                ..Default::default()
+            },
+        };
+
+        let mut index = IvfPqIndex::new(&config).unwrap();
+        let n = 128;
+        let dim = 16;
+        let mut vectors = Vec::with_capacity(n * dim);
+        for i in 0..n {
+            for j in 0..dim {
+                vectors.push(((i * 19 + j * 7) % 101) as f32 / 101.0);
+            }
+        }
+        let ids: Vec<i64> = (0..n as i64).map(|x| x * 3 + 7).collect();
+
+        index.train(&vectors).unwrap();
+        index.add(&vectors, Some(&ids)).unwrap();
+
+        let expected_invlist_ids = index.invlist_ids.clone();
+        let expected_invlist_codes = index.invlist_codes.clone();
+        let expected_centroids = index.pq.centroids().to_vec();
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        index.save(tmp.path()).unwrap();
+
+        let mut loaded = IvfPqIndex::new(&config).unwrap();
+        loaded.load(tmp.path()).unwrap();
+
+        assert_eq!(loaded.invlist_ids, expected_invlist_ids);
+        assert_eq!(loaded.invlist_codes, expected_invlist_codes);
+        assert_eq!(loaded.pq.centroids(), expected_centroids.as_slice());
+        assert!(loaded.imported_pq_centroids.is_none());
     }
 
     #[test]

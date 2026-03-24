@@ -1,3 +1,7 @@
+//! **LEGACY MODULE** — simplified Vamana implementation kept for reference.
+//! Production path is `diskann_aisaq.rs` (PQFlashIndex).
+//! Do not add new features here; improvements go to diskann_aisaq.rs.
+//!
 //! DiskANN-inspired index (Vamana algorithm) - Enhanced
 //!
 //! A graph-based index optimized for SSD storage.
@@ -33,6 +37,7 @@ use crate::simd;
 
 /// DiskANN configuration parameters
 /// Mirrors the C++ DiskANNConfig structure
+#[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
 #[derive(Clone, Debug)]
 pub struct DiskAnnConfig {
     /// Graph degree (max neighbors per node), typically 48-150
@@ -126,6 +131,7 @@ impl Default for DiskAnnConfig {
 }
 
 impl DiskAnnConfig {
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn from_index_config(config: &IndexConfig) -> Self {
         let params = &config.params;
         let search_list_size = params.search_list_size.unwrap_or(128);
@@ -180,6 +186,7 @@ impl DiskAnnConfig {
 }
 
 /// Statistics about the DiskANN index
+#[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
 #[derive(Debug, Clone, Default)]
 pub struct DiskAnnStats {
     pub num_nodes: usize,
@@ -191,6 +198,7 @@ pub struct DiskAnnStats {
     pub memory_usage_bytes: usize,
 }
 
+#[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiskAnnScopeAudit {
     pub dim: usize,
@@ -363,6 +371,7 @@ impl PQCode {
 }
 
 /// DiskANN-style graph index (Vamana) - Enhanced
+#[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
 pub struct DiskAnnIndex {
     config: IndexConfig,
     dann_config: DiskAnnConfig,
@@ -407,6 +416,7 @@ pub struct DiskAnnIndex {
 }
 
 impl DiskAnnIndex {
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn new(config: &IndexConfig) -> Result<Self> {
         if config.dim == 0 {
             return Err(crate::api::KnowhereError::InvalidArg(
@@ -446,6 +456,7 @@ impl DiskAnnIndex {
         })
     }
 
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn train(&mut self, vectors: &[f32]) -> Result<()> {
         let n = vectors.len() / self.dim;
         if n * self.dim != vectors.len() {
@@ -530,6 +541,7 @@ impl DiskAnnIndex {
         Ok(())
     }
 
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn scope_audit(&self) -> DiskAnnScopeAudit {
         DiskAnnScopeAudit {
             dim: self.dim,
@@ -1978,6 +1990,7 @@ impl DiskAnnIndex {
         }
     }
 
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn add(&mut self, vectors: &[f32], ids: Option<&[i64]>) -> Result<usize> {
         let n = vectors.len() / self.dim;
 
@@ -1994,6 +2007,7 @@ impl DiskAnnIndex {
 
     /// Insert a single vector into an existing index without full rebuild.
     /// Returns internal index of the newly inserted node.
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn insert_point(&mut self, vector: &[f32], external_id: i64) -> Result<usize> {
         if vector.len() != self.dim {
             return Err(crate::api::KnowhereError::InvalidArg(format!(
@@ -2099,21 +2113,25 @@ impl DiskAnnIndex {
     }
 
     /// Mark a vector by external ID as deleted (soft delete).
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn lazy_delete(&mut self, external_id: i64) -> bool {
         self.deleted_ids.insert(external_id)
     }
 
     /// Returns true if the external ID was marked deleted.
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn is_deleted(&self, external_id: i64) -> bool {
         self.deleted_ids.contains(&external_id)
     }
 
     /// Number of non-deleted vectors.
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn live_count(&self) -> usize {
         self.ids.len().saturating_sub(self.deleted_ids.len())
     }
 
     /// Remove edges pointing to deleted nodes.
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn consolidate(&mut self) {
         let n = self.ids.len();
         let r = self.dann_config.max_degree;
@@ -2149,6 +2167,7 @@ impl DiskAnnIndex {
         }
     }
 
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<SearchResult> {
         if self.ids.is_empty() {
             return Err(crate::api::KnowhereError::InvalidArg(
@@ -2526,6 +2545,7 @@ impl DiskAnnIndex {
     }
 
     /// Range search: find all vectors within radius
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn range_search(
         &self,
         query: &[f32],
@@ -2606,11 +2626,13 @@ impl DiskAnnIndex {
 
     /// Create an iterator for streaming search results
     #[allow(non_snake_case)]
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn search_iterator<'a>(&'a self, query: &'a [f32], L: usize) -> DiskAnnIterator<'a> {
         DiskAnnIterator::new(self, query, L)
     }
 
     /// Get statistics about the index
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn get_stats(&self) -> DiskAnnStats {
         let n = self.ids.len();
         let mut num_edges = 0;
@@ -2658,10 +2680,12 @@ impl DiskAnnIndex {
         }
     }
 
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn ntotal(&self) -> usize {
         self.ids.len()
     }
 
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn save(&self, path: &std::path::Path) -> Result<()> {
         use std::fs::File;
         use std::io::Write;
@@ -2723,6 +2747,7 @@ impl DiskAnnIndex {
         Ok(())
     }
 
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn load(&mut self, path: &std::path::Path) -> Result<()> {
         use std::fs::File;
         use std::io::Read;
@@ -2973,6 +2998,7 @@ impl Ord for ReverseOrderedFloat {
 
 /// Iterator for streaming DiskANN search results
 #[allow(dead_code)]
+#[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
 pub struct DiskAnnIterator<'a> {
     index: &'a DiskAnnIndex,
     results: Vec<(i64, f32)>,
@@ -2991,6 +3017,7 @@ impl<'a> DiskAnnIterator<'a> {
     }
 
     /// Get remaining count
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn remaining(&self) -> usize {
         self.results.len() - self.current
     }
@@ -4901,12 +4928,14 @@ use crate::index::{AnnIterator, Index, IndexError};
 use std::time::Instant;
 
 /// Wrapper to adapt DiskAnnIterator to the AnnIterator trait
+#[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
 pub struct DiskAnnIteratorWrapper {
     results: Vec<(i64, f32)>,
     current: usize,
 }
 
 impl DiskAnnIteratorWrapper {
+    #[deprecated(note = "use PQFlashIndex in diskann_aisaq.rs instead")]
     pub fn new(results: Vec<(i64, f32)>) -> Self {
         Self {
             results,

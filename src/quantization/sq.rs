@@ -42,6 +42,10 @@ impl ScalarQuantizer {
         }
     }
 
+    // NOTE: Uses global min/max across all dims.
+    // Native faiss ScalarQuantizer(QT_8bit) trains per-dim range.
+    // For high-dimensional data with uneven dim distributions, recall may diverge.
+    // TODO: add per-dim mode for native parity.
     /// 训练量化器 (确定 min/max/scale)
     pub fn train(&mut self, data: &[f32]) {
         if data.is_empty() {

@@ -1,4 +1,6 @@
-//! IVF-Flat index implementation.
+//! **LEGACY/SCAFFOLD MODULE** — simplified IVF container, not native-compatible.
+//! Lacks: metric_type dispatch, standard k-means training, range search, serialization.
+//! For parity with native knowhere, see ivf_sq8.rs / ivfpq.rs / ivf_flat.rs.
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -13,6 +15,7 @@ use crate::simd::{dot_product_f32, l2_distance_sq};
 /// IVF-Flat index.
 ///
 /// Stores full-precision vectors in inverted lists (no quantization).
+#[deprecated(note = "use IvfFlatIndex (ivf_flat.rs) or IvfSq8Index (ivf_sq8.rs) for native parity")]
 pub struct IvfIndex {
     pub dim: usize,
     pub nlist: usize,
