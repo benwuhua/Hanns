@@ -64,6 +64,9 @@ pub struct AisaqConfig {
     /// Build-time Vamana search list size (0 = auto derive from search_list_size/max_degree)
     #[serde(default)]
     pub build_search_list_size: usize,
+    /// Build batch size for parallel insertion path.
+    #[serde(default = "default_build_batch_size")]
+    pub build_batch_size: usize,
     pub warm_up: bool,
     pub filter_threshold: f32,
     #[serde(default)]
@@ -88,6 +91,10 @@ fn default_refine_passes() -> usize {
     2
 }
 
+fn default_build_batch_size() -> usize {
+    2048
+}
+
 impl Default for AisaqConfig {
     fn default() -> Self {
         Self {
@@ -109,6 +116,7 @@ impl Default for AisaqConfig {
             random_seed: 42,
             build_degree_slack_pct: 100,
             build_search_list_size: 0,
+            build_batch_size: 2048,
             warm_up: false,
             filter_threshold: -1.0,
             search_io_limit: None,
@@ -995,7 +1003,7 @@ impl PQFlashIndex {
         #[cfg(feature = "parallel")]
         {
             use rayon::prelude::*;
-            let batch_size = 512usize.min(num_vectors).max(1);
+            let batch_size = self.config.build_batch_size.max(1).min(num_vectors);
             let mut row = 0usize;
 
             while row < num_vectors {
