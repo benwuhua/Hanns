@@ -71,6 +71,32 @@ impl IvfPqIndex {
     }
 
     #[inline]
+    fn dist_in_range(&self, dist: f32, radius: f32, range_filter: f32) -> bool {
+        match self.config.metric_type {
+            MetricType::L2 | MetricType::Hamming => radius <= dist && dist <= range_filter,
+            MetricType::Ip | MetricType::Cosine => range_filter <= dist && dist <= radius,
+        }
+    }
+
+    #[inline]
+    fn subspace_score(&self, a: &[f32], b: &[f32]) -> f32 {
+        match self.config.metric_type {
+            MetricType::L2 | MetricType::Hamming => {
+                a.iter()
+                    .zip(b.iter())
+                    .map(|(&x, &y)| {
+                        let d = x - y;
+                        d * d
+                    })
+                    .sum()
+            }
+            MetricType::Ip | MetricType::Cosine => {
+                -a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum::<f32>()
+            }
+        }
+    }
+
+    #[inline]
     fn metric_to_byte(metric: MetricType) -> u8 {
         match metric {
             MetricType::L2 => 0,
@@ -431,21 +457,7 @@ impl IvfPqIndex {
 
             for c in 0..ksub {
                 let centroid = &centroids[c * sub_dim..(c + 1) * sub_dim];
-                let mut dist = 0.0f32;
-                match self.config.metric_type {
-                    MetricType::L2 | MetricType::Hamming => {
-                        for d in 0..sub_dim {
-                            let diff = query_sub[d] - centroid[d];
-                            dist += diff * diff;
-                        }
-                    }
-                    MetricType::Ip | MetricType::Cosine => {
-                        for d in 0..sub_dim {
-                            dist -= query_sub[d] * centroid[d];
-                        }
-                    }
-                }
-                dists.push(dist);
+                dists.push(self.subspace_score(query_sub, centroid));
             }
             table.push(dists);
         }
@@ -486,21 +498,7 @@ impl IvfPqIndex {
             for c in 0..ksub {
                 let centroid_offset = sub_q * ksub * sub_dim + c * sub_dim;
                 let centroid = &centroids[centroid_offset..centroid_offset + sub_dim];
-                let mut dist = 0.0f32;
-                match self.config.metric_type {
-                    MetricType::L2 | MetricType::Hamming => {
-                        for i in 0..sub_dim {
-                            let d = query_sub[i] - centroid[i];
-                            dist += d * d;
-                        }
-                    }
-                    MetricType::Ip | MetricType::Cosine => {
-                        for i in 0..sub_dim {
-                            dist -= query_sub[i] * centroid[i];
-                        }
-                    }
-                }
-                dists.push(dist);
+                dists.push(self.subspace_score(query_sub, centroid));
             }
             table.push(dists);
         }
@@ -706,6 +704,52 @@ impl IvfPqIndex {
         }
 
         Ok(SearchResult::new(all_ids, all_dists, 0.0))
+    }
+
+    pub fn range_search(&self, query: &[f32], radius: f32, range_filter: f32) -> Vec<(i64, f32)> {
+        if self.ids.is_empty() || query.len() != self.dim {
+            return Vec::new();
+        }
+
+        let mut candidates = Vec::new();
+        let code_size = self.active_code_size();
+        let opq_enabled = self.opq_enabled();
+
+        for cluster in 0..self.nlist {
+            let ids = &self.invlist_ids[cluster];
+            let codes = &self.invlist_codes[cluster];
+            if ids.is_empty() {
+                continue;
+            }
+
+            let mut query_residual = vec![0.0f32; self.dim];
+            for j in 0..self.dim {
+                query_residual[j] = query[j] - self.centroids[cluster * self.dim + j];
+            }
+
+            if opq_enabled {
+                let opq = self.opq.as_ref().expect("OPQ must be present when enabled");
+                let rotated_residual = opq.apply_rotation_single(&query_residual);
+                let table = self.precompute_distance_table_opq(opq, &rotated_residual);
+                candidates.extend(
+                    ids.iter()
+                        .zip(codes.chunks(code_size))
+                        .map(|(id, code)| (*id, self.adc_distance(&table, code)))
+                        .filter(|(_, dist)| self.dist_in_range(*dist, radius, range_filter)),
+                );
+            } else {
+                let table = self.precompute_distance_table(&query_residual);
+                candidates.extend(
+                    ids.iter()
+                        .zip(codes.chunks(code_size))
+                        .map(|(id, code)| (*id, self.adc_distance(&table, code)))
+                        .filter(|(_, dist)| self.dist_in_range(*dist, radius, range_filter)),
+                );
+            }
+        }
+
+        candidates.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        candidates
     }
 
     /// Search multiple queries in parallel (requires rayon)
@@ -1447,7 +1491,10 @@ impl IvfPqIndex {
         let mut min_dist = f32::MAX;
         let mut best = 0;
         for (i, centroid) in self.centroids.chunks(self.dim).enumerate() {
-            let dist = self.centroid_score(vector, centroid);
+            let dist = match self.config.metric_type {
+                MetricType::L2 | MetricType::Hamming => l2_distance_sq(vector, centroid),
+                MetricType::Ip | MetricType::Cosine => -dot_product_f32(vector, centroid),
+            };
             if dist < min_dist {
                 min_dist = dist;
                 best = i;
@@ -1782,6 +1829,43 @@ mod tests {
         assert_eq!(loaded.invlist_codes, expected_invlist_codes);
         assert_eq!(loaded.pq.centroids(), expected_centroids.as_slice());
         assert!(loaded.imported_pq_centroids.is_none());
+    }
+
+    #[test]
+    fn test_ivfpq_range_search_returns_hits_within_bounds() {
+        let config = IndexConfig {
+            index_type: IndexType::IvfPq,
+            metric_type: MetricType::L2,
+            dim: 16,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                nlist: Some(4),
+                nprobe: Some(2),
+                m: Some(4),
+                nbits_per_idx: Some(8),
+                ..Default::default()
+            },
+        };
+
+        let mut index = IvfPqIndex::new(&config).unwrap();
+        let n = 64;
+        let dim = 16;
+        let mut vectors = Vec::with_capacity(n * dim);
+        for i in 0..n {
+            for j in 0..dim {
+                vectors.push(((i * 13 + j * 5) % 89) as f32 / 89.0);
+            }
+        }
+
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        let query = vectors[0..dim].to_vec();
+        let hits = index.range_search(&query, 0.0, 5.0);
+
+        assert!(!hits.is_empty());
+        assert!(hits.windows(2).all(|w| w[0].1 <= w[1].1));
+        assert!(hits.iter().all(|(_, dist)| *dist >= 0.0 && *dist <= 5.0));
     }
 
     #[test]

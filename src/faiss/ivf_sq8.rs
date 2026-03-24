@@ -523,6 +523,14 @@ impl IvfSq8Index {
         true
     }
 
+    #[inline]
+    fn dist_in_range(&self, dist: f32, radius: f32, range_filter: f32) -> bool {
+        match self.metric_type {
+            MetricType::L2 | MetricType::Hamming => radius <= dist && dist <= range_filter,
+            MetricType::Ip | MetricType::Cosine => range_filter <= dist && dist <= radius,
+        }
+    }
+
     /// Find nearest centroid
     fn find_nearest_centroid(&self, vector: &[f32]) -> usize {
         match self.metric_type {
@@ -794,6 +802,46 @@ impl IvfSq8Index {
         }
 
         Ok(SearchResult::new(all_ids, all_dists, 0.0))
+    }
+
+    pub fn range_search(&self, query: &[f32], radius: f32, range_filter: f32) -> Vec<(i64, f32)> {
+        if !self.trained || self.ids.is_empty() || query.len() != self.dim {
+            return Vec::new();
+        }
+
+        let mut results = Vec::new();
+        let mut q_residual_buf = vec![0.0f32; self.dim];
+        let mut q_precomputed_buf = vec![0i16; self.dim];
+
+        for cluster_id in 0..self.nlist {
+            let Some((cluster_ids, _)) = self.inverted_lists.get(&cluster_id) else {
+                continue;
+            };
+            if cluster_ids.is_empty() {
+                continue;
+            }
+
+            let hits = self
+                .scan_cluster_with_buf(
+                    cluster_id,
+                    query,
+                    cluster_ids.len(),
+                    &mut q_residual_buf,
+                    &mut q_precomputed_buf,
+                    None,
+                    None,
+                )
+                .into_hits();
+
+            results.extend(
+                hits.into_iter()
+                    .filter(|hit| self.dist_in_range(hit.dist, radius, range_filter))
+                    .map(|hit| (hit.id, hit.dist)),
+            );
+        }
+
+        results.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        results
     }
 
     /// Get total number of vectors
@@ -1774,6 +1822,34 @@ mod tests {
         assert_eq!(result.ids.len(), 2);
         // Should find the closest vectors (ids 0 and 1)
         assert!(result.ids[0] == 0 || result.ids[0] == 1);
+    }
+
+    #[test]
+    fn test_ivf_sq8_range_search_returns_hits_within_bounds() {
+        let config = IndexConfig {
+            index_type: IndexType::IvfSq8,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: IndexParams::ivf_sq8(4, 2),
+        };
+
+        let mut index = IvfSq8Index::new(&config).unwrap();
+        let vectors = vec![
+            0.0, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            2.0, 0.0, 0.0, 0.0, //
+            4.0, 0.0, 0.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        let query = vec![0.0, 0.0, 0.0, 0.0];
+        let hits = index.range_search(&query, 0.0, 1.5);
+
+        assert!(!hits.is_empty());
+        assert!(hits.windows(2).all(|w| w[0].1 <= w[1].1));
+        assert!(hits.iter().all(|(_, dist)| *dist >= 0.0 && *dist <= 1.5));
     }
 
     #[test]

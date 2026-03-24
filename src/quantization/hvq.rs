@@ -1,3 +1,7 @@
+//! **EXPERIMENTAL** — HvqQuantizer has no native knowhere equivalent.
+//! Not suitable for cross-implementation parity testing.
+//! Benchmark results should not be compared against native IVF-PQ/SQ metrics.
+
 use nalgebra::linalg::QR;
 use nalgebra::DMatrix;
 use rand::rngs::StdRng;
@@ -9,6 +13,7 @@ pub struct HvqConfig {
     pub nbits: u8,
 }
 
+#[doc = "⚠️ Experimental: no native parity"]
 pub struct HvqQuantizer {
     pub config: HvqConfig,
     pub rotation_matrix: Vec<f32>, // row-major dim x dim
