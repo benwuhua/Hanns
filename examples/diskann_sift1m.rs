@@ -193,6 +193,36 @@ fn run_one_config(
     })
 }
 
+fn search_at_l(
+    index: &mut PQFlashIndex,
+    queries: &[f32],
+    gt: &[Vec<i32>],
+    dim: usize,
+    l: usize,
+) -> Result<(f64, f64), Box<dyn Error>> {
+    index.set_search_list_size(l);
+
+    let query_n = queries.len() / dim;
+    let t = Instant::now();
+    let batch = index.search_batch(queries, TOP_K)?;
+    let qps = query_n as f64 / t.elapsed().as_secs_f64().max(f64::EPSILON);
+
+    let recall_n = RECALL_QUERIES.min(query_n).min(gt.len());
+    let mut recall_sum = 0.0;
+    for (i, gt_row) in gt.iter().enumerate().take(recall_n) {
+        let s = i * TOP_K;
+        let e = s + TOP_K;
+        recall_sum += recall_at_k(gt_row, &batch.ids[s..e], TOP_K);
+    }
+    let recall = if recall_n > 0 {
+        recall_sum / recall_n as f64
+    } else {
+        0.0
+    };
+
+    Ok((recall, qps))
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
@@ -241,41 +271,47 @@ fn main() -> Result<(), Box<dyn Error>> {
     let dim = base_dim;
 
     println!("--- NoPQ (disk_pq_dims=0) ---");
-    let mut nopq_cfg = AisaqConfig {
+    let nopq_cfg = AisaqConfig {
         disk_pq_dims: 0,
         search_list_size: 128,
         cache_all_on_load: true,
         ..AisaqConfig::default()
     };
 
-    let mut nopq_results: Vec<(usize, RunMetrics)> = Vec::new();
+    let mut build_cfg = nopq_cfg.clone();
+    build_cfg.search_list_size = 128;
+    let mut index = PQFlashIndex::new(build_cfg, MetricType::L2, dim)?;
+
+    let t0 = Instant::now();
+    index.train(&learn)?;
+    let train_s = t0.elapsed().as_secs_f64();
+
+    let t1 = Instant::now();
+    index.add(&base)?;
+    let add_s = t1.elapsed().as_secs_f64();
+
+    let save_dir = unique_temp_dir("nopq_shared_build");
+    let t2 = Instant::now();
+    let _ = index.save(&save_dir)?;
+    let save_s = t2.elapsed().as_secs_f64();
+
+    let t3 = Instant::now();
+    let mut loaded = PQFlashIndex::load(&save_dir)?;
+    let load_s = t3.elapsed().as_secs_f64();
+
+    println!(
+        "build: train={:.2}s add={:.2}s total={:.2}s",
+        train_s,
+        add_s,
+        train_s + add_s
+    );
+    println!("save: {:.2}s  load: {:.2}s", save_s, load_s);
+
     for &l in &[64usize, 128usize, 200usize] {
-        nopq_cfg.search_list_size = l;
-        let metrics = run_one_config(
-            nopq_cfg.clone(),
-            &format!("nopq_l{}", l),
-            dim,
-            &learn,
-            &base,
-            &queries,
-            &gt,
-        )?;
-        nopq_results.push((l, metrics));
+        let (recall, qps) = search_at_l(&mut loaded, &queries, &gt, dim, l)?;
+        println!("L={}:  recall@10={:.3} QPS={:.0}", l, recall, qps);
     }
-
-    if let Some((_, m128)) = nopq_results.iter().find(|(l, _)| *l == 128) {
-        println!(
-            "build: train={:.2}s add={:.2}s total={:.2}s",
-            m128.train_s,
-            m128.add_s,
-            m128.train_s + m128.add_s
-        );
-        println!("save: {:.2}s  load: {:.2}s", m128.save_s, m128.load_s);
-    }
-
-    for (l, m) in &nopq_results {
-        println!("L={}:  recall@10={:.3} QPS={:.0}", l, m.recall, m.qps);
-    }
+    let _ = std::fs::remove_dir_all(&save_dir);
 
     println!("--- PQ32 (disk_pq_dims=32) ---");
     let pq32_cfg = AisaqConfig {

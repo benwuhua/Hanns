@@ -1325,6 +1325,10 @@ impl PQFlashIndex {
         self.search_internal(query, k, None)
     }
 
+    pub fn set_search_list_size(&mut self, l: usize) {
+        self.config.search_list_size = l.max(1);
+    }
+
     pub fn search_with_bitset(
         &self,
         query: &[f32],
