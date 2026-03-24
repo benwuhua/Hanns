@@ -5913,6 +5913,295 @@ impl HnswIndex {
         Ok(index)
     }
 
+    /// Import native knowhere/hnswlib binary bytes.
+    ///
+    /// Expected layout follows hnswlib serialization:
+    /// header -> level-0 memory block -> optional cosine norms -> per-node upper link lists.
+    pub fn import_from_hnswlib_bytes(data: &[u8]) -> Result<Self> {
+        use std::io::Cursor;
+        use std::io::Read;
+
+        fn read_u64<R: Read>(r: &mut R) -> Result<u64> {
+            let mut b = [0u8; 8];
+            r.read_exact(&mut b)?;
+            Ok(u64::from_le_bytes(b))
+        }
+        fn read_i32<R: Read>(r: &mut R) -> Result<i32> {
+            let mut b = [0u8; 4];
+            r.read_exact(&mut b)?;
+            Ok(i32::from_le_bytes(b))
+        }
+        fn read_u32<R: Read>(r: &mut R) -> Result<u32> {
+            let mut b = [0u8; 4];
+            r.read_exact(&mut b)?;
+            Ok(u32::from_le_bytes(b))
+        }
+        fn read_f64<R: Read>(r: &mut R) -> Result<f64> {
+            let mut b = [0u8; 8];
+            r.read_exact(&mut b)?;
+            Ok(f64::from_le_bytes(b))
+        }
+        fn read_f32<R: Read>(r: &mut R) -> Result<f32> {
+            let mut b = [0u8; 4];
+            r.read_exact(&mut b)?;
+            Ok(f32::from_le_bytes(b))
+        }
+
+        #[inline]
+        fn metric_dist(metric: MetricType, a: &[f32], b: &[f32]) -> f32 {
+            match metric {
+                MetricType::L2 => {
+                    let mut s = 0.0f32;
+                    for i in 0..a.len() {
+                        let d = a[i] - b[i];
+                        s += d * d;
+                    }
+                    s
+                }
+                MetricType::Ip | MetricType::Cosine => {
+                    let mut dot = 0.0f32;
+                    for i in 0..a.len() {
+                        dot += a[i] * b[i];
+                    }
+                    -dot
+                }
+                MetricType::Hamming => {
+                    let mut cnt = 0u32;
+                    for i in 0..a.len() {
+                        cnt += (a[i].to_bits() ^ b[i].to_bits()).count_ones();
+                    }
+                    cnt as f32
+                }
+            }
+        }
+
+        let mut cur = Cursor::new(data);
+
+        // Header
+        let metric_raw = read_u64(&mut cur)?;
+        let metric_type = match metric_raw {
+            0 => MetricType::L2,
+            1 => MetricType::Ip,
+            2 => MetricType::Cosine,
+            10 => MetricType::Hamming,
+            other => {
+                return Err(crate::api::KnowhereError::Codec(format!(
+                    "unsupported hnswlib metric_type {}",
+                    other
+                )))
+            }
+        };
+        let data_size = read_u64(&mut cur)? as usize;
+        let dim = read_u64(&mut cur)? as usize;
+        if dim == 0 {
+            return Err(crate::api::KnowhereError::Codec("invalid dim=0".to_string()));
+        }
+        if data_size != dim * std::mem::size_of::<f32>() {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "data_size mismatch: {} != dim*4 {}",
+                data_size,
+                dim * 4
+            )));
+        }
+        let _offset_level0 = read_u64(&mut cur)?;
+        let _max_elements = read_u64(&mut cur)?;
+        let cur_element_count = read_u64(&mut cur)? as usize;
+        let size_data_per_element = read_u64(&mut cur)? as usize;
+        let _label_offset = read_u64(&mut cur)?;
+        let offset_data = read_u64(&mut cur)? as usize;
+        let maxlevel_hdr = read_i32(&mut cur)? as usize;
+        let enterpoint_node = read_i32(&mut cur)?;
+        let max_m = read_u64(&mut cur)? as usize;
+        let max_m0 = read_u64(&mut cur)? as usize;
+        let m = read_u64(&mut cur)? as usize;
+        let mult = read_f64(&mut cur)? as f32;
+        let ef_construction = read_u64(&mut cur)? as usize;
+
+        if m == 0 || max_m == 0 || max_m0 == 0 {
+            return Err(crate::api::KnowhereError::Codec(
+                "invalid M/maxM/maxM0 in hnswlib header".to_string(),
+            ));
+        }
+        if offset_data + dim * 4 > size_data_per_element {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "offsetData out of bounds: offset_data={} dim={} size_data_per_element={}",
+                offset_data, dim, size_data_per_element
+            )));
+        }
+
+        // Level-0 block.
+        let block_len = cur_element_count
+            .checked_mul(size_data_per_element)
+            .ok_or_else(|| crate::api::KnowhereError::Codec("level0 block size overflow".to_string()))?;
+        let mut level0 = vec![0u8; block_len];
+        cur.read_exact(&mut level0)?;
+
+        let mut vectors = vec![0.0f32; cur_element_count * dim];
+        let mut level0_neighbors: Vec<Vec<u32>> = vec![Vec::new(); cur_element_count];
+
+        for node in 0..cur_element_count {
+            let base = node * size_data_per_element;
+            let count_padded = u32::from_le_bytes([
+                level0[base],
+                level0[base + 1],
+                level0[base + 2],
+                level0[base + 3],
+            ]);
+            let degree = ((count_padded & 0xFFFF) as usize).min(max_m0);
+
+            let neigh_base = base + 4;
+            let mut neighs = Vec::with_capacity(degree);
+            for i in 0..degree {
+                let off = neigh_base + i * 4;
+                let nbr =
+                    u32::from_le_bytes([level0[off], level0[off + 1], level0[off + 2], level0[off + 3]]);
+                if (nbr as usize) < cur_element_count && nbr as usize != node {
+                    neighs.push(nbr);
+                }
+            }
+            level0_neighbors[node] = neighs;
+
+            let vec_base = base + offset_data;
+            for d in 0..dim {
+                let off = vec_base + d * 4;
+                vectors[node * dim + d] = f32::from_le_bytes([
+                    level0[off],
+                    level0[off + 1],
+                    level0[off + 2],
+                    level0[off + 3],
+                ]);
+            }
+        }
+
+        if metric_type == MetricType::Cosine {
+            // Serialized norms are ignored; normalize vectors directly.
+            for _ in 0..cur_element_count {
+                let _ = read_f32(&mut cur)?;
+            }
+            for vec in vectors.chunks_exact_mut(dim) {
+                let norm = simd::inner_product(vec, vec).sqrt();
+                if norm > 0.0 {
+                    let inv = 1.0 / norm;
+                    for v in vec.iter_mut() {
+                        *v *= inv;
+                    }
+                }
+            }
+        }
+
+        // Per-node upper links.
+        let upper_block = max_m
+            .checked_mul(4)
+            .and_then(|v| v.checked_add(4))
+            .ok_or_else(|| crate::api::KnowhereError::Codec("upper block size overflow".to_string()))?;
+        let mut element_levels = vec![0usize; cur_element_count];
+        let mut upper_neighbors: Vec<Vec<Vec<u32>>> = vec![Vec::new(); cur_element_count];
+
+        for node in 0..cur_element_count {
+            let link_list_size = read_u32(&mut cur)? as usize;
+            if link_list_size == 0 {
+                continue;
+            }
+            if link_list_size % upper_block != 0 {
+                return Err(crate::api::KnowhereError::Codec(format!(
+                    "invalid linkListSize {} for node {} (block={})",
+                    link_list_size, node, upper_block
+                )));
+            }
+            let levels = link_list_size / upper_block;
+            element_levels[node] = levels;
+            let mut blob = vec![0u8; link_list_size];
+            cur.read_exact(&mut blob)?;
+            let mut per_level = Vec::with_capacity(levels);
+            for lvl in 0..levels {
+                let base = lvl * upper_block;
+                let cnt_padded =
+                    u32::from_le_bytes([blob[base], blob[base + 1], blob[base + 2], blob[base + 3]]);
+                let degree = ((cnt_padded & 0xFFFF) as usize).min(max_m);
+                let mut neighs = Vec::with_capacity(degree);
+                for i in 0..degree {
+                    let off = base + 4 + i * 4;
+                    let nbr =
+                        u32::from_le_bytes([blob[off], blob[off + 1], blob[off + 2], blob[off + 3]]);
+                    if (nbr as usize) < cur_element_count && nbr as usize != node {
+                        neighs.push(nbr);
+                    }
+                }
+                per_level.push(neighs);
+            }
+            upper_neighbors[node] = per_level;
+        }
+
+        let parsed_max_level = element_levels.iter().copied().max().unwrap_or(0);
+        let max_level = maxlevel_hdr.max(parsed_max_level);
+        let ids: Vec<i64> = (0..cur_element_count as i64).collect();
+
+        let mut node_info = Vec::with_capacity(cur_element_count);
+        for node in 0..cur_element_count {
+            let node_max = element_levels[node];
+            let mut ni = NodeInfo::new(node_max, m);
+            let vec_i = &vectors[node * dim..(node + 1) * dim];
+
+            // layer 0
+            for &nbr in &level0_neighbors[node] {
+                let vec_n = &vectors[nbr as usize * dim..(nbr as usize + 1) * dim];
+                let dist = metric_dist(metric_type, vec_i, vec_n);
+                ni.layer_neighbors[0].push(nbr as i64, dist);
+            }
+            // upper layers (stored from layer1..layerN)
+            for layer in 1..=node_max {
+                for &nbr in &upper_neighbors[node][layer - 1] {
+                    let vec_n = &vectors[nbr as usize * dim..(nbr as usize + 1) * dim];
+                    let dist = metric_dist(metric_type, vec_i, vec_n);
+                    ni.layer_neighbors[layer].push(nbr as i64, dist);
+                }
+            }
+            node_info.push(ni);
+        }
+
+        let entry_point = if cur_element_count == 0 {
+            None
+        } else {
+            Some(enterpoint_node.max(0) as i64)
+        };
+
+        let bootstrap_config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type,
+            data_type: DataType::Float,
+            dim,
+            params: crate::api::IndexParams {
+                m: Some(m),
+                ef_construction: Some(ef_construction),
+                ef_search: Some(ef_construction.max(1)),
+                ml: Some(if mult > 0.0 { mult } else { 1.0 / (m as f32).ln() }),
+                ..Default::default()
+            },
+        };
+
+        let mut index = Self::new(&bootstrap_config)?;
+        index.dim = dim;
+        index.metric_type = metric_type;
+        index.distance_to_idx_fn = Self::resolve_distance_to_idx_fn(metric_type);
+        index.l2_distance_sq_ptr_kernel = simd::l2_distance_sq_ptr_kernel();
+        index.entry_point = entry_point;
+        index.max_level = max_level;
+        index.vectors = vectors;
+        index.ids = ids;
+        index.node_info = node_info;
+        index.next_id = cur_element_count as i64;
+        index.trained = true;
+        index.m = m;
+        index.m_max0 = max_m0;
+        index.ef_construction = ef_construction;
+        index.ef_search = ef_construction.max(1);
+        index.level_multiplier = if mult > 0.0 { mult } else { 1.0 / (m as f32).ln() };
+        index.use_sequential_ids = true;
+        index.rebuild_bf16_storage();
+        index.refresh_layer0_flat_graph();
+        Ok(index)
+    }
+
     pub fn load(&mut self, path: &std::path::Path) -> Result<()> {
         use std::collections::HashSet;
         use std::fs::File;
@@ -9576,6 +9865,86 @@ mod tests {
             upper_layer_selected,
             vec![(0usize, 0.1f32)],
             "upper layers should keep the existing no-backfill behavior"
+        );
+    }
+
+    #[test]
+    fn test_import_from_hnswlib_bytes_roundtrip() {
+        fn push_u64(buf: &mut Vec<u8>, v: u64) {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        fn push_i32(buf: &mut Vec<u8>, v: i32) {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        fn push_u32(buf: &mut Vec<u8>, v: u32) {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        fn push_f64(buf: &mut Vec<u8>, v: f64) {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        fn push_f32(buf: &mut Vec<u8>, v: f32) {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+
+        let n = 4usize;
+        let dim = 2usize;
+        let m = 4usize;
+        let max_m = m;
+        let max_m0 = m * 2;
+        let data_size = dim * 4;
+        let offset_data = max_m0 * 4 + 4;
+        let size_data_per_element = offset_data + data_size;
+
+        let mut blob = Vec::new();
+
+        // Header
+        push_u64(&mut blob, 0); // metric_type: L2
+        push_u64(&mut blob, data_size as u64);
+        push_u64(&mut blob, dim as u64);
+        push_u64(&mut blob, 0); // offsetLevel0
+        push_u64(&mut blob, n as u64); // max_elements
+        push_u64(&mut blob, n as u64); // cur_element_count
+        push_u64(&mut blob, size_data_per_element as u64);
+        push_u64(&mut blob, 0); // label_offset
+        push_u64(&mut blob, offset_data as u64);
+        push_i32(&mut blob, 0); // maxlevel
+        push_i32(&mut blob, 0); // enterpoint_node
+        push_u64(&mut blob, max_m as u64);
+        push_u64(&mut blob, max_m0 as u64);
+        push_u64(&mut blob, m as u64);
+        push_f64(&mut blob, 1.0 / (m as f64).ln());
+        push_u64(&mut blob, 16); // ef_construction
+
+        // Level-0 memory block.
+        let vectors = [[0.0f32, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]];
+        let neigh = [1u32, 2, 3, 0];
+        for i in 0..n {
+            let mut node = vec![0u8; size_data_per_element];
+            node[0..4].copy_from_slice(&(1u32).to_le_bytes()); // low u16 degree=1
+
+            let nbr_off = 4;
+            node[nbr_off..nbr_off + 4].copy_from_slice(&neigh[i].to_le_bytes());
+
+            let vec_off = offset_data;
+            node[vec_off..vec_off + 4].copy_from_slice(&vectors[i][0].to_le_bytes());
+            node[vec_off + 4..vec_off + 8].copy_from_slice(&vectors[i][1].to_le_bytes());
+
+            blob.extend_from_slice(&node);
+        }
+
+        // Upper links: no upper levels for any node.
+        for _ in 0..n {
+            push_u32(&mut blob, 0);
+        }
+
+        let idx = HnswIndex::import_from_hnswlib_bytes(&blob).unwrap();
+        assert_eq!(idx.dim, 2);
+        assert_eq!(idx.ids.len(), 4);
+        assert_eq!(idx.entry_point, Some(0));
+        assert_eq!(idx.max_level, 0);
+        assert!(
+            !idx.node_info[0].layer_neighbors[0].ids.is_empty(),
+            "level0 neighbors should be parsed"
         );
     }
 }
