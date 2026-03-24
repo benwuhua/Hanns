@@ -2772,19 +2772,110 @@ impl PQFlashIndex {
             })
             .collect();
 
-        for (i, new_neighbors) in results {
-            let start = i * stride;
+        // 1) Apply forward edges (one row per node, no conflicts).
+        for (i, new_neighbors) in &results {
+            let start = *i * stride;
             let count = new_neighbors.len().min(stride);
-            self.node_neighbor_counts[i] = count as u32;
+            self.node_neighbor_counts[*i] = count as u32;
             for j in 0..count {
                 self.node_neighbor_ids[start + j] = new_neighbors[j];
             }
             for j in count..stride {
                 self.node_neighbor_ids[start + j] = 0;
             }
+        }
 
-            for &nb in &new_neighbors {
-                self.link_back_no_guard(nb, i as u32, stride);
+        // 2) Collect reverse-edge updates by destination node.
+        let mut reverse_incoming: Vec<Vec<u32>> = vec![Vec::new(); n_nodes];
+        for (i, new_neighbors) in &results {
+            let src = *i as u32;
+            for &nb in new_neighbors {
+                let nb_idx = nb as usize;
+                if nb_idx < n_nodes && nb_idx != *i {
+                    reverse_incoming[nb_idx].push(src);
+                }
+            }
+        }
+
+        // 3) Compute reverse-edge pruned neighbor lists (parallel when enabled).
+        #[cfg(feature = "parallel")]
+        let reverse_updates: Vec<(usize, Vec<u32>)> = {
+            use rayon::prelude::*;
+            reverse_incoming
+                .into_par_iter()
+                .enumerate()
+                .filter_map(|(neighbor_idx, incoming)| {
+                    if incoming.is_empty() || neighbor_idx >= self.node_ids.len() {
+                        return None;
+                    }
+
+                    let start = neighbor_idx * stride;
+                    let count = self.node_neighbor_counts[neighbor_idx] as usize;
+                    let mut merged: Vec<u32> = self.node_neighbor_ids[start..start + count].to_vec();
+                    merged.extend(incoming);
+
+                    // Remove self-loop and deduplicate candidates before scoring.
+                    let mut seen = HashSet::with_capacity(merged.len().saturating_mul(2).max(1));
+                    merged.retain(|&id| id as usize != neighbor_idx && seen.insert(id));
+                    if merged.is_empty() {
+                        return Some((neighbor_idx, Vec::new()));
+                    }
+
+                    let anchor = self.node_vector(neighbor_idx).to_vec();
+                    let mut scored: Vec<(u32, f32)> = merged
+                        .into_iter()
+                        .filter(|&id| (id as usize) < self.node_ids.len())
+                        .map(|id| (id, self.exact_distance(&anchor, self.node_vector(id as usize))))
+                        .collect();
+                    scored.sort_by(|a, b| a.1.total_cmp(&b.1));
+                    let selected = self.robust_prune_scored(neighbor_idx, &scored, stride, 1.2);
+                    Some((neighbor_idx, selected))
+                })
+                .collect()
+        };
+
+        #[cfg(not(feature = "parallel"))]
+        let reverse_updates: Vec<(usize, Vec<u32>)> = reverse_incoming
+            .into_iter()
+            .enumerate()
+            .filter_map(|(neighbor_idx, incoming)| {
+                if incoming.is_empty() || neighbor_idx >= self.node_ids.len() {
+                    return None;
+                }
+
+                let start = neighbor_idx * stride;
+                let count = self.node_neighbor_counts[neighbor_idx] as usize;
+                let mut merged: Vec<u32> = self.node_neighbor_ids[start..start + count].to_vec();
+                merged.extend(incoming);
+
+                let mut seen = HashSet::with_capacity(merged.len().saturating_mul(2).max(1));
+                merged.retain(|&id| id as usize != neighbor_idx && seen.insert(id));
+                if merged.is_empty() {
+                    return Some((neighbor_idx, Vec::new()));
+                }
+
+                let anchor = self.node_vector(neighbor_idx).to_vec();
+                let mut scored: Vec<(u32, f32)> = merged
+                    .into_iter()
+                    .filter(|&id| (id as usize) < self.node_ids.len())
+                    .map(|id| (id, self.exact_distance(&anchor, self.node_vector(id as usize))))
+                    .collect();
+                scored.sort_by(|a, b| a.1.total_cmp(&b.1));
+                let selected = self.robust_prune_scored(neighbor_idx, &scored, stride, 1.2);
+                Some((neighbor_idx, selected))
+            })
+            .collect();
+
+        // 4) Apply reverse-edge updates.
+        for (neighbor_idx, new_neighbors) in reverse_updates {
+            let start = neighbor_idx * stride;
+            let count = new_neighbors.len().min(stride);
+            self.node_neighbor_counts[neighbor_idx] = count as u32;
+            for j in 0..count {
+                self.node_neighbor_ids[start + j] = new_neighbors[j];
+            }
+            for j in count..stride {
+                self.node_neighbor_ids[start + j] = 0;
             }
         }
     }
