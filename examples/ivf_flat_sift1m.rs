@@ -1,6 +1,10 @@
-//! HNSW SIFT-1M authority benchmark
+//! IVF-Flat SIFT-1M authority benchmark
 //! Usage:
-//!   cargo run --example hnsw_sift1m --release -- <data_dir>
+//!   cargo run --example ivf_flat_sift1m --release -- <data_dir>
+//! data_dir must contain either:
+//!   - sift_base.fvecs, sift_query.fvecs, sift_groundtruth.ivecs
+//! or:
+//!   - base.fvecs, query.fvecs, groundtruth.ivecs
 
 use std::env;
 use std::error::Error;
@@ -10,16 +14,11 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::HnswIndex;
-use rayon::prelude::*;
+use knowhere_rs::faiss::IvfFlatIndex;
 
 const TOP_K: usize = 10;
-const M: usize = 16;
-const EF_CONSTRUCTION: usize = 200;
-const LEVEL_MULTIPLIER: f32 = 0.5;
-const EF_SWEEP: [usize; 6] = [16, 32, 50, 60, 100, 138];
-const QPS_QUERIES: usize = 1000;
-const RECALL_QUERIES: usize = 200;
+const NLIST: usize = 1024;
+const NPROBES: [usize; 6] = [1, 4, 8, 16, 32, 64];
 
 fn resolve_file(data_dir: &Path, names: &[&str]) -> Result<PathBuf, Box<dyn Error>> {
     for name in names {
@@ -35,7 +34,7 @@ fn read_fvecs(path: &Path) -> Result<(Vec<f32>, usize, usize), Box<dyn Error>> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
 
-    let mut data = Vec::<f32>::new();
+    let mut data: Vec<f32> = Vec::new();
     let mut n = 0usize;
     let mut dim_opt: Option<usize> = None;
     let mut raw = Vec::<u8>::new();
@@ -83,6 +82,7 @@ fn read_fvecs(path: &Path) -> Result<(Vec<f32>, usize, usize), Box<dyn Error>> {
 fn read_ivecs(path: &Path) -> Result<Vec<Vec<i32>>, Box<dyn Error>> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
+
     let mut out: Vec<Vec<i32>> = Vec::new();
 
     loop {
@@ -129,7 +129,7 @@ fn recall_at_k(gt_row: &[i32], result_ids: &[i64], k: usize) -> f64 {
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: cargo run --example hnsw_sift1m --release -- <data_dir>");
+        eprintln!("Usage: cargo run --example ivf_flat_sift1m --release -- <data_dir>");
         std::process::exit(2);
     }
 
@@ -138,7 +138,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let query_path = resolve_file(data_dir, &["sift_query.fvecs", "query.fvecs"])?;
     let gt_path = resolve_file(data_dir, &["sift_groundtruth.ivecs", "groundtruth.ivecs"])?;
 
-    println!("=== HNSW SIFT-1M authority benchmark ===");
+    println!("=== IVF-Flat SIFT-1M Benchmark ===");
     println!("data_dir={}", data_dir.display());
     println!(
         "files: base={}, query={}, gt={}",
@@ -168,115 +168,89 @@ fn main() -> Result<(), Box<dyn Error>> {
         .into());
     }
 
-    let recall_n = RECALL_QUERIES.min(query_n).min(gt.len());
-    let qps_n = QPS_QUERIES.min(query_n);
+    let recall_queries = query_n.min(gt.len());
+    let qps_queries = query_n;
 
-    let mut params = IndexParams::hnsw(EF_CONSTRUCTION, 60, LEVEL_MULTIPLIER);
-    params.m = Some(M);
+    let mut params = IndexParams::default();
+    params.nlist = Some(NLIST);
+    params.nprobe = Some(32);
 
     let cfg = IndexConfig {
-        index_type: IndexType::Hnsw,
+        index_type: IndexType::IvfFlat,
         metric_type: MetricType::L2,
         data_type: DataType::Float,
         dim: base_dim,
         params,
     };
 
-    let mut index = HnswIndex::new(&cfg)?;
+    let mut index = IvfFlatIndex::new(&cfg)?;
 
-    let t_train = Instant::now();
+    let t0 = Instant::now();
     index.train(&base)?;
-    let train_s = t_train.elapsed().as_secs_f64();
+    let train_s = t0.elapsed().as_secs_f64();
 
-    let t_add = Instant::now();
+    let t1 = Instant::now();
     index.add(&base, None)?;
-    let add_s = t_add.elapsed().as_secs_f64();
+    let add_s = t1.elapsed().as_secs_f64();
 
     println!(
-        "build: train={:.2}s add={:.2}s total={:.2}s (M={}, ef_construction={})",
+        "build: train={:.2}s add={:.2}s total={:.2}s",
         train_s,
         add_s,
-        train_s + add_s,
-        M,
-        EF_CONSTRUCTION
+        train_s + add_s
     );
-    println!("ef sweep (qps on {} queries, recall on {} queries):", qps_n, recall_n);
 
-    let mut ef60: Option<(u64, f64)> = None;
-    let mut ef138: Option<(u64, f64)> = None;
+    println!("single-query sweep:");
+    println!("nprobe | recall@10 | qps");
+    println!("-------|-----------|------");
 
-    for &ef in &EF_SWEEP {
-        index.set_ef_search(ef);
+    for &nprobe in &NPROBES {
         let req = SearchRequest {
             top_k: TOP_K,
-            nprobe: ef,
-            params: Some(format!(r#"{{\"ef\": {ef}}}"#)),
+            nprobe,
             ..Default::default()
         };
 
-        let t_qps = Instant::now();
-        for i in 0..qps_n {
+        let qps_start = Instant::now();
+        for i in 0..qps_queries {
             let q = &queries[i * base_dim..(i + 1) * base_dim];
             let _ = index.search(q, &req)?;
         }
-        let qps = (qps_n as f64 / t_qps.elapsed().as_secs_f64().max(f64::EPSILON)).round() as u64;
+        let qps = qps_queries as f64 / qps_start.elapsed().as_secs_f64().max(f64::EPSILON);
 
         let mut recall_sum = 0.0;
-        for i in 0..recall_n {
+        for i in 0..recall_queries {
             let q = &queries[i * base_dim..(i + 1) * base_dim];
             let res = index.search(q, &req)?;
             recall_sum += recall_at_k(&gt[i], &res.ids, TOP_K);
         }
-        let recall = recall_sum / recall_n as f64;
+        let recall = recall_sum / recall_queries as f64;
 
-        println!("ef={:>4} recall@10={:.4} qps={}", ef, recall, qps);
+        println!("{:>6} | {:>9.3} | {:.0}", nprobe, recall, qps);
+    }
 
-        if ef == 60 {
-            ef60 = Some((qps, recall));
-        } else if ef == 138 {
-            ef138 = Some((qps, recall));
+    #[cfg(feature = "parallel")]
+    {
+        let t_batch = Instant::now();
+        let batch = index.search_parallel(&queries, TOP_K, 32)?;
+        let batch_qps = qps_queries as f64 / t_batch.elapsed().as_secs_f64().max(f64::EPSILON);
+
+        let mut recall_sum = 0.0;
+        for i in 0..recall_queries {
+            let ids: Vec<i64> = batch[i].iter().take(TOP_K).map(|(id, _)| *id as i64).collect();
+            recall_sum += recall_at_k(&gt[i], &ids, TOP_K);
         }
+        let recall = recall_sum / recall_queries as f64;
+
+        println!(
+            "batch parallel (nprobe=32): recall@10={:.3}, qps={:.0}",
+            recall, batch_qps
+        );
     }
 
-    if let Some((qps, recall)) = ef60 {
-        println!("marker ef=60: qps={} recall@10={:.4}", qps, recall);
-    }
-    if let Some((qps, recall)) = ef138 {
-        println!("marker ef=138: qps={} recall@10={:.4}", qps, recall);
-    }
-
-    println!("batch parallel sweep (all {} queries):", query_n);
-    let mut ef60_parallel_qps: Option<u64> = None;
-    let mut ef138_parallel_qps: Option<u64> = None;
-    for &ef in &[60usize, 138usize] {
-        let req = SearchRequest {
-            top_k: TOP_K,
-            nprobe: ef,
-            params: Some(format!(r#"{{\"ef\": {ef}}}"#)),
-            ..Default::default()
-        };
-
-        let t = Instant::now();
-        queries
-            .par_chunks(base_dim)
-            .for_each(|q| {
-                let _ = index.search(q, &req);
-            });
-        let qps = (query_n as f64 / t.elapsed().as_secs_f64().max(f64::EPSILON)).round() as u64;
-        println!("batch ef={:>4} qps={}", ef, qps);
-
-        if ef == 60 {
-            ef60_parallel_qps = Some(qps);
-        } else if ef == 138 {
-            ef138_parallel_qps = Some(qps);
-        }
-    }
-
-    if let Some(qps) = ef60_parallel_qps {
-        println!("marker batch ef=60: qps={}", qps);
-    }
-    if let Some(qps) = ef138_parallel_qps {
-        println!("marker batch ef=138: qps={}", qps);
+    #[cfg(not(feature = "parallel"))]
+    {
+        println!("batch parallel (nprobe=32): skipped (feature parallel not enabled)");
     }
 
     Ok(())

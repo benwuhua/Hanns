@@ -946,6 +946,7 @@ fn benchmark_aisaq_refine_passes() {
         let t_build = Instant::now();
         let mut index = PQFlashIndex::new(cfg.clone(), MetricType::L2, dim).unwrap();
         index.train(&data).unwrap();
+        index.add(&data).unwrap();
         let build_s = t_build.elapsed().as_secs_f64();
 
         let t_search = Instant::now();
