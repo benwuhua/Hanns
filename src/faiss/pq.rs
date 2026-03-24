@@ -212,7 +212,7 @@ impl PqEncoder {
 
             for c in 0..self.k {
                 let cent = &codebook[c * self.sub_dim..(c + 1) * self.sub_dim];
-                let d = simd::l2_distance(sub_vec, cent);
+                let d = simd::l2_distance_sq(sub_vec, cent);
                 if d < min_dist {
                     min_dist = d;
                     best = c;
@@ -254,7 +254,7 @@ impl PqEncoder {
 
             for c in 0..self.k {
                 let cent = &codebook[c * self.sub_dim..(c + 1) * self.sub_dim];
-                table[m_idx * self.k + c] = simd::l2_distance(query_sub, cent);
+                table[m_idx * self.k + c] = simd::l2_distance_sq(query_sub, cent);
             }
         }
 
