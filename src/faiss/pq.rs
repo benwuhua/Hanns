@@ -21,6 +21,14 @@ pub struct PqEncoder {
 impl PqEncoder {
     /// 创建新的 PQ 编码器
     pub fn new(dim: usize, m: usize, k: usize) -> Self {
+        assert!(m > 0, "PQ m must be > 0, got m={}", m);
+        assert!(dim % m == 0, "PQ dim must be divisible by m, got dim={}, m={}", dim, m);
+        assert!(
+            k >= 2 && k <= 256 && k.is_power_of_two(),
+            "PQ k must be a power of 2 and <= 256, got k={}",
+            k
+        );
+
         let sub_dim = dim / m;
         let nbits = (k as f64).log2() as usize;
 
