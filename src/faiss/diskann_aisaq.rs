@@ -2708,6 +2708,7 @@ impl PQFlashIndex {
         self.node_neighbor_counts[neighbor_idx] = new_count as u32;
     }
 
+    #[allow(dead_code)]
     fn link_back_no_guard(&mut self, neighbor: u32, node_id: u32, degree_limit: usize) {
         let neighbor_idx = neighbor as usize;
         if neighbor_idx >= self.node_ids.len() || node_id == neighbor {

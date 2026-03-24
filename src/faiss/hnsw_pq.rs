@@ -248,6 +248,7 @@ impl HnswPqIndex {
     }
 
     /// Compute distance between a query and a stored PQ code using lookup table
+    #[allow(dead_code)]
     fn compute_distance_to_code(&self, query: &[f32], code: &[u8]) -> f32 {
         let table = self.pq.build_adc_table(query);
         self.compute_distance_to_code_with_table(&table, code)
