@@ -1294,8 +1294,9 @@ impl IndexWrapper {
 
             Ok((ids, distances, lims, elapsed_ms))
         } else if let Some(ref _idx) = self.hnsw {
-            // HNSW range search: not yet implemented
-            Err(CError::NotImplemented)
+            // TODO: wire HNSW range_search once available in src/faiss/hnsw.rs.
+            eprintln!("HNSW range_search not yet implemented");
+            Err(CError::InvalidArg)
         } else if let Some(ref _idx) = self.scann {
             // ScaNN: use radius search if available, otherwise return error
             // For now, return NotImplemented
@@ -2284,9 +2285,8 @@ pub extern "C" fn knowhere_search_with_bitset(
                 }
                 Err(_) => std::ptr::null_mut(),
             }
-        } else {
-            // 其他索引类型暂时使用普通搜索（不支持 bitset）
-            match index.search(query_slice, top_k) {
+        } else if let Some(ref idx) = index.hnsw {
+            match idx.search_with_bitset(query_slice, &req, &bitset_view) {
                 Ok(result) => {
                     let mut ids = result.ids;
                     let mut distances = result.distances;
@@ -2309,6 +2309,10 @@ pub extern "C" fn knowhere_search_with_bitset(
                 }
                 Err(_) => std::ptr::null_mut(),
             }
+        } else {
+            // Do not silently drop bitset on unsupported index types.
+            eprintln!("bitset search not supported for this index type");
+            std::ptr::null_mut()
         }
     }
 }
