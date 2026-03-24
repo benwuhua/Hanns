@@ -274,6 +274,9 @@ pub struct IndexParams {
     /// For DiskANN flash layout: load sidecar via mmap for runtime reads
     #[serde(default)]
     pub disk_flash_mmap_mode: Option<bool>,
+    /// For DiskANN flash layout: use pread() on-demand SSD reads (third mode, for graph > RAM)
+    #[serde(default)]
+    pub disk_flash_ssd_mode: Option<bool>,
     /// For DiskANN flash mmap path: per-expansion prefetch batch size (0 = disabled)
     #[serde(default)]
     pub disk_flash_prefetch_batch: Option<usize>,

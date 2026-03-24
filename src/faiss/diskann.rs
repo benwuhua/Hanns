@@ -71,6 +71,8 @@ pub struct DiskAnnConfig {
     pub enable_flash_layout: bool,
     /// Whether to use mmap runtime reads for flash layout sidecar.
     pub flash_mmap_mode: bool,
+    /// Use pread() on-demand SSD reads instead of mmap (for graph > RAM scenarios).
+    pub flash_ssd_mode: bool,
     /// Per-expansion prefetch batch size for mmap path (0 = disabled).
     pub flash_prefetch_batch: usize,
     /// Warm-up before search
@@ -110,6 +112,7 @@ impl Default for DiskAnnConfig {
             cache_dram_budget_gb: 0.0,
             enable_flash_layout: false,
             flash_mmap_mode: false,
+            flash_ssd_mode: false,
             flash_prefetch_batch: 0,
             warm_up: false,
             filter_threshold: -1.0,
@@ -154,6 +157,7 @@ impl DiskAnnConfig {
             cache_dram_budget_gb: params.disk_search_cache_budget_gb.unwrap_or(0.0).max(0.0),
             enable_flash_layout: params.disk_enable_flash_layout.unwrap_or(false),
             flash_mmap_mode: params.disk_flash_mmap_mode.unwrap_or(false),
+            flash_ssd_mode: params.disk_flash_ssd_mode.unwrap_or(false),
             flash_prefetch_batch: params.disk_flash_prefetch_batch.unwrap_or(0).min(256),
             warm_up: params.disk_warm_up.unwrap_or(false),
             filter_threshold: params.disk_filter_threshold.unwrap_or(-1.0).clamp(-1.0, 1.0),
@@ -392,6 +396,8 @@ pub struct DiskAnnIndex {
     flash_vectors: Option<Vec<f32>>,
     /// Memory mapped flash sidecar for on-demand neighbor/vector reads.
     flash_sidecar_mmap: Option<memmap2::Mmap>,
+    /// Open flash sidecar file handle for pread-based random reads.
+    flash_ssd_file: Option<std::fs::File>,
     /// Budgeted runtime cache for flash mmap mode (node idx -> decoded neighbors).
     flash_cached_neighbors: Option<HashMap<usize, Box<[i64]>>>,
     /// Budgeted runtime cache for flash mmap mode (node idx -> decoded vector).
@@ -433,6 +439,7 @@ impl DiskAnnIndex {
             flash_max_degree: 0,
             flash_vectors: None,
             flash_sidecar_mmap: None,
+            flash_ssd_file: None,
             flash_cached_neighbors: None,
             flash_cached_vectors: None,
             scratch_pool: Mutex::new(Vec::new()),
@@ -460,6 +467,7 @@ impl DiskAnnIndex {
         self.flash_max_degree = 0;
         self.flash_vectors = None;
         self.flash_sidecar_mmap = None;
+        self.flash_ssd_file = None;
         self.flash_cached_neighbors = None;
         self.flash_cached_vectors = None;
 
@@ -627,7 +635,17 @@ impl DiskAnnIndex {
         let record_len = 4 + max_degree.saturating_mul(8) + self.dim.saturating_mul(4);
         let expected_len = header_len + n.saturating_mul(record_len);
 
-        if self.dann_config.flash_mmap_mode {
+        if self.dann_config.flash_ssd_mode {
+            self.flash_max_degree = max_degree;
+            self.flash_neighbor_ids = None;
+            self.flash_vectors = None;
+            self.flash_sidecar_mmap = None;
+            self.flash_ssd_file = Some(std::fs::File::open(sidecar)?);
+            self.flash_cached_neighbors = None;
+            self.flash_cached_vectors = None;
+            self.has_flash_layout = true;
+            return Ok(true);
+        } else if self.dann_config.flash_mmap_mode {
             let mmap = unsafe { memmap2::MmapOptions::new().map(&file)? };
             if mmap.len() < expected_len {
                 return Ok(false);
@@ -636,6 +654,7 @@ impl DiskAnnIndex {
             self.flash_neighbor_ids = None;
             self.flash_vectors = None;
             self.flash_sidecar_mmap = Some(mmap);
+            self.flash_ssd_file = None;
             self.flash_cached_neighbors = None;
             self.flash_cached_vectors = None;
             return Ok(true);
@@ -665,6 +684,7 @@ impl DiskAnnIndex {
         self.flash_neighbor_ids = Some(flash_neighbor_ids);
         self.flash_vectors = Some(flash_vectors);
         self.flash_sidecar_mmap = None;
+        self.flash_ssd_file = None;
         self.flash_cached_neighbors = None;
         self.flash_cached_vectors = None;
 
@@ -741,6 +761,137 @@ impl DiskAnnIndex {
         Some(vec.into_boxed_slice())
     }
 
+    fn flash_ssd_read_node(&self, idx: usize) -> Option<(Box<[i64]>, Box<[f32]>)> {
+        use std::os::unix::fs::FileExt;
+        let file = self.flash_ssd_file.as_ref()?;
+        if self.flash_max_degree == 0 || self.dim == 0 {
+            return None;
+        }
+        let record_len = 4 + self.flash_max_degree * 8 + self.dim * 4;
+        let offset = 24usize.checked_add(idx.checked_mul(record_len)?)?;
+        let mut buf = vec![0u8; record_len];
+        let nread = file.read_at(&mut buf, offset as u64).ok()?;
+        if nread != record_len {
+            return None;
+        }
+
+        let degree = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+        let degree = degree.min(self.flash_max_degree);
+
+        let mut nbrs = Vec::with_capacity(degree);
+        for slot in 0..degree {
+            let off = 4 + slot * 8;
+            let end = off + 8;
+            let id = i64::from_le_bytes(buf.get(off..end)?.try_into().ok()?);
+            nbrs.push(id);
+        }
+
+        let vec_off = 4 + self.flash_max_degree * 8;
+        let mut vec = Vec::with_capacity(self.dim);
+        for d in 0..self.dim {
+            let off = vec_off + d * 4;
+            let end = off + 4;
+            let v = f32::from_le_bytes(buf.get(off..end)?.try_into().ok()?);
+            vec.push(v);
+        }
+        Some((nbrs.into_boxed_slice(), vec.into_boxed_slice()))
+    }
+
+    fn flash_ssd_read_vector(&self, idx: usize) -> Option<Box<[f32]>> {
+        use std::os::unix::fs::FileExt;
+        let file = self.flash_ssd_file.as_ref()?;
+        if self.flash_max_degree == 0 || self.dim == 0 {
+            return None;
+        }
+        let record_len = 4 + self.flash_max_degree * 8 + self.dim * 4;
+        let vec_off = 24usize
+            .checked_add(idx.checked_mul(record_len)?)?
+            .checked_add(4 + self.flash_max_degree * 8)?;
+        let mut buf = vec![0u8; self.dim * 4];
+        let nread = file.read_at(&mut buf, vec_off as u64).ok()?;
+        if nread != self.dim * 4 {
+            return None;
+        }
+
+        let mut vec = Vec::with_capacity(self.dim);
+        for d in 0..self.dim {
+            let off = d * 4;
+            let end = off + 4;
+            let v = f32::from_le_bytes(buf.get(off..end)?.try_into().ok()?);
+            vec.push(v);
+        }
+        Some(vec.into_boxed_slice())
+    }
+
+    #[inline]
+    fn is_ssd_mode(&self) -> bool {
+        self.flash_ssd_file.is_some()
+    }
+
+    #[inline]
+    fn flash_read_node(&self, idx: usize) -> Option<(Box<[i64]>, Box<[f32]>)> {
+        if self.is_ssd_mode() {
+            self.flash_ssd_read_node(idx)
+        } else {
+            self.flash_mmap_read_node(idx)
+        }
+    }
+
+    #[inline]
+    fn flash_read_vector(&self, idx: usize) -> Option<Box<[f32]>> {
+        if self.is_ssd_mode() {
+            self.flash_ssd_read_vector(idx)
+        } else {
+            self.flash_mmap_read_vector(idx)
+        }
+    }
+
+    #[inline]
+    fn flash_neighbor_id(&self, idx: usize, slot: usize) -> Option<i64> {
+        if self.is_ssd_mode() {
+            let file = self.flash_ssd_file.as_ref()?;
+            if self.flash_max_degree == 0 || slot >= self.flash_max_degree {
+                return None;
+            }
+            let record_len = 4 + self.flash_max_degree * 8 + self.dim * 4;
+            let offset = 24usize
+                .checked_add(idx.checked_mul(record_len)?)?
+                .checked_add(4 + slot * 8)?;
+            let mut buf = [0u8; 8];
+            use std::os::unix::fs::FileExt;
+            let nread = file.read_at(&mut buf, offset as u64).ok()?;
+            if nread != 8 {
+                return None;
+            }
+            Some(i64::from_le_bytes(buf))
+        } else {
+            self.flash_mmap_neighbor_id(idx, slot)
+        }
+    }
+
+    #[inline]
+    fn flash_vector_component(&self, idx: usize, d: usize) -> Option<f32> {
+        if self.is_ssd_mode() {
+            let file = self.flash_ssd_file.as_ref()?;
+            if self.flash_max_degree == 0 || d >= self.dim {
+                return None;
+            }
+            let record_len = 4 + self.flash_max_degree * 8 + self.dim * 4;
+            let offset = 24usize
+                .checked_add(idx.checked_mul(record_len)?)?
+                .checked_add(4 + self.flash_max_degree * 8 + d * 4)?;
+            let mut buf = [0u8; 4];
+            use std::os::unix::fs::FileExt;
+            let nread = file.read_at(&mut buf, offset as u64).ok()?;
+            if nread != 4 {
+                return None;
+            }
+            Some(f32::from_le_bytes(buf))
+        } else {
+            self.flash_mmap_vector_component(idx, d)
+        }
+    }
+
     #[inline]
     fn flash_prefetch_enabled(&self) -> bool {
         self.flash_sidecar_mmap.is_some()
@@ -800,7 +951,7 @@ impl DiskAnnIndex {
         {
             let items: Vec<(usize, Box<[f32]>)> = selected
                 .par_iter()
-                .filter_map(|&idx| self.flash_mmap_read_vector(idx).map(|v| (idx, v)))
+                .filter_map(|&idx| self.flash_read_vector(idx).map(|v| (idx, v)))
                 .collect();
             for (idx, vec) in items {
                 if cache.len() >= query_prefetch_cap {
@@ -816,7 +967,7 @@ impl DiskAnnIndex {
                 if cache.len() >= query_prefetch_cap {
                     break;
                 }
-                if let Some(v) = self.flash_mmap_read_vector(idx) {
+                if let Some(v) = self.flash_read_vector(idx) {
                     cache.insert(idx, v);
                 }
             }
@@ -874,7 +1025,7 @@ impl DiskAnnIndex {
             if used + node_cost > budget {
                 break;
             }
-            if let Some((nbrs, vec)) = self.flash_mmap_read_node(idx) {
+            if let Some((nbrs, vec)) = self.flash_read_node(idx) {
                 enqueue_neighbors.extend(
                     nbrs.iter()
                         .copied()
@@ -894,7 +1045,7 @@ impl DiskAnnIndex {
             if used + node_cost > budget {
                 break;
             }
-            if let Some((nbrs, vec)) = self.flash_mmap_read_node(idx) {
+            if let Some((nbrs, vec)) = self.flash_read_node(idx) {
                 used += node_cost;
                 cached_neighbors.insert(idx, nbrs);
                 cached_vectors.insert(idx, vec);
@@ -957,10 +1108,10 @@ impl DiskAnnIndex {
                 .map(|id| id as usize)
                 .collect();
         }
-        if self.flash_sidecar_mmap.is_some() {
+        if self.flash_sidecar_mmap.is_some() || self.is_ssd_mode() {
             let mut out = Vec::with_capacity(self.flash_max_degree);
             for slot in 0..self.flash_max_degree {
-                if let Some(id) = self.flash_mmap_neighbor_id(idx, slot) {
+                if let Some(id) = self.flash_neighbor_id(idx, slot) {
                     if id >= 0 {
                         out.push(id as usize);
                     }
@@ -1751,10 +1902,10 @@ impl DiskAnnIndex {
 
     #[inline]
     fn l2_sqr(&self, a: &[f32], b_idx: usize) -> f32 {
-        if self.flash_sidecar_mmap.is_some() && self.flash_vectors.is_none() {
+        if (self.flash_sidecar_mmap.is_some() || self.is_ssd_mode()) && self.flash_vectors.is_none() {
             let mut acc = 0.0f32;
             for (d, &av) in a.iter().enumerate().take(self.dim) {
-                let bv = self.flash_mmap_vector_component(b_idx, d).unwrap_or(0.0);
+                let bv = self.flash_vector_component(b_idx, d).unwrap_or(0.0);
                 let diff = av - bv;
                 acc += diff * diff;
             }
@@ -1780,9 +1931,9 @@ impl DiskAnnIndex {
     fn ip_distance(&self, a: &[f32], b_idx: usize) -> f32 {
         // For IP, higher is better, so we return negative (for consistent sorting)
         let mut sum = 0.0f32;
-        if self.flash_sidecar_mmap.is_some() && self.flash_vectors.is_none() {
+        if (self.flash_sidecar_mmap.is_some() || self.is_ssd_mode()) && self.flash_vectors.is_none() {
             for (d, &av) in a.iter().enumerate().take(self.dim) {
-                let bv = self.flash_mmap_vector_component(b_idx, d).unwrap_or(0.0);
+                let bv = self.flash_vector_component(b_idx, d).unwrap_or(0.0);
                 sum += av * bv;
             }
         } else {
@@ -2758,6 +2909,7 @@ impl DiskAnnIndex {
             self.flash_vectors = None;
             self.flash_max_degree = 0;
             self.flash_sidecar_mmap = None;
+            self.flash_ssd_file = None;
             self.flash_cached_neighbors = None;
             self.flash_cached_vectors = None;
         } else if self.flash_sidecar_mmap.is_some() {
