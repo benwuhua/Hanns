@@ -423,6 +423,12 @@ impl IndexWrapper {
                 })
             }
             CIndexType::Scann => {
+                if metric != MetricType::L2 {
+                    eprintln!(
+                        "ScaNN currently only supports L2; ignoring metric_type={:?}",
+                        metric
+                    );
+                }
                 let num_partitions = if config.num_partitions > 0 {
                     config.num_partitions
                 } else {
@@ -433,8 +439,11 @@ impl IndexWrapper {
                 } else {
                     256
                 };
+                // ef_search not plumbed in ScaNN runtime search path; use reorder_k as the search budget.
                 let reorder_k = if config.reorder_k > 0 {
                     config.reorder_k
+                } else if config.ef_search > 0 {
+                    config.ef_search
                 } else {
                     100
                 };
@@ -1124,6 +1133,7 @@ impl IndexWrapper {
             idx.search(query, &req).map_err(|_| CError::Internal)
         } else if let Some(ref idx) = self.scann {
             let start = std::time::Instant::now();
+            // ScaNN FFI does not accept per-search ef_search; reorder_k is the search budget.
             let results = idx.search(query, top_k);
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
