@@ -903,7 +903,7 @@ fn benchmark_pqflash_1m() {
 fn benchmark_aisaq_refine_passes() {
     println!("\n=== AISAQ num_refine_passes sweep (100K, NoPQ) ===");
 
-    let n: usize = 100_000;
+    let n: usize = 200_000;
     let dim: usize = 128;
     let mut rng = StdRng::seed_from_u64(42);
     let data: Vec<f32> = (0..n * dim).map(|_| rng.r#gen::<f32>()).collect();
