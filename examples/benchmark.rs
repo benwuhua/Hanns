@@ -900,6 +900,76 @@ fn benchmark_pqflash_1m() {
     }
 }
 
+fn benchmark_aisaq_refine_passes() {
+    println!("\n=== AISAQ num_refine_passes sweep (100K, NoPQ) ===");
+
+    let n: usize = 100_000;
+    let dim: usize = 128;
+    let mut rng = StdRng::seed_from_u64(42);
+    let data: Vec<f32> = (0..n * dim).map(|_| rng.r#gen::<f32>()).collect();
+    let queries: Vec<f32> = (0..1000 * dim).map(|_| rng.r#gen::<f32>()).collect();
+
+    // Brute-force ground truth (top-10)
+    let top_k = 10usize;
+    let gt: Vec<Vec<usize>> = (0..1000)
+        .map(|qi| {
+            let qv = &queries[qi * dim..(qi + 1) * dim];
+            let mut dists: Vec<(f32, usize)> = (0..n)
+                .map(|di| {
+                    let dv = &data[di * dim..(di + 1) * dim];
+                    let d: f32 = qv
+                        .iter()
+                        .zip(dv.iter())
+                        .map(|(a, b)| {
+                            let diff = a - b;
+                            diff * diff
+                        })
+                        .sum();
+                    (d, di)
+                })
+                .collect();
+            dists.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            dists.iter().take(top_k).map(|&(_, id)| id).collect()
+        })
+        .collect();
+
+    for passes in [1usize, 2, 3] {
+        let cfg = AisaqConfig {
+            max_degree: 32,
+            build_search_list_size: 64,
+            num_refine_passes: passes,
+            search_list_size: 64,
+            cache_all_on_load: true,
+            ..AisaqConfig::default()
+        };
+
+        let t_build = Instant::now();
+        let mut index = PQFlashIndex::new(cfg.clone(), MetricType::L2, dim).unwrap();
+        index.train(&data).unwrap();
+        let build_s = t_build.elapsed().as_secs_f64();
+
+        let t_search = Instant::now();
+        let batch = index.search_batch(&queries, top_k).unwrap();
+        let qps = 1000.0 / t_search.elapsed().as_secs_f64().max(f64::EPSILON);
+
+        let mut hits = 0usize;
+        for (qi, gt_row) in gt.iter().enumerate().take(1000) {
+            let result_ids = &batch.ids[qi * top_k..(qi + 1) * top_k];
+            for &gt_id in gt_row {
+                if result_ids.iter().any(|&rid| rid as usize == gt_id) {
+                    hits += 1;
+                }
+            }
+        }
+        let recall = hits as f64 / (1000 * top_k) as f64;
+
+        println!(
+            "passes={}: build={:.1}s recall@10={:.4} QPS={:.0}",
+            passes, build_s, recall, qps
+        );
+    }
+}
+
 fn main() {
     println!("KnowHere RS Benchmark");
     println!("=====================");
@@ -919,6 +989,7 @@ fn main() {
     benchmark_pqflash_100k();
     benchmark_pqflash_1m();
     benchmark_ivf_sq8_1m();
+    benchmark_aisaq_refine_passes();
 
     println!("\n✅ Benchmark complete!");
 }
