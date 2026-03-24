@@ -898,6 +898,34 @@ fn benchmark_pqflash_1m() {
         let qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
         println!("[PQ32] Search QPS: {:.0}", qps);
     }
+
+    // NoPQ + SQ8 prefilter 1M
+    {
+        let config = AisaqConfig {
+            disk_pq_dims: 0,
+            search_list_size: 128,
+            cache_all_on_load: true,
+            use_sq8_prefilter: true,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, DIM).unwrap();
+        let t0 = Instant::now();
+        index.train(&vectors).unwrap();
+        let train_s = t0.elapsed().as_secs_f64();
+        let t1 = Instant::now();
+        index.add(&vectors).unwrap();
+        let add_s = t1.elapsed().as_secs_f64();
+        println!(
+            "[NoPQ+SQ8] Build 1M vectors: {:.1}s  (train {:.1}s + add {:.1}s)",
+            train_s + add_s,
+            train_s,
+            add_s
+        );
+        let start = Instant::now();
+        let _ = index.search_batch(&queries, TOP_K).unwrap();
+        let qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
+        println!("[NoPQ+SQ8] Search QPS: {:.0}", qps);
+    }
 }
 
 fn benchmark_aisaq_refine_passes() {

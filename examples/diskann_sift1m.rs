@@ -332,5 +332,38 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("save: {:.2}s  load: {:.2}s", pq32.save_s, pq32.load_s);
     println!("L=128: recall@10={:.3} QPS={:.0}", pq32.recall, pq32.qps);
 
+    println!("--- NoPQ+SQ8 (use_sq8_prefilter=true) ---");
+    let sq8_cfg = AisaqConfig {
+        disk_pq_dims: 0,
+        search_list_size: 128,
+        cache_all_on_load: true,
+        use_sq8_prefilter: true,
+        ..AisaqConfig::default()
+    };
+    let mut sq8_idx = PQFlashIndex::new(sq8_cfg, MetricType::L2, dim)?;
+
+    let t0 = Instant::now();
+    sq8_idx.train(&learn)?;
+    let train_s = t0.elapsed().as_secs_f64();
+
+    let t1 = Instant::now();
+    sq8_idx.add(&base)?;
+    let add_s = t1.elapsed().as_secs_f64();
+    println!(
+        "build: train={:.2}s add={:.2}s total={:.2}s",
+        train_s,
+        add_s,
+        train_s + add_s
+    );
+    let sq8_dir = unique_temp_dir("nopq_sq8");
+    sq8_idx.save(&sq8_dir)?;
+    let mut sq8_loaded = PQFlashIndex::load(&sq8_dir)?;
+
+    for &l in &[64usize, 128usize, 200usize] {
+        let (recall, qps) = search_at_l(&mut sq8_loaded, &queries, &gt, dim, l)?;
+        println!("L={}:  recall@10={:.3} QPS={:.0}", l, recall, qps);
+    }
+    let _ = std::fs::remove_dir_all(&sq8_dir);
+
     Ok(())
 }
