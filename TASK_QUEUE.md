@@ -1,5 +1,5 @@
 # Builder 任务队列
-> 最后更新: 2026-03-20 | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
+> 最后更新: 2026-03-24 | 只保留当前大任务面板。历史任务已迁移到 `docs/TASK_QUEUE_ARCHIVE.md`。
 > 详细 gap analysis: `docs/superpowers/specs/2026-03-18-diskann-aisaq-gap-analysis.md`
 > Native 对比分析: `docs/EVALUATION_KNOWHERE_RS_vs_CPP.md` (2026-03-20, 全面评估)
 
@@ -134,6 +134,17 @@
   - 实现: `hvq.rs::dot_u8_i8_avx512()` — 运行时 cpuid 分发，`_mm512_dpbusd_epi32`
   - scalar=simd=170688 验证通过；非 x86_64 自动回退 scalar
 
+- [ ] **AISAQ-SQ8-001** [P1 NEW 2026-03-24]: AISAQ beam search SQ8 预过滤（带宽优化）
+  - 目标: 替换 `exact_distance()` 为 `sq_l2_precomputed()`（整数 AVX-512/AVX2 核），per-node 带宽降低 4x（dim bytes vs dim×4 bytes）
+  - 实现: `use_sq8_prefilter: bool` 配置项；`sq8_quantizer + sq8_codes` 字段；add() 后训练编码；search_internal() 预计算 q_i16 一次；save/load 向前兼容
+  - 已确认: `SqQuantizer::new(dim,8)` + `precompute_query()` + `sq_l2_precomputed()` API 在 `src/quantization/sq.rs` 存在且有 AVX-512/AVX2 快路径
+  - 预期收益: warm QPS 提升（内存带宽瓶颈下 4x 带宽节省）
+  - 复杂度: 中等
+
+- [ ] **HVQ-FLASH-001** [已关闭 2026-03-24]: HVQ ADC 距离替换 exact_distance（已验证不可行）
+  - 分析: `adc_distance_prerotated()` 内部先 reconstruct_to_float()（O(d) 代价），再做距离计算，与 exact_distance L2 代价相同，无带宽优势
+  - 结论: 无加速，关闭。改为 AISAQ-SQ8-001 方向（SQ8 integer kernel 真正节省带宽）
+
 - [ ] **AISAQ-ARCH-008** [P2]: Sector-batch I/O 重构（暂停）
   - 设计报告: `/tmp/arch008_design.md`（Codex 已完成分析）
   - 暂停原因: 结构性工作量大；先推 HANNS 轻量优化收割低垂果实
@@ -144,6 +155,11 @@
 - [ ] **IVFPQ-FIX-001** [P3]: IVF-PQ SIFT-1M recall 提升（等 ADC-001/FIX-002）
 - [ ] **AISAQ-ARCH-007 guard** [P3]: 100K guard 去掉（需要新 build 架构，ARCH-007 验证为负向）
 - [ ] **HANNS-HPC-001** [P3]: High Precision Scan（large topk 场景 offset_delta + calc_cnt）
+- [ ] **PCA-DUAL-001** [P2 2026-03-24]: Dual-PCA 降维优化
+  - 来源: 外部 gap analysis 评估（2026-03-24）
+  - 目标: 查询端和库端分别用独立 PCA 投影（asymmetric PCA），减少距离计算维度
+  - 前置: AISAQ-SQ8-001（先做带宽优化）
+  - 复杂度: 高（需要验证 recall 影响）
 
 ---
 

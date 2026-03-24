@@ -75,6 +75,9 @@ pub struct AisaqConfig {
     /// Number of full-graph Vamana refinement passes after insertion (0 = disabled, default = 2)
     #[serde(default = "default_refine_passes")]
     pub num_refine_passes: usize,
+    /// Enable SQ8 prefilter distance in beam-search hot path.
+    #[serde(default)]
+    pub use_sq8_prefilter: bool,
 }
 
 fn default_true() -> bool {
@@ -112,6 +115,7 @@ impl Default for AisaqConfig {
             cache_all_on_load: false,
             run_refine_pass: true,
             num_refine_passes: 2,
+            use_sq8_prefilter: false,
         }
     }
 }
@@ -759,6 +763,8 @@ pub struct PQFlashIndex {
     storage: Option<DiskStorage>,
     loaded_node_cache: Option<HashMap<u32, std::sync::Arc<LoadedNode>>>,
     deleted_ids: HashSet<usize>,
+    sq8_quantizer: Option<crate::quantization::sq::ScalarQuantizer>,
+    sq8_codes: Vec<u8>,
     scratch_pool: Mutex<Vec<AisaqScratch>>,
 }
 
@@ -795,6 +801,8 @@ impl PQFlashIndex {
             storage: None,
             loaded_node_cache: None,
             deleted_ids: HashSet::new(),
+            sq8_quantizer: None,
+            sq8_codes: Vec::new(),
             scratch_pool: Mutex::new(Vec::new()),
         })
     }
@@ -915,6 +923,8 @@ impl PQFlashIndex {
         self.entry_points = new_entry_points;
         self.node_count = kept;
         self.deleted_ids.clear();
+        self.sq8_quantizer = None;
+        self.sq8_codes.clear();
         removed
     }
 
@@ -1132,6 +1142,15 @@ impl PQFlashIndex {
         if self.config.warm_up {
             self.warm_up_cache();
         }
+        if self.config.use_sq8_prefilter && !self.vectors.is_empty() {
+            let mut sq = crate::quantization::sq::ScalarQuantizer::new(self.dim, 8);
+            sq.train(&self.vectors);
+            self.sq8_codes = sq.encode_batch(&self.vectors).into_iter().flatten().collect();
+            self.sq8_quantizer = Some(sq);
+        } else {
+            self.sq8_quantizer = None;
+            self.sq8_codes.clear();
+        }
         Ok(())
     }
 
@@ -1217,6 +1236,22 @@ impl PQFlashIndex {
         for &id in &self.deleted_ids {
             data_file.write_all(&(id as u64).to_le_bytes())?;
         }
+        let use_sq8 = (!self.sq8_codes.is_empty() && self.sq8_quantizer.is_some()) as u8;
+        data_file.write_all(&[use_sq8])?;
+        if use_sq8 == 1 {
+            data_file.write_all(&(self.sq8_codes.len() as u64).to_le_bytes())?;
+            data_file.write_all(&self.sq8_codes)?;
+            let sq = self
+                .sq8_quantizer
+                .as_ref()
+                .expect("sq8 quantizer present when use_sq8 is set");
+            data_file.write_all(&(sq.dim as u64).to_le_bytes())?;
+            data_file.write_all(&(sq.bit as u64).to_le_bytes())?;
+            data_file.write_all(&sq.min_val.to_le_bytes())?;
+            data_file.write_all(&sq.max_val.to_le_bytes())?;
+            data_file.write_all(&sq.scale.to_le_bytes())?;
+            data_file.write_all(&sq.offset.to_le_bytes())?;
+        }
         data_file.flush()?;
 
         Ok(file_group)
@@ -1278,6 +1313,8 @@ impl PQFlashIndex {
             }),
             loaded_node_cache: None,
             deleted_ids: HashSet::new(),
+            sq8_quantizer: None,
+            sq8_codes: Vec::new(),
             scratch_pool: Mutex::new(Vec::new()),
         };
         // Optional trailing deleted-id payload: [count:u64][row_id:u64 * count]
@@ -1293,8 +1330,9 @@ impl PQFlashIndex {
                 .data_path(),
         )?;
         let file_len = data_file.metadata()?.len();
-        if file_len > expected_node_bytes + 8 {
-            data_file.seek(SeekFrom::Start(expected_node_bytes))?;
+        let mut cursor = expected_node_bytes;
+        if file_len >= expected_node_bytes + 8 {
+            data_file.seek(SeekFrom::Start(cursor))?;
             let mut count_buf = [0u8; 8];
             if data_file.read_exact(&mut count_buf).is_ok() {
                 let count = u64::from_le_bytes(count_buf) as usize;
@@ -1310,6 +1348,46 @@ impl PQFlashIndex {
                         let row = u64::from_le_bytes(id_buf) as usize;
                         if row < index.node_count {
                             index.deleted_ids.insert(row);
+                        }
+                    }
+                    cursor = needed;
+                }
+            }
+        }
+
+        // Optional SQ8 payload (forward-compatible EOF fallback).
+        if file_len > cursor {
+            data_file.seek(SeekFrom::Start(cursor))?;
+            let mut flag = [0u8; 1];
+            if data_file.read_exact(&mut flag).is_ok() && flag[0] == 1 {
+                let mut len_buf = [0u8; 8];
+                if data_file.read_exact(&mut len_buf).is_ok() {
+                    let code_len = u64::from_le_bytes(len_buf) as usize;
+                    let mut codes = vec![0u8; code_len];
+                    if data_file.read_exact(&mut codes).is_ok() {
+                        let mut dim_buf = [0u8; 8];
+                        let mut bit_buf = [0u8; 8];
+                        let mut min_buf = [0u8; 4];
+                        let mut max_buf = [0u8; 4];
+                        let mut scale_buf = [0u8; 4];
+                        let mut offset_buf = [0u8; 4];
+                        if data_file.read_exact(&mut dim_buf).is_ok()
+                            && data_file.read_exact(&mut bit_buf).is_ok()
+                            && data_file.read_exact(&mut min_buf).is_ok()
+                            && data_file.read_exact(&mut max_buf).is_ok()
+                            && data_file.read_exact(&mut scale_buf).is_ok()
+                            && data_file.read_exact(&mut offset_buf).is_ok()
+                        {
+                            let sq_dim = u64::from_le_bytes(dim_buf) as usize;
+                            let sq_bit = u64::from_le_bytes(bit_buf) as usize;
+                            let mut sq =
+                                crate::quantization::sq::ScalarQuantizer::new(sq_dim, sq_bit);
+                            sq.min_val = f32::from_le_bytes(min_buf);
+                            sq.max_val = f32::from_le_bytes(max_buf);
+                            sq.scale = f32::from_le_bytes(scale_buf);
+                            sq.offset = f32::from_le_bytes(offset_buf);
+                            index.sq8_codes = codes;
+                            index.sq8_quantizer = Some(sq);
                         }
                     }
                 }
@@ -1523,6 +1601,13 @@ impl PQFlashIndex {
             .as_ref()
             .map(|encoder| encoder.build_distance_table(query));
         let pq_table_slice = pq_table.as_ref().map(|v| v.as_slice());
+        let sq8_q = if self.config.use_sq8_prefilter && self.metric_type == MetricType::L2 {
+            self.sq8_quantizer
+                .as_ref()
+                .map(|sq| sq.precompute_query(query))
+        } else {
+            None
+        };
 
         let max_visit = self.compute_max_visit(k);
         let mut scratch = {
@@ -1576,9 +1661,19 @@ impl PQFlashIndex {
                                             table,
                                             neighbor_node.inline_pq,
                                         )
+                                    } else if let Some(ref q_i16) = sq8_q {
+                                        self.sq8_prefilter_distance(q_i16, neighbor as usize)
+                                            .unwrap_or_else(|| {
+                                                self.exact_distance(query, neighbor_node.vector)
+                                            })
                                     } else {
                                         self.exact_distance(query, neighbor_node.vector)
                                     }
+                                } else if let Some(ref q_i16) = sq8_q {
+                                    self.sq8_prefilter_distance(q_i16, neighbor as usize)
+                                        .unwrap_or_else(|| {
+                                            self.exact_distance(query, neighbor_node.vector)
+                                        })
                                 } else {
                                     self.exact_distance(query, neighbor_node.vector)
                                 }
@@ -2340,6 +2435,15 @@ impl PQFlashIndex {
             MetricType::Cosine => 1.0 - cosine_similarity(query, vector),
             MetricType::Hamming => f32::MAX,
         }
+    }
+
+    #[inline]
+    fn sq8_prefilter_distance(&self, q_i16: &[i16], node_idx: usize) -> Option<f32> {
+        let sq = self.sq8_quantizer.as_ref()?;
+        let start = node_idx.checked_mul(self.dim)?;
+        let end = start.checked_add(self.dim)?;
+        let code = self.sq8_codes.get(start..end)?;
+        Some(sq.sq_l2_precomputed(q_i16, code))
     }
 
     /// Build-time beam search over currently built prefix graph.
