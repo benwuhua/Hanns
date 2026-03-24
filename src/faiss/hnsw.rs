@@ -1352,8 +1352,8 @@ impl HnswIndex {
         // OPT-029: Higher default ef_search for better recall
         let ef_search = config.params.ef_search.unwrap_or(400).max(1);
 
-        // OPT-029: Higher default ef_construction for better graph quality
-        let ef_construction = config.params.ef_construction.unwrap_or(400).max(1);
+        // Align with native hnswlib/knowhere: ef_construction must be >= M.
+        let ef_construction = config.params.ef_construction.unwrap_or(400).max(m);
 
         // BUG-001 FIX: keep the default layer distribution stable across M values.
         // High-M builds collapse into a near-single-layer graph when we derive ml from the

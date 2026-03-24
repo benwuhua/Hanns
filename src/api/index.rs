@@ -524,8 +524,16 @@ impl IndexParams {
         top_k: usize,
     ) -> usize {
         let adaptive_floor = (self.hnsw_adaptive_k().max(0.0) * top_k as f64) as usize;
+        // SearchRequest.nprobe is reused as requested_ef_search for HNSW call sites.
+        // Keep native semantics: only explicit overrides (>1) should affect ef_search.
+        // Default/no-op values (0/1) must not override the index's configured ef_search.
+        let requested_override = if requested_ef_search > 1 {
+            requested_ef_search
+        } else {
+            0
+        };
         base_ef_search
-            .max(requested_ef_search.max(1))
+            .max(requested_override)
             .max(adaptive_floor)
     }
 }
@@ -624,5 +632,17 @@ mod tests {
         };
 
         assert_eq!(params.effective_hnsw_ef_search(138, 138, 100), 138);
+    }
+
+    #[test]
+    fn test_hnsw_effective_ef_search_ignores_default_nprobe_values() {
+        let params = IndexParams {
+            ef_search: Some(138),
+            hnsw_adaptive_k: Some(0.0),
+            ..Default::default()
+        };
+
+        assert_eq!(params.effective_hnsw_ef_search(138, 0, 100), 138);
+        assert_eq!(params.effective_hnsw_ef_search(138, 1, 100), 138);
     }
 }
