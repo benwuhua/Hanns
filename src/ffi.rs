@@ -91,6 +91,7 @@ pub enum CIndexType {
     MinHashLsh = 16,
     IvfPq = 17,
     IvfFlat = 18,
+    DiskAnn = 19,
 }
 
 /// Metric 类型枚举
@@ -343,6 +344,7 @@ impl IndexWrapper {
             CIndexType::BinIvfFlat => IndexType::BinIvfFlat,
             CIndexType::SparseWandCc => IndexType::SparseWandCc,
             CIndexType::MinHashLsh => IndexType::MinHashLsh,
+            CIndexType::DiskAnn => IndexType::DiskAnn,
         };
 
         // Parse data_type from i32 (Milvus VecType enum)
@@ -956,6 +958,10 @@ impl IndexWrapper {
                     sparse_wand_cc: None,
                     minhash_lsh: Some(minhash_lsh),
                 })
+            }
+            CIndexType::DiskAnn => {
+                eprintln!("DiskANN not yet fully implemented via FFI");
+                None
             }
             _ => None,
         }
