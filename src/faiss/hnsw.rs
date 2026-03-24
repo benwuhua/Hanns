@@ -1175,14 +1175,6 @@ impl SearchScratch {
     }
 
     #[inline]
-    fn generic_frontier_count_below(&self, thresh: f32) -> usize {
-        self.generic_frontier
-            .iter()
-            .filter(|(SearchMinDist(dist), _)| *dist < thresh)
-            .count()
-    }
-
-    #[inline]
     fn sync_generic_worst_result_distance(&mut self) {
         self.generic_worst_result_distance = self
             .generic_results
@@ -4191,16 +4183,6 @@ impl HnswIndex {
             }
 
             let pruning_start = profile_enabled.then(Instant::now);
-            if scratch.generic_frontier.len() >= ef
-                && scratch.generic_frontier_count_below(cand_dist) >= ef
-            {
-                if let Some(stats) = profile.as_mut() {
-                    if let Some(start) = pruning_start {
-                        stats.record_candidate_pruning(start.elapsed(), 1);
-                    }
-                }
-                break;
-            }
             if scratch.generic_results.len() >= ef
                 && cand_dist > scratch.generic_worst_result_distance
             {
@@ -4454,16 +4436,6 @@ impl HnswIndex {
             }
 
             let pruning_start = profile_enabled.then(Instant::now);
-            if scratch.generic_frontier.len() >= ef
-                && scratch.generic_frontier_count_below(cand_dist) >= ef
-            {
-                if let Some(stats) = profile.as_mut() {
-                    if let Some(start) = pruning_start {
-                        stats.record_candidate_pruning(start.elapsed(), 1);
-                    }
-                }
-                break;
-            }
             if scratch.generic_results.len() >= ef {
                 if let Some(&(SearchMaxDist(worst_dist), _)) = scratch.generic_results.peek() {
                     if cand_dist > worst_dist {

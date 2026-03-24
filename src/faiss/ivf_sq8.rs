@@ -753,14 +753,19 @@ impl IvfSq8Index {
     }
 
     fn write_to<W: std::io::Write>(&self, writer: &mut W) -> Result<()> {
+        const HEADER_VERSION_V3: u32 = 3;
+
         // Magic
         writer.write_all(b"IVFSQ8")?;
+        writer.write_all(&HEADER_VERSION_V3.to_le_bytes())?;
 
         // Dim
         writer.write_all(&(self.dim as u32).to_le_bytes())?;
 
         // Nlist
         writer.write_all(&(self.nlist as u32).to_le_bytes())?;
+        // Nprobe (persist runtime search breadth)
+        writer.write_all(&(self.nprobe as u32).to_le_bytes())?;
         // Metric type
         let metric_byte = match self.metric_type {
             MetricType::L2 => 0u8,
@@ -830,19 +835,47 @@ impl IvfSq8Index {
 
         let mut u32_buf = [0u8; 4];
         reader.read_exact(&mut u32_buf)?;
-        let stored_dim = u32::from_le_bytes(u32_buf) as usize;
+        let first_word = u32::from_le_bytes(u32_buf);
+        let (stored_dim, nlist, nprobe, metric_type) = match first_word {
+            // v2: [magic][version=2][dim][nlist]..., metric defaults to L2, nprobe defaults to 8
+            2 => {
+                reader.read_exact(&mut u32_buf)?;
+                let stored_dim = u32::from_le_bytes(u32_buf) as usize;
+                reader.read_exact(&mut u32_buf)?;
+                let nlist = u32::from_le_bytes(u32_buf) as usize;
+                (stored_dim, nlist, 8usize, MetricType::L2)
+            }
+            // v3: [magic][version=3][dim][nlist][nprobe][metric]...
+            3 => {
+                reader.read_exact(&mut u32_buf)?;
+                let stored_dim = u32::from_le_bytes(u32_buf) as usize;
+                reader.read_exact(&mut u32_buf)?;
+                let nlist = u32::from_le_bytes(u32_buf) as usize;
+                reader.read_exact(&mut u32_buf)?;
+                let nprobe = u32::from_le_bytes(u32_buf) as usize;
+                let mut metric_buf = [0u8; 1];
+                reader.read_exact(&mut metric_buf)?;
+                let metric_type = MetricType::from_bytes(metric_buf[0]);
+                (stored_dim, nlist, nprobe, metric_type)
+            }
+            // Legacy (unversioned) format:
+            // [magic][dim][nlist][metric]...
+            stored_dim => {
+                let stored_dim = stored_dim as usize;
+                reader.read_exact(&mut u32_buf)?;
+                let nlist = u32::from_le_bytes(u32_buf) as usize;
+                let mut metric_buf = [0u8; 1];
+                reader.read_exact(&mut metric_buf)?;
+                let metric_type = MetricType::from_bytes(metric_buf[0]);
+                (stored_dim, nlist, 8usize, metric_type)
+            }
+        };
         if stored_dim != dim {
             return Err(crate::api::KnowhereError::InvalidArg(format!(
                 "dim mismatch: load dim {} vs stored dim {}",
                 dim, stored_dim
             )));
         }
-
-        reader.read_exact(&mut u32_buf)?;
-        let nlist = u32::from_le_bytes(u32_buf) as usize;
-        let mut metric_buf = [0u8; 1];
-        reader.read_exact(&mut metric_buf)?;
-        let metric_type = MetricType::from_bytes(metric_buf[0]);
 
         let mut centroids = vec![0.0f32; nlist * stored_dim];
         for value in &mut centroids {
@@ -912,11 +945,11 @@ impl IvfSq8Index {
                 metric_type,
                 dim: stored_dim,
                 data_type: crate::api::DataType::Float,
-                params: crate::api::IndexParams::ivf(nlist, 8),
+                params: crate::api::IndexParams::ivf(nlist, nprobe),
             },
             dim: stored_dim,
             nlist,
-            nprobe: 8,
+            nprobe,
             metric_type,
             centroids,
             inverted_lists,
