@@ -1118,8 +1118,14 @@ impl PQFlashIndex {
             let stride = self.flat_stride.max(1);
             let build_l = (stride * 3).max(32).min(n_nodes);
             let passes = self.config.num_refine_passes;
-            for _ in 0..passes {
-                self.vamana_refine_pass(n_nodes, build_l);
+            // Pass 1: 全图精化（Phase 1 + Phase 2）
+            if passes >= 1 {
+                self.vamana_refine_pass(n_nodes, build_l, 0);
+            }
+            // Pass 2+: 只精化 Phase 2 节点（Phase 1 连通性已足够）
+            let phase2_start = 100_000_usize.min(n_nodes);
+            for _ in 1..passes {
+                self.vamana_refine_pass(n_nodes, build_l, phase2_start);
             }
         }
         self.refresh_entry_points();
@@ -2627,13 +2633,13 @@ impl PQFlashIndex {
         self.node_neighbor_counts[neighbor_idx] = new_count as u32;
     }
 
-    fn vamana_refine_pass(&mut self, n_nodes: usize, build_l: usize) {
+    fn vamana_refine_pass(&mut self, n_nodes: usize, build_l: usize, start_node: usize) {
         let stride = self.flat_stride.max(1);
 
         #[cfg(feature = "parallel")]
         let results: Vec<(usize, Vec<u32>)> = {
             use rayon::prelude::*;
-            (0..n_nodes)
+            (start_node..n_nodes)
                 .into_par_iter()
                 .map(|i| {
                     let vector_i = self.node_vector(i).to_vec();
@@ -2645,7 +2651,7 @@ impl PQFlashIndex {
         };
 
         #[cfg(not(feature = "parallel"))]
-        let results: Vec<(usize, Vec<u32>)> = (0..n_nodes)
+        let results: Vec<(usize, Vec<u32>)> = (start_node..n_nodes)
             .map(|i| {
                 let vector_i = self.node_vector(i).to_vec();
                 let cands = self.vamana_build_search(&vector_i, build_l, n_nodes);

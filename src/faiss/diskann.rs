@@ -3545,6 +3545,162 @@ mod tests {
     }
 
     #[test]
+    fn test_diskann_flash_ssd_mode_basic() {
+        let config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_enable_flash_layout: Some(true),
+                disk_flash_ssd_mode: Some(true),
+                max_degree: Some(16),
+                ..Default::default()
+            },
+        };
+
+        let mut index = DiskAnnIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0f32, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            2.0, 0.0, 0.0, 0.0, //
+            3.0, 0.0, 0.0, 0.0,
+        ];
+        index.train(&vectors).unwrap();
+
+        let temp_path = std::env::temp_dir().join("diskann_flash_ssd_mode_test.bin");
+        let sidecar = DiskAnnIndex::flash_layout_sidecar_path(&temp_path);
+        index.save(&temp_path).unwrap();
+
+        let mut loaded = DiskAnnIndex::new(&config).unwrap();
+        loaded.load(&temp_path).unwrap();
+
+        assert!(loaded.has_flash_layout, "flash layout should be set");
+        assert!(loaded.flash_ssd_file.is_some(), "flash_ssd_file should be open");
+        assert!(
+            loaded.flash_sidecar_mmap.is_none(),
+            "mmap should not be used in ssd mode"
+        );
+        assert!(
+            loaded.flash_neighbor_ids.is_none(),
+            "in-memory neighbors should be empty in ssd mode"
+        );
+
+        loaded.neighbor_ids.clear();
+        loaded.neighbor_dists.clear();
+        loaded.neighbor_degrees.clear();
+        loaded.vectors.clear();
+
+        let query = vec![0.1f32, 0.0, 0.0, 0.0];
+        let req = SearchRequest {
+            top_k: 2,
+            nprobe: 8,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let result = loaded.search(&query, &req).unwrap();
+        assert_eq!(result.ids.len(), 2, "should return 2 results");
+        assert!(result.ids[0] >= 0, "first result id should be valid");
+        assert_eq!(result.ids[0], 0, "nearest neighbor should be vector 0");
+
+        std::fs::remove_file(temp_path).ok();
+        std::fs::remove_file(sidecar).ok();
+    }
+
+    #[test]
+    fn test_diskann_flash_ssd_vs_mmap_same_results() {
+        let dim = 4;
+        let vectors = vec![
+            0.0f32, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            2.0, 0.0, 0.0, 0.0, //
+            3.0, 0.0, 0.0, 0.0, //
+            4.0, 0.0, 0.0, 0.0, //
+            0.5, 0.5, 0.0, 0.0,
+        ];
+        let queries = vec![
+            0.1f32, 0.0, 0.0, 0.0, //
+            2.1, 0.0, 0.0, 0.0,
+        ];
+
+        let base_config = crate::api::IndexParams {
+            disk_enable_flash_layout: Some(true),
+            max_degree: Some(16),
+            ..Default::default()
+        };
+
+        let build_config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: base_config.clone(),
+        };
+        let mut index = DiskAnnIndex::new(&build_config).unwrap();
+        index.train(&vectors).unwrap();
+        let temp_path = std::env::temp_dir().join("diskann_ssd_vs_mmap_test.bin");
+        let sidecar = DiskAnnIndex::flash_layout_sidecar_path(&temp_path);
+        index.save(&temp_path).unwrap();
+
+        let req = SearchRequest {
+            top_k: 3,
+            nprobe: 16,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+
+        let mmap_config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_flash_mmap_mode: Some(true),
+                ..base_config.clone()
+            },
+        };
+        let mut mmap_idx = DiskAnnIndex::new(&mmap_config).unwrap();
+        mmap_idx.load(&temp_path).unwrap();
+        mmap_idx.vectors.clear();
+        mmap_idx.neighbor_ids.clear();
+        mmap_idx.neighbor_dists.clear();
+        mmap_idx.neighbor_degrees.clear();
+
+        let ssd_config = IndexConfig {
+            index_type: IndexType::DiskAnn,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                disk_flash_ssd_mode: Some(true),
+                ..base_config.clone()
+            },
+        };
+        let mut ssd_idx = DiskAnnIndex::new(&ssd_config).unwrap();
+        ssd_idx.load(&temp_path).unwrap();
+        ssd_idx.vectors.clear();
+        ssd_idx.neighbor_ids.clear();
+        ssd_idx.neighbor_dists.clear();
+        ssd_idx.neighbor_degrees.clear();
+
+        for q_start in (0..queries.len()).step_by(dim) {
+            let q = &queries[q_start..q_start + dim];
+            let mmap_result = mmap_idx.search(q, &req).unwrap();
+            let ssd_result = ssd_idx.search(q, &req).unwrap();
+            assert_eq!(
+                mmap_result.ids, ssd_result.ids,
+                "SSD and mmap modes should return same neighbor ids for query {:?}",
+                q
+            );
+        }
+
+        std::fs::remove_file(temp_path).ok();
+        std::fs::remove_file(sidecar).ok();
+    }
+
+    #[test]
     fn test_diskann_prefetch_cache_reuses_across_expansions_with_cap() {
         let config = IndexConfig {
             index_type: IndexType::DiskAnn,
