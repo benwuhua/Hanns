@@ -35,32 +35,31 @@ fn build_index(m: usize, ml: Option<f32>, num_vectors: usize) -> HnswIndex {
     index
 }
 
-/// Test that high-M builds maintain stable multi-layer structure when using reference-M level multiplier.
+/// Test that high-M builds use the runtime-M level multiplier rather than a fixed reference M.
 ///
-/// With ml = 1/ln(16) ≈ 0.36:
-/// - P(level >= 1) = e^(-1/ml) ≈ e^(-2.77) ≈ 0.063
-/// - P(level >= 2) = e^(-2/ml) ≈ e^(-5.55) ≈ 0.004
-/// - P(level >= 3) = e^(-3/ml) ≈ e^(-8.33) ≈ 0.00024
+/// For M = 64, ml = 1/ln(64) ≈ 0.2404:
+/// - P(level >= 1) = 1/64 ≈ 0.015625
+/// - P(level >= 2) = 1/64^2 ≈ 0.000244
 ///
 /// With 50000 vectors:
-/// - Expected at level >= 1: ~3150 nodes
-/// - Expected at level >= 2: ~200 nodes
-/// - Expected at level >= 3: ~12 nodes (reliable for max_level >= 3)
+/// - Expected average level is about 1 / (M - 1) ≈ 0.0159
+/// - Expected at level >= 2: ~12 nodes, so max_level >= 2 is still realistic
 #[test]
 fn test_hnsw_default_level_distribution_stays_stable_at_high_m() {
     // Use 50K vectors for statistically reliable level distribution
     let index = build_index(64, None, 50_000);
 
-    // Primary check: average level should be consistent with reference-M distribution
+    // Primary check: average level should reflect the runtime M=64 distribution,
+    // not the old reference-M=16 behavior.
     let avg_level = index.average_node_level();
     assert!(
-        avg_level > 0.04,
-        "expected reference-M level distribution for high M, got avg_level={}",
+        avg_level > 0.01 && avg_level < 0.03,
+        "expected runtime-M level distribution for high M, got avg_level={}",
         avg_level
     );
 
     // Secondary check: should have a multi-layer graph
-    // With 50K vectors and ml=0.36, we expect ~12 nodes at level >= 3
+    // With 50K vectors and ml≈0.24, we still expect a handful of nodes at level >= 2.
     let max_level = index.max_level();
     assert!(
         max_level >= 2,

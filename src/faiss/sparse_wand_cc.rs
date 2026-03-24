@@ -46,7 +46,11 @@ pub struct SparseWandIndexCC {
 impl SparseWandIndexCC {
     /// 创建新的并发 WAND 索引
     pub fn new(metric_type: SparseMetricType, ssize: usize) -> Self {
-        let _ = ssize; // ssize is a C-API compatibility parameter and is not yet plumbed into SparseWandIndexCC search budget.
+        if ssize > 0 {
+            eprintln!("warn: ssize parameter ignored in SparseWandIndexCC");
+        }
+        // ssize is a C-API compatibility parameter and is not yet plumbed into
+        // SparseWandIndexCC's search budget.
         Self {
             inner: RwLock::new(SparseInvertedIndex::new(metric_type)),
         }

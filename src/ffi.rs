@@ -74,7 +74,7 @@ pub enum CError {
 pub enum CIndexType {
     Flat = 0,
     Hnsw = 1,
-    Scann = 2,
+    Scann = 2, // Rust-only, no native parity
     HnswPrq = 3,
     IvfRabitq = 4,
     HnswSq = 5,
@@ -85,9 +85,9 @@ pub enum CIndexType {
     IvfFlatCc = 10,
     IvfSqCc = 11,
     SparseInverted = 12,
-    SparseWand = 13,
+    SparseWand = 13, // Rust-only, no native parity
     BinIvfFlat = 14,
-    SparseWandCc = 15,
+    SparseWandCc = 15, // Rust-only, no native parity
     MinHashLsh = 16,
     IvfPq = 17,
     IvfFlat = 18,
@@ -424,10 +424,11 @@ impl IndexWrapper {
             }
             CIndexType::Scann => {
                 if metric != MetricType::L2 {
-                    eprintln!(
-                        "ScaNN currently only supports L2; ignoring metric_type={:?}",
-                        metric
-                    );
+                    eprintln!("ScaNN only supports L2 metric; got metric_type={:?}", metric);
+                    return None;
+                }
+                if config.ef_search > 0 {
+                    eprintln!("warn: ef_search ignored for ScaNN; use reorder_k instead");
                 }
                 let num_partitions = if config.num_partitions > 0 {
                     config.num_partitions
@@ -439,11 +440,10 @@ impl IndexWrapper {
                 } else {
                     256
                 };
-                // ef_search not plumbed in ScaNN runtime search path; use reorder_k as the search budget.
+                // ScaNN FFI only exposes num_partitions/num_centroids/reorder_k.
+                // ef_search is not plumbed into the ScaNN runtime search path.
                 let reorder_k = if config.reorder_k > 0 {
                     config.reorder_k
-                } else if config.ef_search > 0 {
-                    config.ef_search
                 } else {
                     100
                 };
@@ -875,16 +875,14 @@ impl IndexWrapper {
             CIndexType::SparseWand => {
                 // Sparse WAND index for efficient sparse vector search
                 use crate::faiss::sparse_inverted::SparseMetricType;
-                let sparse_metric = match metric {
-                    MetricType::Ip => SparseMetricType::Ip,
-                    _ => {
-                        eprintln!(
-                            "SparseWand only supports InnerProduct metric; ignoring metric_type={:?}",
-                            metric
-                        );
-                        SparseMetricType::Ip
-                    }
-                };
+                if metric != MetricType::Ip {
+                    eprintln!(
+                        "SparseWand only supports InnerProduct metric; got metric_type={:?}",
+                        metric
+                    );
+                    return None;
+                }
+                let sparse_metric = SparseMetricType::Ip;
                 let sparse_wand = crate::faiss::SparseWandIndex::new(sparse_metric);
                 Some(Self {
                     flat: None,
@@ -909,16 +907,14 @@ impl IndexWrapper {
             CIndexType::SparseWandCc => {
                 // Sparse WAND CC (Concurrent) index
                 use crate::faiss::sparse_inverted::SparseMetricType;
-                let sparse_metric = match metric {
-                    MetricType::Ip => SparseMetricType::Ip,
-                    _ => {
-                        eprintln!(
-                            "SparseWandCc only supports InnerProduct metric; ignoring metric_type={:?}",
-                            metric
-                        );
-                        SparseMetricType::Ip
-                    }
-                };
+                if metric != MetricType::Ip {
+                    eprintln!(
+                        "SparseWandCc only supports InnerProduct metric; got metric_type={:?}",
+                        metric
+                    );
+                    return None;
+                }
+                let sparse_metric = SparseMetricType::Ip;
                 let ssize = if config.num_partitions > 0 {
                     config.num_partitions
                 } else {
@@ -2339,7 +2335,7 @@ pub extern "C" fn knowhere_search_with_bitset(
             }
         } else {
             // Do not silently drop bitset on unsupported index types.
-            eprintln!("bitset search not supported for this index type");
+            eprintln!("search_with_bitset not supported for this index type");
             std::ptr::null_mut()
         }
     }

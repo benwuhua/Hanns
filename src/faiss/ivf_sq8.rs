@@ -206,6 +206,8 @@ pub struct IvfSq8Index {
     centroids: Vec<f32>,
     /// Inverted lists: cluster_id -> (ids, flat quantized residual codes)
     inverted_lists: HashMap<usize, (Vec<i64>, Vec<u8>)>,
+    /// Internal row ids aligned with each inverted-list entry.
+    inverted_list_rows: HashMap<usize, Vec<usize>>,
     /// Scalar quantizer for residuals
     quantizer: ScalarQuantizer,
     /// All vectors (for decoding)
@@ -234,6 +236,7 @@ impl IvfSq8Index {
             metric_type: config.metric_type,
             centroids: Vec::new(),
             inverted_lists: HashMap::new(),
+            inverted_list_rows: HashMap::new(),
             quantizer: ScalarQuantizer::new(config.dim, 8),
             vectors: Vec::new(),
             ids: Vec::new(),
@@ -295,6 +298,7 @@ impl IvfSq8Index {
         for i in 0..n {
             let start = i * self.dim;
             let vector = &vectors[start..start + self.dim];
+            let internal_row = self.ids.len();
 
             // Find nearest centroid
             let cluster = self.find_nearest_centroid(vector);
@@ -319,6 +323,10 @@ impl IvfSq8Index {
                 .or_insert_with(|| (Vec::new(), Vec::new()));
             entry.0.push(id);
             entry.1.extend_from_slice(&quantized);
+            self.inverted_list_rows
+                .entry(cluster)
+                .or_insert_with(Vec::new)
+                .push(internal_row);
         }
 
         Ok(n)
@@ -424,7 +432,7 @@ impl IvfSq8Index {
         q_residual_buf: &mut Vec<f32>,
         q_precomputed_buf: &mut Vec<i16>,
         bitset: Option<&BitsetView>,
-        id_to_row: Option<&HashMap<i64, usize>>,
+        cluster_rows: Option<&[usize]>,
     ) -> TopKAccumulator {
         let mut acc = TopKAccumulator::new(top_k);
         if let Some((ids, codes)) = self.inverted_lists.get(&cluster_id) {
@@ -448,7 +456,10 @@ impl IvfSq8Index {
                         .precompute_query_into(q_residual_buf, q_precomputed_buf.as_mut_slice());
 
                     for i in 0..n {
-                        if !Self::id_allowed_by_bitset(ids[i], bitset, id_to_row) {
+                        if !Self::row_allowed_by_bitset(
+                            cluster_rows.and_then(|rows| rows.get(i)).copied(),
+                            bitset,
+                        ) {
                             continue;
                         }
                         let code = &codes[i * self.dim..(i + 1) * self.dim];
@@ -463,7 +474,10 @@ impl IvfSq8Index {
                     // Keep "smaller is better" convention for TopKAccumulator.
                     let centroid_dot = dot_product_f32(query_vec, centroid_vec);
                     for i in 0..n {
-                        if !Self::id_allowed_by_bitset(ids[i], bitset, id_to_row) {
+                        if !Self::row_allowed_by_bitset(
+                            cluster_rows.and_then(|rows| rows.get(i)).copied(),
+                            bitset,
+                        ) {
                             continue;
                         }
                         let code = &codes[i * self.dim..(i + 1) * self.dim];
@@ -493,21 +507,18 @@ impl IvfSq8Index {
     }
 
     #[inline]
-    fn id_allowed_by_bitset(
-        id: i64,
+    fn row_allowed_by_bitset(
+        internal_row: Option<usize>,
         bitset: Option<&BitsetView>,
-        id_to_row: Option<&HashMap<i64, usize>>,
     ) -> bool {
         let Some(bitset) = bitset else {
             return true;
         };
-        let Some(id_to_row) = id_to_row else {
+        let Some(row) = internal_row else {
             return true;
         };
-        if let Some(&row) = id_to_row.get(&id) {
-            if row < bitset.len() {
-                return !bitset.get(row);
-            }
+        if row < bitset.len() {
+            return !bitset.get(row);
         }
         true
     }
@@ -571,6 +582,38 @@ impl IvfSq8Index {
         vector.iter().zip(centroid).map(|(a, b)| a - b).collect()
     }
 
+    fn rebuild_inverted_list_rows_from_vectors(&self) -> HashMap<usize, Vec<usize>> {
+        let mut rows: HashMap<usize, Vec<usize>> =
+            HashMap::with_capacity(self.inverted_lists.len());
+        let total_rows = self.ids.len().min(self.vectors.len() / self.dim);
+        for row in 0..total_rows {
+            let start = row * self.dim;
+            let vector = &self.vectors[start..start + self.dim];
+            let cluster = self.find_nearest_centroid(vector);
+            rows.entry(cluster).or_insert_with(Vec::new).push(row);
+        }
+        rows
+    }
+
+    fn synthetic_inverted_list_rows(
+        inverted_lists: &HashMap<usize, (Vec<i64>, Vec<u8>)>,
+    ) -> HashMap<usize, Vec<usize>> {
+        let mut rows: HashMap<usize, Vec<usize>> = HashMap::with_capacity(inverted_lists.len());
+        let mut cluster_ids: Vec<usize> = inverted_lists.keys().copied().collect();
+        cluster_ids.sort_unstable();
+
+        let mut next_row = 0usize;
+        for cluster_id in cluster_ids {
+            let Some((ids, _)) = inverted_lists.get(&cluster_id) else {
+                continue;
+            };
+            let cluster_rows: Vec<usize> = (next_row..next_row + ids.len()).collect();
+            next_row += ids.len();
+            rows.insert(cluster_id, cluster_rows);
+        }
+        rows
+    }
+
     /// Add vectors in parallel (requires rayon)
     #[cfg(feature = "parallel")]
     pub fn add_parallel(
@@ -592,9 +635,10 @@ impl IvfSq8Index {
         let nlist = self.nlist;
         let centroids = self.centroids.clone();
         let quantizer = &self.quantizer;
+        let base_row = self.ids.len();
 
         // Parallel: assign vectors to clusters
-        let assignments: Vec<(usize, i64, Vec<u8>)> = (0..n)
+        let assignments: Vec<(usize, i64, usize, Vec<u8>)> = (0..n)
             .into_par_iter()
             .map(|i| {
                 let start = i * dim;
@@ -634,28 +678,33 @@ impl IvfSq8Index {
                 let quantized = quantizer.encode(&residual);
 
                 let id = ids.map(|ids| ids[i]).unwrap_or(i as i64);
-                (cluster, id, quantized)
+                (cluster, id, base_row + i, quantized)
             })
             .collect();
 
         // Collect by cluster
-        let mut cluster_data: HashMap<usize, (Vec<i64>, Vec<u8>)> = HashMap::new();
-        for (cluster, id, quantized) in assignments {
+        let mut cluster_data: HashMap<usize, (Vec<i64>, Vec<u8>, Vec<usize>)> = HashMap::new();
+        for (cluster, id, internal_row, quantized) in assignments {
             let entry = cluster_data
                 .entry(cluster)
-                .or_insert_with(|| (Vec::new(), Vec::new()));
+                .or_insert_with(|| (Vec::new(), Vec::new(), Vec::new()));
             entry.0.push(id);
             entry.1.extend_from_slice(&quantized);
+            entry.2.push(internal_row);
         }
 
         // Merge into inverted lists
-        for (cluster, (mut ids_buf, mut codes_buf)) in cluster_data {
+        for (cluster, (mut ids_buf, mut codes_buf, mut rows_buf)) in cluster_data {
             let entry = self
                 .inverted_lists
                 .entry(cluster)
                 .or_insert_with(|| (Vec::new(), Vec::new()));
             entry.0.append(&mut ids_buf);
             entry.1.append(&mut codes_buf);
+            self.inverted_list_rows
+                .entry(cluster)
+                .or_insert_with(Vec::new)
+                .append(&mut rows_buf);
         }
 
         // Update ids and vectors
@@ -953,6 +1002,7 @@ impl IvfSq8Index {
             metric_type,
             centroids,
             inverted_lists,
+            inverted_list_rows: HashMap::new(),
             quantizer,
             vectors,
             ids,
@@ -960,6 +1010,7 @@ impl IvfSq8Index {
             trained: true,
         };
 
+        index.inverted_list_rows = index.rebuild_inverted_list_rows_from_vectors();
         index.next_id = index.ids.iter().copied().max().map_or(0, |m| m + 1);
 
         Ok(index)
@@ -1247,10 +1298,15 @@ impl IvfSq8Index {
         quantizer.offset = safe_min;
         quantizer.scale = 255.0 / (safe_max - safe_min);
 
+        let mut cluster_ids: Vec<usize> = inverted_lists.keys().copied().collect();
+        cluster_ids.sort_unstable();
         let mut all_ids = Vec::with_capacity(total_ids);
-        for (ids, _) in inverted_lists.values() {
-            all_ids.extend_from_slice(ids);
+        for cluster_id in &cluster_ids {
+            if let Some((ids, _)) = inverted_lists.get(cluster_id) {
+                all_ids.extend_from_slice(ids);
+            }
         }
+        let inverted_list_rows = Self::synthetic_inverted_list_rows(&inverted_lists);
 
         let mut index = Self {
             config: IndexConfig {
@@ -1266,6 +1322,7 @@ impl IvfSq8Index {
             metric_type,
             centroids,
             inverted_lists,
+            inverted_list_rows,
             quantizer,
             vectors: vec![0.0; ntotal * dim],
             ids: all_ids,
@@ -1370,12 +1427,6 @@ impl IndexTrait for IvfSq8Index {
         let mut all_ids = vec![-1; n_queries * top_k];
         let mut all_dists = vec![f32::MAX; n_queries * top_k];
 
-        // Native semantics: bitset is aligned to internal row index, not external id.
-        let mut id_to_row = HashMap::with_capacity(self.ids.len());
-        for (row, &id) in self.ids.iter().enumerate() {
-            id_to_row.entry(id).or_insert(row);
-        }
-
         for q_idx in 0..n_queries {
             let q_start = q_idx * self.dim;
             let query_vec = &vectors[q_start..q_start + self.dim];
@@ -1392,7 +1443,7 @@ impl IndexTrait for IvfSq8Index {
                     &mut q_residual_buf,
                     &mut q_precomputed_buf,
                     Some(bitset),
-                    Some(&id_to_row),
+                    self.inverted_list_rows.get(&cluster_id).map(|rows| rows.as_slice()),
                 ));
             }
 
@@ -1723,6 +1774,44 @@ mod tests {
         assert_eq!(result.ids.len(), 2);
         // Should find the closest vectors (ids 0 and 1)
         assert!(result.ids[0] == 0 || result.ids[0] == 1);
+    }
+
+    #[test]
+    fn test_ivf_sq8_bitset_uses_internal_rows_not_external_ids() {
+        let config = IndexConfig {
+            index_type: IndexType::IvfSq8,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: IndexParams::ivf_sq8(4, 2),
+        };
+
+        let mut index = IvfSq8Index::new(&config).unwrap();
+        let vectors = vec![
+            0.0, 0.0, 0.0, 0.0, //
+            0.1, 0.1, 0.1, 0.1, //
+            5.0, 5.0, 5.0, 5.0, //
+            6.0, 6.0, 6.0, 6.0,
+        ];
+        let ids = vec![100, 101, 102, 103];
+
+        index.train(&vectors).unwrap();
+        index.add(&vectors, Some(&ids)).unwrap();
+
+        let query = Dataset::from_vectors(vec![0.01, 0.01, 0.01, 0.01], 4);
+        let mut bitset = BitsetView::new(4);
+        bitset.set(0, true);
+
+        let result =
+            crate::index::Index::search_with_bitset(&index, &query, 4, &bitset).unwrap();
+        assert!(
+            !result.ids.contains(&100),
+            "bitset row 0 should filter the first internal row even when external id is 100"
+        );
+        assert!(
+            result.ids.contains(&101),
+            "bitset should only filter the targeted internal row, not nearby unfiltered rows"
+        );
     }
 
     #[test]
