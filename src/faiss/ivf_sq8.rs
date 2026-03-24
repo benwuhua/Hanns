@@ -373,6 +373,8 @@ impl IvfSq8Index {
                                 k,
                                 q_residual_buf,
                                 q_precomputed_buf,
+                                None,
+                                None,
                             )
                         },
                     )
@@ -396,6 +398,8 @@ impl IvfSq8Index {
                         k,
                         &mut q_residual_buf,
                         &mut q_precomputed_buf,
+                        None,
+                        None,
                     ));
                 }
                 merged
@@ -419,6 +423,8 @@ impl IvfSq8Index {
         top_k: usize,
         q_residual_buf: &mut Vec<f32>,
         q_precomputed_buf: &mut Vec<i16>,
+        bitset: Option<&BitsetView>,
+        id_to_row: Option<&HashMap<i64, usize>>,
     ) -> TopKAccumulator {
         let mut acc = TopKAccumulator::new(top_k);
         if let Some((ids, codes)) = self.inverted_lists.get(&cluster_id) {
@@ -442,6 +448,9 @@ impl IvfSq8Index {
                         .precompute_query_into(q_residual_buf, q_precomputed_buf.as_mut_slice());
 
                     for i in 0..n {
+                        if !Self::id_allowed_by_bitset(ids[i], bitset, id_to_row) {
+                            continue;
+                        }
                         let code = &codes[i * self.dim..(i + 1) * self.dim];
                         let dist = self
                             .quantizer
@@ -454,6 +463,9 @@ impl IvfSq8Index {
                     // Keep "smaller is better" convention for TopKAccumulator.
                     let centroid_dot = dot_product_f32(query_vec, centroid_vec);
                     for i in 0..n {
+                        if !Self::id_allowed_by_bitset(ids[i], bitset, id_to_row) {
+                            continue;
+                        }
                         let code = &codes[i * self.dim..(i + 1) * self.dim];
                         let residual_dot = self.quantizer.decode_dot_f32(code, query_vec);
                         let dist = -(centroid_dot + residual_dot);
@@ -475,7 +487,29 @@ impl IvfSq8Index {
             top_k,
             &mut q_residual_buf,
             &mut q_precomputed_buf,
+            None,
+            None,
         )
+    }
+
+    #[inline]
+    fn id_allowed_by_bitset(
+        id: i64,
+        bitset: Option<&BitsetView>,
+        id_to_row: Option<&HashMap<i64, usize>>,
+    ) -> bool {
+        let Some(bitset) = bitset else {
+            return true;
+        };
+        let Some(id_to_row) = id_to_row else {
+            return true;
+        };
+        if let Some(&row) = id_to_row.get(&id) {
+            if row < bitset.len() {
+                return !bitset.get(row);
+            }
+        }
+        true
     }
 
     /// Find nearest centroid
@@ -687,6 +721,8 @@ impl IvfSq8Index {
                         k,
                         &mut q_residual_buf,
                         &mut q_precomputed_buf,
+                        None,
+                        None,
                     ));
                 }
 
@@ -991,36 +1027,64 @@ impl IndexTrait for IvfSq8Index {
         top_k: usize,
         bitset: &BitsetView,
     ) -> std::result::Result<IndexSearchResult, IndexError> {
-        // IVF-SQ8 doesn't have native bitset support, use default implementation
         let vectors = query.vectors();
-        let req = SearchRequest {
-            top_k,
-            nprobe: self.nprobe,
-            filter: None,
-            params: None,
-            radius: None,
-        };
+        if !self.trained {
+            return Err(IndexError::Unsupported("index not trained".to_string()));
+        }
+        if self.ids.is_empty() {
+            return Ok(IndexSearchResult::new(vec![], vec![], 0.0));
+        }
 
-        let api_result = self
-            .search(vectors, &req)
-            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        let n_queries = vectors.len() / self.dim;
+        if n_queries * self.dim != vectors.len() {
+            return Err(IndexError::Unsupported("query dimension mismatch".to_string()));
+        }
+        if top_k == 0 {
+            return Ok(IndexSearchResult::new(vec![], vec![], 0.0));
+        }
 
-        // Filter out bitset-marked vectors
-        let mut filtered_ids = Vec::new();
-        let mut filtered_distances = Vec::new();
+        let nprobe = self.nprobe.min(self.nlist);
+        let mut all_ids = vec![-1; n_queries * top_k];
+        let mut all_dists = vec![f32::MAX; n_queries * top_k];
 
-        for (id, dist) in api_result.ids.iter().zip(api_result.distances.iter()) {
-            let idx = *id as usize;
-            if idx >= bitset.len() || !bitset.get(idx) {
-                filtered_ids.push(*id);
-                filtered_distances.push(*dist);
+        // Native semantics: bitset is aligned to internal row index, not external id.
+        let mut id_to_row = HashMap::with_capacity(self.ids.len());
+        for (row, &id) in self.ids.iter().enumerate() {
+            id_to_row.entry(id).or_insert(row);
+        }
+
+        for q_idx in 0..n_queries {
+            let q_start = q_idx * self.dim;
+            let query_vec = &vectors[q_start..q_start + self.dim];
+            let clusters = self.search_clusters(query_vec, nprobe);
+            let mut q_residual_buf = vec![0.0f32; self.dim];
+            let mut q_precomputed_buf = vec![0i16; self.dim];
+            let mut merged = TopKAccumulator::new(top_k);
+
+            for cluster_id in clusters {
+                merged.merge(self.scan_cluster_with_buf(
+                    cluster_id,
+                    query_vec,
+                    top_k,
+                    &mut q_residual_buf,
+                    &mut q_precomputed_buf,
+                    Some(bitset),
+                    Some(&id_to_row),
+                ));
+            }
+
+            let hits = merged.into_hits();
+            let offset = q_idx * top_k;
+            for (i, hit) in hits.into_iter().enumerate().take(top_k) {
+                all_ids[offset + i] = hit.id;
+                all_dists[offset + i] = hit.dist;
             }
         }
 
         Ok(IndexSearchResult::new(
-            filtered_ids,
-            filtered_distances,
-            api_result.elapsed_ms,
+            all_ids,
+            all_dists,
+            0.0,
         ))
     }
 
