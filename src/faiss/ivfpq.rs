@@ -11,6 +11,7 @@ use crate::quantization::KMeans;
 use crate::quantization::opq::{OPQConfig, OptimizedProductQuantizer};
 use crate::quantization::pq::{PQConfig, ProductQuantizer};
 use crate::simd::{dot_product_f32, l2_distance_sq};
+use std::io::{Read, Seek, SeekFrom};
 
 /// IVF-PQ Index
 ///
@@ -33,6 +34,9 @@ pub struct IvfPqIndex {
     pq: ProductQuantizer,
     /// Optional OPQ quantizer for rotated residual encoding
     opq: Option<OptimizedProductQuantizer>,
+    /// Optional PQ centroids imported from FAISS binary files.
+    /// When present, search uses this table directly instead of internal PQ training state.
+    imported_pq_centroids: Option<Vec<f32>>,
     /// Enable OPQ path (default: true)
     use_opq: bool,
     /// Inverted lists (Vec 替代 HashMap - 性能优化)
@@ -124,6 +128,7 @@ impl IvfPqIndex {
             centroids: Vec::new(),
             pq,
             opq,
+            imported_pq_centroids: None,
             use_opq,
             invlist_ids,
             invlist_codes,
@@ -410,16 +415,18 @@ impl IvfPqIndex {
     /// Precompute distance table for a query residual.
     /// Returns table[sub_q][centroid_idx] = L2 distance between query sub-vector and PQ centroid.
     fn precompute_distance_table(&self, query_residual: &[f32]) -> Vec<Vec<f32>> {
-        let sub_dim = self.pq.config().sub_dim();
-        let ksub = self.pq.config().ksub();
-        let m = self.pq.config().m;
+        let sub_dim = self.dim / self.m;
+        let ksub = 1usize << self.nbits_per_idx;
+        let m = self.m;
 
         let mut table = Vec::with_capacity(m);
         for sub_q in 0..m {
             let q_sub_offset = sub_q * sub_dim;
             let query_sub = &query_residual[q_sub_offset..q_sub_offset + sub_dim];
 
-            let centroids = self.pq.get_centroids(sub_q).unwrap();
+            let centroids = self
+                .pq_subquantizer_centroids(sub_q)
+                .expect("pq centroids unavailable for subquantizer");
             let mut dists = Vec::with_capacity(ksub);
 
             for c in 0..ksub {
@@ -443,6 +450,20 @@ impl IvfPqIndex {
             table.push(dists);
         }
         table
+    }
+
+    #[inline]
+    fn pq_subquantizer_centroids(&self, sub_q: usize) -> Option<&[f32]> {
+        if sub_q >= self.m {
+            return None;
+        }
+        if let Some(imported) = self.imported_pq_centroids.as_ref() {
+            let ksub = 1usize << self.nbits_per_idx;
+            let sub_dim = self.dim / self.m;
+            let off = sub_q * ksub * sub_dim;
+            return Some(&imported[off..off + ksub * sub_dim]);
+        }
+        self.pq.get_centroids(sub_q)
     }
 
     /// Precompute ADC distance table using OPQ centroids and rotated query residual.
@@ -855,6 +876,294 @@ impl IvfPqIndex {
         Ok(())
     }
 
+    /// Import an IVF-PQ index from native FAISS `write_index` binary file.
+    ///
+    /// Supported subset:
+    /// - top-level fourcc: `IwPQ` / `IvPQ`
+    /// - coarse quantizer fourcc: `IxF2` / `IxFI`
+    /// - inverted lists fourcc: `ilar`
+    pub fn import_from_faiss_file(path: &str) -> Result<Self> {
+        fn read_u8<R: Read>(r: &mut R) -> Result<u8> {
+            let mut b = [0u8; 1];
+            r.read_exact(&mut b)?;
+            Ok(b[0])
+        }
+        fn read_i32<R: Read>(r: &mut R) -> Result<i32> {
+            let mut b = [0u8; 4];
+            r.read_exact(&mut b)?;
+            Ok(i32::from_le_bytes(b))
+        }
+        fn read_u32<R: Read>(r: &mut R) -> Result<u32> {
+            let mut b = [0u8; 4];
+            r.read_exact(&mut b)?;
+            Ok(u32::from_le_bytes(b))
+        }
+        fn read_i64<R: Read>(r: &mut R) -> Result<i64> {
+            let mut b = [0u8; 8];
+            r.read_exact(&mut b)?;
+            Ok(i64::from_le_bytes(b))
+        }
+        fn read_f32_vec_with_count<R: Read>(r: &mut R) -> Result<Vec<f32>> {
+            let n = read_i64(r)?;
+            if n < 0 {
+                return Err(crate::api::KnowhereError::Codec(
+                    "negative vector length in faiss blob".to_string(),
+                ));
+            }
+            let n = n as usize;
+            let mut raw = vec![0u8; n * 4];
+            r.read_exact(&mut raw)?;
+            let mut out = Vec::with_capacity(n);
+            for c in raw.chunks_exact(4) {
+                out.push(f32::from_le_bytes([c[0], c[1], c[2], c[3]]));
+            }
+            Ok(out)
+        }
+        fn metric_from_faiss_i32(v: i32) -> Result<MetricType> {
+            match v {
+                0 => Ok(MetricType::L2),
+                1 => Ok(MetricType::Ip),
+                _ => Err(crate::api::KnowhereError::Codec(format!(
+                    "unsupported faiss metric_type {} for ivfpq import",
+                    v
+                ))),
+            }
+        }
+
+        let mut file = std::fs::File::open(path)?;
+
+        // Top-level fourcc
+        let mut fourcc = [0u8; 4];
+        file.read_exact(&mut fourcc)?;
+        if &fourcc != b"IwPQ" && &fourcc != b"IvPQ" {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "unsupported top-level fourcc {:?}, expected IwPQ/IvPQ",
+                String::from_utf8_lossy(&fourcc)
+            )));
+        }
+        let legacy = &fourcc == b"IvPQ";
+
+        // IVF header
+        let dim = read_u32(&mut file)? as usize;
+        let _ntotal = read_i64(&mut file)?;
+        let _dummy1 = read_i64(&mut file)?;
+        let _dummy2 = read_i64(&mut file)?;
+        let _is_trained = read_u8(&mut file)?;
+        let metric_type = metric_from_faiss_i32(read_i32(&mut file)?)?;
+        let nlist = read_i64(&mut file)? as usize;
+        let nprobe = read_i64(&mut file)? as usize;
+
+        // Nested coarse quantizer (IxF2 / IxFI only)
+        let mut cq_fourcc = [0u8; 4];
+        file.read_exact(&mut cq_fourcc)?;
+        if &cq_fourcc != b"IxF2" && &cq_fourcc != b"IxFI" {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "unsupported coarse quantizer fourcc {:?}, expected IxF2/IxFI",
+                String::from_utf8_lossy(&cq_fourcc)
+            )));
+        }
+
+        let cq_dim = read_u32(&mut file)? as usize;
+        let _cq_ntotal = read_i64(&mut file)?;
+        let _cq_dummy1 = read_i64(&mut file)?;
+        let _cq_dummy2 = read_i64(&mut file)?;
+        let _cq_is_trained = read_u8(&mut file)?;
+        let _cq_metric = read_i32(&mut file)?;
+        let coarse_centroids = read_f32_vec_with_count(&mut file)?;
+        if cq_dim != dim {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "coarse quantizer dim mismatch: cq_dim={} dim={}",
+                cq_dim, dim
+            )));
+        }
+        if coarse_centroids.len() != nlist * dim {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "coarse centroid size mismatch: got {}, expected {}",
+                coarse_centroids.len(),
+                nlist * dim
+            )));
+        }
+
+        // direct_map: support both simplified i32 form and native char+vector form.
+        let dm_pos = file.stream_position()?;
+        let mut by_residual = None;
+        let mut code_size = None;
+        {
+            let dm_type = read_u8(&mut file)?;
+            let arr_len = read_i64(&mut file)?;
+            let mut ok = arr_len >= 0;
+            if ok {
+                let skip = (arr_len as u64) * 8;
+                file.seek(SeekFrom::Current(skip as i64))?;
+                if dm_type == 2 {
+                    let hash_len = read_i64(&mut file)?;
+                    if hash_len < 0 {
+                        ok = false;
+                    } else {
+                        let pair_bytes = (hash_len as u64).saturating_mul(16);
+                        file.seek(SeekFrom::Current(pair_bytes as i64))?;
+                    }
+                }
+                if ok {
+                    by_residual = Some(read_u8(&mut file)?);
+                    code_size = Some(read_i32(&mut file)? as usize);
+                }
+            }
+        }
+        if by_residual.is_none() || code_size.is_none() {
+            file.seek(SeekFrom::Start(dm_pos))?;
+            let _dm_type_i32 = read_i32(&mut file)?;
+            by_residual = Some(read_u8(&mut file)?);
+            code_size = Some(read_i32(&mut file)? as usize);
+        }
+        let by_residual = by_residual.unwrap_or(1);
+        let code_size = code_size.unwrap_or(0);
+        if by_residual == 0 {
+            return Err(crate::api::KnowhereError::Codec(
+                "import currently supports by_residual=1 only".to_string(),
+            ));
+        }
+
+        // ProductQuantizer
+        let pq_d = read_u32(&mut file)? as usize;
+        let pq_m = read_u32(&mut file)? as usize;
+        let pq_nbits = read_u32(&mut file)? as usize;
+        if pq_d != dim {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "pq dim mismatch: pq_d={} dim={}",
+                pq_d, dim
+            )));
+        }
+        if pq_m == 0 || dim % pq_m != 0 {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invalid pq_m={} for dim={}",
+                pq_m, dim
+            )));
+        }
+        let pq_centroids = read_f32_vec_with_count(&mut file)?;
+        let expected_pq_centroids = pq_m * (1usize << pq_nbits) * (dim / pq_m);
+        if pq_centroids.len() != expected_pq_centroids {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "pq centroids size mismatch: got {}, expected {}",
+                pq_centroids.len(),
+                expected_pq_centroids
+            )));
+        }
+        let expected_code_size = (pq_m * pq_nbits) / 8;
+        if code_size != expected_code_size {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "pq code_size mismatch: header={} expected={}",
+                code_size, expected_code_size
+            )));
+        }
+
+        // InvertedLists (ilar only)
+        if !legacy {
+            let mut il_fourcc = [0u8; 4];
+            file.read_exact(&mut il_fourcc)?;
+            if &il_fourcc != b"ilar" {
+                return Err(crate::api::KnowhereError::Codec(format!(
+                    "unsupported invlists fourcc {:?}, expected ilar",
+                    String::from_utf8_lossy(&il_fourcc)
+                )));
+            }
+        }
+        let il_nlist = read_i64(&mut file)? as usize;
+        let il_code_size = read_i64(&mut file)? as usize;
+        if il_nlist != nlist {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invlists nlist mismatch: {} vs {}",
+                il_nlist, nlist
+            )));
+        }
+        if il_code_size != code_size {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invlists code_size mismatch: {} vs {}",
+                il_code_size, code_size
+            )));
+        }
+
+        // list sizes: support both native ilar format (list_type + READVECTOR)
+        // and simplified format (raw [i64; nlist]).
+        let mut list_sizes = vec![0usize; nlist];
+        let sizes_pos = file.stream_position()?;
+        let mut list_type = [0u8; 4];
+        file.read_exact(&mut list_type)?;
+        if &list_type == b"full" || &list_type == b"sprs" {
+            let sz_count = read_i64(&mut file)? as usize;
+            if &list_type == b"full" {
+                if sz_count != nlist {
+                    return Err(crate::api::KnowhereError::Codec(format!(
+                        "ilar full size count mismatch: {} vs {}",
+                        sz_count, nlist
+                    )));
+                }
+                for slot in &mut list_sizes {
+                    *slot = read_i64(&mut file)? as usize;
+                }
+            } else {
+                // sprs: pairs (idx, size)
+                for _ in 0..(sz_count / 2) {
+                    let idx = read_i64(&mut file)? as usize;
+                    let sz = read_i64(&mut file)? as usize;
+                    if idx < nlist {
+                        list_sizes[idx] = sz;
+                    }
+                }
+            }
+        } else {
+            // simplified format: rewind and read nlist raw sizes
+            file.seek(SeekFrom::Start(sizes_pos))?;
+            for slot in &mut list_sizes {
+                *slot = read_i64(&mut file)? as usize;
+            }
+        }
+
+        let mut invlist_ids = vec![Vec::<i64>::new(); nlist];
+        let mut invlist_codes = vec![Vec::<u8>::new(); nlist];
+        let mut all_ids = Vec::new();
+        for i in 0..nlist {
+            let sz = list_sizes[i];
+            let mut codes = vec![0u8; sz * code_size];
+            if !codes.is_empty() {
+                file.read_exact(&mut codes)?;
+            }
+            let mut ids = vec![0i64; sz];
+            for id in &mut ids {
+                *id = read_i64(&mut file)?;
+            }
+            all_ids.extend_from_slice(&ids);
+            invlist_ids[i] = ids;
+            invlist_codes[i] = codes;
+        }
+
+        let cfg = IndexConfig {
+            index_type: IndexType::IvfPq,
+            metric_type,
+            dim,
+            data_type: DataType::Float,
+            params: crate::api::IndexParams {
+                nlist: Some(nlist),
+                nprobe: Some(nprobe.max(1)),
+                m: Some(pq_m),
+                nbits_per_idx: Some(pq_nbits),
+                ..Default::default()
+            },
+        };
+        let mut index = Self::new(&cfg)?;
+        index.centroids = coarse_centroids;
+        index.invlist_ids = invlist_ids;
+        index.invlist_codes = invlist_codes;
+        index.ids = all_ids;
+        index.vectors.clear();
+        index.next_id = index.ids.iter().copied().max().map(|x| x + 1).unwrap_or(0);
+        index.trained = true;
+        index.imported_pq_centroids = Some(pq_centroids);
+        index.use_opq = false;
+        index.opq = None;
+        Ok(index)
+    }
+
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>> {
         let tmp = tempfile::NamedTempFile::new()?;
         self.save(tmp.path())?;
@@ -993,6 +1302,7 @@ impl IvfPqIndex {
         } else {
             None
         };
+        self.imported_pq_centroids = None;
         self.invlist_ids = (0..self.nlist).map(|_| Vec::new()).collect();
         self.invlist_codes = (0..self.nlist).map(|_| Vec::new()).collect();
 
@@ -1363,5 +1673,104 @@ mod tests {
             ivf.lists.iter().flatten().count() >= n,
             "placeholder IVF scaffold still stores raw vector positions in coarse lists"
         );
+    }
+
+    #[test]
+    fn test_import_faiss_ivfpq_roundtrip_via_raw_bytes() {
+        fn push_u8(buf: &mut Vec<u8>, v: u8) {
+            buf.push(v);
+        }
+        fn push_i32(buf: &mut Vec<u8>, v: i32) {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        fn push_u32(buf: &mut Vec<u8>, v: u32) {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        fn push_i64(buf: &mut Vec<u8>, v: i64) {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        fn push_f32(buf: &mut Vec<u8>, v: f32) {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+
+        let dim = 4usize;
+        let nlist = 2usize;
+        let nprobe = 2usize;
+        let m = 2usize;
+        let nbits = 8usize;
+        let code_size = 2usize;
+
+        let mut blob = Vec::new();
+
+        // Top-level IwPQ
+        blob.extend_from_slice(b"IwPQ");
+        push_u32(&mut blob, dim as u32);
+        push_i64(&mut blob, 3); // ntotal
+        push_i64(&mut blob, 0); // dummy1
+        push_i64(&mut blob, 0); // dummy2
+        push_u8(&mut blob, 1); // trained
+        push_i32(&mut blob, 0); // metric_type=L2
+        push_i64(&mut blob, nlist as i64);
+        push_i64(&mut blob, nprobe as i64);
+
+        // Coarse quantizer: IxF2
+        blob.extend_from_slice(b"IxF2");
+        push_u32(&mut blob, dim as u32);
+        push_i64(&mut blob, nlist as i64); // cq ntotal
+        push_i64(&mut blob, 0);
+        push_i64(&mut blob, 0);
+        push_u8(&mut blob, 1);
+        push_i32(&mut blob, 0); // L2
+        push_i64(&mut blob, (nlist * dim) as i64); // READVECTOR count
+        for i in 0..(nlist * dim) {
+            push_f32(&mut blob, i as f32 * 0.1);
+        }
+
+        // NoMap direct_map: u8 type=0 + i64 arr_len=0
+        push_u8(&mut blob, 0u8);
+        push_i64(&mut blob, 0i64);
+
+        // IVF-PQ payload
+        push_u8(&mut blob, 1); // by_residual
+        push_i32(&mut blob, code_size as i32);
+        push_u32(&mut blob, dim as u32); // pq_d
+        push_u32(&mut blob, m as u32); // pq_M
+        push_u32(&mut blob, nbits as u32); // pq_nbits
+        let pq_nf = m * (1usize << nbits) * (dim / m);
+        push_i64(&mut blob, pq_nf as i64); // pq READVECTOR count
+        for i in 0..pq_nf {
+            push_f32(&mut blob, (i % 17) as f32 * 0.01);
+        }
+
+        // Inverted lists: ilar
+        blob.extend_from_slice(b"ilar");
+        push_i64(&mut blob, nlist as i64);
+        push_i64(&mut blob, code_size as i64);
+        // simplified per-list sizes (no full/sprs tag)
+        push_i64(&mut blob, 2);
+        push_i64(&mut blob, 1);
+        // list0 codes + ids
+        blob.extend_from_slice(&[1u8, 2u8, 3u8, 4u8]);
+        push_i64(&mut blob, 11);
+        push_i64(&mut blob, 12);
+        // list1 codes + ids
+        blob.extend_from_slice(&[5u8, 6u8]);
+        push_i64(&mut blob, 13);
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), &blob).unwrap();
+
+        let imported = IvfPqIndex::import_from_faiss_file(tmp.path().to_str().unwrap()).unwrap();
+        assert_eq!(imported.dim, dim);
+        assert_eq!(imported.nlist, nlist);
+        assert_eq!(imported.m, m);
+        assert_eq!(imported.nbits_per_idx, nbits);
+        assert_eq!(imported.nprobe, nprobe);
+        assert!(imported.trained);
+        assert_eq!(imported.invlist_ids[0], vec![11, 12]);
+        assert_eq!(imported.invlist_ids[1], vec![13]);
+        assert_eq!(imported.invlist_codes[0], vec![1, 2, 3, 4]);
+        assert_eq!(imported.invlist_codes[1], vec![5, 6]);
+        assert_eq!(imported.imported_pq_centroids.as_ref().unwrap().len(), pq_nf);
     }
 }
