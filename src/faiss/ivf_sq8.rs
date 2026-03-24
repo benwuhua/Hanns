@@ -1088,6 +1088,67 @@ impl IndexTrait for IvfSq8Index {
         ))
     }
 
+    fn range_search(
+        &self,
+        query: &Dataset,
+        radius: f32,
+    ) -> std::result::Result<IndexSearchResult, IndexError> {
+        let vectors = query.vectors();
+        if !self.trained {
+            return Err(IndexError::Unsupported("index not trained".to_string()));
+        }
+        if self.ids.is_empty() {
+            return Ok(IndexSearchResult::new(vec![], vec![], 0.0));
+        }
+
+        let n_queries = vectors.len() / self.dim;
+        if n_queries * self.dim != vectors.len() {
+            return Err(IndexError::Unsupported("query dimension mismatch".to_string()));
+        }
+
+        let nprobe = self.nprobe.min(self.nlist);
+        let mut all_ids = Vec::new();
+        let mut all_dists = Vec::new();
+
+        for q_idx in 0..n_queries {
+            let q_start = q_idx * self.dim;
+            let query_vec = &vectors[q_start..q_start + self.dim];
+            let clusters = self.search_clusters(query_vec, nprobe);
+            let mut q_residual_buf = vec![0.0f32; self.dim];
+            let mut q_precomputed_buf = vec![0i16; self.dim];
+
+            for cluster_id in clusters {
+                let Some((cluster_ids, _)) = self.inverted_lists.get(&cluster_id) else {
+                    continue;
+                };
+                if cluster_ids.is_empty() {
+                    continue;
+                }
+                let cluster_all = cluster_ids.len();
+                let hits = self
+                    .scan_cluster_with_buf(
+                        cluster_id,
+                        query_vec,
+                        cluster_all,
+                        &mut q_residual_buf,
+                        &mut q_precomputed_buf,
+                        None,
+                        None,
+                    )
+                    .into_hits();
+
+                for hit in hits {
+                    if hit.dist <= radius {
+                        all_ids.push(hit.id);
+                        all_dists.push(hit.dist);
+                    }
+                }
+            }
+        }
+
+        Ok(IndexSearchResult::new(all_ids, all_dists, 0.0))
+    }
+
     fn save(&self, path: &str) -> std::result::Result<(), IndexError> {
         let path = std::path::Path::new(path);
         self.save(path)

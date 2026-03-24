@@ -7,11 +7,10 @@
 //! OPT-003: 内存布局优化 - 使用 Vec 替代 HashMap
 
 use crate::api::{DataType, IndexConfig, IndexType, MetricType, Result, SearchRequest, SearchResult};
-use crate::executor::l2_distance;
 use crate::quantization::KMeans;
 use crate::quantization::opq::{OPQConfig, OptimizedProductQuantizer};
 use crate::quantization::pq::{PQConfig, ProductQuantizer};
-use crate::simd::l2_distance_sq;
+use crate::simd::{dot_product_f32, l2_distance_sq};
 
 /// IVF-PQ Index
 ///
@@ -59,6 +58,34 @@ pub struct IvfPqHotPathAudit {
 }
 
 impl IvfPqIndex {
+    #[inline]
+    fn centroid_score(&self, a: &[f32], b: &[f32]) -> f32 {
+        match self.config.metric_type {
+            MetricType::L2 | MetricType::Hamming => l2_distance_sq(a, b),
+            MetricType::Ip | MetricType::Cosine => -dot_product_f32(a, b),
+        }
+    }
+
+    #[inline]
+    fn metric_to_byte(metric: MetricType) -> u8 {
+        match metric {
+            MetricType::L2 => 0,
+            MetricType::Ip => 1,
+            MetricType::Cosine => 2,
+            MetricType::Hamming => 3,
+        }
+    }
+
+    #[inline]
+    fn metric_from_byte(byte: u8) -> MetricType {
+        match byte {
+            1 => MetricType::Ip,
+            2 => MetricType::Cosine,
+            3 => MetricType::Hamming,
+            _ => MetricType::L2,
+        }
+    }
+
     pub fn new(config: &IndexConfig) -> Result<Self> {
         if config.dim == 0 {
             return Err(crate::api::KnowhereError::InvalidArg(
@@ -279,6 +306,7 @@ impl IvfPqIndex {
         let n = vectors.len() / self.dim;
         let dim = self.dim;
         let nlist = self.nlist;
+        let metric_type = self.config.metric_type;
         let centroids = self.centroids.clone();
 
         // Parallel: assign vectors to clusters and PQ-encode residuals
@@ -292,7 +320,11 @@ impl IvfPqIndex {
                 let mut min_dist = f32::MAX;
                 let mut cluster = 0;
                 for c in 0..nlist {
-                    let dist = l2_distance(vector, &centroids[c * dim..(c + 1) * dim]);
+                    let centroid = &centroids[c * dim..(c + 1) * dim];
+                    let dist = match metric_type {
+                        MetricType::L2 | MetricType::Hamming => l2_distance_sq(vector, centroid),
+                        MetricType::Ip | MetricType::Cosine => -dot_product_f32(vector, centroid),
+                    };
                     if dist < min_dist {
                         min_dist = dist;
                         cluster = c;
@@ -362,7 +394,8 @@ impl IvfPqIndex {
 
         let mut cluster_dists: Vec<(usize, f32)> = (0..self.nlist)
             .map(|c| {
-                let dist = l2_distance_sq(query, &self.centroids[c * self.dim..(c + 1) * self.dim]);
+                let dist =
+                    self.centroid_score(query, &self.centroids[c * self.dim..(c + 1) * self.dim]);
                 (c, dist)
             })
             .collect();
@@ -392,9 +425,18 @@ impl IvfPqIndex {
             for c in 0..ksub {
                 let centroid = &centroids[c * sub_dim..(c + 1) * sub_dim];
                 let mut dist = 0.0f32;
-                for d in 0..sub_dim {
-                    let diff = query_sub[d] - centroid[d];
-                    dist += diff * diff;
+                match self.config.metric_type {
+                    MetricType::L2 | MetricType::Hamming => {
+                        for d in 0..sub_dim {
+                            let diff = query_sub[d] - centroid[d];
+                            dist += diff * diff;
+                        }
+                    }
+                    MetricType::Ip | MetricType::Cosine => {
+                        for d in 0..sub_dim {
+                            dist -= query_sub[d] * centroid[d];
+                        }
+                    }
                 }
                 dists.push(dist);
             }
@@ -424,9 +466,18 @@ impl IvfPqIndex {
                 let centroid_offset = sub_q * ksub * sub_dim + c * sub_dim;
                 let centroid = &centroids[centroid_offset..centroid_offset + sub_dim];
                 let mut dist = 0.0f32;
-                for i in 0..sub_dim {
-                    let d = query_sub[i] - centroid[i];
-                    dist += d * d;
+                match self.config.metric_type {
+                    MetricType::L2 | MetricType::Hamming => {
+                        for i in 0..sub_dim {
+                            let d = query_sub[i] - centroid[i];
+                            dist += d * d;
+                        }
+                    }
+                    MetricType::Ip | MetricType::Cosine => {
+                        for i in 0..sub_dim {
+                            dist -= query_sub[i] * centroid[i];
+                        }
+                    }
                 }
                 dists.push(dist);
             }
@@ -499,7 +550,7 @@ impl IvfPqIndex {
             // Find nearest clusters (coarse quantizer)
             let mut cluster_dists: Vec<(usize, f32)> = (0..self.nlist)
                 .map(|c| {
-                    let dist = l2_distance_sq(
+                    let dist = self.centroid_score(
                         query_vec,
                         &self.centroids[c * self.dim..(c + 1) * self.dim],
                     );
@@ -674,8 +725,8 @@ impl IvfPqIndex {
                 // Find nearest clusters
                 let mut cluster_dists: Vec<(usize, f32)> = (0..nlist)
                     .map(|c| {
-                        let dist =
-                            l2_distance(query_vec, &self.centroids[c * dim..(c + 1) * dim]);
+                        let dist = self
+                            .centroid_score(query_vec, &self.centroids[c * dim..(c + 1) * dim]);
                         (c, dist)
                     })
                     .collect();
@@ -764,11 +815,13 @@ impl IvfPqIndex {
         let mut file = std::fs::File::create(path)?;
 
         file.write_all(b"IVFPQ")?;
-        file.write_all(&2u32.to_le_bytes())?; // version 2 for PQ format
+        file.write_all(&3u32.to_le_bytes())?; // version 3: add nprobe + metric_type
         file.write_all(&(self.dim as u32).to_le_bytes())?;
         file.write_all(&(self.nlist as u32).to_le_bytes())?;
         file.write_all(&(self.m as u32).to_le_bytes())?;
         file.write_all(&(self.nbits_per_idx as u32).to_le_bytes())?;
+        file.write_all(&(self.nprobe as u32).to_le_bytes())?;
+        file.write_all(&[Self::metric_to_byte(self.config.metric_type)])?;
 
         // Centroids
         let bytes: Vec<u8> = self
@@ -810,8 +863,8 @@ impl IvfPqIndex {
     }
 
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self> {
-        const HEADER_LEN: usize = 5 + 4 + 4 + 4 + 4 + 4; // magic + version + dim/nlist/m/nbits
-        if bytes.len() < HEADER_LEN {
+        const HEADER_V2_LEN: usize = 5 + 4 + 4 + 4 + 4 + 4; // magic + version + dim/nlist/m/nbits
+        if bytes.len() < HEADER_V2_LEN {
             return Err(crate::api::KnowhereError::Codec(
                 "ivfpq bytes too short".to_string(),
             ));
@@ -822,6 +875,9 @@ impl IvfPqIndex {
             ));
         }
 
+        let version = u32::from_le_bytes(bytes[5..9].try_into().map_err(|_| {
+            crate::api::KnowhereError::Codec("invalid version bytes".to_string())
+        })?);
         let dim = u32::from_le_bytes(bytes[9..13].try_into().map_err(|_| {
             crate::api::KnowhereError::Codec("invalid dim bytes".to_string())
         })?) as usize;
@@ -834,15 +890,29 @@ impl IvfPqIndex {
         let nbits_per_idx = u32::from_le_bytes(bytes[21..25].try_into().map_err(|_| {
             crate::api::KnowhereError::Codec("invalid nbits bytes".to_string())
         })?) as usize;
+        let (nprobe, metric_type) = if version >= 3 {
+            if bytes.len() < HEADER_V2_LEN + 4 + 1 {
+                return Err(crate::api::KnowhereError::Codec(
+                    "ivfpq bytes too short for v3 header".to_string(),
+                ));
+            }
+            let nprobe = u32::from_le_bytes(bytes[25..29].try_into().map_err(|_| {
+                crate::api::KnowhereError::Codec("invalid nprobe bytes".to_string())
+            })?) as usize;
+            let metric = Self::metric_from_byte(bytes[29]);
+            (nprobe.max(1), metric)
+        } else {
+            (nlist.clamp(1, 8), MetricType::L2)
+        };
 
         let cfg = IndexConfig {
             index_type: IndexType::IvfPq,
-            metric_type: MetricType::L2,
+            metric_type,
             data_type: DataType::Float,
             dim,
             params: crate::api::IndexParams {
                 nlist: Some(nlist),
-                nprobe: Some(nlist.min(8).max(1)),
+                nprobe: Some(nprobe),
                 m: Some(m),
                 nbits_per_idx: Some(nbits_per_idx),
                 ..Default::default()
@@ -869,9 +939,10 @@ impl IvfPqIndex {
             ));
         }
 
-        // Skip version
+        // Read version
         let mut ver = [0u8; 4];
         file.read_exact(&mut ver)?;
+        let version = u32::from_le_bytes(ver);
 
         let mut dim_bytes = [0u8; 4];
         file.read_exact(&mut dim_bytes)?;
@@ -883,11 +954,47 @@ impl IvfPqIndex {
 
         let mut m_bytes = [0u8; 4];
         file.read_exact(&mut m_bytes)?;
-        let _m = u32::from_le_bytes(m_bytes) as usize;
+        let m = u32::from_le_bytes(m_bytes) as usize;
 
         let mut nbits_bytes = [0u8; 4];
         file.read_exact(&mut nbits_bytes)?;
-        let _nbits = u32::from_le_bytes(nbits_bytes) as usize;
+        let nbits = u32::from_le_bytes(nbits_bytes) as usize;
+
+        let mut nprobe = self.nprobe;
+        let mut metric_type = self.config.metric_type;
+        if version >= 3 {
+            let mut nprobe_bytes = [0u8; 4];
+            file.read_exact(&mut nprobe_bytes)?;
+            nprobe = (u32::from_le_bytes(nprobe_bytes) as usize).max(1);
+            let mut metric_byte = [0u8; 1];
+            file.read_exact(&mut metric_byte)?;
+            metric_type = Self::metric_from_byte(metric_byte[0]);
+        }
+
+        self.dim = dim;
+        self.nlist = nlist;
+        self.m = m;
+        self.nbits_per_idx = nbits;
+        self.nprobe = nprobe;
+        self.config.dim = dim;
+        self.config.metric_type = metric_type;
+        self.config.params.nlist = Some(nlist);
+        self.config.params.nprobe = Some(nprobe);
+        self.config.params.m = Some(m);
+        self.config.params.nbits_per_idx = Some(nbits);
+
+        // Recreate quantizers with loaded parameters.
+        self.pq = ProductQuantizer::new(PQConfig::new(self.dim, self.m, self.nbits_per_idx));
+        self.opq = if self.use_opq {
+            let mut opq_config = OPQConfig::new(self.dim, self.m, self.nbits_per_idx);
+            opq_config.niter = 1;
+            opq_config.random_rotation = true;
+            Some(OptimizedProductQuantizer::new(opq_config)?)
+        } else {
+            None
+        };
+        self.invlist_ids = (0..self.nlist).map(|_| Vec::new()).collect();
+        self.invlist_codes = (0..self.nlist).map(|_| Vec::new()).collect();
 
         // Load centroids
         let mut centroid_bytes = vec![0u8; nlist * dim * 4];
@@ -967,11 +1074,7 @@ impl IvfPqIndex {
         let mut min_dist = f32::MAX;
         let mut best = 0;
         for (i, centroid) in self.centroids.chunks(self.dim).enumerate() {
-            let dist = vector
-                .iter()
-                .zip(centroid)
-                .map(|(a, b)| (a - b).powi(2))
-                .sum::<f32>();
+            let dist = self.centroid_score(vector, centroid);
             if dist < min_dist {
                 min_dist = dist;
                 best = i;
