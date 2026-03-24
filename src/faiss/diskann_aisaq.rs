@@ -78,6 +78,10 @@ pub struct AisaqConfig {
     /// Number of full-graph Vamana refinement passes after insertion (0 = disabled, default = 2)
     #[serde(default = "default_refine_passes")]
     pub num_refine_passes: usize,
+    /// Frontier-bound early-stop slack factor.
+    /// 1.0 = strict bound, >1.0 = conservative bound, f32::MAX = effectively disabled.
+    #[serde(default = "default_early_stop_alpha")]
+    pub early_stop_alpha: f32,
     /// Enable SQ8 prefilter distance in beam-search hot path.
     #[serde(default)]
     pub use_sq8_prefilter: bool,
@@ -89,6 +93,10 @@ fn default_true() -> bool {
 
 fn default_refine_passes() -> usize {
     2
+}
+
+fn default_early_stop_alpha() -> f32 {
+    1.5
 }
 
 fn default_build_batch_size() -> usize {
@@ -123,6 +131,7 @@ impl Default for AisaqConfig {
             cache_all_on_load: false,
             run_refine_pass: true,
             num_refine_passes: 2,
+            early_stop_alpha: 1.5,
             use_sq8_prefilter: false,
         }
     }
@@ -746,6 +755,16 @@ impl AisaqScratch {
         self.expanded.clear();
         self.accepted.clear();
     }
+}
+
+#[inline]
+fn kth_best_score(candidates: &[Candidate], k: usize) -> Option<f32> {
+    if k == 0 || candidates.len() < k {
+        return None;
+    }
+    let mut scores: Vec<f32> = candidates.iter().map(|c| c.score).collect();
+    scores.sort_by(|a, b| a.total_cmp(b));
+    scores.get(k - 1).copied()
 }
 
 /// PQ Flash index skeleton for DiskANN AISAQ.
@@ -1635,6 +1654,19 @@ impl PQFlashIndex {
                     if let Some(io_limit) = self.config.search_io_limit {
                         if io.pages_loaded_total() > io_limit {
                             break;
+                        }
+                    }
+
+                    if k > 0 && scratch.accepted.len() >= k {
+                        if let (Some(frontier_best_dist), Some(result_kth_dist)) = (
+                            scratch.frontier.peek().map(|c| c.score),
+                            kth_best_score(&scratch.accepted, k),
+                        ) {
+                            if frontier_best_dist
+                                >= result_kth_dist * self.config.early_stop_alpha
+                            {
+                                break;
+                            }
                         }
                     }
 
