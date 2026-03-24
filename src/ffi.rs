@@ -866,7 +866,13 @@ impl IndexWrapper {
                 use crate::faiss::sparse_inverted::SparseMetricType;
                 let sparse_metric = match metric {
                     MetricType::Ip => SparseMetricType::Ip,
-                    _ => SparseMetricType::Ip,
+                    _ => {
+                        eprintln!(
+                            "SparseWand only supports InnerProduct metric; ignoring metric_type={:?}",
+                            metric
+                        );
+                        SparseMetricType::Ip
+                    }
                 };
                 let sparse_wand = crate::faiss::SparseWandIndex::new(sparse_metric);
                 Some(Self {
@@ -894,7 +900,13 @@ impl IndexWrapper {
                 use crate::faiss::sparse_inverted::SparseMetricType;
                 let sparse_metric = match metric {
                     MetricType::Ip => SparseMetricType::Ip,
-                    _ => SparseMetricType::Ip,
+                    _ => {
+                        eprintln!(
+                            "SparseWandCc only supports InnerProduct metric; ignoring metric_type={:?}",
+                            metric
+                        );
+                        SparseMetricType::Ip
+                    }
                 };
                 let ssize = if config.num_partitions > 0 {
                     config.num_partitions
