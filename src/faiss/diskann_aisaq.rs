@@ -1322,6 +1322,120 @@ impl PQFlashIndex {
         Ok(())
     }
 
+    pub fn export_native_disk_index(&self, prefix: &str) -> Result<()> {
+        const SECTOR_LEN: usize = 4096;
+
+        if self.node_count == 0 {
+            return Err(KnowhereError::InvalidArg(
+                "cannot export disk.index: node_count is 0".to_string(),
+            ));
+        }
+        if self.vectors.is_empty() || self.node_neighbor_counts.is_empty() {
+            return Err(KnowhereError::InvalidArg(
+                "cannot export disk.index: vectors/neighbor_counts are empty".to_string(),
+            ));
+        }
+
+        let n = self.node_count;
+        let max_degree = self.config.max_degree.max(1);
+        let disk_bytes_per_point = self.dim * std::mem::size_of::<f32>();
+        let max_node_len = disk_bytes_per_point + (max_degree + 1) * std::mem::size_of::<u32>();
+        let nnodes_per_sector = (SECTOR_LEN / max_node_len).max(1);
+        let data_sectors = n.div_ceil(nnodes_per_sector);
+        let num_sectors = 1 + data_sectors;
+        let expected_file_size = num_sectors * SECTOR_LEN;
+
+        let disk_index_path = format!("{prefix}_disk.index");
+        let mut file = File::create(&disk_index_path)?;
+
+        // Sector 0 header.
+        let mut sector0 = vec![0u8; SECTOR_LEN];
+        let mut cursor = 0usize;
+        for value in [
+            expected_file_size as u64,
+            n as u64,
+            self.entry_points.first().copied().unwrap_or(0) as u64,
+            max_node_len as u64,
+            nnodes_per_sector as u64,
+            0u64, // num_frozen_points
+            0u64, // file_frozen_id
+            0u64, // reorder_data_exists
+        ] {
+            sector0[cursor..cursor + 8].copy_from_slice(&value.to_le_bytes());
+            cursor += 8;
+        }
+        file.write_all(&sector0)?;
+
+        // Sectors 1+ node payload.
+        for sector_id in 0..data_sectors {
+            let mut sector = vec![0u8; SECTOR_LEN];
+            for slot in 0..nnodes_per_sector {
+                let node_id = sector_id * nnodes_per_sector + slot;
+                if node_id >= n {
+                    break;
+                }
+                let node_off = slot * max_node_len;
+                let vec_start = node_id * self.dim;
+                let vec_end = vec_start + self.dim;
+                if vec_end > self.vectors.len() {
+                    return Err(KnowhereError::InvalidArg(format!(
+                        "vector storage too small: need {}, got {}",
+                        vec_end,
+                        self.vectors.len()
+                    )));
+                }
+
+                // Vector payload.
+                let mut write_off = node_off;
+                for &v in &self.vectors[vec_start..vec_end] {
+                    sector[write_off..write_off + 4].copy_from_slice(&v.to_le_bytes());
+                    write_off += 4;
+                }
+
+                // Neighbor count.
+                let count = (self.node_neighbor_counts[node_id] as usize).min(max_degree) as u32;
+                sector[write_off..write_off + 4].copy_from_slice(&count.to_le_bytes());
+                write_off += 4;
+
+                // Neighbor ids (max_degree slots, zero-padded).
+                let base = node_id * self.flat_stride;
+                for i in 0..max_degree {
+                    let neighbor = if i < count as usize
+                        && base + i < self.node_neighbor_ids.len()
+                    {
+                        self.node_neighbor_ids[base + i]
+                    } else {
+                        0
+                    };
+                    sector[write_off..write_off + 4].copy_from_slice(&neighbor.to_le_bytes());
+                    write_off += 4;
+                }
+            }
+            file.write_all(&sector)?;
+        }
+        file.flush()?;
+
+        // medoids file: [1i32][1i32][u32 medoid]
+        let medoids_path = format!("{prefix}_disk.index_medoids.bin");
+        let mut medoids = File::create(&medoids_path)?;
+        medoids.write_all(&(1i32).to_le_bytes())?;
+        medoids.write_all(&(1i32).to_le_bytes())?;
+        medoids.write_all(&(self.entry_points.first().copied().unwrap_or(0)).to_le_bytes())?;
+        medoids.flush()?;
+
+        // centroids file: [1i32][dim i32][f32 zeros]
+        let centroids_path = format!("{prefix}_disk.index_centroids.bin");
+        let mut centroids = File::create(&centroids_path)?;
+        centroids.write_all(&(1i32).to_le_bytes())?;
+        centroids.write_all(&(self.dim as i32).to_le_bytes())?;
+        for _ in 0..self.dim {
+            centroids.write_all(&0.0f32.to_le_bytes())?;
+        }
+        centroids.flush()?;
+
+        Ok(())
+    }
+
     fn compute_build_max_degree(&self) -> usize {
         let slack = self.config.build_degree_slack_pct.max(100);
         self.config
@@ -4567,6 +4681,49 @@ mod tests {
             std::fs::metadata(&compressed).unwrap().len() as usize,
             8 + index.node_ids.len() * m
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_export_native_disk_index_format() {
+        use std::io::Read;
+
+        let dim = 4usize;
+        let n = 10usize;
+        let mut rng = StdRng::seed_from_u64(77);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+
+        let config = AisaqConfig {
+            max_degree: 8,
+            search_list_size: 16,
+            disk_pq_dims: 0,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, dim).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+
+        let dir = make_temp_dir("pqflash_native_disk_index");
+        fs::create_dir_all(&dir).unwrap();
+        let prefix = dir.join("native");
+        index
+            .export_native_disk_index(prefix.to_str().unwrap())
+            .unwrap();
+
+        let disk_index_path = dir.join("native_disk.index");
+        let medoids_path = dir.join("native_disk.index_medoids.bin");
+        let centroids_path = dir.join("native_disk.index_centroids.bin");
+
+        let mut f = std::fs::File::open(&disk_index_path).unwrap();
+        let mut b = [0u8; 8];
+        f.read_exact(&mut b).unwrap();
+        let expected_file_size = u64::from_le_bytes(b);
+        let actual_file_size = std::fs::metadata(&disk_index_path).unwrap().len();
+        assert_eq!(actual_file_size, expected_file_size);
+
+        assert_eq!(std::fs::metadata(&medoids_path).unwrap().len(), 12);
+        assert_eq!(std::fs::metadata(&centroids_path).unwrap().len(), (8 + dim * 4) as u64);
 
         let _ = fs::remove_dir_all(&dir);
     }

@@ -993,6 +993,296 @@ impl IvfSq8Index {
         let mut cursor = std::io::Cursor::new(bytes);
         Self::read_from(&mut cursor, dim)
     }
+
+    /// Import IVF-SQ8 index from FAISS standard "IwSq" binary.
+    pub fn import_from_faiss_file(path: &str) -> Result<Self> {
+        use std::fs::File;
+        use std::io::{Read, Seek, SeekFrom};
+
+        fn read_u8<R: Read>(r: &mut R) -> Result<u8> {
+            let mut b = [0u8; 1];
+            r.read_exact(&mut b)?;
+            Ok(b[0])
+        }
+        fn read_i32<R: Read>(r: &mut R) -> Result<i32> {
+            let mut b = [0u8; 4];
+            r.read_exact(&mut b)?;
+            Ok(i32::from_le_bytes(b))
+        }
+        fn read_u32<R: Read>(r: &mut R) -> Result<u32> {
+            let mut b = [0u8; 4];
+            r.read_exact(&mut b)?;
+            Ok(u32::from_le_bytes(b))
+        }
+        fn read_i64<R: Read>(r: &mut R) -> Result<i64> {
+            let mut b = [0u8; 8];
+            r.read_exact(&mut b)?;
+            Ok(i64::from_le_bytes(b))
+        }
+        fn read_f32<R: Read>(r: &mut R) -> Result<f32> {
+            let mut b = [0u8; 4];
+            r.read_exact(&mut b)?;
+            Ok(f32::from_le_bytes(b))
+        }
+        fn read_f32_vec_with_count<R: Read>(r: &mut R) -> Result<Vec<f32>> {
+            let n = read_i64(r)? as usize;
+            let mut out = Vec::with_capacity(n);
+            for _ in 0..n {
+                out.push(read_f32(r)?);
+            }
+            Ok(out)
+        }
+        fn metric_from_faiss_i32(v: i32) -> Result<MetricType> {
+            match v {
+                0 => Ok(MetricType::Ip),
+                1 => Ok(MetricType::L2),
+                // fallback: keep parser permissive for uncommon FAISS metrics
+                _ => Ok(MetricType::L2),
+            }
+        }
+
+        let mut file = File::open(path)?;
+
+        // Top-level fourcc: IwSq
+        let mut fourcc = [0u8; 4];
+        file.read_exact(&mut fourcc)?;
+        if &fourcc != b"IwSq" {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "unsupported top-level fourcc {:?}, expected IwSq",
+                String::from_utf8_lossy(&fourcc)
+            )));
+        }
+
+        // write_index_header
+        let dim = read_i32(&mut file)? as usize;
+        let ntotal = read_i64(&mut file)? as usize;
+        let _dummy1 = read_i64(&mut file)?;
+        let _dummy2 = read_i64(&mut file)?;
+        let _is_trained = read_u8(&mut file)?;
+        let metric_i32 = read_i32(&mut file)?;
+        let metric_type = metric_from_faiss_i32(metric_i32)?;
+        if metric_i32 > 1 {
+            let _metric_arg = read_f32(&mut file)?;
+        }
+
+        // write_ivf_header
+        let nlist = read_i64(&mut file)? as usize;
+        let nprobe = read_i64(&mut file)? as usize;
+
+        // coarse quantizer (IxF2 / IxFI)
+        let mut cq_fourcc = [0u8; 4];
+        file.read_exact(&mut cq_fourcc)?;
+        if &cq_fourcc != b"IxF2" && &cq_fourcc != b"IxFI" {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "unsupported coarse quantizer fourcc {:?}, expected IxF2/IxFI",
+                String::from_utf8_lossy(&cq_fourcc)
+            )));
+        }
+        let cq_dim = read_i32(&mut file)? as usize;
+        if cq_dim != dim {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "coarse dim mismatch: cq_dim={} dim={}",
+                cq_dim, dim
+            )));
+        }
+        let _cq_ntotal = read_i64(&mut file)?;
+        let _cq_dummy1 = read_i64(&mut file)?;
+        let _cq_dummy2 = read_i64(&mut file)?;
+        let _cq_trained = read_u8(&mut file)?;
+        let _cq_metric = read_i32(&mut file)?;
+        let centroids = read_f32_vec_with_count(&mut file)?;
+        if centroids.len() != nlist * dim {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invalid centroid payload: {} != nlist*dim {}",
+                centroids.len(),
+                nlist * dim
+            )));
+        }
+
+        // direct_map
+        let dm_type = read_u8(&mut file)?;
+        let dm_arr_len = read_i64(&mut file)? as usize;
+        match dm_type {
+            0 => {}
+            1 => {
+                // Array direct-map payload (i64[])
+                let skip = dm_arr_len
+                    .checked_mul(8)
+                    .ok_or_else(|| crate::api::KnowhereError::Codec("direct_map overflow".to_string()))?;
+                file.seek(SeekFrom::Current(skip as i64))?;
+            }
+            2 | 3 => {
+                // Hashtable payload
+                let hash_len = read_i64(&mut file)? as usize;
+                let skip = hash_len
+                    .checked_mul(16)
+                    .ok_or_else(|| crate::api::KnowhereError::Codec("direct_map hash overflow".to_string()))?;
+                file.seek(SeekFrom::Current(skip as i64))?;
+            }
+            _ => {
+                return Err(crate::api::KnowhereError::Codec(format!(
+                    "unsupported direct_map type {dm_type}"
+                )));
+            }
+        }
+
+        // ScalarQuantizer
+        let _qtype = read_i32(&mut file)?;
+        let _rangestat = read_i32(&mut file)?;
+        let _rangestat_arg = read_f32(&mut file)?;
+        let sq_d = read_i32(&mut file)? as usize;
+        let sq_code_size = read_i64(&mut file)? as usize;
+        let trained_vals = read_f32_vec_with_count(&mut file)?;
+
+        // IVFSQ fields
+        let ivsc_code_size = read_i64(&mut file)? as usize;
+        let _by_residual = read_u8(&mut file)?;
+
+        // Inverted lists
+        let mut il_fourcc = [0u8; 4];
+        file.read_exact(&mut il_fourcc)?;
+        if &il_fourcc != b"ilar" {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "unsupported invlists fourcc {:?}, expected ilar",
+                String::from_utf8_lossy(&il_fourcc)
+            )));
+        }
+        let il_nlist = read_i64(&mut file)? as usize;
+        let il_code_size = read_i64(&mut file)? as usize;
+        if il_nlist != nlist {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invlists nlist mismatch: {} != {}",
+                il_nlist, nlist
+            )));
+        }
+
+        let mut list_sizes = vec![0usize; nlist];
+        let mut list_type_buf = [0u8; 4];
+        file.read_exact(&mut list_type_buf)?;
+        if &list_type_buf == b"full" {
+            let sizes_count = read_i64(&mut file)? as usize;
+            if sizes_count != nlist {
+                return Err(crate::api::KnowhereError::Codec(format!(
+                    "full list sizes count mismatch: {} != {}",
+                    sizes_count, nlist
+                )));
+            }
+            for slot in &mut list_sizes {
+                *slot = read_i64(&mut file)? as usize;
+            }
+        } else if &list_type_buf == b"sprs" {
+            let sparse_count = read_i64(&mut file)? as usize;
+            for _ in 0..sparse_count {
+                let list_id = read_i64(&mut file)? as usize;
+                let list_size = read_i64(&mut file)? as usize;
+                if list_id >= nlist {
+                    return Err(crate::api::KnowhereError::Codec(format!(
+                        "sparse list id out of range: {} >= {}",
+                        list_id, nlist
+                    )));
+                }
+                list_sizes[list_id] = list_size;
+            }
+        } else {
+            // Legacy simplified layout: rewind and read sizes directly as i64[nlist]
+            file.seek(SeekFrom::Current(-4))?;
+            let sizes_count = read_i64(&mut file)? as usize;
+            if sizes_count == nlist {
+                for slot in &mut list_sizes {
+                    *slot = read_i64(&mut file)? as usize;
+                }
+            } else {
+                list_sizes[0] = sizes_count;
+                for slot in list_sizes.iter_mut().skip(1) {
+                    *slot = read_i64(&mut file)? as usize;
+                }
+            }
+        }
+
+        let mut inverted_lists: HashMap<usize, (Vec<i64>, Vec<u8>)> =
+            HashMap::with_capacity(nlist);
+        let mut total_ids = 0usize;
+        for (list_id, &sz) in list_sizes.iter().enumerate() {
+            if sz == 0 {
+                continue;
+            }
+            let mut codes = vec![0u8; sz * il_code_size];
+            file.read_exact(&mut codes)?;
+            let mut ids = vec![0i64; sz];
+            for id in &mut ids {
+                *id = read_i64(&mut file)?;
+            }
+            total_ids += sz;
+            inverted_lists.insert(list_id, (ids, codes));
+        }
+
+        // Build quantizer params from serialized SQ training payload.
+        let mut quantizer = ScalarQuantizer::new(dim, 8);
+        let (min_val, max_val) = if sq_d == dim && trained_vals.len() >= 2 * dim {
+            let mins = &trained_vals[..dim];
+            let maxs = &trained_vals[dim..2 * dim];
+            (
+                mins.iter().copied().fold(f32::INFINITY, f32::min),
+                maxs.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+            )
+        } else if !trained_vals.is_empty() {
+            (
+                trained_vals.iter().copied().fold(f32::INFINITY, f32::min),
+                trained_vals
+                    .iter()
+                    .copied()
+                    .fold(f32::NEG_INFINITY, f32::max),
+            )
+        } else {
+            (0.0, 1.0)
+        };
+        let safe_min = if min_val.is_finite() { min_val } else { 0.0 };
+        let safe_max = if max_val.is_finite() && max_val > safe_min {
+            max_val
+        } else {
+            safe_min + 1.0
+        };
+        quantizer.min_val = safe_min;
+        quantizer.max_val = safe_max;
+        quantizer.offset = safe_min;
+        quantizer.scale = 255.0 / (safe_max - safe_min);
+
+        let mut all_ids = Vec::with_capacity(total_ids);
+        for (ids, _) in inverted_lists.values() {
+            all_ids.extend_from_slice(ids);
+        }
+
+        let mut index = Self {
+            config: IndexConfig {
+                index_type: crate::api::IndexType::IvfSq8,
+                metric_type,
+                dim,
+                data_type: crate::api::DataType::Float,
+                params: crate::api::IndexParams::ivf(nlist, nprobe.max(1)),
+            },
+            dim,
+            nlist,
+            nprobe: nprobe.max(1),
+            metric_type,
+            centroids,
+            inverted_lists,
+            quantizer,
+            vectors: vec![0.0; ntotal * dim],
+            ids: all_ids,
+            next_id: 0,
+            trained: true,
+        };
+        index.next_id = index.ids.iter().copied().max().map_or(0, |m| m + 1);
+
+        if il_code_size != dim && sq_code_size != dim && ivsc_code_size != dim {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "unexpected code size: il={} sq={} ivsc={} dim={}",
+                il_code_size, sq_code_size, ivsc_code_size, dim
+            )));
+        }
+
+        Ok(index)
+    }
 }
 
 /// Index trait implementation for IvfSq8Index
@@ -1477,5 +1767,112 @@ mod tests {
         assert_eq!("ivf-sq8".parse::<IndexType>().ok(), Some(IndexType::IvfSq8));
         assert_eq!("ivfsq8".parse::<IndexType>().ok(), Some(IndexType::IvfSq8));
         assert_eq!("IVF_SQ8".parse::<IndexType>().ok(), Some(IndexType::IvfSq8));
+    }
+
+    #[test]
+    fn test_import_faiss_ivfsq8_via_raw_bytes() {
+        fn push_u8(buf: &mut Vec<u8>, v: u8) {
+            buf.push(v);
+        }
+        fn push_i32(buf: &mut Vec<u8>, v: i32) {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        fn push_u32(buf: &mut Vec<u8>, v: u32) {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        fn push_i64(buf: &mut Vec<u8>, v: i64) {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        fn push_f32(buf: &mut Vec<u8>, v: f32) {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+
+        let dim = 4usize;
+        let nlist = 2usize;
+        let nprobe = 2usize;
+        let ntotal = 4usize;
+        let il_code_size = dim;
+
+        let mut blob = Vec::new();
+
+        // Top-level IwSq.
+        blob.extend_from_slice(b"IwSq");
+        push_i32(&mut blob, dim as i32);
+        push_i64(&mut blob, ntotal as i64);
+        push_i64(&mut blob, 0);
+        push_i64(&mut blob, 0);
+        push_u8(&mut blob, 1); // trained
+        push_i32(&mut blob, 1); // METRIC_L2
+        push_i64(&mut blob, nlist as i64);
+        push_i64(&mut blob, nprobe as i64);
+
+        // Coarse quantizer IxF2.
+        blob.extend_from_slice(b"IxF2");
+        push_i32(&mut blob, dim as i32);
+        push_i64(&mut blob, nlist as i64);
+        push_i64(&mut blob, 0);
+        push_i64(&mut blob, 0);
+        push_u8(&mut blob, 1);
+        push_i32(&mut blob, 1);
+        push_i64(&mut blob, (nlist * dim) as i64);
+        for i in 0..(nlist * dim) {
+            push_f32(&mut blob, i as f32 * 0.1);
+        }
+
+        // direct_map: NoMap.
+        push_u8(&mut blob, 0);
+        push_i64(&mut blob, 0);
+
+        // ScalarQuantizer.
+        push_i32(&mut blob, 0); // qtype QT_8bit
+        push_i32(&mut blob, 0); // rangestat RS_minmax
+        push_f32(&mut blob, 0.0); // rangestat_arg
+        push_i32(&mut blob, dim as i32); // sq_d
+        push_i64(&mut blob, dim as i64); // sq_code_size
+        push_i64(&mut blob, (2 * dim) as i64); // trained_count
+        for _ in 0..dim {
+            push_f32(&mut blob, 0.0); // mins
+        }
+        for _ in 0..dim {
+            push_f32(&mut blob, 1.0); // maxs
+        }
+
+        // IVFScalarQuantizer fields.
+        push_i64(&mut blob, dim as i64); // ivsc_code_size
+        push_u8(&mut blob, 1); // by_residual
+
+        // Inverted lists.
+        blob.extend_from_slice(b"ilar");
+        push_i64(&mut blob, nlist as i64);
+        push_i64(&mut blob, il_code_size as i64);
+        blob.extend_from_slice(b"full");
+        push_i64(&mut blob, nlist as i64); // sizes_count
+        push_i64(&mut blob, 2);
+        push_i64(&mut blob, 2);
+
+        // list 0: 2 codes (2*dim bytes), 2 ids
+        blob.extend_from_slice(&[1u8, 2, 3, 4, 5, 6, 7, 8]);
+        push_i64(&mut blob, 10);
+        push_i64(&mut blob, 11);
+        // list 1
+        blob.extend_from_slice(&[9u8, 10, 11, 12, 13, 14, 15, 16]);
+        push_i64(&mut blob, 12);
+        push_i64(&mut blob, 13);
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), &blob).unwrap();
+
+        let imported =
+            IvfSq8Index::import_from_faiss_file(tmp.path().to_str().unwrap()).unwrap();
+        assert_eq!(imported.dim, 4);
+        assert_eq!(imported.nlist, 2);
+        assert_eq!(imported.nprobe, 2);
+        assert!(imported.trained);
+        let list0 = imported.inverted_lists.get(&0).unwrap();
+        let list1 = imported.inverted_lists.get(&1).unwrap();
+        assert_eq!(list0.0, vec![10, 11]);
+        assert_eq!(list1.0, vec![12, 13]);
+        assert_eq!(list0.1.len(), 8);
+        assert_eq!(list1.1.len(), 8);
     }
 }
