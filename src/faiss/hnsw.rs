@@ -49,12 +49,6 @@ thread_local! {
     static HNSW_COSINE_QUERY_NORM_TLS: std::cell::Cell<f32> = std::cell::Cell::new(0.0);
 }
 
-/// BUG-001 FIX: Reference M value for level multiplier calculation.
-/// Using a fixed reference M ensures consistent level distribution across different M values.
-/// Without this, high M values (e.g., M=64) would have very few layers, collapsing the
-/// multi-layer structure and degrading recall.
-const REFERENCE_M_FOR_LEVEL: usize = 16;
-
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 #[derive(Clone, Copy)]
 enum X86PrefetchHint {
@@ -1355,13 +1349,12 @@ impl HnswIndex {
         // Align with native hnswlib/knowhere: ef_construction must be >= M.
         let ef_construction = config.params.ef_construction.unwrap_or(400).max(m);
 
-        // BUG-001 FIX: keep the default layer distribution stable across M values.
-        // High-M builds collapse into a near-single-layer graph when we derive ml from the
-        // runtime M value. Allow explicit overrides, otherwise use the reference distribution.
+        // Align with native hnswlib/knowhere: default ml derives from runtime M.
+        // ml = 1 / ln(M), while preserving explicit ml overrides from config.
         let level_multiplier = config
             .params
             .ml
-            .unwrap_or_else(|| 1.0 / (REFERENCE_M_FOR_LEVEL as f32).ln());
+            .unwrap_or_else(|| 1.0 / (m as f32).ln());
 
         // OPT-024: Get number of threads from config or use default (num_cpus)
         let num_threads = config.params.num_threads.unwrap_or_else(|| {
@@ -6909,23 +6902,19 @@ impl crate::index::AnnIterator for HnswAnnIterator {
 /// Generate a random level for a new node using exponential distribution.
 ///
 /// This implements the original HNSW algorithm for level selection:
-/// level = floor(-ln(U) / ln(REFERENCE_M)) where U ~ Uniform(0, 1]
-///
-/// BUG-001 FIX: Uses a fixed reference M (16) instead of the dynamic M parameter.
-/// This ensures consistent level distribution across different M values.
-/// Using dynamic M causes high M values to have very few layers, degrading recall.
+/// level = floor(-ln(U) / ln(M)) where U ~ Uniform(0, 1]
 ///
 /// # Arguments
-/// * `_m` - The M parameter (number of connections), kept for API compatibility but not used
+/// * `m` - The M parameter (number of connections)
 /// * `rng` - Random number generator
 ///
 /// # Returns
 /// A random level (0 means only base layer, higher values mean more layers)
-pub fn random_level(_m: usize, rng: &mut impl Rng) -> usize {
+pub fn random_level(m: usize, rng: &mut impl Rng) -> usize {
     let r: f32 = rng.gen(); // Uniform [0, 1)
 
-    // BUG-001 FIX: Use fixed reference M for consistent level distribution
-    let level = (-r.ln() / (REFERENCE_M_FOR_LEVEL as f32).ln()) as usize;
+    let m = m.max(2) as f32;
+    let level = (-r.ln() / m.ln()) as usize;
 
     // Clamp to reasonable maximum
     level.min(MAX_LAYERS - 1)
@@ -7135,7 +7124,7 @@ mod tests {
                 m: Some(16),
                 ef_construction: Some(100),
                 ef_search: Some(138),
-                ml: Some(1.0 / (REFERENCE_M_FOR_LEVEL as f32).ln()),
+                ml: Some(1.0 / (16.0_f32).ln()),
                 num_threads: Some(1),
                 ..Default::default()
             },
