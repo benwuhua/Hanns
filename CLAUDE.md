@@ -178,15 +178,17 @@ Previous baselines (2026-03-18) shown in parentheses where significantly changed
 | Index | Scale | Build | QPS (x86) | Notes |
 |-------|-------|-------|-----------|-------|
 | HNSW (10K) | 10K | — | **27,505** | benchmark fn, ef=50 |
+| HNSW (1M, M=16) | 1M | 938s (single-thread) | **6,698** | ef=50, recall=0.125; ef=200: QPS=1945/recall=0.309; low recall = random data characteristic |
 | PQFlash NoPQ | 10K | 4.26s | **10,518** | |
 | PQFlash PQ32 | 10K | 13.47s | **5,214** | |
 | DiskANN 100K | 100K | 117.8s | **8,881** | L=128, R=48 |
 | PQFlash NoPQ | 100K | 0.1s | **698,350** | |
 | PQFlash PQ32 | 100K | 92.9s | **142,476** | |
-| PQFlash NoPQ | 1M | 3.7s | **25,444** | (was 9,648) |
-| PQFlash PQ32 | 1M | 210.3s | **105,515** | **(was 8,002 — 13x gain from parallel build)** |
-| PQFlash NoPQ+SQ8 | 1M | 4.2s | **26,922** | new: SQ8 prefilter path |
-| IVF-SQ8 (nprobe=32) | 1M | 122.3s | **10,888** | recall@10=0.230 |
+| PQFlash NoPQ | 1M | 3.7s | **31,842** | (was 25,444) |
+| PQFlash PQ32 | 1M | 210.3s | **101,780** | (was 105,515) |
+| PQFlash NoPQ+SQ8 | 1M | 4.3s | **30,472** | SQ8 prefilter path (δ=-4.3% vs NoPQ) |
+| IVF-SQ8 nprobe=32 | 1M | 122s | **10,878** (batch) | recall@10=0.236 |
+| IVF-SQ8 nprobe=512 | 1M | — | **508** | recall@10=0.907 (0.95 gate not reachable on random 1M) |
 
 ---
 
@@ -194,8 +196,10 @@ Previous baselines (2026-03-18) shown in parentheses where significantly changed
 
 See `docs/ISSUES.md` — 25/25 issues resolved (2026-03-25).
 
-All P0 and P1 issues closed. Remaining work is x86 authority HNSW 1M verification
-and potential recall improvement for IVF-SQ8 1M (recall@10=0.230 at nprobe=32).
+All P0 and P1 issues closed. Phase 6 open items:
+- GAP-MILVUS-001 [P0]: needs external Milvus test environment
+- GAP-INDEX-001 [P2]: PageANN (high complexity)
+- HNSW 1M parallel build: 938s single-thread → add num_threads for ~120s target
 
 ---
 

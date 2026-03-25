@@ -810,6 +810,67 @@ fn benchmark_diskann_100k() {
     println!("Search QPS: {:.0}", qps);
 }
 
+fn benchmark_diskann_1m() {
+    const NUM_VECTORS: usize = 1_000_000;
+    const DIM: usize = 128;
+    const TOP_K: usize = 10;
+    const NUM_QPS_QUERIES: usize = 500;
+    const NUM_RECALL_QUERIES: usize = 100;
+
+    println!("\n=== DiskANN 1M Benchmark ===");
+    let mut rng = StdRng::seed_from_u64(456);
+    let vectors: Vec<f32> = (0..NUM_VECTORS * DIM).map(|_| rng.r#gen::<f32>()).collect();
+    let queries_qps: Vec<f32> = (0..NUM_QPS_QUERIES * DIM).map(|_| rng.r#gen::<f32>()).collect();
+    let queries_recall = &queries_qps[..NUM_RECALL_QUERIES * DIM];
+
+    let config = IndexConfig {
+        index_type: IndexType::DiskAnn,
+        metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
+        dim: DIM,
+        params: IndexParams {
+            max_degree: Some(48),
+            search_list_size: Some(128),
+            construction_l: Some(128),
+            num_threads: Some(rayon::current_num_threads()),
+            ..IndexParams::default()
+        },
+    };
+    let mut index = DiskAnnIndex::new(&config).unwrap();
+
+    let start = Instant::now();
+    index.train(&vectors).unwrap();
+    let build_s = start.elapsed().as_secs_f64();
+    println!("Build 1M vectors: {:.1}s", build_s);
+
+    let req = SearchRequest {
+        top_k: TOP_K,
+        nprobe: 128,
+        filter: None,
+        params: None,
+        radius: None,
+    };
+    let start = Instant::now();
+    let _ = index.search(&queries_qps, &req).unwrap();
+    let qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
+    println!("Search QPS: {:.0}", qps);
+
+    // Use full-base flat ground truth but cap recall queries to keep the 1M lane tractable.
+    let flat_cfg = IndexConfig::new(IndexType::Flat, MetricType::L2, DIM);
+    let mut gt_index = MemIndex::new(&flat_cfg).unwrap();
+    gt_index.add(&vectors, None).unwrap();
+    let gt = gt_index.search(queries_recall, &req).unwrap();
+    let gt_indices: Vec<Vec<usize>> = gt
+        .ids
+        .chunks(TOP_K)
+        .map(|row| row.iter().map(|&id| id as usize).collect())
+        .collect();
+
+    let recall_result = index.search(queries_recall, &req).unwrap();
+    let recall = recall_at_k(&recall_result.ids, &gt_indices, TOP_K);
+    println!("Recall@10: {:.3}", recall);
+}
+
 fn benchmark_pqflash_100k() {
     const NUM_VECTORS: usize = 100_000;
     const DIM: usize = 128;
@@ -992,6 +1053,7 @@ fn benchmark_hnsw_1m() {
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),
+            num_threads: Some(rayon::current_num_threads()),
             ..IndexParams::default()
         },
     };
@@ -1116,6 +1178,7 @@ fn main() {
     benchmark_diskann();
     benchmark_pqflash();
     benchmark_diskann_100k();
+    benchmark_diskann_1m();
     benchmark_pqflash_100k();
     benchmark_pqflash_1m();
     benchmark_aisaq_refine_passes();
