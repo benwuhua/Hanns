@@ -364,7 +364,7 @@ fn benchmark_ivf_sq8_1m() {
     const NLIST: usize = 1024;
     const RECALL_QUERIES: usize = 200;
     const QPS_QUERIES: usize = 1_000;
-    const NPROBES: [usize; 3] = [16, 32, 64];
+    const NPROBES: [usize; 5] = [32, 64, 128, 256, 512];
 
     println!("\n=== IVF-SQ8 1M Benchmark ===");
     println!(
@@ -957,6 +957,7 @@ fn benchmark_hnsw_1m() {
     const NUM_VECTORS: usize = 1_000_000;
     const DIM: usize = 128;
     const NUM_QPS_QUERIES: usize = 500;
+    const NUM_RECALL_QUERIES: usize = 500;
     const TOP_K: usize = 10;
 
     println!("\n=== HNSW 1M Benchmark ===");
@@ -964,6 +965,7 @@ fn benchmark_hnsw_1m() {
     let mut rng = StdRng::seed_from_u64(42);
     let vectors: Vec<f32> = (0..NUM_VECTORS * DIM).map(|_| rng.r#gen::<f32>()).collect();
     let queries: Vec<f32> = (0..NUM_QPS_QUERIES * DIM).map(|_| rng.r#gen::<f32>()).collect();
+    let recall_queries = &queries[..NUM_RECALL_QUERIES * DIM];
 
     let flat_cfg = IndexConfig::new(IndexType::Flat, MetricType::L2, DIM);
     let mut gt_index = MemIndex::new(&flat_cfg).unwrap();
@@ -975,7 +977,7 @@ fn benchmark_hnsw_1m() {
         params: None,
         radius: None,
     };
-    let gt = gt_index.search(&queries, &gt_req).unwrap();
+    let gt = gt_index.search(recall_queries, &gt_req).unwrap();
     let gt_indices: Vec<Vec<usize>> = gt
         .ids
         .chunks(TOP_K)
@@ -1008,10 +1010,11 @@ fn benchmark_hnsw_1m() {
         add_s
     );
 
-    for ef in [32usize, 64, 128] {
+    for ef in [50usize, 100, 200, 400, 800] {
+        index.set_ef_search(ef);
         let req = SearchRequest {
             top_k: TOP_K,
-            nprobe: ef,
+            nprobe: 0,
             filter: None,
             params: None,
             radius: None,
@@ -1019,8 +1022,8 @@ fn benchmark_hnsw_1m() {
         let start = Instant::now();
         let result = index.search(&queries, &req).unwrap();
         let qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
-        let recall = recall_at_k(&result.ids, &gt_indices, TOP_K);
-        println!("M=16 ef={ef}: recall@10={recall:.4} QPS={qps:.0}");
+        let recall = recall_at_k(&result.ids[..NUM_RECALL_QUERIES * TOP_K], &gt_indices, TOP_K);
+        println!("M=16 ef={ef}: recall@10={recall:.4} QPS={qps:.0} (batch)");
     }
 }
 
