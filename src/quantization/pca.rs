@@ -2,6 +2,7 @@ use nalgebra::DMatrix;
 use rand::seq::index::sample;
 use rand::thread_rng;
 
+#[derive(Debug, Clone)]
 pub struct PcaTransform {
     pub mean: Vec<f32>,
     pub components: Vec<f32>,

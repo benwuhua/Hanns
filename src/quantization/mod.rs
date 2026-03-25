@@ -1,3 +1,4 @@
+pub mod dual_pca;
 pub mod hvq;
 pub mod kmeans;
 pub mod opq;
@@ -10,6 +11,7 @@ pub mod residual_pq;
 pub mod rq;
 pub mod sq;
 
+pub use dual_pca::DualPca;
 pub use hvq::{HvqConfig, HvqQuantizer};
 pub use kmeans::KMeans;
 pub use opq::{OPQConfig, OptimizedProductQuantizer};
