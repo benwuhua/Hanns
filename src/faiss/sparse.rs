@@ -5,6 +5,8 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read, Write};
 
 const BLOCK_SIZE: usize = 32;
 
@@ -913,6 +915,119 @@ impl SparseIndex {
     pub fn is_empty(&self) -> bool {
         self.vectors.is_empty()
     }
+
+    pub fn save(&self, path: &std::path::Path) -> crate::api::Result<()> {
+        const MAGIC: u32 = 0x5350_4152;
+        const VERSION: u32 = 1;
+
+        let mut file = File::create(path)?;
+        file.write_all(&MAGIC.to_le_bytes())?;
+        file.write_all(&VERSION.to_le_bytes())?;
+        file.write_all(&(self.dim as u64).to_le_bytes())?;
+        file.write_all(&self.next_id.to_le_bytes())?;
+
+        let metric = match self.metric_type {
+            SparseMetricType::Cosine => 0u8,
+            SparseMetricType::Bm25 => 2u8,
+        };
+        file.write_all(&[metric])?;
+        file.write_all(&self.bm25_params.k1.to_le_bytes())?;
+        file.write_all(&self.bm25_params.b.to_le_bytes())?;
+        file.write_all(&(self.vectors.len() as u64).to_le_bytes())?;
+
+        for (&id, vector) in self.ids.iter().zip(&self.vectors) {
+            file.write_all(&id.to_le_bytes())?;
+            let pairs = vector.sorted_pairs();
+            file.write_all(&(pairs.len() as u64).to_le_bytes())?;
+            for (index, value) in pairs {
+                file.write_all(&index.to_le_bytes())?;
+                file.write_all(&value.to_le_bytes())?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn load(path: &std::path::Path) -> crate::api::Result<Self> {
+        const MAGIC: u32 = 0x5350_4152;
+        const VERSION: u32 = 1;
+
+        fn read_u32<R: Read>(r: &mut R) -> crate::api::Result<u32> {
+            let mut buf = [0u8; 4];
+            r.read_exact(&mut buf)?;
+            Ok(u32::from_le_bytes(buf))
+        }
+
+        fn read_u64<R: Read>(r: &mut R) -> crate::api::Result<u64> {
+            let mut buf = [0u8; 8];
+            r.read_exact(&mut buf)?;
+            Ok(u64::from_le_bytes(buf))
+        }
+
+        fn read_i64<R: Read>(r: &mut R) -> crate::api::Result<i64> {
+            let mut buf = [0u8; 8];
+            r.read_exact(&mut buf)?;
+            Ok(i64::from_le_bytes(buf))
+        }
+
+        fn read_f32<R: Read>(r: &mut R) -> crate::api::Result<f32> {
+            let mut buf = [0u8; 4];
+            r.read_exact(&mut buf)?;
+            Ok(f32::from_le_bytes(buf))
+        }
+
+        let mut file = File::open(path)?;
+        let magic = read_u32(&mut file)?;
+        if magic != MAGIC {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invalid sparse magic: expected {MAGIC:#x}, got {magic:#x}"
+            )));
+        }
+
+        let version = read_u32(&mut file)?;
+        if version != VERSION {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "unsupported sparse version {version}"
+            )));
+        }
+
+        let dim = read_u64(&mut file)? as usize;
+        let next_id = read_i64(&mut file)?;
+        let mut metric_buf = [0u8; 1];
+        file.read_exact(&mut metric_buf)?;
+        let metric_type = match metric_buf[0] {
+            0 => SparseMetricType::Cosine,
+            2 => SparseMetricType::Bm25,
+            other => {
+                return Err(crate::api::KnowhereError::Codec(format!(
+                    "unsupported sparse metric byte {other}"
+                )))
+            }
+        };
+
+        let k1 = read_f32(&mut file)?;
+        let b = read_f32(&mut file)?;
+        let n_vectors = read_u64(&mut file)? as usize;
+
+        let mut index = Self::new(dim);
+        index.metric_type = metric_type;
+        index.bm25_params = Bm25Params { k1, b };
+
+        for _ in 0..n_vectors {
+            let id = read_i64(&mut file)?;
+            let n_entries = read_u64(&mut file)? as usize;
+            let mut indices = Vec::with_capacity(n_entries);
+            let mut values = Vec::with_capacity(n_entries);
+            for _ in 0..n_entries {
+                indices.push(read_u32(&mut file)?);
+                values.push(read_f32(&mut file)?);
+            }
+            index.add(SparseVector { indices, values }, Some(id));
+        }
+
+        index.next_id = next_id.max(index.next_id);
+        Ok(index)
+    }
 }
 
 /// 稀疏向量批量编码 (TF-IDF 风格)
@@ -1144,9 +1259,46 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "SparseIndex has no save/load persistence API yet"]
     fn test_sparse_save_load_roundtrip() {
-        // Coverage placeholder for TEST-SAVELOAD-MISSING (sparse).
-        // SparseIndex currently exposes no save/load methods to exercise.
+        let mut index = SparseIndex::new(8);
+        index.add(
+            SparseVector {
+                indices: vec![0, 2, 5],
+                values: vec![1.0, 0.5, 0.25],
+            },
+            Some(10),
+        );
+        index.add(
+            SparseVector {
+                indices: vec![1, 2, 6],
+                values: vec![0.7, 1.0, 0.4],
+            },
+            Some(11),
+        );
+        index.add(
+            SparseVector {
+                indices: vec![0, 7],
+                values: vec![0.9, 0.3],
+            },
+            Some(12),
+        );
+
+        let query = SparseVector {
+            indices: vec![0, 2],
+            values: vec![1.0, 0.75],
+        };
+        let before = index.search(&query, 2);
+
+        let path = std::env::temp_dir().join("test_sparse_roundtrip.bin");
+        index.save(&path).unwrap();
+        let loaded = SparseIndex::load(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        let after = loaded.search(&query, 2);
+        assert_eq!(loaded.len(), index.len());
+        assert_eq!(
+            before.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            after.iter().map(|(id, _)| *id).collect::<Vec<_>>()
+        );
     }
 }

@@ -7,6 +7,7 @@
 //! OPT-003: 内存布局优化 - 使用 Vec 替代 HashMap
 
 use crate::api::{DataType, IndexConfig, IndexType, MetricType, Result, SearchRequest, SearchResult};
+use crate::bitset::BitsetView;
 use crate::quantization::KMeans;
 use crate::quantization::opq::{OPQConfig, OptimizedProductQuantizer};
 use crate::quantization::pq::{PQConfig, ProductQuantizer};
@@ -699,6 +700,110 @@ impl IvfPqIndex {
                         all_ids.push(-1);
                         all_dists.push(f32::MAX);
                     }
+                }
+            }
+        }
+
+        Ok(SearchResult::new(all_ids, all_dists, 0.0))
+    }
+
+    pub fn search_with_bitset(
+        &self,
+        query: &[f32],
+        req: &SearchRequest,
+        bitset: &BitsetView,
+    ) -> Result<SearchResult> {
+        if self.ids.is_empty() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "index is empty".to_string(),
+            ));
+        }
+
+        let n_queries = query.len() / self.dim;
+        if n_queries * self.dim != query.len() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "query dimension mismatch".to_string(),
+            ));
+        }
+
+        let id_to_pos: std::collections::HashMap<i64, usize> = self
+            .ids
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(pos, id)| (id, pos))
+            .collect();
+
+        let nprobe = req.nprobe.max(1).min(self.nlist);
+        let k = req.top_k;
+        let code_size = self.active_code_size();
+        let opq_enabled = self.opq_enabled();
+
+        let mut all_ids = Vec::with_capacity(n_queries * k);
+        let mut all_dists = Vec::with_capacity(n_queries * k);
+
+        for q_idx in 0..n_queries {
+            let q_start = q_idx * self.dim;
+            let query_vec = &query[q_start..q_start + self.dim];
+
+            let mut cluster_dists: Vec<(usize, f32)> = (0..self.nlist)
+                .map(|c| {
+                    let dist = self.centroid_score(
+                        query_vec,
+                        &self.centroids[c * self.dim..(c + 1) * self.dim],
+                    );
+                    (c, dist)
+                })
+                .collect();
+            cluster_dists.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+            let mut candidates: Vec<(i64, f32)> = Vec::new();
+            for &(cluster, _) in cluster_dists.iter().take(nprobe) {
+                let ids = &self.invlist_ids[cluster];
+                let codes = &self.invlist_codes[cluster];
+                if ids.is_empty() {
+                    continue;
+                }
+
+                let mut query_residual = vec![0.0f32; self.dim];
+                for j in 0..self.dim {
+                    query_residual[j] = query_vec[j] - self.centroids[cluster * self.dim + j];
+                }
+
+                let table = if opq_enabled {
+                    let opq = self.opq.as_ref().expect("OPQ must be present when enabled");
+                    let rotated_residual = opq.apply_rotation_single(&query_residual);
+                    Some(self.precompute_distance_table_opq(opq, &rotated_residual))
+                } else {
+                    None
+                };
+
+                for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
+                    let Some(&pos_in_index) = id_to_pos.get(id) else {
+                        continue;
+                    };
+                    if bitset.test(pos_in_index) {
+                        continue;
+                    }
+
+                    let dist = if let Some(table) = table.as_ref() {
+                        self.adc_distance(table, code)
+                    } else {
+                        let table = self.precompute_distance_table(&query_residual);
+                        self.adc_distance(&table, code)
+                    };
+                    candidates.push((*id, dist));
+                }
+            }
+
+            candidates.sort_by(|a, b| a.1.total_cmp(&b.1));
+            for i in 0..k {
+                if i < candidates.len() {
+                    all_ids.push(candidates[i].0);
+                    all_dists.push(candidates[i].1);
+                } else {
+                    all_ids.push(-1);
+                    all_dists.push(f32::MAX);
                 }
             }
         }
@@ -1869,11 +1974,52 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "IvfPqIndex does not expose search_with_bitset/filter-aware search yet"]
     fn test_ivfpq_search_with_bitset() {
-        // Coverage placeholder for TEST-IVFPQ-BITSET.
-        // The review requested bitset filtering, but IvfPqIndex currently has
-        // no search_with_bitset API and its SearchRequest path is not filter-aware.
+        let dim = 16;
+        let n = 200;
+        let config = IndexConfig {
+            index_type: IndexType::IvfPq,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                nlist: Some(4),
+                nprobe: Some(4),
+                m: Some(2),
+                nbits_per_idx: Some(8),
+                ..Default::default()
+            },
+        };
+
+        let mut index = IvfPqIndex::new(&config).unwrap();
+        let mut vectors = Vec::with_capacity(n * dim);
+        for i in 0..n {
+            for j in 0..dim {
+                vectors.push(((i * 17 + j * 3) % 101) as f32 / 50.0);
+            }
+        }
+
+        let ids: Vec<i64> = (0..n as i64).collect();
+        index.train(&vectors).unwrap();
+        index.add(&vectors, Some(&ids)).unwrap();
+
+        let query = vectors[0..dim].to_vec();
+        let req = SearchRequest {
+            top_k: 5,
+            nprobe: 4,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+
+        let mut bitset = BitsetView::new(n);
+        for i in 0..100 {
+            bitset.set_bit(i);
+        }
+
+        let result = index.search_with_bitset(&query, &req, &bitset).unwrap();
+        assert_eq!(result.ids.len(), 5);
+        assert!(result.ids.iter().all(|&id| id == -1 || id >= 100));
     }
 
     #[test]

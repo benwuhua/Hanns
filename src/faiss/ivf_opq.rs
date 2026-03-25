@@ -4,8 +4,11 @@
 //! Combines IVF coarse quantization with OPQ fine quantization for improved recall.
 
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read, Write};
 
 use crate::api::{IndexConfig, KnowhereError, Result, SearchRequest, SearchResult};
+use crate::quantization::pq::{PQConfig, ProductQuantizer};
 use crate::quantization::{
     OPQConfig, OptimizedProductQuantizer, ResidualPQConfig, ResidualProductQuantizer,
 };
@@ -74,6 +77,12 @@ pub struct IvfOpqIndex {
     next_id: i64,
     /// Whether trained
     is_trained: bool,
+    /// Original vectors kept for persistence/rebuild fallback
+    stored_vectors: Vec<f32>,
+    stored_ids: Vec<i64>,
+    /// Loaded residual PQ state reconstructed from serialized centroids
+    loaded_residual_coarse_centroids: Option<Vec<f32>>,
+    loaded_residual_pq: Option<ProductQuantizer>,
 }
 
 impl IvfOpqIndex {
@@ -105,6 +114,10 @@ impl IvfOpqIndex {
             ntotal: 0,
             next_id: 0,
             is_trained: false,
+            stored_vectors: Vec::new(),
+            stored_ids: Vec::new(),
+            loaded_residual_coarse_centroids: None,
+            loaded_residual_pq: None,
         })
     }
 
@@ -149,6 +162,8 @@ impl IvfOpqIndex {
         let residuals_by_cluster = self.compute_residuals_by_cluster(n, x)?;
 
         // Step 3: Train OPQ/RPQ on residuals
+        self.loaded_residual_coarse_centroids = None;
+        self.loaded_residual_pq = None;
         if self.config.use_residual {
             self.train_residual_pq(&residuals_by_cluster)?;
         } else {
@@ -351,6 +366,8 @@ impl IvfOpqIndex {
             // Encode residual
             let code = if let Some(ref rpq) = self.residual_pq {
                 rpq.encode(&residual)?
+            } else if self.loaded_residual_pq.is_some() {
+                self.encode_loaded_residual_pq(&residual)?
             } else if let Some(ref opq) = self.opq {
                 opq.encode(&residual)?
             } else {
@@ -368,6 +385,9 @@ impl IvfOpqIndex {
                 .get_mut(&cluster)
                 .unwrap()
                 .push((id, code));
+
+            self.stored_ids.push(id);
+            self.stored_vectors.extend_from_slice(vector);
         }
 
         self.ntotal += n;
@@ -468,11 +488,86 @@ impl IvfOpqIndex {
         // Compute distance using the appropriate quantizer
         if let Some(ref rpq) = self.residual_pq {
             rpq.compute_distance(&query_residual, code)
+        } else if let (Some(coarse_centroids), Some(pq)) = (
+            self.loaded_residual_coarse_centroids.as_ref(),
+            self.loaded_residual_pq.as_ref(),
+        ) {
+            Self::compute_distance_loaded_residual_pq(
+                &query_residual,
+                code,
+                self.config.dim,
+                coarse_centroids,
+                pq,
+            )
         } else if let Some(ref opq) = self.opq {
             opq.compute_distance(&query_residual, code)
         } else {
             f32::MAX
         }
+    }
+
+    fn encode_loaded_residual_pq(&self, x: &[f32]) -> Result<Vec<u8>> {
+        let (coarse_centroids, pq) = match (
+            self.loaded_residual_coarse_centroids.as_ref(),
+            self.loaded_residual_pq.as_ref(),
+        ) {
+            (Some(coarse_centroids), Some(pq)) => (coarse_centroids, pq),
+            _ => {
+                return Err(KnowhereError::InternalError(
+                    "Loaded residual PQ state unavailable".to_string(),
+                ))
+            }
+        };
+
+        let dim = self.config.dim;
+        let ncentroids = coarse_centroids.len() / dim;
+        let mut best_idx = 0usize;
+        let mut best_dist = f32::INFINITY;
+        for c in 0..ncentroids {
+            let centroid = &coarse_centroids[c * dim..(c + 1) * dim];
+            let dist = Self::l2_distance(x, centroid);
+            if dist < best_dist {
+                best_dist = dist;
+                best_idx = c;
+            }
+        }
+
+        let centroid = &coarse_centroids[best_idx * dim..(best_idx + 1) * dim];
+        let mut residual = vec![0.0f32; dim];
+        for i in 0..dim {
+            residual[i] = x[i] - centroid[i];
+        }
+
+        let pq_code = pq.encode(&residual)?;
+        let mut code = vec![0u8; 4 + pq_code.len()];
+        code[0..4].copy_from_slice(&(best_idx as u32).to_le_bytes());
+        code[4..].copy_from_slice(&pq_code);
+        Ok(code)
+    }
+
+    fn compute_distance_loaded_residual_pq(
+        query: &[f32],
+        code: &[u8],
+        dim: usize,
+        coarse_centroids: &[f32],
+        pq: &ProductQuantizer,
+    ) -> f32 {
+        if code.len() < 4 {
+            return f32::INFINITY;
+        }
+
+        let coarse_idx = u32::from_le_bytes([code[0], code[1], code[2], code[3]]) as usize;
+        let ncentroids = coarse_centroids.len() / dim;
+        if coarse_idx >= ncentroids {
+            return f32::INFINITY;
+        }
+
+        let centroid = &coarse_centroids[coarse_idx * dim..(coarse_idx + 1) * dim];
+        let mut query_residual = vec![0.0f32; dim];
+        for i in 0..dim {
+            query_residual[i] = query[i] - centroid[i];
+        }
+        pq.compute_distance(&query_residual, &code[4..])
     }
 
     /// Compute L2 distance
@@ -492,17 +587,228 @@ impl IvfOpqIndex {
         }
         self.ntotal = 0;
         self.next_id = 0;
+        self.stored_vectors.clear();
+        self.stored_ids.clear();
+        self.loaded_residual_coarse_centroids = None;
+        self.loaded_residual_pq = None;
     }
 
     /// Get code size
     pub fn code_size(&self) -> usize {
         if let Some(ref rpq) = self.residual_pq {
             rpq.code_size()
+        } else if self.loaded_residual_pq.is_some() {
+            4 + self.config.m * self.config.nbits / 8
         } else if let Some(ref opq) = self.opq {
             opq.code_size()
         } else {
             self.config.m * self.config.nbits / 8
         }
+    }
+
+    pub fn save(&self, path: &std::path::Path) -> Result<()> {
+        const MAGIC: u32 = 0x4F50_5149;
+        const VERSION: u32 = 1;
+
+        let mut file = File::create(path)?;
+        file.write_all(&MAGIC.to_le_bytes())?;
+        file.write_all(&VERSION.to_le_bytes())?;
+        file.write_all(&(self.config.dim as u64).to_le_bytes())?;
+        file.write_all(&(self.config.nlist as u64).to_le_bytes())?;
+        file.write_all(&(self.config.m as u64).to_le_bytes())?;
+        file.write_all(&(self.config.nbits as u64).to_le_bytes())?;
+        file.write_all(&(self.config.nprobe as u64).to_le_bytes())?;
+        file.write_all(&[u8::from(self.config.use_residual)])?;
+        file.write_all(&[u8::from(self.is_trained)])?;
+        file.write_all(&(self.ntotal as u64).to_le_bytes())?;
+        file.write_all(&self.next_id.to_le_bytes())?;
+        file.write_all(&(self.coarse_centroids.len() as u64).to_le_bytes())?;
+        for &v in &self.coarse_centroids {
+            file.write_all(&v.to_le_bytes())?;
+        }
+
+        file.write_all(&(self.inverted_lists.len() as u64).to_le_bytes())?;
+        for cluster_id in 0..self.config.nlist {
+            let list = self.inverted_lists.get(&cluster_id).map(Vec::as_slice).unwrap_or(&[]);
+            file.write_all(&(cluster_id as u64).to_le_bytes())?;
+            file.write_all(&(list.len() as u64).to_le_bytes())?;
+            for (vec_id, code) in list {
+                file.write_all(&vec_id.to_le_bytes())?;
+                file.write_all(&(code.len() as u64).to_le_bytes())?;
+                file.write_all(code)?;
+            }
+        }
+
+        let residual_flag = if self.config.use_residual && self.residual_pq.is_some() {
+            1u8
+        } else {
+            0u8
+        };
+        file.write_all(&[residual_flag])?;
+        if residual_flag == 1 {
+            let rpq = self.residual_pq.as_ref().expect("checked above");
+            let coarse = rpq.get_coarse_centroids();
+            let pq_centroids = rpq.get_residual_pq().centroids();
+            file.write_all(&(coarse.len() as u64).to_le_bytes())?;
+            for &v in coarse {
+                file.write_all(&v.to_le_bytes())?;
+            }
+            file.write_all(&(pq_centroids.len() as u64).to_le_bytes())?;
+            for &v in pq_centroids {
+                file.write_all(&v.to_le_bytes())?;
+            }
+        }
+
+        file.write_all(&(self.stored_vectors.len() as u64).to_le_bytes())?;
+        for &v in &self.stored_vectors {
+            file.write_all(&v.to_le_bytes())?;
+        }
+        file.write_all(&(self.stored_ids.len() as u64).to_le_bytes())?;
+        for &id in &self.stored_ids {
+            file.write_all(&id.to_le_bytes())?;
+        }
+
+        Ok(())
+    }
+
+    pub fn load(path: &std::path::Path) -> Result<Self> {
+        const MAGIC: u32 = 0x4F50_5149;
+        const VERSION: u32 = 1;
+
+        fn read_u8<R: Read>(r: &mut R) -> Result<u8> {
+            let mut buf = [0u8; 1];
+            r.read_exact(&mut buf)?;
+            Ok(buf[0])
+        }
+        fn read_u32<R: Read>(r: &mut R) -> Result<u32> {
+            let mut buf = [0u8; 4];
+            r.read_exact(&mut buf)?;
+            Ok(u32::from_le_bytes(buf))
+        }
+        fn read_u64<R: Read>(r: &mut R) -> Result<u64> {
+            let mut buf = [0u8; 8];
+            r.read_exact(&mut buf)?;
+            Ok(u64::from_le_bytes(buf))
+        }
+        fn read_i64<R: Read>(r: &mut R) -> Result<i64> {
+            let mut buf = [0u8; 8];
+            r.read_exact(&mut buf)?;
+            Ok(i64::from_le_bytes(buf))
+        }
+        fn read_f32<R: Read>(r: &mut R) -> Result<f32> {
+            let mut buf = [0u8; 4];
+            r.read_exact(&mut buf)?;
+            Ok(f32::from_le_bytes(buf))
+        }
+
+        let mut file = File::open(path)?;
+        let magic = read_u32(&mut file)?;
+        if magic != MAGIC {
+            return Err(KnowhereError::Codec(format!(
+                "invalid IVF-OPQ magic: expected {MAGIC:#x}, got {magic:#x}"
+            )));
+        }
+        let version = read_u32(&mut file)?;
+        if version != VERSION {
+            return Err(KnowhereError::Codec(format!(
+                "unsupported IVF-OPQ version {version}"
+            )));
+        }
+
+        let dim = read_u64(&mut file)? as usize;
+        let nlist = read_u64(&mut file)? as usize;
+        let m = read_u64(&mut file)? as usize;
+        let nbits = read_u64(&mut file)? as usize;
+        let nprobe = read_u64(&mut file)? as usize;
+        let use_residual = read_u8(&mut file)? != 0;
+        let is_trained = read_u8(&mut file)? != 0;
+        let ntotal = read_u64(&mut file)? as usize;
+        let next_id = read_i64(&mut file)?;
+
+        let mut config = IvfOpqConfig::new(dim, nlist, m, nbits);
+        config.nprobe = nprobe;
+        config.use_residual = use_residual;
+
+        let coarse_len = read_u64(&mut file)? as usize;
+        let mut coarse_centroids = Vec::with_capacity(coarse_len);
+        for _ in 0..coarse_len {
+            coarse_centroids.push(read_f32(&mut file)?);
+        }
+
+        let n_lists = read_u64(&mut file)? as usize;
+        let mut inverted_lists = HashMap::new();
+        for _ in 0..n_lists {
+            let cluster_id = read_u64(&mut file)? as usize;
+            let n_entries = read_u64(&mut file)? as usize;
+            let mut list = Vec::with_capacity(n_entries);
+            for _ in 0..n_entries {
+                let vec_id = read_i64(&mut file)?;
+                let code_len = read_u64(&mut file)? as usize;
+                let mut code = vec![0u8; code_len];
+                file.read_exact(&mut code)?;
+                list.push((vec_id, code));
+            }
+            inverted_lists.insert(cluster_id, list);
+        }
+
+        let residual_flag = read_u8(&mut file)? != 0;
+        let mut loaded_residual_coarse_centroids = None;
+        let mut loaded_residual_pq = None;
+        if residual_flag {
+            let coarse_len = read_u64(&mut file)? as usize;
+            let mut residual_coarse = Vec::with_capacity(coarse_len);
+            for _ in 0..coarse_len {
+                residual_coarse.push(read_f32(&mut file)?);
+            }
+            let pq_len = read_u64(&mut file)? as usize;
+            let mut residual_pq_centroids = Vec::with_capacity(pq_len);
+            for _ in 0..pq_len {
+                residual_pq_centroids.push(read_f32(&mut file)?);
+            }
+
+            let pq_config = PQConfig::new(dim, m, nbits);
+            let mut pq = ProductQuantizer::new(pq_config);
+            pq.set_centroids(residual_pq_centroids)?;
+            loaded_residual_coarse_centroids = Some(residual_coarse);
+            loaded_residual_pq = Some(pq);
+        }
+
+        let stored_vectors_len = read_u64(&mut file)? as usize;
+        let mut stored_vectors = Vec::with_capacity(stored_vectors_len);
+        for _ in 0..stored_vectors_len {
+            stored_vectors.push(read_f32(&mut file)?);
+        }
+        let stored_ids_len = read_u64(&mut file)? as usize;
+        let mut stored_ids = Vec::with_capacity(stored_ids_len);
+        for _ in 0..stored_ids_len {
+            stored_ids.push(read_i64(&mut file)?);
+        }
+
+        let mut index = Self::new(config)?;
+        index.coarse_centroids = coarse_centroids;
+        index.inverted_lists = inverted_lists;
+        for cluster_id in 0..index.config.nlist {
+            index.inverted_lists.entry(cluster_id).or_default();
+        }
+        index.ntotal = ntotal;
+        index.next_id = next_id;
+        index.is_trained = is_trained;
+        index.stored_vectors = stored_vectors;
+        index.stored_ids = stored_ids;
+
+        if index.config.use_residual {
+            index.loaded_residual_coarse_centroids = loaded_residual_coarse_centroids;
+            index.loaded_residual_pq = loaded_residual_pq;
+        } else if index.is_trained && !index.stored_vectors.is_empty() {
+            let stored_vectors = index.stored_vectors.clone();
+            let stored_ids = index.stored_ids.clone();
+            let n = stored_vectors.len() / index.config.dim;
+            index.train(n, &stored_vectors)?;
+            index.add(stored_ids.len(), &stored_vectors, Some(&stored_ids))?;
+            index.next_id = next_id;
+        }
+
+        Ok(index)
     }
 }
 
@@ -616,10 +922,35 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "IvfOpqIndex has no save/load persistence API yet"]
     fn test_ivf_opq_save_load_roundtrip() {
-        // Coverage placeholder for TEST-SAVELOAD-MISSING (ivf_opq).
-        // IvfOpqIndex currently exposes no save/load methods to exercise.
+        let config = IvfOpqConfig::new(32, 8, 4, 8);
+        let mut index = IvfOpqIndex::new(config).unwrap();
+
+        let train_data = create_test_vectors(256, 32);
+        index.train(256, &train_data).unwrap();
+
+        let add_data = create_test_vectors(64, 32);
+        let ids: Vec<i64> = (1000..1064).collect();
+        index.add(64, &add_data, Some(&ids)).unwrap();
+
+        let query = add_data[0..32].to_vec();
+        let req = SearchRequest {
+            top_k: 5,
+            nprobe: 4,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let before = index.search(1, &query, &req).unwrap();
+
+        let path = std::env::temp_dir().join("test_ivf_opq_roundtrip.bin");
+        index.save(&path).unwrap();
+        let loaded = IvfOpqIndex::load(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        let after = loaded.search(1, &query, &req).unwrap();
+        assert_eq!(loaded.ntotal(), index.ntotal());
+        assert_eq!(before.ids, after.ids);
     }
 
     // Note: Standard OPQ mode (use_residual=false) requires more training data
