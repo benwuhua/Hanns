@@ -67,6 +67,9 @@ pub struct AisaqConfig {
     /// Build batch size for parallel insertion path.
     #[serde(default = "default_build_batch_size")]
     pub build_batch_size: usize,
+    /// Search-time beam batch size for sync sector-batch expansion.
+    #[serde(default = "default_beam_batch_size")]
+    pub beam_batch_size: usize,
     pub warm_up: bool,
     pub filter_threshold: f32,
     #[serde(default)]
@@ -103,6 +106,10 @@ fn default_build_batch_size() -> usize {
     2048
 }
 
+fn default_beam_batch_size() -> usize {
+    8
+}
+
 const ROBUST_PRUNE_ALPHA: f32 = 1.2;
 
 impl Default for AisaqConfig {
@@ -127,6 +134,7 @@ impl Default for AisaqConfig {
             build_degree_slack_pct: 100,
             build_search_list_size: 0,
             build_batch_size: 2048,
+            beam_batch_size: 8,
             warm_up: false,
             filter_threshold: -1.0,
             search_io_limit: None,
@@ -187,6 +195,11 @@ impl AisaqConfig {
         if self.beamwidth == 0 {
             return Err(KnowhereError::InvalidArg(
                 "beamwidth must be greater than 0".to_string(),
+            ));
+        }
+        if self.beam_batch_size == 0 {
+            return Err(KnowhereError::InvalidArg(
+                "beam_batch_size must be greater than 0".to_string(),
             ));
         }
         if self.num_entry_points == 0 {
@@ -2401,28 +2414,52 @@ impl PQFlashIndex {
                         }
                     }
 
-                    let candidate = match scratch.frontier.pop() {
-                        Some(candidate) => candidate,
-                        None => break,
+                    let expand_limit = self.compute_expand_limit(&io);
+                    let remaining_budget = max_visit.saturating_sub(scratch.expanded.len());
+                    let use_sector_batch = self.storage.is_some();
+                    #[cfg(feature = "parallel")]
+                    let batch_limit = if use_sector_batch && rayon::current_thread_index().is_none()
+                    {
+                        self.config.beam_batch_size.max(1).min(16)
+                    } else {
+                        1usize
                     };
+                    #[cfg(not(feature = "parallel"))]
+                    let batch_limit = 1usize;
+                    let batch_cap = batch_limit
+                        .min(remaining_budget.max(1))
+                        .min(scratch.frontier.len().max(1));
 
-                    if visited.is_visited(candidate.node_id) {
-                        continue;
+                    let mut batch = Vec::with_capacity(batch_cap);
+                    while batch.len() < batch_cap {
+                        let Some(candidate) = scratch.frontier.pop() else {
+                            break;
+                        };
+                        if visited.is_visited(candidate.node_id) {
+                            continue;
+                        }
+                        visited.mark(candidate.node_id);
+                        scratch.expanded.push(candidate);
+                        if self.node_allowed(candidate.node_id, bitset) {
+                            scratch.accepted.push(candidate);
+                        }
+                        batch.push(candidate);
                     }
-                    visited.mark(candidate.node_id);
 
-                    scratch.expanded.push(candidate);
-                    if self.node_allowed(candidate.node_id, bitset) {
-                        scratch.accepted.push(candidate);
+                    if batch.is_empty() {
+                        break;
                     }
 
-                    let mut neighbor_scores = if let Some(node) = self.node_ref(candidate.node_id) {
-                        io.record_node_read(candidate.node_id, self.flash_layout.node_bytes);
-                        let mut scores = Vec::with_capacity(node.neighbors.len());
-                        for &neighbor in node.neighbors {
-                            if visited.is_visited(neighbor) {
-                                continue;
-                            }
+                    let loaded_batch = self.load_node_batch_sync(&batch, &mut io)?;
+                    for (_, node) in loaded_batch {
+                        let unseen: Vec<u32> = node
+                            .neighbors
+                            .iter()
+                            .filter(|&&neighbor| !visited.is_visited(neighbor))
+                            .copied()
+                            .collect();
+                        let mut neighbor_scores = Vec::with_capacity(unseen.len());
+                        for &neighbor in &unseen {
                             let score = if let Some(neighbor_node) = self.node_ref(neighbor) {
                                 if let (Some(encoder), Some(table)) = (&self.pq_encoder, pq_table_slice)
                                 {
@@ -2451,37 +2488,15 @@ impl PQFlashIndex {
                             } else {
                                 self.coarse_distance(neighbor, query, pq_table_slice, &mut io)?
                             };
-                            scores.push(Candidate {
+                            neighbor_scores.push(Candidate {
                                 node_id: neighbor,
                                 score,
                             });
                         }
-                        scores
-                    } else {
-                        let node = self.load_node(candidate.node_id, NodeAccessMode::Node, &mut io)?;
-                        let unseen: Vec<u32> = node
-                            .neighbors
-                            .iter()
-                            .filter(|&&neighbor| !visited.is_visited(neighbor))
-                            .copied()
-                            .collect();
-                        // self.batch_prefetch_neighbors(&unseen); // disabled: net negative on x86 warm path
-                        let mut scores = Vec::with_capacity(unseen.len());
-                        for &neighbor in &unseen {
-                            let score =
-                                self.coarse_distance(neighbor, query, pq_table_slice, &mut io)?;
-                            scores.push(Candidate {
-                                node_id: neighbor,
-                                score,
-                            });
+                        neighbor_scores.sort_by(|left, right| left.score.total_cmp(&right.score));
+                        for neighbor in neighbor_scores.into_iter().take(expand_limit) {
+                            scratch.frontier.push(neighbor);
                         }
-                        scores
-                    };
-
-                    neighbor_scores.sort_by(|left, right| left.score.total_cmp(&right.score));
-                    let expand_limit = self.compute_expand_limit(&io);
-                    for neighbor in neighbor_scores.into_iter().take(expand_limit) {
-                        scratch.frontier.push(neighbor);
                     }
                 }
 
@@ -2545,6 +2560,63 @@ impl PQFlashIndex {
         bitset: &BitsetView,
     ) -> Result<SearchResult> {
         self.search_async_internal(query, k, Some(bitset)).await
+    }
+
+    fn load_node_batch_sync(
+        &self,
+        batch: &[Candidate],
+        io: &mut BeamSearchIO,
+    ) -> Result<Vec<(Candidate, std::sync::Arc<LoadedNode>)>> {
+        if batch.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        #[cfg(feature = "parallel")]
+        {
+            if batch.len() <= 1 {
+                let candidate = batch[0];
+                let node = self.load_node(candidate.node_id, NodeAccessMode::Node, io)?;
+                return Ok(vec![(candidate, node)]);
+            }
+
+            let loaded = std::thread::scope(|scope| {
+                let mut handles = Vec::with_capacity(batch.len());
+                for &candidate in batch {
+                    handles.push(scope.spawn(move || {
+                        let mut local_io = self.io_template.clone();
+                        local_io.reset_stats();
+                        let node =
+                            self.load_node(candidate.node_id, NodeAccessMode::Node, &mut local_io)?;
+                        Ok::<_, KnowhereError>((candidate, node, local_io.stats().pages_read))
+                    }));
+                }
+
+                let mut out = Vec::with_capacity(batch.len());
+                for handle in handles {
+                    let joined = handle.join().map_err(|_| {
+                        KnowhereError::InternalError(
+                            "sync batch load thread panicked".to_string(),
+                        )
+                    })?;
+                    out.push(joined?);
+                }
+                Ok::<_, KnowhereError>(out)
+            })?;
+
+            let mut out = Vec::with_capacity(loaded.len());
+            for (candidate, node, pages_read) in loaded {
+                io.record_node_access(candidate.node_id, self.flash_layout.node_bytes, pages_read);
+                out.push((candidate, node));
+            }
+            return Ok(out);
+        }
+
+        #[cfg(not(feature = "parallel"))]
+        {
+            let candidate = batch[0];
+            let node = self.load_node(candidate.node_id, NodeAccessMode::Node, io)?;
+            Ok(vec![(candidate, node)])
+        }
     }
 
     async fn load_node_batch_async(
