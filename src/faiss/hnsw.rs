@@ -13,7 +13,7 @@ use rand::SeedableRng;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BinaryHeap};
+use std::collections::{BTreeMap, BinaryHeap, HashSet};
 use std::sync::Arc;
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 use std::sync::OnceLock;
@@ -1214,6 +1214,7 @@ pub struct HnswIndex {
     use_bf16_storage: bool,
     // OPT-015: ids Vec kept only for custom ID support, not used in hot path
     ids: Vec<i64>,
+    deleted: HashSet<i64>,
     node_info: Vec<NodeInfo>,
     layer0_flat_graph: Layer0FlatGraph,
     layer0_slab: Layer0Slab,
@@ -1371,6 +1372,7 @@ impl HnswIndex {
             bf16_vectors: Vec::new(),
             use_bf16_storage,
             ids: Vec::new(),
+            deleted: HashSet::new(),
             node_info: Vec::new(),
             layer0_flat_graph: Layer0FlatGraph::default(),
             layer0_slab: Layer0Slab::default(),
@@ -2874,7 +2876,7 @@ impl HnswIndex {
             // OPT-036: Correct early termination - peek returns WORST (largest) distance
             if results.len() >= ef {
                 if let Some(&(MaxDist(worst_dist), _)) = results.peek() {
-                    if cand_dist > worst_dist {
+                    if cand_dist >= worst_dist {
                         break;
                     }
                 }
@@ -3661,6 +3663,14 @@ impl HnswIndex {
         Ok(ApiSearchResult::new(all_ids, all_dists, 0.0))
     }
 
+    pub fn mark_deleted(&mut self, id: i64) {
+        self.deleted.insert(id);
+    }
+
+    pub fn is_deleted(&self, id: i64) -> bool {
+        self.deleted.contains(&id)
+    }
+
     /// Zero-allocation search variant for serial hot-path usage.
     ///
     /// Writes up to `ids.len()` results into caller-provided buffers.
@@ -3800,7 +3810,7 @@ impl HnswIndex {
     {
         let mut all: Vec<(i64, f32)> = Vec::with_capacity(self.ids.len());
         for (idx, &id) in self.ids.iter().enumerate() {
-            if keep(id, idx) {
+            if !self.is_deleted(id) && keep(id, idx) {
                 all.push((id, self.distance(query, idx)));
             }
         }
@@ -4184,7 +4194,7 @@ impl HnswIndex {
 
             let pruning_start = profile_enabled.then(Instant::now);
             if scratch.generic_results.len() >= ef
-                && cand_dist > scratch.generic_worst_result_distance
+                && cand_dist >= scratch.generic_worst_result_distance
             {
                 if let Some(stats) = profile.as_mut() {
                     if let Some(start) = pruning_start {
@@ -4438,7 +4448,7 @@ impl HnswIndex {
             let pruning_start = profile_enabled.then(Instant::now);
             if scratch.generic_results.len() >= ef {
                 if let Some(&(SearchMaxDist(worst_dist), _)) = scratch.generic_results.peek() {
-                    if cand_dist > worst_dist {
+                    if cand_dist >= worst_dist {
                         if let Some(stats) = profile.as_mut() {
                             if let Some(start) = pruning_start {
                                 stats.record_candidate_pruning(start.elapsed(), 1);
@@ -4643,7 +4653,7 @@ impl HnswIndex {
                 && scratch
                     .layer0_results
                     .worst_dist()
-                    .is_some_and(|worst_dist| candidate.dist > worst_dist)
+                    .is_some_and(|worst_dist| candidate.dist >= worst_dist)
             {
                 break;
             }
@@ -4886,7 +4896,7 @@ impl HnswIndex {
             }
             if scratch.layer0_results.len() >= ef {
                 if let Some(worst_dist) = scratch.layer0_results.worst_dist() {
-                    if candidate.dist > worst_dist {
+                    if candidate.dist >= worst_dist {
                         if let Some(stats) = profile.as_mut() {
                             if let Some(start) = pruning_start {
                                 stats.record_candidate_pruning(start.elapsed(), 1);
@@ -5136,7 +5146,11 @@ impl HnswIndex {
 
         let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
         for (idx, dist) in results {
-            final_results.push((self.get_id_from_idx(idx), dist));
+            let id = self.get_id_from_idx(idx);
+            if self.is_deleted(id) {
+                continue;
+            }
+            final_results.push((id, dist));
             if final_results.len() >= k {
                 break;
             }
@@ -5201,7 +5215,11 @@ impl HnswIndex {
 
         let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
         for (idx, dist) in results {
-            final_results.push((self.get_id_from_idx(idx), dist));
+            let id = self.get_id_from_idx(idx);
+            if self.is_deleted(id) {
+                continue;
+            }
+            final_results.push((id, dist));
             if final_results.len() >= k {
                 break;
             }
@@ -5260,7 +5278,11 @@ impl HnswIndex {
 
         let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
         for (idx, dist) in results {
-            final_results.push((self.get_id_from_idx(idx), dist));
+            let id = self.get_id_from_idx(idx);
+            if self.is_deleted(id) {
+                continue;
+            }
+            final_results.push((id, dist));
             if final_results.len() >= k {
                 break;
             }
@@ -5311,13 +5333,8 @@ impl HnswIndex {
             return self.search_single_l2_unfiltered(query, ef, k);
         }
 
-        let filter_fn = |id: i64| {
-            if let Some(f) = filter {
-                f.evaluate(id)
-            } else {
-                true
-            }
-        };
+        let filter_fn =
+            |id: i64| !self.is_deleted(id) && filter.as_ref().is_none_or(|f| f.evaluate(id));
 
         // BUG-P1-001: Cosine on tiny collections can be sensitive to graph entry-point
         // randomness. Use deterministic exhaustive ranking for small-N to keep
@@ -5453,7 +5470,11 @@ impl HnswIndex {
 
         let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
         for (idx, dist) in results {
-            final_results.push((self.get_id_from_idx(idx), dist));
+            let id = self.get_id_from_idx(idx);
+            if self.is_deleted(id) {
+                continue;
+            }
+            final_results.push((id, dist));
             if final_results.len() >= k {
                 break;
             }
@@ -5504,7 +5525,11 @@ impl HnswIndex {
 
         let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
         for (idx, dist) in results {
-            final_results.push((self.get_id_from_idx(idx), dist));
+            let id = self.get_id_from_idx(idx);
+            if self.is_deleted(id) {
+                continue;
+            }
+            final_results.push((id, dist));
             if final_results.len() >= k {
                 break;
             }
@@ -5603,7 +5628,11 @@ impl HnswIndex {
         // Apply bitset filter and return top k
         let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
         for (idx, dist) in results {
-            final_results.push((self.get_id_from_idx(idx), dist));
+            let id = self.get_id_from_idx(idx);
+            if self.is_deleted(id) {
+                continue;
+            }
+            final_results.push((id, dist));
             if final_results.len() >= k {
                 break;
             }
@@ -5836,7 +5865,7 @@ impl HnswIndex {
 
         // Magic and version
         file.write_all(b"HNSW")?;
-        file.write_all(&3u32.to_le_bytes())?; // Version 3: multi-layer support
+        file.write_all(&4u32.to_le_bytes())?; // Version 4: add deleted-id persistence
 
         // Config
         file.write_all(&(self.dim as u32).to_le_bytes())?;
@@ -5885,6 +5914,11 @@ impl HnswIndex {
             file.write_all(&ep.to_le_bytes())?;
         } else {
             file.write_all(&[0u8])?;
+        }
+
+        file.write_all(&(self.deleted.len() as u64).to_le_bytes())?;
+        for &id in &self.deleted {
+            file.write_all(&id.to_le_bytes())?;
         }
 
         Ok(())
@@ -6221,7 +6255,7 @@ impl HnswIndex {
         file.read_exact(&mut ver)?;
         let version = u32::from_le_bytes(ver);
 
-        if version != 3 {
+        if version != 3 && version != 4 {
             return Err(crate::api::KnowhereError::Codec(format!(
                 "unsupported version: {}",
                 version
@@ -6362,6 +6396,24 @@ impl HnswIndex {
             self.entry_point = Some(entry);
         } else {
             self.entry_point = None;
+        }
+
+        self.deleted.clear();
+        if version >= 4 {
+            file.read_exact(&mut buf8)?;
+            let deleted_count = u64::from_le_bytes(buf8) as usize;
+            for _ in 0..deleted_count {
+                let mut buf = [0u8; 8];
+                file.read_exact(&mut buf)?;
+                let deleted_id = i64::from_le_bytes(buf);
+                if !id_set.contains(&deleted_id) {
+                    return Err(crate::api::KnowhereError::Codec(format!(
+                        "deleted id {} not found in ids table",
+                        deleted_id
+                    )));
+                }
+                self.deleted.insert(deleted_id);
+            }
         }
         if count > 0 && self.entry_point.is_none() {
             return Err(crate::api::KnowhereError::Codec(
@@ -8010,9 +8062,9 @@ mod tests {
 
         let mut bytes = std::fs::read(&path).unwrap();
         let bytes_len = bytes.len();
-        assert_eq!(bytes[bytes_len - 9], 1u8);
+        assert_eq!(bytes[bytes_len - 17], 1u8);
         let invalid_entry: i64 = 9_999_999;
-        bytes[bytes_len - 8..].copy_from_slice(&invalid_entry.to_le_bytes());
+        bytes[bytes_len - 16..bytes_len - 8].copy_from_slice(&invalid_entry.to_le_bytes());
         std::fs::write(&path, &bytes).unwrap();
 
         let mut loaded = HnswIndex::new(&config).unwrap();
@@ -8021,6 +8073,68 @@ mod tests {
         assert!(
             load_err.to_string().contains("entry point id"),
             "load should reject corrupted entry-point id"
+        );
+    }
+
+    #[test]
+    fn test_mark_deleted_filters_search_and_persists() {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(8),
+                ef_construction: Some(32),
+                ef_search: Some(32),
+                ..Default::default()
+            },
+        };
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        let vectors = vec![
+            0.0, 0.0, //
+            1.0, 0.0, //
+            2.0, 0.0,
+        ];
+        let ids = vec![10, 20, 30];
+        index.train(&vectors).unwrap();
+        index.add(&vectors, Some(&ids)).unwrap();
+        index.mark_deleted(20);
+        assert!(index.is_deleted(20));
+
+        let req = SearchRequest {
+            top_k: 3,
+            nprobe: 32,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let result = index.search(&[1.0, 0.0], &req).unwrap();
+        assert!(
+            !result.ids.iter().any(|&id| id == 20),
+            "deleted id must not appear in search results"
+        );
+
+        let path = std::env::temp_dir().join(format!(
+            "hnsw_deleted_{}_{}.bin",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        index.save(&path).unwrap();
+
+        let mut loaded = HnswIndex::new(&config).unwrap();
+        loaded.load(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert!(loaded.is_deleted(20));
+        let reloaded_result = loaded.search(&[1.0, 0.0], &req).unwrap();
+        assert!(
+            !reloaded_result.ids.iter().any(|&id| id == 20),
+            "deleted id must stay filtered after save/load"
         );
     }
 

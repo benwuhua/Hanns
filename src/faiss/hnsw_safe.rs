@@ -3,6 +3,9 @@
 //! 遵守内存零冗余、无锁设计、Cache 对齐
 //!
 //! **已废弃**: 请使用 `hnsw.rs`
+//! **NOTE**: This is brute-force linear scan, NOT graph search.
+//! Named "safe" for historical reasons; performance degrades O(N) with dataset size.
+//! For production use, prefer HnswIndex (graph-based) with mark_deleted().
 
 #![deprecated(since = "0.1.0", note = "Use hnsw.rs instead")]
 
