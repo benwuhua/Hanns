@@ -953,6 +953,77 @@ fn benchmark_pqflash_1m() {
     }
 }
 
+fn benchmark_hnsw_1m() {
+    const NUM_VECTORS: usize = 1_000_000;
+    const DIM: usize = 128;
+    const NUM_QPS_QUERIES: usize = 500;
+    const TOP_K: usize = 10;
+
+    println!("\n=== HNSW 1M Benchmark ===");
+
+    let mut rng = StdRng::seed_from_u64(42);
+    let vectors: Vec<f32> = (0..NUM_VECTORS * DIM).map(|_| rng.r#gen::<f32>()).collect();
+    let queries: Vec<f32> = (0..NUM_QPS_QUERIES * DIM).map(|_| rng.r#gen::<f32>()).collect();
+
+    let flat_cfg = IndexConfig::new(IndexType::Flat, MetricType::L2, DIM);
+    let mut gt_index = MemIndex::new(&flat_cfg).unwrap();
+    gt_index.add(&vectors, None).unwrap();
+    let gt_req = SearchRequest {
+        top_k: TOP_K,
+        nprobe: 1,
+        filter: None,
+        params: None,
+        radius: None,
+    };
+    let gt = gt_index.search(&queries, &gt_req).unwrap();
+    let gt_indices: Vec<Vec<usize>> = gt
+        .ids
+        .chunks(TOP_K)
+        .map(|row| row.iter().map(|&id| id as usize).collect())
+        .collect();
+
+    let config = IndexConfig {
+        index_type: IndexType::Hnsw,
+        metric_type: MetricType::L2,
+        data_type: knowhere_rs::api::DataType::Float,
+        dim: DIM,
+        params: IndexParams {
+            m: Some(16),
+            ef_construction: Some(200),
+            ..IndexParams::default()
+        },
+    };
+
+    let mut index = HnswIndex::new(&config).unwrap();
+    let t_train = Instant::now();
+    index.train(&vectors).unwrap();
+    let train_s = t_train.elapsed().as_secs_f64();
+    let t_add = Instant::now();
+    index.add(&vectors, None).unwrap();
+    let add_s = t_add.elapsed().as_secs_f64();
+    println!(
+        "Build 1M vectors: {:.1}s  (train {:.1}s + add {:.1}s)",
+        train_s + add_s,
+        train_s,
+        add_s
+    );
+
+    for ef in [32usize, 64, 128] {
+        let req = SearchRequest {
+            top_k: TOP_K,
+            nprobe: ef,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let start = Instant::now();
+        let result = index.search(&queries, &req).unwrap();
+        let qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
+        let recall = recall_at_k(&result.ids, &gt_indices, TOP_K);
+        println!("M=16 ef={ef}: recall@10={recall:.4} QPS={qps:.0}");
+    }
+}
+
 fn benchmark_aisaq_refine_passes() {
     println!("\n=== AISAQ num_refine_passes sweep (100K, NoPQ) ===");
 
@@ -1036,13 +1107,14 @@ fn main() {
     benchmark_ivfpq_index();
     benchmark_ivfpq_100k();
     benchmark_ivf_sq8();
+    benchmark_ivf_sq8_1m();
+    benchmark_hnsw_1m();
     benchmark_diskann_index();
     benchmark_diskann();
     benchmark_pqflash();
     benchmark_diskann_100k();
     benchmark_pqflash_100k();
     benchmark_pqflash_1m();
-    benchmark_ivf_sq8_1m();
     benchmark_aisaq_refine_passes();
 
     println!("\n✅ Benchmark complete!");
