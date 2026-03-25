@@ -707,6 +707,16 @@ fn benchmark_pqflash() {
     let disk_qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
     println!("[Disk NoPQ] PageCache warm QPS: {:.0} queries/sec", disk_qps);
 
+    let disk_mmap_idx = PQFlashIndex::load_with_mmap(&tmp_dir).unwrap();
+    println!("[Disk NoPQ] Warming up direct mmap...");
+    for _ in 0..10 {
+        let _ = disk_mmap_idx.search_batch(&queries_qps[..DIM * 10], TOP_K);
+    }
+    let start = Instant::now();
+    let _ = disk_mmap_idx.search_batch(&queries_qps, TOP_K).unwrap();
+    let disk_mmap_qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
+    println!("[Disk NoPQ] Direct mmap QPS: {:.0} queries/sec", disk_mmap_qps);
+
     // lock-free HashMap path via enable_node_cache — Arc::clone per node, no Mutex contention
     let mut disk_cached_idx = PQFlashIndex::load(&tmp_dir).unwrap();
     disk_cached_idx.enable_node_cache().unwrap();
@@ -714,6 +724,21 @@ fn benchmark_pqflash() {
     let _ = disk_cached_idx.search_batch(&queries_qps, TOP_K).unwrap();
     let disk_cached_qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
     println!("[Disk NoPQ] Cached (lock-free) QPS: {:.0} queries/sec", disk_cached_qps);
+
+    let native_prefix = tmp_dir.join("native_roundtrip");
+    build_idx
+        .export_native_disk_index(native_prefix.to_str().unwrap())
+        .unwrap();
+    let native_import_idx = PQFlashIndex::import_native_disk_index(native_prefix.to_str().unwrap())
+        .unwrap();
+    let start = Instant::now();
+    let _ = native_import_idx.search_batch(&queries_qps, TOP_K).unwrap();
+    let native_import_qps =
+        NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
+    println!(
+        "[Disk NoPQ] Native disk.index import QPS: {:.0} queries/sec",
+        native_import_qps
+    );
     std::fs::remove_dir_all(&tmp_dir).ok();
 
     // --- Diagnostic: PQ32 recall sweep ---

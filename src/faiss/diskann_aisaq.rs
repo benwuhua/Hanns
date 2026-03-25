@@ -695,10 +695,28 @@ fn evict_if_needed(shard: &mut PageCacheShard) {
     }
 }
 
+#[inline]
+fn pages_touched(offset: usize, len: usize, page_size: usize) -> usize {
+    if len == 0 || page_size == 0 {
+        return 0;
+    }
+    let start_page = offset / page_size;
+    let end_page = offset
+        .saturating_add(len.saturating_sub(1))
+        .saturating_div(page_size);
+    end_page.saturating_sub(start_page).saturating_add(1)
+}
+
 #[derive(Debug)]
 struct DiskStorage {
     file_group: FileGroup,
     page_cache: PageCache,
+}
+
+#[derive(Debug)]
+struct DirectMmapStorage {
+    file_group: FileGroup,
+    mmap: Mmap,
 }
 
 #[derive(Clone, Copy)]
@@ -790,6 +808,7 @@ pub struct PQFlashIndex {
     trained: bool,
     node_count: usize,
     storage: Option<DiskStorage>,
+    mmap_storage: Option<DirectMmapStorage>,
     loaded_node_cache: Option<HashMap<u32, std::sync::Arc<LoadedNode>>>,
     deleted_ids: HashSet<usize>,
     sq8_quantizer: Option<crate::quantization::sq::ScalarQuantizer>,
@@ -828,6 +847,7 @@ impl PQFlashIndex {
             trained: false,
             node_count: 0,
             storage: None,
+            mmap_storage: None,
             loaded_node_cache: None,
             deleted_ids: HashSet::new(),
             sq8_quantizer: None,
@@ -838,7 +858,7 @@ impl PQFlashIndex {
 
     /// Soft-delete node by external id. Returns true if found and marked.
     pub fn soft_delete(&mut self, external_id: i64) -> bool {
-        if self.storage.is_some() && self.node_ids.is_empty() {
+        if (self.storage.is_some() || self.mmap_storage.is_some()) && self.node_ids.is_empty() {
             let _ = self.materialize_storage();
         }
         if let Some(row_id) = self.node_ids.iter().position(|&id| id == external_id) {
@@ -865,7 +885,10 @@ impl PQFlashIndex {
         if self.deleted_ids.is_empty() {
             return 0;
         }
-        if self.storage.is_some() && self.node_ids.is_empty() && self.materialize_storage().is_err() {
+        if (self.storage.is_some() || self.mmap_storage.is_some())
+            && self.node_ids.is_empty()
+            && self.materialize_storage().is_err()
+        {
             return 0;
         }
 
@@ -1625,6 +1648,304 @@ impl PQFlashIndex {
         Ok(())
     }
 
+    pub fn import_native_disk_index(prefix: &str) -> Result<Self> {
+        const SECTOR_LEN: usize = 4096;
+
+        fn read_matrix_header(path: &Path) -> Result<(i32, i32)> {
+            let mut file = File::open(path)?;
+            let mut buf = [0u8; 8];
+            file.read_exact(&mut buf)?;
+            let rows = i32::from_le_bytes(buf[0..4].try_into().unwrap());
+            let cols = i32::from_le_bytes(buf[4..8].try_into().unwrap());
+            Ok((rows, cols))
+        }
+
+        let disk_index_path = PathBuf::from(format!("{prefix}_disk.index"));
+        let medoids_path = PathBuf::from(format!("{prefix}_disk.index_medoids.bin"));
+        let centroids_path = PathBuf::from(format!("{prefix}_disk.index_centroids.bin"));
+
+        let (centroid_rows, dim_i32) = read_matrix_header(&centroids_path)?;
+        if centroid_rows != 1 || dim_i32 <= 0 {
+            return Err(KnowhereError::Codec(format!(
+                "invalid native centroid header rows={} dim={}",
+                centroid_rows, dim_i32
+            )));
+        }
+        let dim = dim_i32 as usize;
+
+        let disk_file = OpenOptions::new().read(true).open(&disk_index_path)?;
+        let mmap = unsafe { Mmap::map(&disk_file)? };
+        if mmap.len() < SECTOR_LEN {
+            return Err(KnowhereError::Codec(format!(
+                "native disk.index too small: {} bytes",
+                mmap.len()
+            )));
+        }
+
+        let read_u64 = |offset: usize| -> Result<u64> {
+            let bytes = mmap
+                .get(offset..offset + 8)
+                .ok_or_else(|| KnowhereError::Codec(format!("truncated disk header at {offset}")))?;
+            Ok(u64::from_le_bytes(bytes.try_into().unwrap()))
+        };
+
+        let expected_file_size = read_u64(0)? as usize;
+        let node_count = read_u64(8)? as usize;
+        let medoid_from_header = read_u64(16)? as u32;
+        let max_node_len = read_u64(24)? as usize;
+        let nnodes_per_sector = read_u64(32)? as usize;
+
+        if expected_file_size != mmap.len() {
+            return Err(KnowhereError::Codec(format!(
+                "native disk.index size mismatch: header={} actual={}",
+                expected_file_size,
+                mmap.len()
+            )));
+        }
+        if node_count == 0 || nnodes_per_sector == 0 {
+            return Err(KnowhereError::Codec(format!(
+                "invalid native disk.index header: node_count={} nnodes_per_sector={}",
+                node_count, nnodes_per_sector
+            )));
+        }
+        let vector_bytes = dim
+            .checked_mul(std::mem::size_of::<f32>())
+            .ok_or_else(|| KnowhereError::Codec("native vector byte overflow".to_string()))?;
+        if max_node_len < vector_bytes + std::mem::size_of::<u32>() {
+            return Err(KnowhereError::Codec(format!(
+                "invalid native max_node_len {} for dim {}",
+                max_node_len, dim
+            )));
+        }
+        let tail_bytes = max_node_len - vector_bytes;
+        if tail_bytes % std::mem::size_of::<u32>() != 0 {
+            return Err(KnowhereError::Codec(format!(
+                "native max_node_len {} leaves misaligned neighbor payload",
+                max_node_len
+            )));
+        }
+        let max_degree = tail_bytes / std::mem::size_of::<u32>() - 1;
+
+        let mut medoid = medoid_from_header;
+        if medoids_path.exists() {
+            let mut file = File::open(&medoids_path)?;
+            let mut buf = [0u8; 12];
+            file.read_exact(&mut buf)?;
+            let rows = i32::from_le_bytes(buf[0..4].try_into().unwrap());
+            let cols = i32::from_le_bytes(buf[4..8].try_into().unwrap());
+            if rows == 1 && cols == 1 {
+                medoid = u32::from_le_bytes(buf[8..12].try_into().unwrap());
+            }
+        }
+
+        let config = AisaqConfig {
+            max_degree: max_degree.max(1),
+            search_list_size: max_degree.max(1).saturating_mul(4),
+            ..AisaqConfig::default()
+        };
+        let mut index = Self::new(config, MetricType::L2, dim)?;
+        index.vectors = Vec::with_capacity(node_count * dim);
+        index.node_ids = (0..node_count as i64).collect();
+        index.node_neighbor_counts = vec![0; node_count];
+        index.node_neighbor_ids = vec![0; node_count * max_degree.max(1)];
+        index.flat_stride = max_degree.max(1);
+        index.node_count = node_count;
+        index.trained = true;
+        index.entry_points = vec![medoid.min(node_count.saturating_sub(1) as u32)];
+
+        for node_id in 0..node_count {
+            let sector = 1 + node_id / nnodes_per_sector;
+            let slot = node_id % nnodes_per_sector;
+            let node_offset = sector
+                .checked_mul(SECTOR_LEN)
+                .and_then(|v| v.checked_add(slot.saturating_mul(max_node_len)))
+                .ok_or_else(|| KnowhereError::Codec("native node offset overflow".to_string()))?;
+            let node_bytes = mmap.get(node_offset..node_offset + max_node_len).ok_or_else(|| {
+                KnowhereError::Codec(format!(
+                    "native node {} extends past file bounds at [{}..{})",
+                    node_id,
+                    node_offset,
+                    node_offset + max_node_len
+                ))
+            })?;
+
+            let mut cursor = 0usize;
+            for _ in 0..dim {
+                let raw = node_bytes
+                    .get(cursor..cursor + 4)
+                    .ok_or_else(|| KnowhereError::Codec("truncated native vector".to_string()))?;
+                index
+                    .vectors
+                    .push(f32::from_le_bytes(raw.try_into().unwrap()));
+                cursor += 4;
+            }
+
+            let count_raw = u32::from_le_bytes(
+                node_bytes[cursor..cursor + 4]
+                    .try_into()
+                    .map_err(|_| KnowhereError::Codec("truncated native degree".to_string()))?,
+            ) as usize;
+            cursor += 4;
+            let count = count_raw.min(max_degree);
+            index.node_neighbor_counts[node_id] = count as u32;
+            let row_start = node_id * index.flat_stride;
+            for slot in 0..max_degree {
+                let neighbor = u32::from_le_bytes(
+                    node_bytes[cursor..cursor + 4]
+                        .try_into()
+                        .map_err(|_| {
+                            KnowhereError::Codec("truncated native neighbor".to_string())
+                        })?,
+                );
+                cursor += 4;
+                if slot < count {
+                    index.node_neighbor_ids[row_start + slot] =
+                        neighbor.min(node_count.saturating_sub(1) as u32);
+                }
+            }
+        }
+
+        Ok(index)
+    }
+
+    pub fn load_with_mmap<P: AsRef<Path>>(root: P) -> Result<Self> {
+        let file_group = FileGroup::new(root);
+        let mut metadata_bytes = Vec::new();
+        File::open(file_group.metadata_path())?.read_to_end(&mut metadata_bytes)?;
+        let metadata: AisaqMetadata = bincode::deserialize(&metadata_bytes)
+            .map_err(|error| KnowhereError::Codec(error.to_string()))?;
+        if metadata.version != 2 {
+            return Err(KnowhereError::Codec(format!(
+                "unsupported AISAQ metadata version {}",
+                metadata.version
+            )));
+        }
+
+        let mut io_template = BeamSearchIO::new(&metadata.flash_layout, &metadata.config);
+        if metadata.config.warm_up {
+            for &entry in &metadata.entry_points {
+                io_template.cache_node(entry);
+                if metadata.pq_code_size > 0 {
+                    io_template.cache_pq_vector(entry);
+                }
+            }
+        }
+
+        let data_file = OpenOptions::new().read(true).open(file_group.data_path())?;
+        let mmap = unsafe { Mmap::map(&data_file)? };
+        let mut index = Self {
+            config: metadata.config,
+            metric_type: metadata.metric_type,
+            dim: metadata.dim,
+            flash_layout: metadata.flash_layout,
+            vectors: Vec::new(),
+            node_ids: Vec::new(),
+            node_neighbor_ids: Vec::new(),
+            node_neighbor_counts: Vec::new(),
+            node_pq_codes: Vec::new(),
+            disk_pq_codes: Vec::new(),
+            flat_stride: 0,
+            pq_encoder: metadata.pq_encoder.map(SerializedPqEncoder::into_encoder),
+            pq_code_size: metadata.pq_code_size,
+            entry_points: metadata.entry_points,
+            io_template,
+            trained: metadata.trained,
+            node_count: metadata.node_count,
+            storage: None,
+            mmap_storage: Some(DirectMmapStorage { file_group, mmap }),
+            loaded_node_cache: None,
+            deleted_ids: HashSet::new(),
+            sq8_quantizer: None,
+            sq8_codes: Vec::new(),
+            scratch_pool: Mutex::new(Vec::new()),
+        };
+
+        let expected_node_bytes = index
+            .node_count
+            .saturating_mul(index.flash_layout.node_bytes) as u64;
+        let mut data_file = File::open(
+            index
+                .mmap_storage
+                .as_ref()
+                .expect("mmap storage set")
+                .file_group
+                .data_path(),
+        )?;
+        let file_len = data_file.metadata()?.len();
+        let mut cursor = expected_node_bytes;
+        if file_len >= expected_node_bytes + 8 {
+            data_file.seek(SeekFrom::Start(cursor))?;
+            let mut count_buf = [0u8; 8];
+            if data_file.read_exact(&mut count_buf).is_ok() {
+                let count = u64::from_le_bytes(count_buf) as usize;
+                let needed = expected_node_bytes
+                    .saturating_add(8)
+                    .saturating_add((count as u64).saturating_mul(8));
+                if file_len >= needed {
+                    for _ in 0..count {
+                        let mut id_buf = [0u8; 8];
+                        if data_file.read_exact(&mut id_buf).is_err() {
+                            break;
+                        }
+                        let row = u64::from_le_bytes(id_buf) as usize;
+                        if row < index.node_count {
+                            index.deleted_ids.insert(row);
+                        }
+                    }
+                    cursor = needed;
+                }
+            }
+        }
+
+        if file_len > cursor {
+            data_file.seek(SeekFrom::Start(cursor))?;
+            let mut flag = [0u8; 1];
+            if data_file.read_exact(&mut flag).is_ok() && flag[0] == 1 {
+                let mut len_buf = [0u8; 8];
+                if data_file.read_exact(&mut len_buf).is_ok() {
+                    let code_len = u64::from_le_bytes(len_buf) as usize;
+                    let mut codes = vec![0u8; code_len];
+                    if data_file.read_exact(&mut codes).is_ok() {
+                        let mut dim_buf = [0u8; 8];
+                        let mut bit_buf = [0u8; 8];
+                        let mut min_buf = [0u8; 4];
+                        let mut max_buf = [0u8; 4];
+                        let mut scale_buf = [0u8; 4];
+                        let mut offset_buf = [0u8; 4];
+                        if data_file.read_exact(&mut dim_buf).is_ok()
+                            && data_file.read_exact(&mut bit_buf).is_ok()
+                            && data_file.read_exact(&mut min_buf).is_ok()
+                            && data_file.read_exact(&mut max_buf).is_ok()
+                            && data_file.read_exact(&mut scale_buf).is_ok()
+                            && data_file.read_exact(&mut offset_buf).is_ok()
+                        {
+                            let sq_dim = u64::from_le_bytes(dim_buf) as usize;
+                            let sq_bit = u64::from_le_bytes(bit_buf) as usize;
+                            let mut sq =
+                                crate::quantization::sq::ScalarQuantizer::new(sq_dim, sq_bit);
+                            sq.min_val = f32::from_le_bytes(min_buf);
+                            sq.max_val = f32::from_le_bytes(max_buf);
+                            sq.scale = f32::from_le_bytes(scale_buf);
+                            sq.offset = f32::from_le_bytes(offset_buf);
+                            index.sq8_codes = codes;
+                            index.sq8_quantizer = Some(sq);
+                        }
+                    }
+                }
+            }
+        }
+        if index.pq_code_size > 0 {
+            index.disk_pq_codes = index.load_disk_pq_codes()?;
+        }
+        if index.config.cache_all_on_load {
+            index.prime_loaded_node_cache()?;
+        }
+        if index.config.warm_up {
+            index.warm_up_cache();
+        }
+        Ok(index)
+    }
+
     fn compute_build_max_degree(&self) -> usize {
         let slack = self.config.build_degree_slack_pct.max(100);
         self.config
@@ -1747,6 +2068,7 @@ impl PQFlashIndex {
                 file_group,
                 page_cache,
             }),
+            mmap_storage: None,
             loaded_node_cache: None,
             deleted_ids: HashSet::new(),
             sq8_quantizer: None,
@@ -2617,7 +2939,7 @@ impl PQFlashIndex {
             entry_point_count: self.entry_points.len(),
             uses_flash_layout: true,
             uses_beam_search_io: true,
-            uses_mmap_backed_pages: self.storage.is_some(),
+            uses_mmap_backed_pages: self.storage.is_some() || self.mmap_storage.is_some(),
             has_page_cache: self.storage.is_some(),
             native_comparable: false,
             comparability_reason: "PQFlashIndex exposes a real flash-layout/page-cache AISAQ skeleton, but graph construction and IO remain simplified rather than native-comparable DiskANN",
@@ -2641,7 +2963,10 @@ impl PQFlashIndex {
     }
 
     pub fn file_group(&self) -> Option<&FileGroup> {
-        self.storage.as_ref().map(|storage| &storage.file_group)
+        self.storage
+            .as_ref()
+            .map(|storage| &storage.file_group)
+            .or_else(|| self.mmap_storage.as_ref().map(|storage| &storage.file_group))
     }
 
     pub fn page_cache(&self) -> Option<&PageCache> {
@@ -2801,16 +3126,31 @@ impl PQFlashIndex {
 
     #[inline]
     fn prefetch_node(&self, node_id: u32) {
-        let Some(storage) = &self.storage else {
-            return;
-        };
         if node_id as usize >= self.len() {
             return;
         }
-        let offset = node_id as usize * self.flash_layout.node_bytes;
-        let _ = storage
-            .page_cache
-            .prefetch(offset, self.flash_layout.node_bytes);
+        if let Some(storage) = &self.storage {
+            let offset = node_id as usize * self.flash_layout.node_bytes;
+            let _ = storage
+                .page_cache
+                .prefetch(offset, self.flash_layout.node_bytes);
+        }
+    }
+
+    /// Prefetch upcoming sectors for the next beam-search round.
+    /// On the sync/PageCache path this warms the page cache; on direct mmap it is a no-op.
+    #[cfg(feature = "async-io")]
+    pub async fn prefetch_sectors(&self, node_ids: &[u32]) -> Result<()> {
+        for &node_id in node_ids {
+            self.prefetch_node(node_id);
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "async-io"))]
+    pub async fn prefetch_sectors(&self, node_ids: &[u32]) -> Result<()> {
+        let _ = node_ids;
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -3568,7 +3908,7 @@ impl PQFlashIndex {
     }
 
     fn materialize_storage(&mut self) -> Result<()> {
-        if self.storage.is_none() {
+        if self.storage.is_none() && self.mmap_storage.is_none() {
             return Ok(());
         }
 
@@ -3605,20 +3945,24 @@ impl PQFlashIndex {
         }
         self.vectors = vectors;
         self.storage = None;
+        self.mmap_storage = None;
         self.loaded_node_cache = None;
         self.disk_pq_codes.clear();
         Ok(())
     }
 
     fn load_disk_pq_codes(&self) -> Result<Vec<u8>> {
-        let Some(storage) = &self.storage else {
-            return Ok(Vec::new());
-        };
         if self.pq_code_size == 0 || self.node_count == 0 {
             return Ok(Vec::new());
         }
 
-        let bytes = fs::read(storage.file_group.data_path())?;
+        let bytes = if let Some(storage) = &self.storage {
+            fs::read(storage.file_group.data_path())?
+        } else if let Some(storage) = &self.mmap_storage {
+            storage.mmap.to_vec()
+        } else {
+            return Ok(Vec::new());
+        };
         let expected = self.node_count.saturating_mul(self.flash_layout.node_bytes);
         if bytes.len() < expected {
             return Err(KnowhereError::Codec(format!(
@@ -3651,17 +3995,14 @@ impl PQFlashIndex {
     }
 
     fn prime_loaded_node_cache(&mut self) -> Result<()> {
-        let Some(storage) = &self.storage else {
+        if self.storage.is_none() && self.mmap_storage.is_none() {
             return Ok(());
-        };
+        }
         let mut cache = HashMap::with_capacity(self.node_count);
+        let mut io = BeamSearchIO::new(&self.flash_layout, &self.config);
         for node_id in 0..self.node_count {
-            let offset = node_id * self.flash_layout.node_bytes;
-            let page_read = storage
-                .page_cache
-                .read(offset, self.flash_layout.node_bytes)?;
-            let loaded = self.deserialize_node(node_id as u32, &page_read.bytes)?;
-            cache.insert(node_id as u32, std::sync::Arc::new(loaded));
+            let loaded = self.load_node(node_id as u32, NodeAccessMode::None, &mut io)?;
+            cache.insert(node_id as u32, loaded);
         }
         self.loaded_node_cache = Some(cache);
         Ok(())
@@ -3716,6 +4057,33 @@ impl PQFlashIndex {
                             loaded.inline_pq.len(),
                             page_read.pages_loaded,
                         );
+                    }
+                }
+            }
+            return Ok(std::sync::Arc::new(loaded));
+        }
+
+        if let Some(storage) = &self.mmap_storage {
+            let offset = node_id as usize * self.flash_layout.node_bytes;
+            let end = offset + self.flash_layout.node_bytes;
+            let bytes = storage.mmap.get(offset..end).ok_or_else(|| {
+                KnowhereError::Storage(format!(
+                    "direct mmap read [{}..{}) exceeds file size {}",
+                    offset,
+                    end,
+                    storage.mmap.len()
+                ))
+            })?;
+            let loaded = self.deserialize_node(node_id, bytes)?;
+            let pages_loaded = pages_touched(offset, self.flash_layout.node_bytes, self.flash_layout.page_size);
+            match access_mode {
+                NodeAccessMode::None => {}
+                NodeAccessMode::Node => {
+                    io.record_node_access(node_id, self.flash_layout.node_bytes, pages_loaded)
+                }
+                NodeAccessMode::Pq => {
+                    if !loaded.inline_pq.is_empty() {
+                        io.record_pq_access(node_id, loaded.inline_pq.len(), pages_loaded);
                     }
                 }
             }
@@ -4905,6 +5273,49 @@ mod tests {
     }
 
     #[test]
+    fn test_import_native_disk_index_roundtrip() {
+        let dim = 8usize;
+        let n = 24usize;
+        let k = 4usize;
+        let mut rng = StdRng::seed_from_u64(91);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let queries: Vec<f32> = (0..8 * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+
+        let config = AisaqConfig {
+            max_degree: 8,
+            search_list_size: 16,
+            disk_pq_dims: 0,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, dim).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+
+        let dir = make_temp_dir("pqflash_native_disk_roundtrip");
+        fs::create_dir_all(&dir).unwrap();
+        let prefix = dir.join("native");
+        index
+            .export_native_disk_index(prefix.to_str().unwrap())
+            .unwrap();
+
+        let imported = PQFlashIndex::import_native_disk_index(prefix.to_str().unwrap()).unwrap();
+        assert_eq!(imported.len(), index.len());
+        assert_eq!(imported.entry_points, index.entry_points);
+        assert_eq!(imported.node_neighbor_counts, index.node_neighbor_counts);
+        assert_eq!(imported.node_neighbor_ids, index.node_neighbor_ids);
+        assert_eq!(imported.vectors.len(), index.vectors.len());
+        for (a, b) in imported.vectors.iter().zip(index.vectors.iter()) {
+            assert!((a - b).abs() < 1e-6);
+        }
+
+        let original_results = run_batch_search(&index, &queries, dim, k);
+        let imported_results = run_batch_search(&imported, &queries, dim, k);
+        assert_eq!(original_results.ids, imported_results.ids);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn test_pqflash_disk_path_after_load() {
         let dim = 16usize;
         let n = 300usize;
@@ -4930,6 +5341,39 @@ mod tests {
         let loaded = PQFlashIndex::load(&dir).unwrap();
 
         assert!(loaded.vectors.is_empty(), "loaded index should use disk-backed path");
+        let results = run_batch_search(&loaded, &queries, dim, k);
+        assert_eq!(results.ids.len(), nq * k);
+        assert!(results.ids.iter().all(|&id| id >= 0));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_pqflash_disk_path_after_load_with_mmap() {
+        let dim = 16usize;
+        let n = 300usize;
+        let nq = 20usize;
+        let k = 5usize;
+        let mut rng = StdRng::seed_from_u64(84);
+        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let queries: Vec<f32> = (0..nq * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+
+        let config = AisaqConfig {
+            max_degree: 16,
+            search_list_size: 50,
+            disk_pq_dims: 0,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, dim).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+
+        let dir = make_temp_dir("pqflash_disk_path_mmap");
+        fs::create_dir_all(&dir).unwrap();
+        index.save(&dir).unwrap();
+        let loaded = PQFlashIndex::load_with_mmap(&dir).unwrap();
+
+        assert!(loaded.vectors.is_empty(), "mmap-backed load should stay disk-backed");
+        assert!(loaded.mmap_storage.is_some(), "direct mmap storage should be set");
         let results = run_batch_search(&loaded, &queries, dim, k);
         assert_eq!(results.ids.len(), nq * k);
         assert!(results.ids.iter().all(|&id| id >= 0));
