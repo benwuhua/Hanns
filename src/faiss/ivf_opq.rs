@@ -615,6 +615,13 @@ mod tests {
         assert!(result.ids[0] != -1); // Should find at least one result
     }
 
+    #[test]
+    #[ignore = "IvfOpqIndex has no save/load persistence API yet"]
+    fn test_ivf_opq_save_load_roundtrip() {
+        // Coverage placeholder for TEST-SAVELOAD-MISSING (ivf_opq).
+        // IvfOpqIndex currently exposes no save/load methods to exercise.
+    }
+
     // Note: Standard OPQ mode (use_residual=false) requires more training data
     // and is tested separately in opq module tests
 }

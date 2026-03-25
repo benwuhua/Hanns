@@ -165,4 +165,18 @@ mod tests {
         let result = index.search(query, 10).unwrap();
         assert_eq!(result.len(), 10);
     }
+
+    #[test]
+    #[ignore = "DiskAnnSqIndex has no range_search API yet"]
+    fn test_diskann_sq_range_search() {
+        // Coverage placeholder for TEST-DISKANN-SQ-COVERAGE.
+        // DiskAnnSqIndex currently exposes only top-k search.
+    }
+
+    #[test]
+    #[ignore = "DiskAnnSqIndex has no save/load persistence API yet"]
+    fn test_diskann_sq_save_load() {
+        // Coverage placeholder for TEST-SAVELOAD-MISSING / TEST-DISKANN-SQ-COVERAGE.
+        // DiskAnnSqIndex currently exposes no save/load methods to exercise.
+    }
 }

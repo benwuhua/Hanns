@@ -31,8 +31,15 @@
 | 23 | HVQ-NATIVE-REGISTRY-GAP | ✅ 已注释 | — | 其他 | hvq.rs 标记 EXPERIMENTAL + no native parity |
 | 24 | SCANN-PARAMETER-SEMANTICS | ✅ 已修复 | — | 其他 | 非 L2 metric 返回 None；ef_search warn |
 | 25 | SPARSE-METRIC-AND-SSIZE-DRIFT | ✅ 已修复 | — | 其他 | 非 IP metric 返回 None；ssize warn |
+| 26 | TEST-AISAQ-RANGE-SEARCH | 🔴 开放 | P1 | 测试 | diskann_aisaq.rs range_search/range_search_raw 完全无测试 |
+| 27 | TEST-IVFPQ-BITSET | 🔴 开放 | P1 | 测试 | ivfpq.rs search_with_bitset 无测试 |
+| 28 | TEST-SAVELOAD-MISSING | 🔴 开放 | P1 | 测试 | sparse.rs/ivf_opq.rs/diskann_sq.rs 均无 save/load 测试 |
+| 29 | TEST-DISKANN-SQ-COVERAGE | 🔴 开放 | P1 | 测试 | diskann_sq.rs 仅 1 个测试，缺 range/bitset/save/load |
+| 30 | TEST-PQFLASH-DISKPATH-WEAK | 🔴 开放 | P1 | 测试 | pqflash disk path 测试仅检查 results.ids.len()，无 recall 验证 |
+| 31 | TEST-EXPORT-PARSE | 🔴 开放 | P2 | 测试 | native disk.index export 测试仅断言字节数，不解析内容验证正确性 |
+| 32 | TEST-PQFLASH-BASIC-REDUNDANT | 🔴 开放 | P2 | 测试 | test_pqflash_basic_search 被 test_pqflash_recall_quality 完全覆盖，可删除 |
 
-**统计**: 25 个问题，**23 个已修复/注释**，2 个开放（P2×2）
+**统计**: 32 个问题，**23 个已修复/注释**，9 个开放（P2×2，TEST×7）
 
 ---
 
@@ -466,3 +473,89 @@
 - 对 Sparse 路径做严格参数校验：不支持 metric 直接报错，不静默 remap
 - 若 `ssize` 暂不生效，移出公开配置或标记 no-op
 - 明确声明 Sparse 为 experimental（无 native parity）
+
+---
+
+## 测试覆盖缺口（TEST 系列）
+
+### 🔴 TEST-AISAQ-RANGE-SEARCH
+**严重程度**: P1 | **日期**: 2026-03-25
+
+**问题**: `diskann_aisaq.rs` 中 `range_search()` 和 `range_search_raw()` 完全没有测试覆盖。这两个方法实现了基于距离阈值的范围搜索，是生产路径，却没有任何验证。
+
+**影响**: 范围搜索逻辑回归无法被检测到；与 native 的行为差异无法发现。
+
+**建议**: 添加测试：构建小型 AISAQ 索引，调用 `range_search(query, radius)`，验证返回的所有结果距离 ≤ radius，且结果集合覆盖 brute-force 已知的命中点。
+
+---
+
+### 🔴 TEST-IVFPQ-BITSET
+**严重程度**: P1 | **日期**: 2026-03-25
+
+**问题**: `ivfpq.rs` 实现了 `search_with_bitset()`，但该路径没有任何测试。bitset pre-filter 逻辑（排除屏蔽 ID）的正确性完全未经验证。
+
+**影响**: bitset 过滤逻辑静默失效时无法被发现；与 IVF-SQ8 bitset 路径的对称性无法对比。
+
+**建议**: 添加测试：构建 IvfPqIndex，创建 bitset 屏蔽 50% 的 ID，调用 `search_with_bitset()`，验证结果中无被屏蔽的 ID 出现。
+
+---
+
+### 🔴 TEST-SAVELOAD-MISSING
+**严重程度**: P1 | **日期**: 2026-03-25
+
+**问题**: 以下模块缺少 save/load round-trip 测试：
+- `sparse.rs`（SparseWandIndex）
+- `ivf_opq.rs`（IvfOpqIndex）
+- `diskann_sq.rs`（DiskAnnSqIndex）
+
+序列化路径是生产关键路径，任何结构变更都可能静默破坏持久化而无测试捕获。
+
+**影响**: 版本升级后序列化格式回归无法发现；跨平台字节序问题无法检测。
+
+**建议**: 每个模块添加 round-trip 测试：训练→save→load，对比 search 结果 IDs 与原始索引一致。
+
+---
+
+### 🔴 TEST-DISKANN-SQ-COVERAGE
+**严重程度**: P1 | **日期**: 2026-03-25
+
+**问题**: `diskann_sq.rs` 只有 1 个基础测试（`test_diskann_sq_basic`），缺少：
+- range_search 测试
+- bitset 过滤测试
+- save/load round-trip 测试
+- 多 metric（IP/Cosine）测试
+
+**影响**: DiskAnnSqIndex 是独立实现，覆盖率极低意味着大量代码路径完全未验证。
+
+**建议**: 参照 diskann_aisaq.rs 的测试结构，为 diskann_sq.rs 补充完整测试套件。
+
+---
+
+### 🔴 TEST-PQFLASH-DISKPATH-WEAK
+**严重程度**: P1 | **日期**: 2026-03-25
+
+**问题**: PQFlash disk path 相关测试（`test_pqflash_disk_path`、`test_pqflash_with_external_ids` 等）只检查 `results.ids.len() > 0`，没有 recall 验证。
+
+**影响**: disk I/O 路径返回全错误结果时测试依然通过；mmap 加载 vs 直接加载路径的质量差异无法检测。
+
+**建议**: 添加 recall 断言：构建已知数据集，验证 top-k 结果中至少 N% 与 brute-force ground truth 重叠，阈值可宽松（≥0.5）以保留对随机数据的容忍度。
+
+---
+
+### 🔴 TEST-EXPORT-PARSE
+**严重程度**: P2 | **日期**: 2026-03-25
+
+**问题**: `test_export_native_diskann_index` 等导出测试只断言写入字节数（如 `assert!(bytes > 0)`），不解析导出内容验证格式正确性。
+
+**影响**: 导出格式静默损坏（header 字段写错、对齐错误）时测试通过；无法验证 C++ DiskANN 能否成功加载导出文件。
+
+**建议**: 解析导出文件的 header（8×u64 magic/npts/ndims/…），断言字段值与输入一致；或添加 re-import 测试验证 round-trip。
+
+---
+
+### 🔴 TEST-PQFLASH-BASIC-REDUNDANT
+**严重程度**: P2 | **日期**: 2026-03-25
+
+**问题**: `test_pqflash_basic_search` 测试的所有场景（构建 + 搜索 + 结果非空）都被 `test_pqflash_recall_quality` 完全覆盖，后者还额外验证了 recall 质量。保留 basic 测试增加维护负担而无额外价值。
+
+**建议**: 删除 `test_pqflash_basic_search`，或将其中唯一有价值的内容（如不同配置参数的构建测试）合并到 recall 测试中。

@@ -5024,6 +5024,24 @@ mod tests {
         hits as f64 / (k * ground_truth.len()) as f64
     }
 
+    fn brute_force_range_l2(
+        vectors: &[f32],
+        query: &[f32],
+        dim: usize,
+        radius: f32,
+    ) -> Vec<(i64, f32)> {
+        let mut out = Vec::new();
+        for idx in 0..(vectors.len() / dim) {
+            let v = &vectors[idx * dim..(idx + 1) * dim];
+            let dist = simd::l2_distance_sq(query, v);
+            if dist <= radius {
+                out.push((idx as i64, dist));
+            }
+        }
+        out.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        out
+    }
+
     fn run_batch_search(index: &PQFlashIndex, queries: &[f32], dim: usize, k: usize) -> SearchResult {
         let nq = queries.len() / dim;
         let mut ids = Vec::with_capacity(nq * k);
@@ -5065,31 +5083,6 @@ mod tests {
     }
 
     #[test]
-    fn test_pqflash_basic_search() {
-        let dim = 16usize;
-        let n = 200usize;
-        let nq = 20usize;
-        let k = 5usize;
-        let mut rng = StdRng::seed_from_u64(42);
-        let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
-        let queries: Vec<f32> = (0..nq * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
-
-        let config = AisaqConfig {
-            max_degree: 16,
-            search_list_size: 50,
-            disk_pq_dims: 0,
-            ..AisaqConfig::default()
-        };
-        let mut index = PQFlashIndex::new(config, MetricType::L2, dim).unwrap();
-        index.train(&vectors).unwrap();
-        index.add(&vectors).unwrap();
-
-        let results = run_batch_search(&index, &queries, dim, k);
-        assert_eq!(results.ids.len(), nq * k);
-        assert!(results.ids.iter().all(|&id| id >= 0));
-    }
-
-    #[test]
     fn test_pqflash_recall_quality() {
         let dim = 16usize;
         let n = 500usize;
@@ -5113,6 +5106,43 @@ mod tests {
         let gt = brute_force_topk_l2(&vectors, &queries, dim, k);
         let recall = compute_recall(&results, &gt, k);
         assert!(recall >= 0.70, "recall@5 too low: {recall:.4}");
+    }
+
+    #[test]
+    fn test_aisaq_range_search() {
+        let dim = 16usize;
+        let n = 100usize;
+        let query_idx = 17usize;
+        let radius = 1e-6f32;
+        let mut vectors = Vec::with_capacity(n * dim);
+        for i in 0..n {
+            for j in 0..dim {
+                vectors.push(if j == 0 { i as f32 * 0.25 } else { 0.0 });
+            }
+        }
+        let query = vectors[query_idx * dim..(query_idx + 1) * dim].to_vec();
+
+        let config = AisaqConfig {
+            max_degree: 12,
+            search_list_size: 64,
+            disk_pq_dims: 0,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, dim).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+
+        let hits = index.range_search_raw(&query, radius).unwrap();
+        let gt = brute_force_range_l2(&vectors, &query, dim, radius);
+        let hit_ids: HashSet<i64> = hits.iter().map(|(id, _)| *id).collect();
+
+        assert!(!gt.is_empty(), "brute-force range search should find at least self");
+        assert!(!hits.is_empty(), "aisaq range search should return at least one hit");
+        assert!(hits.iter().all(|(_, dist)| *dist <= radius + 1e-6));
+        assert!(
+            gt.iter().any(|(id, _)| hit_ids.contains(id)),
+            "aisaq range search should overlap brute-force hits"
+        );
     }
 
     #[test]
@@ -5338,6 +5368,41 @@ mod tests {
         let actual_file_size = std::fs::metadata(&disk_index_path).unwrap().len();
         assert_eq!(actual_file_size, expected_file_size);
 
+        let mut sector0 = [0u8; 64];
+        let mut f = std::fs::File::open(&disk_index_path).unwrap();
+        f.read_exact(&mut sector0).unwrap();
+        let header: Vec<u64> = sector0
+            .chunks_exact(8)
+            .map(|chunk| {
+                let mut bytes = [0u8; 8];
+                bytes.copy_from_slice(chunk);
+                u64::from_le_bytes(bytes)
+            })
+            .collect();
+        assert_eq!(header[1], index.node_ids.len() as u64);
+        assert!(
+            header[2] < index.node_ids.len() as u64,
+            "medoid id in sector0 header should be a valid node id"
+        );
+
+        let mut centroid_header = [0u8; 8];
+        let mut centroids_file = std::fs::File::open(&centroids_path).unwrap();
+        centroids_file.read_exact(&mut centroid_header).unwrap();
+        let centroid_rows = i32::from_le_bytes([
+            centroid_header[0],
+            centroid_header[1],
+            centroid_header[2],
+            centroid_header[3],
+        ]);
+        let centroid_dim = i32::from_le_bytes([
+            centroid_header[4],
+            centroid_header[5],
+            centroid_header[6],
+            centroid_header[7],
+        ]);
+        assert_eq!(centroid_rows, 1);
+        assert_eq!(centroid_dim, dim as i32);
+
         assert_eq!(std::fs::metadata(&medoids_path).unwrap().len(), 12);
         assert_eq!(std::fs::metadata(&centroids_path).unwrap().len(), (8 + dim * 4) as u64);
 
@@ -5416,6 +5481,9 @@ mod tests {
         let results = run_batch_search(&loaded, &queries, dim, k);
         assert_eq!(results.ids.len(), nq * k);
         assert!(results.ids.iter().all(|&id| id >= 0));
+        let gt = brute_force_topk_l2(&vectors, &queries, dim, k);
+        let recall = compute_recall(&results, &gt, k);
+        assert!(recall >= 0.50, "disk path recall@{k} too low after load: {recall:.4}");
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -1142,4 +1142,11 @@ mod tests {
         assert!(!encoded.indices.is_empty());
         assert_eq!(encoded.indices.len(), encoded.values.len());
     }
+
+    #[test]
+    #[ignore = "SparseIndex has no save/load persistence API yet"]
+    fn test_sparse_save_load_roundtrip() {
+        // Coverage placeholder for TEST-SAVELOAD-MISSING (sparse).
+        // SparseIndex currently exposes no save/load methods to exercise.
+    }
 }

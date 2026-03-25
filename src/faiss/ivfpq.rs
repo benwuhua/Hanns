@@ -1869,6 +1869,14 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "IvfPqIndex does not expose search_with_bitset/filter-aware search yet"]
+    fn test_ivfpq_search_with_bitset() {
+        // Coverage placeholder for TEST-IVFPQ-BITSET.
+        // The review requested bitset filtering, but IvfPqIndex currently has
+        // no search_with_bitset API and its SearchRequest path is not filter-aware.
+    }
+
+    #[test]
     fn test_import_faiss_ivfpq_roundtrip_via_raw_bytes() {
         fn push_u8(buf: &mut Vec<u8>, v: u8) {
             buf.push(v);
