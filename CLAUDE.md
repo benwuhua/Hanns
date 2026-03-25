@@ -170,31 +170,32 @@ ssh knowhere-x86-hk-proxy "cd /data/work/knowhere-rs-src && CARGO_TARGET_DIR=/da
 
 ---
 
-## Benchmark Baselines (authority: x86, 2026-03-18, target-cpu=native)
+## Benchmark Baselines (authority: x86, 2026-03-25, target-cpu=native)
 
-Note: `.cargo/config.toml` now sets `target-cpu=native` for x86_64+aarch64. All new benchmarks reflect this.
+Note: `.cargo/config.toml` sets `target-cpu=native` for x86_64+aarch64. All benchmarks reflect this.
+Previous baselines (2026-03-18) shown in parentheses where significantly changed.
 
-| Index | Scale | Build | QPS (x86) | QPS (Mac) |
-|-------|-------|-------|-----------|-----------|
-| HNSW (benchmark, ef=50, 10K) | 10K | — | **28,641** | ~41,746 |
-| HNSW (ef=60, recall=0.953, 1M) | 1M | — | **33,406** | — |
-| PQFlash NoPQ | 1M | 116.8s | **9,648** | 21,921 |
-| PQFlash PQ32 | 1M | 238.6s | **8,002** | 18,431 |
-| HNSW vs native | — | — | **2.099x** faster (near-equal recall, ef=60) | — |
-| IVF-SQ8 (nprobe=256) | 100K | — | **397** | 1,180 |
-| ScaNN (reorder_k=1600) | 100K | — | **28** | 41 |
+| Index | Scale | Build | QPS (x86) | Notes |
+|-------|-------|-------|-----------|-------|
+| HNSW (10K) | 10K | — | **27,505** | benchmark fn, ef=50 |
+| PQFlash NoPQ | 10K | 4.26s | **10,518** | |
+| PQFlash PQ32 | 10K | 13.47s | **5,214** | |
+| DiskANN 100K | 100K | 117.8s | **8,881** | L=128, R=48 |
+| PQFlash NoPQ | 100K | 0.1s | **698,350** | |
+| PQFlash PQ32 | 100K | 92.9s | **142,476** | |
+| PQFlash NoPQ | 1M | 3.7s | **25,444** | (was 9,648) |
+| PQFlash PQ32 | 1M | 210.3s | **105,515** | **(was 8,002 — 13x gain from parallel build)** |
+| PQFlash NoPQ+SQ8 | 1M | 4.2s | **26,922** | new: SQ8 prefilter path |
+| IVF-SQ8 (nprobe=32) | 1M | 122.3s | **10,888** | recall@10=0.230 |
 
 ---
 
-## Active Task Queue (AISAQ Phase 2)
+## Issue Tracker
 
-See `TASK_QUEUE.md` for full list. Current priority:
+See `docs/ISSUES.md` — 25/25 issues resolved (2026-03-25).
 
-1. **AISAQ-CAP-001** [P0]: Exact rerank — post-beam raw float re-sort (recall ceiling fix)
-2. **AISAQ-CAP-002** [P1]: External ID mapping (i64 ↔ u32)
-3. **AISAQ-CAP-003** [P1]: On-disk persistence (save/load)
-4. **AISAQ-CAP-004** [P1]: RangeSearch
-5. **IVFPQ-FIX-001** [P3]: IVF-PQ recall < 0.8 root cause
+All P0 and P1 issues closed. Remaining work is x86 authority HNSW 1M verification
+and potential recall improvement for IVF-SQ8 1M (recall@10=0.230 at nprobe=32).
 
 ---
 
