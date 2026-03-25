@@ -82,7 +82,7 @@ fn benchmark_hnsw_index() {
 
     // Benchmark add
     let start = Instant::now();
-    index.add(&vectors, None).unwrap();
+    index.add_parallel(&vectors, None, None).unwrap();
     let add_time = start.elapsed();
     println!("Add {} vectors: {:?}", NUM_VECTORS, add_time);
     println!(
@@ -356,6 +356,7 @@ fn benchmark_ivf_sq8() {
     {
         println!("batch parallel (nprobe=32): skipped (feature \"parallel\" not enabled)");
     }
+
 }
 
 fn benchmark_ivf_sq8_1m() {
@@ -479,6 +480,61 @@ fn benchmark_ivf_sq8_1m() {
     #[cfg(not(feature = "parallel"))]
     {
         println!("batch parallel (nprobe=32): skipped (feature \"parallel\" not enabled)");
+    }
+
+    // nlist=4096 vs nlist=1024 at fixed nprobe=256
+    {
+        let mut params2 = IndexParams::default();
+        params2.nlist = Some(4096);
+        params2.nprobe = Some(256);
+        let cfg2 = IndexConfig {
+            index_type: IndexType::IvfSq8,
+            metric_type: MetricType::L2,
+            data_type: knowhere_rs::api::DataType::Float,
+            dim: DIM,
+            params: params2,
+        };
+        let mut idx2 = IvfSq8Index::new(&cfg2).unwrap();
+
+        let t = Instant::now();
+        idx2.train(&base).unwrap();
+        idx2.add(&base, None).unwrap();
+        let build_s = t.elapsed().as_secs_f64();
+
+        let req2 = SearchRequest {
+            top_k: TOP_K,
+            nprobe: 256,
+            ..Default::default()
+        };
+
+        #[cfg(feature = "parallel")]
+        let qps2 = {
+            let t2 = Instant::now();
+            let _ = idx2.search_parallel(&qps_queries, &req2, 0).unwrap();
+            (QPS_QUERIES as f64 / t2.elapsed().as_secs_f64().max(f64::EPSILON)).round() as u64
+        };
+
+        #[cfg(not(feature = "parallel"))]
+        let qps2 = {
+            let t2 = Instant::now();
+            for q in qps_queries.chunks(DIM) {
+                let _ = idx2.search(q, &req2).unwrap();
+            }
+            (QPS_QUERIES as f64 / t2.elapsed().as_secs_f64().max(f64::EPSILON)).round() as u64
+        };
+
+        let mut recall_sum2 = 0.0;
+        for (i, gt_ids) in gt_top10.iter().enumerate() {
+            let q = &recall_queries[i * DIM..(i + 1) * DIM];
+            let res = idx2.search(q, &req2).unwrap();
+            recall_sum2 += overlap_at_k(gt_ids, &res.ids) as f64 / TOP_K as f64;
+        }
+        let recall2 = recall_sum2 / RECALL_QUERIES as f64;
+
+        println!(
+            "nlist=4096 nprobe=256: build={:.1}s recall@10={:.3} QPS={}",
+            build_s, recall2, qps2
+        );
     }
 }
 
@@ -1063,7 +1119,7 @@ fn benchmark_hnsw_1m() {
     index.train(&vectors).unwrap();
     let train_s = t_train.elapsed().as_secs_f64();
     let t_add = Instant::now();
-    index.add(&vectors, None).unwrap();
+    index.add_parallel(&vectors, None, None).unwrap();
     let add_s = t_add.elapsed().as_secs_f64();
     println!(
         "Build 1M vectors: {:.1}s  (train {:.1}s + add {:.1}s)",
