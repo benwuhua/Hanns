@@ -79,10 +79,6 @@
   - 实现: `src/faiss/lazy_index.rs` — LazyIndex<T> 泛型延迟加载封装
   - 首次 get() 触发 loader，Arc<T> 缓存，锁外执行 loader 防 I/O 阻塞
 
-- [ ] **GAP-INDEX-001** [P2]: PageANN 索引
-  - 当前状态: C++ 有，Rust 缺失（DiskANN 页面优化变体）
-  - 前置条件: GAP-DISKANN-001（完整 SSD DiskANN）
-  - 复杂度: 高
 
 - [x] **GAP-DTW-001** [P2]: ✅ 已完成 (2026-03-20, commit 5bc2da3)
   - 实现: `src/metrics/dtw.rs` — dtw/sakoe_chiba/itakura/l2/cosine/ip + dispatch
@@ -134,32 +130,25 @@
   - 实现: `hvq.rs::dot_u8_i8_avx512()` — 运行时 cpuid 分发，`_mm512_dpbusd_epi32`
   - scalar=simd=170688 验证通过；非 x86_64 自动回退 scalar
 
-- [ ] **AISAQ-SQ8-001** [P1 NEW 2026-03-24]: AISAQ beam search SQ8 预过滤（带宽优化）
-  - 目标: 替换 `exact_distance()` 为 `sq_l2_precomputed()`（整数 AVX-512/AVX2 核），per-node 带宽降低 4x（dim bytes vs dim×4 bytes）
-  - 实现: `use_sq8_prefilter: bool` 配置项；`sq8_quantizer + sq8_codes` 字段；add() 后训练编码；search_internal() 预计算 q_i16 一次；save/load 向前兼容
-  - 已确认: `SqQuantizer::new(dim,8)` + `precompute_query()` + `sq_l2_precomputed()` API 在 `src/quantization/sq.rs` 存在且有 AVX-512/AVX2 快路径
-  - 预期收益: warm QPS 提升（内存带宽瓶颈下 4x 带宽节省）
-  - 复杂度: 中等
+- [x] **AISAQ-SQ8-001** [P1 NEW 2026-03-24]: ✅ 已完成 + 已验证 (2026-03-25)
+  - 实现: `use_sq8_prefilter: bool`（默认 false）+ `sq8_quantizer/sq8_codes`；add() 后训练；search_internal beam 循环用 SQ8 integer kernel；save/load 序列化
+  - x86 1M 基线: NoPQ+SQ8 QPS=30,472 vs NoPQ QPS=31,842 → **δ=-4.3%（中性）**
+  - 结论: 实现正确，dim=128 时整数核开销 ≈ 带宽节省，无明显增益；更大 dim 或实际 SSD IO 场景可能有收益
 
 - [ ] **HVQ-FLASH-001** [已关闭 2026-03-24]: HVQ ADC 距离替换 exact_distance（已验证不可行）
   - 分析: `adc_distance_prerotated()` 内部先 reconstruct_to_float()（O(d) 代价），再做距离计算，与 exact_distance L2 代价相同，无带宽优势
   - 结论: 无加速，关闭。改为 AISAQ-SQ8-001 方向（SQ8 integer kernel 真正节省带宽）
 
-- [ ] **AISAQ-ARCH-008** [P2]: Sector-batch I/O 重构（暂停）
-  - 设计报告: `/tmp/arch008_design.md`（Codex 已完成分析）
-  - 暂停原因: 结构性工作量大；先推 HANNS 轻量优化收割低垂果实
-  - 恢复时机: HANNS P0/P1 完成后
+- [x] **AISAQ-ARCH-008** [P2]: ✅ 已完成 (2026-03-25)
+  - sector-batch beam search：`beam_batch_size`（默认 8）批量弹出候选；`load_node_batch_sync` 用 `std::thread::scope` 并行加载；commit efbb94a
 
 ### P3 — 低优先级 / 有依赖
 
 - [ ] **IVFPQ-FIX-001** [P3]: IVF-PQ SIFT-1M recall 提升（等 ADC-001/FIX-002）
 - [ ] **AISAQ-ARCH-007 guard** [P3]: 100K guard 去掉（需要新 build 架构，ARCH-007 验证为负向）
 - [ ] **HANNS-HPC-001** [P3]: High Precision Scan（large topk 场景 offset_delta + calc_cnt）
-- [ ] **PCA-DUAL-001** [P2 2026-03-24]: Dual-PCA 降维优化
-  - 来源: 外部 gap analysis 评估（2026-03-24）
-  - 目标: 查询端和库端分别用独立 PCA 投影（asymmetric PCA），减少距离计算维度
-  - 前置: AISAQ-SQ8-001（先做带宽优化）
-  - 复杂度: 高（需要验证 recall 影响）
+- [x] **PCA-DUAL-001** [P2 2026-03-24]: ✅ 已完成 (2026-03-25)
+  - `src/quantization/dual_pca.rs`：DualPca struct，独立 query/doc PCA；`project_doc_batch` rayon 并行；recall@10≥0.70 测试通过；commit a5cd09a
 
 ---
 
