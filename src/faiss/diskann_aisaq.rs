@@ -25,6 +25,8 @@ use crate::index::{Index, IndexError};
 use crate::search::{
     is_visited_thread_local, mark_thread_local, reset_thread_local, with_visited,
 };
+#[cfg(all(feature = "async-io", target_os = "linux"))]
+use crate::search::VisitedList;
 use crate::simd;
 #[cfg(all(feature = "async-io", target_os = "linux"))]
 use io_uring::{opcode, types, IoUring};
@@ -806,6 +808,25 @@ impl AisaqScratch {
         self.expanded.clear();
         self.accepted.clear();
     }
+}
+
+impl Default for AisaqScratch {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+#[cfg(all(feature = "async-io", target_os = "linux"))]
+struct BeamSearchState {
+    query: Vec<f32>,
+    k: usize,
+    pq_table: Option<Vec<f32>>,
+    sq8_query: Option<Vec<i16>>,
+    scratch: AisaqScratch,
+    visited: VisitedList,
+    io: BeamSearchIO,
+    pending_candidates: Vec<Candidate>,
+    done: bool,
 }
 
 #[inline]
@@ -2391,6 +2412,10 @@ impl PQFlashIndex {
         if n_queries == 0 {
             return Ok(SearchResult::new(vec![], vec![], 0.0));
         }
+        #[cfg(all(feature = "async-io", target_os = "linux"))]
+        if self.storage.is_some() && self.loaded_node_cache.is_none() && n_queries >= 2 {
+            return self.search_batch_grouped_uring(queries, k);
+        }
         let results: Result<Vec<SearchResult>> = queries
             .par_chunks(self.dim)
             .map(|q| self.search_internal(q, k, None))
@@ -2454,6 +2479,10 @@ impl PQFlashIndex {
         if n_queries == 0 {
             return Ok(SearchResult::new(vec![], vec![], 0.0));
         }
+        #[cfg(all(feature = "async-io", target_os = "linux"))]
+        if self.storage.is_some() && self.loaded_node_cache.is_none() && n_queries >= 2 {
+            return self.search_batch_grouped_uring(queries, k);
+        }
         let results: Result<Vec<SearchResult>> = queries
             .par_chunks(self.dim)
             .map(|q| self.search_internal(q, k, None))
@@ -2503,6 +2532,343 @@ impl PQFlashIndex {
             }
         }
         Ok(SearchResult::new(ids, distances, 0.0))
+    }
+
+    #[cfg(all(feature = "async-io", target_os = "linux"))]
+    fn prepare_pending_candidates(&self, state: &mut BeamSearchState) {
+        state.pending_candidates.clear();
+
+        let max_visit = self.compute_max_visit(state.k);
+        if state.scratch.expanded.len() >= max_visit {
+            state.done = true;
+            return;
+        }
+
+        let remaining_budget = max_visit.saturating_sub(state.scratch.expanded.len());
+        let batch_cap = self
+            .config
+            .beam_batch_size
+            .max(1)
+            .min(16)
+            .min(remaining_budget.max(1))
+            .min(state.scratch.frontier.len().max(1));
+
+        while state.pending_candidates.len() < batch_cap {
+            let Some(candidate) = state.scratch.frontier.pop() else {
+                break;
+            };
+            if state.visited.is_visited(candidate.node_id) {
+                continue;
+            }
+            state.visited.mark(candidate.node_id);
+            state.scratch.expanded.push(candidate);
+            if self.node_allowed(candidate.node_id, None) {
+                state.scratch.accepted.push(candidate);
+            }
+            state.pending_candidates.push(candidate);
+        }
+
+        state.done = state.pending_candidates.is_empty();
+    }
+
+    #[cfg(all(feature = "async-io", target_os = "linux"))]
+    fn init_beam_state(&self, query: &[f32], k: usize) -> Result<BeamSearchState> {
+        if !self.trained {
+            return Err(KnowhereError::IndexNotTrained(
+                "AISAQ index is not trained".to_string(),
+            ));
+        }
+        if self.is_empty() {
+            return Err(KnowhereError::InternalError(
+                "AISAQ index has no vectors".to_string(),
+            ));
+        }
+        if query.len() != self.dim {
+            return Err(KnowhereError::InvalidArg(format!(
+                "query dimension {} does not match index dimension {}",
+                query.len(),
+                self.dim
+            )));
+        }
+
+        let mut io = self.io_template.clone();
+        io.reset_stats();
+
+        let pq_table = self
+            .pq_encoder
+            .as_ref()
+            .map(|encoder| encoder.build_distance_table(query));
+        let pq_table_slice = pq_table.as_ref().map(|v| v.as_slice());
+        let sq8_query = if self.config.use_sq8_prefilter && self.metric_type == MetricType::L2 {
+            self.sq8_quantizer
+                .as_ref()
+                .map(|sq| sq.precompute_query(query))
+        } else {
+            None
+        };
+
+        let max_visit = self.compute_max_visit(k);
+        let mut scratch = {
+            let mut pool = self.scratch_pool.lock();
+            pool.pop()
+                .unwrap_or_else(|| AisaqScratch::new(max_visit.saturating_mul(2)))
+        };
+        scratch.reset();
+
+        for candidate in self.rank_entry_candidates(query, pq_table_slice, &mut io)? {
+            scratch.frontier.push(candidate);
+        }
+
+        let mut state = BeamSearchState {
+            query: query.to_vec(),
+            k,
+            pq_table,
+            sq8_query,
+            scratch,
+            visited: VisitedList::new(self.node_count),
+            io,
+            pending_candidates: Vec::new(),
+            done: false,
+        };
+        self.prepare_pending_candidates(&mut state);
+        Ok(state)
+    }
+
+    #[cfg(all(feature = "async-io", target_os = "linux"))]
+    fn advance_beam_state(
+        &self,
+        state: &mut BeamSearchState,
+        prefetched: &HashMap<u32, LoadedNode>,
+    ) -> Result<()> {
+        let pq_table_slice = state.pq_table.as_ref().map(|v| v.as_slice());
+
+        for candidate in state.pending_candidates.drain(..) {
+            let node = prefetched.get(&candidate.node_id).ok_or_else(|| {
+                KnowhereError::InternalError(format!(
+                    "missing prefetched node {} in grouped io_uring search",
+                    candidate.node_id
+                ))
+            })?;
+
+            let unseen: Vec<u32> = node
+                .neighbors
+                .iter()
+                .filter(|&&neighbor| !state.visited.is_visited(neighbor))
+                .copied()
+                .collect();
+            let mut neighbor_scores = Vec::with_capacity(unseen.len());
+            for &neighbor in &unseen {
+                let score = if let Some(neighbor_node) = self.node_ref(neighbor) {
+                    if let (Some(encoder), Some(table)) = (&self.pq_encoder, pq_table_slice) {
+                        if !neighbor_node.inline_pq.is_empty() {
+                            state
+                                .io
+                                .record_pq_read(neighbor, neighbor_node.inline_pq.len());
+                            encoder.compute_distance_with_table(table, neighbor_node.inline_pq)
+                        } else if let Some(ref q_i16) = state.sq8_query {
+                            self.sq8_prefilter_distance(q_i16, neighbor as usize)
+                                .unwrap_or_else(|| {
+                                    self.exact_distance(&state.query, neighbor_node.vector)
+                                })
+                        } else {
+                            self.exact_distance(&state.query, neighbor_node.vector)
+                        }
+                    } else if let Some(ref q_i16) = state.sq8_query {
+                        self.sq8_prefilter_distance(q_i16, neighbor as usize)
+                            .unwrap_or_else(|| {
+                                self.exact_distance(&state.query, neighbor_node.vector)
+                            })
+                    } else {
+                        self.exact_distance(&state.query, neighbor_node.vector)
+                    }
+                } else {
+                    self.coarse_distance(neighbor, &state.query, pq_table_slice, &mut state.io)?
+                };
+                neighbor_scores.push(Candidate {
+                    node_id: neighbor,
+                    score,
+                });
+            }
+
+            neighbor_scores.sort_by(|left, right| left.score.total_cmp(&right.score));
+            let expand_limit = self.compute_expand_limit(&state.io);
+            for neighbor in neighbor_scores.into_iter().take(expand_limit) {
+                state.scratch.frontier.push(neighbor);
+            }
+        }
+
+        if let Some(io_limit) = self.config.search_io_limit {
+            if state.io.pages_loaded_total() > io_limit {
+                state.done = true;
+                return Ok(());
+            }
+        }
+
+        if state.k > 0 && state.scratch.accepted.len() >= state.k {
+            if let (Some(frontier_best_dist), Some(result_kth_dist)) = (
+                state.scratch.frontier.peek().map(|c| c.score),
+                kth_best_score(&state.scratch.accepted, state.k),
+            ) {
+                if frontier_best_dist >= result_kth_dist * self.config.early_stop_alpha {
+                    state.done = true;
+                    return Ok(());
+                }
+            }
+        }
+
+        if state.scratch.expanded.len() >= self.compute_max_visit(state.k)
+            || state.scratch.frontier.is_empty()
+        {
+            state.done = true;
+            return Ok(());
+        }
+
+        self.prepare_pending_candidates(state);
+        Ok(())
+    }
+
+    #[cfg(all(feature = "async-io", target_os = "linux"))]
+    fn finalize_beam_state(&self, state: &mut BeamSearchState) -> Result<SearchResult> {
+        if state.scratch.accepted.len() < state.k {
+            self.fill_from_allowed_exact(
+                &state.query,
+                None,
+                |id| state.visited.is_visited(id),
+                state.k,
+                &mut state.scratch.accepted,
+                &mut state.io,
+            )?;
+        }
+
+        let rerank_pool = self.compute_rerank_pool_size(state.k, state.scratch.accepted.len());
+        state
+            .scratch
+            .accepted
+            .sort_by(|left, right| left.score.total_cmp(&right.score));
+        let mut scored = Vec::with_capacity(rerank_pool);
+        for candidate in state.scratch.accepted.iter().take(rerank_pool) {
+            if let Some(node) = self.node_ref(candidate.node_id) {
+                let distance = self.exact_distance(&state.query, node.vector);
+                scored.push((node.id, distance));
+            } else {
+                let node =
+                    self.load_node(candidate.node_id, NodeAccessMode::None, &mut state.io)?;
+                let distance =
+                    self.exact_distance_for_node_vector(&state.query, candidate.node_id, &node.vector)?;
+                scored.push((node.id, distance));
+            }
+        }
+
+        scored.sort_by(|left, right| left.1.total_cmp(&right.1));
+        scored.truncate(state.k.min(scored.len()));
+        let mut result = SearchResult::new(
+            scored.iter().map(|(id, _)| *id).collect(),
+            scored.iter().map(|(_, distance)| *distance).collect(),
+            0.0,
+        );
+        result.num_visited = state.io.stats().nodes_visited;
+        Ok(result)
+    }
+
+    #[cfg(all(feature = "async-io", target_os = "linux"))]
+    fn search_batch_grouped_uring(&self, queries: &[f32], k: usize) -> Result<SearchResult> {
+        let n_queries = queries.len() / self.dim;
+        if n_queries == 0 {
+            return Ok(SearchResult::new(vec![], vec![], 0.0));
+        }
+
+        let group_size = 8usize;
+        let mut all_ids = Vec::with_capacity(n_queries * k);
+        let mut all_distances = Vec::with_capacity(n_queries * k);
+        let mut total_visited = 0usize;
+
+        for group in queries.chunks(self.dim).collect::<Vec<_>>().chunks(group_size) {
+            let mut states = Vec::with_capacity(group.len());
+            for query in group {
+                match self.init_beam_state(query, k) {
+                    Ok(state) => states.push(state),
+                    Err(error) => {
+                        let mut pool = self.scratch_pool.lock();
+                        for state in &mut states {
+                            pool.push(std::mem::take(&mut state.scratch));
+                        }
+                        return Err(error);
+                    }
+                }
+            }
+
+            let group_result = (|| -> Result<()> {
+                while states.iter().any(|state| !state.done) {
+                    let mut all_node_ids: Vec<u32> = states
+                        .iter()
+                        .filter(|state| !state.done)
+                        .flat_map(|state| {
+                            state
+                                .pending_candidates
+                                .iter()
+                                .map(|candidate| candidate.node_id)
+                        })
+                        .collect();
+                    all_node_ids.sort_unstable();
+                    all_node_ids.dedup();
+
+                    if all_node_ids.is_empty() {
+                        break;
+                    }
+
+                    let raw_results = self.read_nodes_batch_ioring(&all_node_ids)?;
+                    let mut node_map = HashMap::with_capacity(all_node_ids.len());
+                    let mut pages_map = HashMap::with_capacity(all_node_ids.len());
+                    for (node_id, (bytes, pages_loaded)) in
+                        all_node_ids.iter().copied().zip(raw_results.into_iter())
+                    {
+                        let node = self.deserialize_node(node_id, &bytes)?;
+                        node_map.insert(node_id, node);
+                        pages_map.insert(node_id, pages_loaded);
+                    }
+
+                    for state in states.iter_mut().filter(|state| !state.done) {
+                        for candidate in &state.pending_candidates {
+                            if let Some(&pages_loaded) = pages_map.get(&candidate.node_id) {
+                                state.io.record_node_access(
+                                    candidate.node_id,
+                                    self.flash_layout.node_bytes,
+                                    pages_loaded,
+                                );
+                            }
+                        }
+                        self.advance_beam_state(state, &node_map)?;
+                    }
+                }
+
+                for state in &mut states {
+                    let result = self.finalize_beam_state(state)?;
+                    total_visited += result.num_visited;
+
+                    let row_len = k.min(result.ids.len()).min(result.distances.len());
+                    all_ids.extend_from_slice(&result.ids[..row_len]);
+                    for _ in row_len..k {
+                        all_ids.push(-1);
+                    }
+                    all_distances.extend_from_slice(&result.distances[..row_len]);
+                    for _ in row_len..k {
+                        all_distances.push(f32::MAX);
+                    }
+                }
+
+                Ok(())
+            })();
+
+            let mut pool = self.scratch_pool.lock();
+            for state in &mut states {
+                pool.push(std::mem::take(&mut state.scratch));
+            }
+            group_result?;
+        }
+
+        let mut result = SearchResult::new(all_ids, all_distances, 0.0);
+        result.num_visited = total_visited;
+        Ok(result)
     }
 
     fn search_internal(
