@@ -1,5 +1,7 @@
 //! Benchmark for KnowHere RS
 
+use std::fs::File;
+use std::io::Read;
 use std::time::Instant;
 
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
@@ -1216,6 +1218,171 @@ fn benchmark_aisaq_refine_passes() {
     }
 }
 
+fn read_fbin(path: &str) -> (usize, usize, Vec<f32>) {
+    let mut file = File::open(path).unwrap_or_else(|e| panic!("failed to open {path}: {e}"));
+    let mut header = [0u8; 8];
+    file.read_exact(&mut header)
+        .unwrap_or_else(|e| panic!("failed to read fbin header {path}: {e}"));
+    let n_vecs = u32::from_le_bytes(header[0..4].try_into().unwrap()) as usize;
+    let dim = u32::from_le_bytes(header[4..8].try_into().unwrap()) as usize;
+    let mut raw = vec![0u8; n_vecs * dim * 4];
+    file.read_exact(&mut raw)
+        .unwrap_or_else(|e| panic!("failed to read fbin payload {path}: {e}"));
+    let data = raw
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    (n_vecs, dim, data)
+}
+
+fn read_ibin(path: &str) -> (usize, usize, Vec<u32>) {
+    let mut file = File::open(path).unwrap_or_else(|e| panic!("failed to open {path}: {e}"));
+    let mut header = [0u8; 8];
+    file.read_exact(&mut header)
+        .unwrap_or_else(|e| panic!("failed to read ibin header {path}: {e}"));
+    let n_vecs = u32::from_le_bytes(header[0..4].try_into().unwrap()) as usize;
+    let k = u32::from_le_bytes(header[4..8].try_into().unwrap()) as usize;
+    let mut raw = vec![0u8; n_vecs * k * 4];
+    file.read_exact(&mut raw)
+        .unwrap_or_else(|e| panic!("failed to read ibin payload {path}: {e}"));
+    let data = raw
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    (n_vecs, k, data)
+}
+
+fn compute_recall_at_k(
+    results: &[i64],
+    gt: &[u32],
+    n_queries: usize,
+    k: usize,
+    gt_k: usize,
+) -> f64 {
+    if n_queries == 0 || k == 0 || gt_k == 0 {
+        return 0.0;
+    }
+
+    let mut total = 0usize;
+    let mut hits = 0usize;
+    for qi in 0..n_queries {
+        let result_row = &results[qi * k..(qi + 1) * k];
+        let gt_row = &gt[qi * gt_k..(qi + 1) * gt_k];
+        for &gt_id in gt_row.iter().take(k) {
+            total += 1;
+            if result_row.iter().any(|&rid| rid >= 0 && rid as u32 == gt_id) {
+                hits += 1;
+            }
+        }
+    }
+
+    if total == 0 {
+        0.0
+    } else {
+        hits as f64 / total as f64
+    }
+}
+
+fn benchmark_pqflash_sift1m() {
+    const SIFT_BASE: &str = "/data/work/datasets/sift-1m/base.fbin";
+    const SIFT_QUERY: &str = "/data/work/datasets/sift-1m/query.fbin";
+    const SIFT_GT: &str = "/data/work/datasets/sift-1m/gt.ibin";
+    const TOP_K: usize = 10;
+
+    if !std::path::Path::new(SIFT_BASE).exists() {
+        println!("\n=== PQFlash SIFT-1M Benchmark: SKIPPED (data not found) ===");
+        return;
+    }
+
+    println!("\n=== PQFlash SIFT-1M Benchmark ===");
+
+    let (base_n, base_dim, base) = read_fbin(SIFT_BASE);
+    let (query_n, query_dim, queries) = read_fbin(SIFT_QUERY);
+    let (gt_n, gt_k, gt) = read_ibin(SIFT_GT);
+
+    assert_eq!(base_dim, query_dim, "base/query dim mismatch");
+    assert_eq!(query_n, gt_n, "query/gt count mismatch");
+
+    let run = |label: &str, config: AisaqConfig| {
+        let mut index = PQFlashIndex::new(config, MetricType::L2, base_dim).unwrap();
+
+        let t0 = Instant::now();
+        index.train(&base).unwrap();
+        let train_s = t0.elapsed().as_secs_f64();
+
+        let t1 = Instant::now();
+        index.add(&base).unwrap();
+        let add_s = t1.elapsed().as_secs_f64();
+
+        let mut qps_samples = Vec::with_capacity(3);
+        let mut last_result = None;
+        for _ in 0..3 {
+            let start = Instant::now();
+            let result = index.search_batch(&queries, TOP_K).unwrap();
+            let elapsed = start.elapsed().as_secs_f64().max(f64::EPSILON);
+            qps_samples.push(query_n as f64 / elapsed);
+            last_result = Some(result);
+        }
+        let qps = qps_samples.iter().sum::<f64>() / qps_samples.len() as f64;
+        let recall = compute_recall_at_k(
+            &last_result.unwrap().ids,
+            &gt,
+            query_n,
+            TOP_K,
+            gt_k,
+        );
+
+        println!(
+            "[{label}] Build: {:.1}s + {:.1}s = {:.1}s",
+            train_s,
+            add_s,
+            train_s + add_s
+        );
+        let q0 = &queries[..base_dim];
+        let q0_result = index.search(q0, 10).unwrap();
+        println!("[{label}] query[0] returned IDs: {:?}", &q0_result.ids);
+        println!(
+            "[{label}] query[0] returned dists: {:?}",
+            q0_result
+                .distances
+                .iter()
+                .map(|d| format!("{:.1}", d))
+                .collect::<Vec<_>>()
+        );
+        let audit = index.scope_audit();
+        println!(
+            "[{label}] entry_point_count={}, node_count={}",
+            audit.entry_point_count, audit.node_count
+        );
+        println!("[{label}] audit: {:?}", audit);
+        println!("[{label}] QPS: {:.0}  Recall@10: {:.4}", qps, recall);
+    };
+
+    run(
+        "NoPQ",
+        AisaqConfig {
+            disk_pq_dims: 0,
+            search_list_size: 128,
+            cache_all_on_load: true,
+            random_init_edges: 8,
+            ..AisaqConfig::default()
+        },
+    );
+    run(
+        "PQ32",
+        AisaqConfig {
+            disk_pq_dims: 32,
+            rerank_expand_pct: 300,
+            search_list_size: 200,
+            cache_all_on_load: true,
+            random_init_edges: 8,
+            ..AisaqConfig::default()
+        },
+    );
+
+    println!("SIFT-1M PQFlash benchmark complete: base={base_n}, queries={query_n}");
+}
+
 fn main() {
     println!("KnowHere RS Benchmark");
     println!("=====================");
@@ -1238,6 +1405,7 @@ fn main() {
     benchmark_pqflash_100k();
     benchmark_pqflash_1m();
     benchmark_aisaq_refine_passes();
+    benchmark_pqflash_sift1m();
 
     println!("\n✅ Benchmark complete!");
 }
