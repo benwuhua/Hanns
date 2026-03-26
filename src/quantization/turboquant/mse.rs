@@ -96,8 +96,8 @@ impl TurboQuantMse {
     pub fn encode(&self, v: &[f32]) -> Vec<u8> {
         assert_eq!(v.len(), self.config.dim);
         let owned = self.preprocess_input(v);
-        let rotated = self.rotation.rotate(&owned);
-        let codes: Vec<u16> = rotated[..self.config.dim]
+        let rotated = self.rotation.rotate(&owned); // d_pad for Hadamard, dim for Dense
+        let codes: Vec<u16> = rotated
             .iter()
             .map(|&value| self.closest_centroid_index(value) as u16)
             .collect();
@@ -137,22 +137,22 @@ impl TurboQuantMse {
     }
 
     pub fn decode(&self, code: &[u8]) -> Vec<f32> {
-        let rotated = self.decode_rotated(code);
-        let mut full = vec![0.0f32; self.rotation.output_len()];
-        full[..self.config.dim].copy_from_slice(&rotated);
-        self.rotation.inverse_rotate(&full)
+        let rotated = self.decode_rotated(code); // length = quantize_dim (d_pad or dim)
+        self.rotation.inverse_rotate(&rotated)
     }
 
+    /// Rotate query and return all quantize_dim coordinates (d_pad for Hadamard).
+    /// Must be passed to score_ip / score_l2 as-is (do NOT truncate to dim).
     pub fn rotate_query(&self, query: &[f32]) -> Vec<f32> {
         assert_eq!(query.len(), self.config.dim);
         let owned = self.preprocess_input(query);
-        let full = self.rotation.rotate(&owned);
-        full[..self.config.dim].to_vec()
+        self.rotation.rotate(&owned) // returns d_pad coords for Hadamard, dim for Dense
     }
 
     pub fn score_ip(&self, q_rotated: &[f32], code: &[u8]) -> f32 {
-        assert_eq!(q_rotated.len(), self.config.dim);
-        let indices = unpack_codes(code, self.config.dim, self.config.bits_per_dim);
+        let qdim = self.rotation.output_len();
+        assert_eq!(q_rotated.len(), qdim);
+        let indices = unpack_codes(code, qdim, self.config.bits_per_dim);
         q_rotated
             .iter()
             .zip(indices.iter())
@@ -161,8 +161,9 @@ impl TurboQuantMse {
     }
 
     pub fn score_l2(&self, q_rotated: &[f32], code: &[u8]) -> f32 {
-        assert_eq!(q_rotated.len(), self.config.dim);
-        let indices = unpack_codes(code, self.config.dim, self.config.bits_per_dim);
+        let qdim = self.rotation.output_len();
+        assert_eq!(q_rotated.len(), qdim);
+        let indices = unpack_codes(code, qdim, self.config.bits_per_dim);
         q_rotated
             .iter()
             .zip(indices.iter())
@@ -196,7 +197,8 @@ impl TurboQuantMse {
     }
 
     fn decode_rotated(&self, code: &[u8]) -> Vec<f32> {
-        let indices = unpack_codes(code, self.config.dim, self.config.bits_per_dim);
+        let qdim = self.rotation.output_len();
+        let indices = unpack_codes(code, qdim, self.config.bits_per_dim);
         indices
             .into_iter()
             .map(|idx| self.centroids[idx as usize])

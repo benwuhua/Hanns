@@ -69,7 +69,13 @@ impl TurboQuantConfig {
         }
     }
 
+    /// Number of coordinates that are actually quantized (d_pad for Hadamard, dim for Dense).
+    /// For Hadamard, all padded coordinates must be quantized to preserve the inner product.
+    pub fn quantize_dim(&self) -> usize {
+        self.padded_dim()
+    }
+
     pub fn code_bytes(&self) -> usize {
-        (self.dim * self.bits_per_dim as usize).div_ceil(8)
+        (self.quantize_dim() * self.bits_per_dim as usize).div_ceil(8)
     }
 }
