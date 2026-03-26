@@ -241,6 +241,8 @@ pub struct FlashLayout {
     #[serde(default)]
     pub id_bytes: usize,
     pub node_bytes: usize,
+    #[serde(default)]
+    pub has_separated_vectors: bool,
 }
 
 impl FlashLayout {
@@ -249,7 +251,9 @@ impl FlashLayout {
         let inline_pq_bytes = config.inline_pq.max(config.disk_pq_dims);
         let neighbor_bytes = (config.max_degree + 1) * std::mem::size_of::<u32>();
         let id_bytes = std::mem::size_of::<i64>();
-        let node_bytes = vector_bytes + neighbor_bytes + inline_pq_bytes + id_bytes;
+        let has_separated_vectors = config.disk_pq_dims > 0;
+        let hot_vector_bytes = if has_separated_vectors { 0 } else { vector_bytes };
+        let node_bytes = hot_vector_bytes + neighbor_bytes + inline_pq_bytes + id_bytes;
 
         Self {
             page_size: DEFAULT_PAGE_SIZE,
@@ -258,6 +262,7 @@ impl FlashLayout {
             neighbor_bytes,
             id_bytes,
             node_bytes,
+            has_separated_vectors,
         }
     }
 }
@@ -532,6 +537,10 @@ impl FileGroup {
     pub fn data_path(&self) -> PathBuf {
         self.root.join("aisaq.nodes")
     }
+
+    pub fn vectors_path(&self) -> PathBuf {
+        self.root.join("aisaq.vectors")
+    }
 }
 
 #[derive(Debug)]
@@ -729,6 +738,7 @@ fn pages_touched(offset: usize, len: usize, page_size: usize) -> usize {
 struct DiskStorage {
     file_group: FileGroup,
     page_cache: PageCache,
+    vectors_mmap: Option<Mmap>,
     #[cfg(all(feature = "async-io", target_os = "linux"))]
     raw_file: std::sync::Arc<File>,
 }
@@ -737,6 +747,7 @@ struct DiskStorage {
 struct DirectMmapStorage {
     file_group: FileGroup,
     mmap: Mmap,
+    vectors_mmap: Option<Mmap>,
 }
 
 #[derive(Clone, Copy)]
@@ -1941,7 +1952,7 @@ impl PQFlashIndex {
         File::open(file_group.metadata_path())?.read_to_end(&mut metadata_bytes)?;
         let metadata: AisaqMetadata = bincode::deserialize(&metadata_bytes)
             .map_err(|error| KnowhereError::Codec(error.to_string()))?;
-        if metadata.version != 2 {
+        if metadata.version != 2 && metadata.version != 3 {
             return Err(KnowhereError::Codec(format!(
                 "unsupported AISAQ metadata version {}",
                 metadata.version
@@ -1960,6 +1971,12 @@ impl PQFlashIndex {
 
         let data_file = OpenOptions::new().read(true).open(file_group.data_path())?;
         let mmap = unsafe { Mmap::map(&data_file)? };
+        let vectors_mmap = if metadata.version == 3 {
+            let vectors_file = File::open(file_group.vectors_path())?;
+            Some(unsafe { Mmap::map(&vectors_file)? })
+        } else {
+            None
+        };
         let mut index = Self {
             config: metadata.config,
             metric_type: metadata.metric_type,
@@ -1979,7 +1996,11 @@ impl PQFlashIndex {
             trained: metadata.trained,
             node_count: metadata.node_count,
             storage: None,
-            mmap_storage: Some(DirectMmapStorage { file_group, mmap }),
+            mmap_storage: Some(DirectMmapStorage {
+                file_group,
+                mmap,
+                vectors_mmap,
+            }),
             loaded_node_cache: None,
             deleted_ids: HashSet::new(),
             sq8_quantizer: None,
@@ -2085,7 +2106,11 @@ impl PQFlashIndex {
     pub fn save<P: AsRef<Path>>(&self, root: P) -> Result<FileGroup> {
         let file_group = FileGroup::create(root)?;
         let metadata = AisaqMetadata {
-            version: 2,
+            version: if self.flash_layout.has_separated_vectors {
+                3
+            } else {
+                2
+            },
             config: self.config.clone(),
             metric_type: self.metric_type,
             dim: self.dim,
@@ -2110,10 +2135,29 @@ impl PQFlashIndex {
             let input = File::open(storage.file_group.data_path())?;
             let node_bytes_len = self.len().saturating_mul(self.flash_layout.node_bytes) as u64;
             std::io::copy(&mut input.take(node_bytes_len), &mut data_file)?;
+        } else if let Some(storage) = &self.mmap_storage {
+            let input = File::open(storage.file_group.data_path())?;
+            let node_bytes_len = self.len().saturating_mul(self.flash_layout.node_bytes) as u64;
+            std::io::copy(&mut input.take(node_bytes_len), &mut data_file)?;
         } else {
             for node_id in 0..self.node_ids.len() {
                 let bytes = self.serialize_node(node_id as u32);
                 data_file.write_all(&bytes)?;
+            }
+        }
+        if self.flash_layout.has_separated_vectors {
+            if let Some(storage) = &self.storage {
+                fs::copy(storage.file_group.vectors_path(), file_group.vectors_path())?;
+            } else if let Some(storage) = &self.mmap_storage {
+                fs::copy(storage.file_group.vectors_path(), file_group.vectors_path())?;
+            } else {
+                let mut vectors_file = File::create(file_group.vectors_path())?;
+                for node_id in 0..self.node_ids.len() {
+                    for &value in self.node_vector(node_id) {
+                        vectors_file.write_all(&value.to_le_bytes())?;
+                    }
+                }
+                vectors_file.flush()?;
             }
         }
         data_file.write_all(&(self.deleted_ids.len() as u64).to_le_bytes())?;
@@ -2147,7 +2191,7 @@ impl PQFlashIndex {
         File::open(file_group.metadata_path())?.read_to_end(&mut metadata_bytes)?;
         let metadata: AisaqMetadata = bincode::deserialize(&metadata_bytes)
             .map_err(|error| KnowhereError::Codec(error.to_string()))?;
-        if metadata.version != 2 {
+        if metadata.version != 2 && metadata.version != 3 {
             return Err(KnowhereError::Codec(format!(
                 "unsupported AISAQ metadata version {}",
                 metadata.version
@@ -2172,6 +2216,12 @@ impl PQFlashIndex {
                 .pq_read_page_cache_size
                 .max(metadata.flash_layout.page_size),
         )?;
+        let vectors_mmap = if metadata.version == 3 {
+            let vectors_file = File::open(file_group.vectors_path())?;
+            Some(unsafe { Mmap::map(&vectors_file)? })
+        } else {
+            None
+        };
         #[cfg(all(feature = "async-io", target_os = "linux"))]
         let raw_file = std::sync::Arc::new(OpenOptions::new().read(true).open(file_group.data_path())?);
 
@@ -2196,6 +2246,7 @@ impl PQFlashIndex {
             storage: Some(DiskStorage {
                 file_group,
                 page_cache,
+                vectors_mmap,
                 #[cfg(all(feature = "async-io", target_os = "linux"))]
                 raw_file,
             }),
@@ -2654,7 +2705,8 @@ impl PQFlashIndex {
                         } else {
                             let node =
                                 self.load_node(candidate.node_id, NodeAccessMode::None, &mut io)?;
-                            let distance = self.exact_distance(query, &node.vector);
+                            let distance = self
+                                .exact_distance_for_node_vector(query, candidate.node_id, &node.vector)?;
                             Ok((node.id, distance))
                         }
                     })
@@ -2924,7 +2976,8 @@ impl PQFlashIndex {
         // TODO: true concurrent IO rerank requires refactoring BeamSearchIO to not require &mut
         for candidate in accepted.iter().take(rerank_pool) {
             let node = self.load_node(candidate.node_id, NodeAccessMode::None, &mut io)?;
-            let distance = self.exact_distance(query, &node.vector);
+            let distance =
+                self.exact_distance_for_node_vector(query, candidate.node_id, &node.vector)?;
             scored.push((node.id, distance));
         }
 
@@ -3018,7 +3071,7 @@ impl PQFlashIndex {
                 continue;
             }
             let node = self.load_node(node_id, NodeAccessMode::Node, io)?;
-            let distance = self.exact_distance(query, &node.vector);
+            let distance = self.exact_distance_for_node_vector(query, node_id, &node.vector)?;
             scored.push((node.id, distance));
         }
         scored.sort_by(|left, right| left.1.total_cmp(&right.1));
@@ -3047,7 +3100,7 @@ impl PQFlashIndex {
             let node = self
                 .load_node_async(node_id, NodeAccessMode::Node, io)
                 .await?;
-            let distance = self.exact_distance(query, &node.vector);
+            let distance = self.exact_distance_for_node_vector(query, node_id, &node.vector)?;
             scored.push((node.id, distance));
         }
         scored.sort_by(|left, right| left.1.total_cmp(&right.1));
@@ -3090,7 +3143,7 @@ impl PQFlashIndex {
                 continue;
             }
             let node = self.load_node(node_id, NodeAccessMode::None, io)?;
-            let score = self.exact_distance(query, &node.vector);
+            let score = self.exact_distance_for_node_vector(query, node_id, &node.vector)?;
             accepted.push(Candidate { node_id, score });
             if accepted.len() >= k {
                 break;
@@ -3390,7 +3443,7 @@ impl PQFlashIndex {
             }
         }
 
-        Ok(self.exact_distance(query, &node.vector))
+        self.exact_distance_for_node_vector(query, node_id, &node.vector)
     }
 
     #[inline]
@@ -3482,7 +3535,7 @@ impl PQFlashIndex {
                 return Ok(encoder.compute_distance_with_table(table, pq));
             }
         }
-        Ok(self.exact_distance(query, &node.vector))
+        self.exact_distance_for_node_vector(query, node_id, &node.vector)
     }
 
     fn exact_distance(&self, query: &[f32], vector: &[f32]) -> f32 {
@@ -3492,6 +3545,46 @@ impl PQFlashIndex {
             MetricType::Cosine => 1.0 - cosine_similarity(query, vector),
             MetricType::Hamming => f32::MAX,
         }
+    }
+
+    fn separated_vectors_mmap(&self) -> Option<&Mmap> {
+        self.storage
+            .as_ref()
+            .and_then(|storage| storage.vectors_mmap.as_ref())
+            .or_else(|| {
+                self.mmap_storage
+                    .as_ref()
+                    .and_then(|storage| storage.vectors_mmap.as_ref())
+            })
+    }
+
+    fn load_separated_vector(&self, node_id: u32) -> Result<Vec<f32>> {
+        let mmap = self.separated_vectors_mmap().ok_or_else(|| {
+            KnowhereError::Codec("no vectors_mmap in separated layout".to_string())
+        })?;
+        let vector_bytes = self.flash_layout.vector_bytes;
+        let start = node_id as usize * vector_bytes;
+        let end = start + vector_bytes;
+        if end > mmap.len() {
+            return Err(KnowhereError::Codec("vectors_mmap out of range".to_string()));
+        }
+        Ok(mmap[start..end]
+            .chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+            .collect())
+    }
+
+    fn exact_distance_for_node_vector(
+        &self,
+        query: &[f32],
+        node_id: u32,
+        vector: &[f32],
+    ) -> Result<f32> {
+        if !vector.is_empty() || !self.flash_layout.has_separated_vectors {
+            return Ok(self.exact_distance(query, vector));
+        }
+        let vector = self.load_separated_vector(node_id)?;
+        Ok(self.exact_distance(query, &vector))
     }
 
     #[inline]
@@ -4172,7 +4265,11 @@ impl PQFlashIndex {
                 let Ok(node) = self.load_node(node_id, NodeAccessMode::None, &mut distance_io) else {
                     continue;
                 };
-                scored.push((node_id, self.exact_distance(query, &node.vector)));
+                let Ok(distance) = self.exact_distance_for_node_vector(query, node_id, &node.vector)
+                else {
+                    continue;
+                };
+                scored.push((node_id, distance));
             }
 
             scored.sort_by(|left, right| {
@@ -4226,7 +4323,11 @@ impl PQFlashIndex {
         let mut io = self.io_template.clone();
         for node_id in 0..node_count {
             let loaded = self.load_node(node_id as u32, NodeAccessMode::None, &mut io)?;
-            vectors.extend_from_slice(&loaded.vector);
+            if loaded.vector.is_empty() && self.flash_layout.has_separated_vectors {
+                vectors.extend_from_slice(&self.load_separated_vector(node_id as u32)?);
+            } else {
+                vectors.extend_from_slice(&loaded.vector);
+            }
             node_data.push(loaded);
         }
 
@@ -4281,7 +4382,12 @@ impl PQFlashIndex {
         }
 
         let mut out = vec![0u8; self.node_count * self.pq_code_size];
-        let inline_offset = self.flash_layout.vector_bytes + self.flash_layout.neighbor_bytes;
+        let hot_vector_bytes = if self.flash_layout.has_separated_vectors {
+            0
+        } else {
+            self.flash_layout.vector_bytes
+        };
+        let inline_offset = hot_vector_bytes + self.flash_layout.neighbor_bytes;
         let copy_len = self.pq_code_size.min(self.flash_layout.inline_pq_bytes);
         for i in 0..self.node_count {
             if copy_len == 0 {
@@ -4430,8 +4536,10 @@ impl PQFlashIndex {
         let pq_size = self.pq_code_size.max(1);
         let pq_start = id * pq_size;
         let mut bytes = Vec::with_capacity(self.flash_layout.node_bytes);
-        for value in self.node_vector(id) {
-            bytes.extend_from_slice(&value.to_le_bytes());
+        if !self.flash_layout.has_separated_vectors {
+            for value in self.node_vector(id) {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
         }
 
         let degree = count.min(self.config.max_degree) as u32;
@@ -4469,13 +4577,16 @@ impl PQFlashIndex {
         }
 
         let mut cursor = 0usize;
-        let mut vector = Vec::with_capacity(self.dim);
-        for _ in 0..self.dim {
-            let raw = bytes
-                .get(cursor..cursor + 4)
-                .ok_or_else(|| KnowhereError::Codec("truncated vector payload".to_string()))?;
-            vector.push(f32::from_le_bytes(raw.try_into().unwrap()));
-            cursor += 4;
+        let mut vector = Vec::new();
+        if !self.flash_layout.has_separated_vectors {
+            vector = Vec::with_capacity(self.dim);
+            for _ in 0..self.dim {
+                let raw = bytes
+                    .get(cursor..cursor + 4)
+                    .ok_or_else(|| KnowhereError::Codec("truncated vector payload".to_string()))?;
+                vector.push(f32::from_le_bytes(raw.try_into().unwrap()));
+                cursor += 4;
+            }
         }
 
         let degree = u32::from_le_bytes(
