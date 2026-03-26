@@ -342,6 +342,7 @@ fn sift1m_disk_pq_uring() {
     }
 
     println!("=== SIFT-1M Disk PQ io_uring Mode ===");
+    println!("index dir: /data/work/tmp/sift_pq_bench");
 
     let load_start = Instant::now();
     let (base_n, base_dim, base) = read_fbin(BASE_PATH);
@@ -371,9 +372,11 @@ fn sift1m_disk_pq_uring() {
     let build_secs = build_start.elapsed().as_secs_f64();
     println!("build: {:.2}s", build_secs);
 
-    let tmp_dir = tempfile::tempdir().expect("tempdir");
+    let data_tmp = std::path::Path::new("/data/work/tmp/sift_pq_bench");
+    std::fs::create_dir_all(data_tmp).expect("create bench dir");
+    let tmp_dir_owned = data_tmp.to_path_buf();
     let save_start = Instant::now();
-    index.save(tmp_dir.path()).expect("save");
+    index.save(&tmp_dir_owned).expect("save");
     let save_secs = save_start.elapsed().as_secs_f64();
     println!("save: {:.2}s", save_secs);
 
@@ -381,7 +384,7 @@ fn sift1m_disk_pq_uring() {
 
     for group_size in [8usize, 16, 32] {
         let load_start = Instant::now();
-        let mut disk_index = PQFlashIndex::load(tmp_dir.path()).expect("load");
+        let mut disk_index = PQFlashIndex::load(&tmp_dir_owned).expect("load");
         disk_index.set_uring_group_size(group_size);
         let load_secs = load_start.elapsed().as_secs_f64();
 
