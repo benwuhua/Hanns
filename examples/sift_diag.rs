@@ -273,10 +273,73 @@ fn sift1m_quick_recall() {
     println!("recall@10: {:.4}", recall);
 }
 
+fn sift1m_disk_mode() {
+    if !Path::new(BASE_PATH).exists() || !Path::new(QUERY_PATH).exists() || !Path::new(GT_PATH).exists()
+    {
+        println!("SKIPPED: SIFT-1M data not found under /data/work/datasets/sift-1m/");
+        return;
+    }
+
+    println!("=== SIFT-1M Disk Mode ===");
+
+    let load_start = Instant::now();
+    let (base_n, base_dim, base) = read_fbin(BASE_PATH);
+    let (query_n, query_dim, queries) = read_fbin(QUERY_PATH);
+    let (gt_n, gt_k, gt) = read_ibin(GT_PATH);
+    let load_secs = load_start.elapsed().as_secs_f64();
+
+    assert_eq!(base_dim, query_dim, "base/query dim mismatch");
+    assert_eq!(query_n, gt_n, "query/gt count mismatch");
+    println!(
+        "loaded base={} query={} dim={} gt_k={} in {:.2}s",
+        base_n, query_n, base_dim, gt_k, load_secs
+    );
+
+    let config = AisaqConfig {
+        disk_pq_dims: 0,
+        search_list_size: 128,
+        cache_all_on_load: false,
+        random_init_edges: 0,
+        ..AisaqConfig::default()
+    };
+    let mut index = PQFlashIndex::new(config, MetricType::L2, base_dim).expect("new PQFlashIndex");
+
+    let build_start = Instant::now();
+    index.train(&base).expect("train");
+    index.add(&base).expect("add");
+    let build_secs = build_start.elapsed().as_secs_f64();
+    println!("build: {:.2}s", build_secs);
+
+    let tmp_dir = tempfile::tempdir().expect("tempdir");
+    let save_start = Instant::now();
+    index.save(tmp_dir.path()).expect("save");
+    let save_secs = save_start.elapsed().as_secs_f64();
+    println!("save: {:.2}s", save_secs);
+
+    drop(index);
+
+    let load_start = Instant::now();
+    let disk_index = PQFlashIndex::load(tmp_dir.path()).expect("load");
+    let load_secs = load_start.elapsed().as_secs_f64();
+    println!("load (disk mode): {:.2}s", load_secs);
+
+    let search_start = Instant::now();
+    let result = disk_index.search_batch(&queries, TOP_K).expect("search_batch");
+    let search_secs = search_start.elapsed().as_secs_f64().max(f64::EPSILON);
+    let qps = query_n as f64 / search_secs;
+    let recall = compute_recall_at_k(&result.ids, &gt, query_n, TOP_K, gt_k);
+
+    println!("disk_mode QPS: {:.0}", qps);
+    println!("disk_mode recall@10: {:.4}", recall);
+    println!("(note: 首次搜索 mmap 冷启动，实际 SSD IO 场景)");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|s| s.as_str()) == Some("1m") {
         sift1m_quick_recall();
+    } else if args.get(1).map(|s| s.as_str()) == Some("1m_disk") {
+        sift1m_disk_mode();
     } else {
         sift10k_quick_diag();
     }
