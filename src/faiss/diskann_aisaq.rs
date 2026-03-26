@@ -78,7 +78,7 @@ pub struct AisaqConfig {
     pub cache_all_on_load: bool,
     #[serde(default = "default_true")]
     pub run_refine_pass: bool,
-    /// Number of full-graph Vamana refinement passes after insertion (0 = disabled, default = 2)
+    /// Number of full-graph Vamana refinement passes after insertion (0 = disabled, default = 1)
     #[serde(default = "default_refine_passes")]
     pub num_refine_passes: usize,
     /// Frontier-bound early-stop slack factor.
@@ -95,7 +95,7 @@ fn default_true() -> bool {
 }
 
 fn default_refine_passes() -> usize {
-    2
+    1
 }
 
 fn default_early_stop_alpha() -> f32 {
@@ -103,14 +103,19 @@ fn default_early_stop_alpha() -> f32 {
 }
 
 fn default_build_batch_size() -> usize {
-    2048
+    512
 }
 
 fn default_beam_batch_size() -> usize {
     8
 }
 
+const GRAPH_SLACK_FACTOR: f32 = 1.3;
 const ROBUST_PRUNE_ALPHA: f32 = 1.2;
+
+fn graph_slack_stride(max_degree: usize) -> usize {
+    ((max_degree.max(1) as f32) * GRAPH_SLACK_FACTOR).ceil() as usize
+}
 
 impl Default for AisaqConfig {
     fn default() -> Self {
@@ -133,7 +138,7 @@ impl Default for AisaqConfig {
             random_seed: 42,
             build_degree_slack_pct: 100,
             build_search_list_size: 0,
-            build_batch_size: 2048,
+            build_batch_size: 512,
             beam_batch_size: 8,
             warm_up: false,
             filter_threshold: -1.0,
@@ -1057,64 +1062,132 @@ impl PQFlashIndex {
             self.entry_points = vec![0];
         }
 
-        // Old path inserted nodes one-by-one and immediately linked reverse edges.
-        // The new path keeps a stable snapshot per batch:
-        // 1) parallel forward-edge discovery against the snapshot graph
-        // 2) batched forward write + reverse-edge merge/prune
-        let batch_size = self.config.build_batch_size.max(1).min(num_vectors);
-        let build_l = if self.config.build_search_list_size > 0 {
-            self.config.build_search_list_size
-        } else {
-            (stride * 3).max(self.config.search_list_size)
-        };
-        let mut row = 0usize;
+        // Inline build loop: parallel beam search per batch, sequential node
+        // insertion with interleaved link_back. This matches f811cf8/5fc548e's
+        // proven build path that achieves 0.952 recall on SIFT-1M.
+        #[cfg(feature = "parallel")]
+        {
+            use rayon::prelude::*;
+            let batch_size = self.config.build_batch_size.max(1).min(num_vectors);
+            let mut row = 0usize;
 
-        while row < num_vectors {
-            while row < num_vectors && self.node_ids.len() < 16 {
+            while row < num_vectors {
+                let batch_end = (row + batch_size).min(num_vectors);
+                let graph_size_snapshot = self.node_ids.len();
+
+                let batch_results: Vec<(Vec<u32>, Vec<u8>, i64)> = (row..batch_end)
+                    .into_par_iter()
+                    .map(|r| {
+                        let start = r * self.dim;
+                        let vector = &vectors[start..start + self.dim];
+
+                        let neighbors: Vec<u32> = if graph_size_snapshot < 16 {
+                            self.select_neighbors(vector, stride)
+                        } else {
+                            let l = (stride * 3).max(32).min(graph_size_snapshot);
+                            let cands = self.vamana_build_search(vector, l, graph_size_snapshot, &[]);
+                            cands
+                                .iter()
+                                .take(stride)
+                                .map(|(id, _)| *id)
+                                .collect()
+                        };
+
+                        let inline_pq = self
+                            .pq_encoder
+                            .as_ref()
+                            .map(|pq| pq.encode(vector))
+                            .unwrap_or_default();
+
+                        let ext_id = if let Some(ids) = external_ids {
+                            ids[r]
+                        } else {
+                            (graph_size_snapshot + (r - row)) as i64
+                        };
+                        (neighbors, inline_pq, ext_id)
+                    })
+                    .collect();
+
+                for (r, (neighbors, inline_pq, ext_id)) in (row..batch_end).zip(batch_results) {
+                    let node_id = self.node_ids.len() as u32;
+                    let vector = &vectors[r * self.dim..(r + 1) * self.dim];
+
+                    self.vectors.extend_from_slice(vector);
+                    self.node_ids.push(ext_id);
+
+                    let count = neighbors.len().min(stride);
+                    self.node_neighbor_counts.push(count as u32);
+                    for i in 0..stride {
+                        self.node_neighbor_ids
+                            .push(if i < count { neighbors[i] } else { 0 });
+                    }
+                    let code_len = inline_pq.len().min(pq_size);
+                    for i in 0..pq_size {
+                        self.node_pq_codes
+                            .push(if i < code_len { inline_pq[i] } else { 0 });
+                    }
+
+                    for &neighbor in &neighbors {
+                        self.link_back_with_limit(neighbor, node_id, stride);
+                    }
+                }
+
+                if self.node_ids.len() % 5000 < batch_size {
+                    self.refresh_entry_points();
+                }
+
+                row = batch_end;
+            }
+        }
+
+        #[cfg(not(feature = "parallel"))]
+        {
+            let build_l = if self.config.build_search_list_size > 0 {
+                self.config.build_search_list_size
+            } else {
+                (stride * 3).max(self.config.search_list_size)
+            };
+            for row in 0..num_vectors {
                 let start = row * self.dim;
                 let end = start + self.dim;
                 let vector = &vectors[start..end];
-                let ext_id = external_ids
-                    .map(|ids| ids[row])
-                    .unwrap_or(self.node_ids.len() as i64);
-                self.bootstrap_insert_node(vector, ext_id, stride, pq_size, build_l);
-                row += 1;
+                let node_id = self.node_ids.len() as u32;
+                let neighbors = if self.node_ids.len() < 16 {
+                    self.select_neighbors(vector, stride)
+                } else {
+                    let graph_size = self.node_ids.len();
+                    let l = build_l.max(stride * 2).min(graph_size);
+                    self.vamana_build_search(vector, l, graph_size, &[])
+                        .into_iter()
+                        .take(stride)
+                        .map(|(id, _)| id)
+                        .collect::<Vec<u32>>()
+                };
+                self.vectors.extend_from_slice(vector);
+                let inline_pq = self
+                    .pq_encoder
+                    .as_ref()
+                    .map(|pq| pq.encode(vector))
+                    .unwrap_or_default();
+
+                let ext_id = external_ids.map(|ids| ids[row]).unwrap_or(node_id as i64);
+                self.node_ids.push(ext_id);
+                let count = neighbors.len().min(stride);
+                self.node_neighbor_counts.push(count as u32);
+                for i in 0..stride {
+                    self.node_neighbor_ids
+                        .push(if i < count { neighbors[i] } else { 0 });
+                }
+                let code_len = inline_pq.len().min(pq_size);
+                for i in 0..pq_size {
+                    self.node_pq_codes
+                        .push(if i < code_len { inline_pq[i] } else { 0 });
+                }
+
+                for neighbor in neighbors {
+                    self.link_back_with_limit(neighbor, node_id, stride);
+                }
             }
-
-            if row >= num_vectors {
-                break;
-            }
-
-            let batch_end = (row + batch_size).min(num_vectors);
-            let graph_size_snapshot = self.node_ids.len();
-            let phase1 = self.compute_batch_phase1_results(
-                &vectors[row * self.dim..batch_end * self.dim],
-                graph_size_snapshot,
-                stride,
-                build_l,
-            );
-
-            let batch_start_node = self.node_ids.len();
-            for (offset, (_, inline_pq)) in phase1.iter().enumerate() {
-                let src_row = row + offset;
-                let vector = &vectors[src_row * self.dim..(src_row + 1) * self.dim];
-                let ext_id = external_ids
-                    .map(|ids| ids[src_row])
-                    .unwrap_or((batch_start_node + offset) as i64);
-                self.append_node_placeholder(vector, ext_id, inline_pq, stride, pq_size);
-            }
-
-            self.apply_batch_graph_updates(
-                batch_start_node,
-                phase1.into_iter().map(|(neighbors, _)| neighbors).collect(),
-                stride,
-            );
-
-            if self.node_ids.len() % 5000 < batch_size {
-                self.refresh_entry_points();
-            }
-
-            row = batch_end;
         }
         self.prune_graph_to_target_degree();
         if self.config.run_refine_pass {
@@ -1122,20 +1195,51 @@ impl PQFlashIndex {
         }
 
         self.node_count = self.node_ids.len();
-        // 1M 规模时跑全图精化 pass，修复 Phase 2 节点无反向边问题
+        // Pre-refine random connectivity seeding. Batch Vamana can leave late nodes
+        // connected mostly to a narrow snapshot of earlier nodes, so add a few
+        // random long edges before global refinement to improve graph reachability.
         let n_nodes = self.node_ids.len();
+        if self.config.random_init_edges > 0 && n_nodes > 1 {
+            use rand::rngs::StdRng;
+            use rand::{Rng, SeedableRng};
+
+            let stride = self.flat_stride.max(1);
+            let k = self.config.random_init_edges;
+            let mut rng = StdRng::seed_from_u64(self.config.random_seed);
+            for i in 0..n_nodes {
+                let nb_start = i * stride;
+                let count = self.node_neighbor_counts[i] as usize;
+                if count == 0 {
+                    continue;
+                }
+                // Replace the last min(k, count) neighbors with random long-range edges.
+                // This breaks chain-like connectivity from batch Vamana construction.
+                let to_replace = k.min(count);
+                let replace_start = nb_start + count - to_replace;
+                for pos in replace_start..(nb_start + count) {
+                    let mut attempts = 0usize;
+                    loop {
+                        let j = rng.gen_range(0..n_nodes);
+                        if j != i {
+                            self.node_neighbor_ids[pos] = j as u32;
+                            break;
+                        }
+                        attempts += 1;
+                        if attempts > 100 {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        // Full-graph Vamana refinement for large graphs. Multiple passes
+        // progressively improve graph quality (5fc548e: 2 passes → recall 0.952).
         if n_nodes > 100_000 {
             let stride = self.flat_stride.max(1);
             let build_l = (stride * 3).max(32).min(n_nodes);
             let passes = self.config.num_refine_passes;
-            // Pass 1: 全图精化（Phase 1 + Phase 2）
-            if passes >= 1 {
-                self.vamana_refine_pass(n_nodes, build_l, 0);
-            }
-            // Pass 2+: 只精化 Phase 2 节点（Phase 1 连通性已足够）
-            let phase2_start = 100_000_usize.min(n_nodes);
-            for _ in 1..passes {
-                self.vamana_refine_pass(n_nodes, build_l, phase2_start);
+            for _ in 0..passes {
+                self.vamana_refine_pass(n_nodes, build_l, 1.2);
             }
         }
         self.refresh_entry_points();
@@ -1168,7 +1272,7 @@ impl PQFlashIndex {
         } else {
             let graph_size = self.node_ids.len();
             let l = build_l.max(stride * 2).min(graph_size);
-            self.vamana_build_search(vector, l, graph_size)
+            self.vamana_build_search(vector, l, graph_size, &[])
                 .into_iter()
                 .take(stride)
                 .map(|(id, _)| id)
@@ -1232,15 +1336,16 @@ impl PQFlashIndex {
                         self.select_neighbors_scored(vector, graph_size_snapshot)
                     } else {
                         let l = build_l.max(degree_limit * 2).min(graph_size_snapshot);
-                        self.vamana_build_search(vector, l, graph_size_snapshot)
+                        self.vamana_build_search(vector, l, graph_size_snapshot, &[])
                     };
-                    scored.truncate(candidate_cap.min(scored.len()));
-                    let neighbors = self.robust_prune_scored(
-                        graph_size_snapshot + offset,
-                        &scored,
-                        degree_limit,
-                        ROBUST_PRUNE_ALPHA,
-                    );
+                    // Simple top-k selection (no robust_prune) matches f811cf8
+                    // build quality — occlusion pruning at build time hurts initial
+                    // graph connectivity, which cascades into poor refine results.
+                    let neighbors: Vec<u32> = scored
+                        .iter()
+                        .take(degree_limit)
+                        .map(|(id, _)| *id)
+                        .collect();
                     let inline_pq = self
                         .pq_encoder
                         .as_ref()
@@ -1255,19 +1360,17 @@ impl PQFlashIndex {
         let results: Vec<(Vec<u32>, Vec<u8>)> = (0..batch_count)
             .map(|offset| {
                 let vector = &batch_vectors[offset * self.dim..(offset + 1) * self.dim];
-                let mut scored = if graph_size_snapshot < 16 {
+                let scored = if graph_size_snapshot < 16 {
                     self.select_neighbors_scored(vector, graph_size_snapshot)
                 } else {
                     let l = build_l.max(degree_limit * 2).min(graph_size_snapshot);
-                    self.vamana_build_search(vector, l, graph_size_snapshot)
+                    self.vamana_build_search(vector, l, graph_size_snapshot, &[])
                 };
-                scored.truncate(candidate_cap.min(scored.len()));
-                let neighbors = self.robust_prune_scored(
-                    graph_size_snapshot + offset,
-                    &scored,
-                    degree_limit,
-                    ROBUST_PRUNE_ALPHA,
-                );
+                let neighbors: Vec<u32> = scored
+                    .iter()
+                    .take(degree_limit)
+                    .map(|(id, _)| *id)
+                    .collect();
                 let inline_pq = self
                     .pq_encoder
                     .as_ref()
@@ -1294,6 +1397,14 @@ impl PQFlashIndex {
 
         for (offset, neighbors) in forward_edges.iter().enumerate() {
             self.write_neighbor_row(batch_start_node + offset, neighbors, stride);
+        }
+
+        // Skip reverse-edge pruning at large scale (>100K nodes).
+        // Premature reverse-edge pruning evicts good forward edges from existing
+        // nodes, fragmenting the graph. The refine pass handles bidirectional
+        // connectivity properly. This matches f811cf8's link_back_with_limit guard.
+        if self.node_ids.len() > 100_000 {
+            return;
         }
 
         let mut incoming: Vec<Vec<u32>> = vec![Vec::new(); self.node_ids.len()];
@@ -1759,9 +1870,10 @@ impl PQFlashIndex {
         let mut index = Self::new(config, MetricType::L2, dim)?;
         index.vectors = Vec::with_capacity(node_count * dim);
         index.node_ids = (0..node_count as i64).collect();
+        let stride = max_degree.max(1);
         index.node_neighbor_counts = vec![0; node_count];
-        index.node_neighbor_ids = vec![0; node_count * max_degree.max(1)];
-        index.flat_stride = max_degree.max(1);
+        index.node_neighbor_ids = vec![0; node_count * stride];
+        index.flat_stride = stride;
         index.node_count = node_count;
         index.trained = true;
         index.entry_points = vec![medoid.min(node_count.saturating_sub(1) as u32)];
@@ -3309,7 +3421,13 @@ impl PQFlashIndex {
 
     /// Build-time beam search over currently built prefix graph.
     /// Returns up to `l` candidates sorted by distance ascending.
-    fn vamana_build_search(&self, query: &[f32], l: usize, graph_size: usize) -> Vec<(u32, f32)> {
+    fn vamana_build_search(
+        &self,
+        query: &[f32],
+        l: usize,
+        graph_size: usize,
+        extra_seeds: &[u32],
+    ) -> Vec<(u32, f32)> {
         if graph_size == 0 || l == 0 {
             return Vec::new();
         }
@@ -3326,21 +3444,22 @@ impl PQFlashIndex {
             .copied()
             .unwrap_or(0) as usize;
         let start_node = start_node.min(graph_size - 1);
-        let start_dist = if let Some(ref table) = pq_table {
-            let code_start = start_node * self.pq_code_size;
-            let code_end = code_start + self.pq_code_size;
-            if code_end <= self.node_pq_codes.len() {
-                if let Some(ref pq) = self.pq_encoder {
-                    pq.compute_distance_with_table(table, &self.node_pq_codes[code_start..code_end])
-                } else {
-                    self.exact_distance(query, self.node_vector(start_node))
+        let score_node = |node_idx: usize| -> f32 {
+            if let Some(ref table) = pq_table {
+                let code_start = node_idx * self.pq_code_size;
+                let code_end = code_start + self.pq_code_size;
+                if code_end <= self.node_pq_codes.len() {
+                    if let Some(ref pq) = self.pq_encoder {
+                        return pq.compute_distance_with_table(
+                            table,
+                            &self.node_pq_codes[code_start..code_end],
+                        );
+                    }
                 }
-            } else {
-                self.exact_distance(query, self.node_vector(start_node))
             }
-        } else {
-            self.exact_distance(query, self.node_vector(start_node))
+            self.exact_distance(query, self.node_vector(node_idx))
         };
+        let start_dist = score_node(start_node);
 
         let mut frontier: BinaryHeap<Candidate> = BinaryHeap::new();
         let mut visited: HashSet<u32> = HashSet::with_capacity(l.saturating_mul(2));
@@ -3351,6 +3470,17 @@ impl PQFlashIndex {
             score: start_dist,
         });
         visited.insert(start_node as u32);
+
+        for &seed in extra_seeds {
+            let seed_idx = seed as usize;
+            if seed_idx >= graph_size || !visited.insert(seed) {
+                continue;
+            }
+            frontier.push(Candidate {
+                node_id: seed,
+                score: score_node(seed_idx),
+            });
+        }
 
         while let Some(candidate) = frontier.pop() {
             best.push((candidate.node_id, candidate.score));
@@ -3365,25 +3495,9 @@ impl PQFlashIndex {
                 if nb as usize >= graph_size || !visited.insert(nb) {
                     continue;
                 }
-                let nb_dist = if let Some(ref table) = pq_table {
-                    let code_start = nb as usize * self.pq_code_size;
-                    let code_end = code_start + self.pq_code_size;
-                    if code_end <= self.node_pq_codes.len() {
-                        if let Some(ref pq) = self.pq_encoder {
-                            pq.compute_distance_with_table(table, &self.node_pq_codes[code_start..code_end])
-                        } else {
-                            self.exact_distance(query, self.node_vector(nb as usize))
-                        }
-                    } else {
-                        // node not yet encoded (shouldn't happen, but safe fallback)
-                        self.exact_distance(query, self.node_vector(nb as usize))
-                    }
-                } else {
-                    self.exact_distance(query, self.node_vector(nb as usize))
-                };
                 frontier.push(Candidate {
                     node_id: nb,
-                    score: nb_dist,
+                    score: score_node(nb as usize),
                 });
             }
         }
@@ -3423,6 +3537,40 @@ impl PQFlashIndex {
         Some(self.exact_distance(self.node_vector(a_idx), self.node_vector(b_idx)))
     }
 
+    fn run_robust_prune_pass(
+        &self,
+        pool: &[(u32, f32)],
+        selected: &mut Vec<u32>,
+        selected_ids: &mut HashSet<u32>,
+        current_alpha: f32,
+        degree_limit: usize,
+    ) {
+        for &(candidate_id, anchor_distance) in pool {
+            if selected.len() >= degree_limit {
+                break;
+            }
+            if selected_ids.contains(&candidate_id) {
+                continue;
+            }
+
+            let mut occluded = false;
+            for &selected_id in selected.iter() {
+                let Some(d_jk) = self.candidate_pair_distance(selected_id, candidate_id) else {
+                    continue;
+                };
+                if d_jk <= f32::EPSILON || anchor_distance / d_jk > current_alpha {
+                    occluded = true;
+                    break;
+                }
+            }
+
+            if !occluded {
+                selected.push(candidate_id);
+                selected_ids.insert(candidate_id);
+            }
+        }
+    }
+
     fn robust_prune_scored(
         &self,
         anchor_idx: usize,
@@ -3435,8 +3583,8 @@ impl PQFlashIndex {
         }
 
         let anchor_id = anchor_idx as u32;
-        let mut dedup = HashSet::with_capacity(pool.len().saturating_mul(2).max(1));
-        let mut filtered: Vec<(u32, f32)> = pool
+        let mut dedup = HashSet::with_capacity(pool.len().saturating_mul(2));
+        let filtered: Vec<(u32, f32)> = pool
             .iter()
             .copied()
             .filter(|&(candidate_id, _)| candidate_id != anchor_id)
@@ -3444,35 +3592,39 @@ impl PQFlashIndex {
             .filter(|&(candidate_id, _)| dedup.insert(candidate_id))
             .collect();
 
-        filtered.sort_by(|a, b| a.1.total_cmp(&b.1));
-        filtered.truncate(
-            degree_limit
-                .saturating_mul(3)
-                .max(degree_limit)
-                .min(filtered.len()),
-        );
+        if filtered.len() <= degree_limit {
+            return filtered.into_iter().map(|(candidate_id, _)| candidate_id).collect();
+        }
 
-        let alpha = alpha.max(1.0);
+        let final_alpha = alpha.max(1.0);
         let mut selected = Vec::with_capacity(degree_limit.min(filtered.len()));
+        let mut selected_ids = HashSet::with_capacity(degree_limit.saturating_mul(2));
 
-        for &(candidate_id, anchor_distance) in &filtered {
-            if selected.len() >= degree_limit {
-                break;
-            }
+        self.run_robust_prune_pass(
+            &filtered,
+            &mut selected,
+            &mut selected_ids,
+            1.0,
+            degree_limit,
+        );
+        if selected.len() < degree_limit && final_alpha > 1.0 {
+            self.run_robust_prune_pass(
+                &filtered,
+                &mut selected,
+                &mut selected_ids,
+                final_alpha,
+                degree_limit,
+            );
+        }
 
-            let mut occluded = false;
-            for &selected_id in &selected {
-                let Some(dist_rc) = self.candidate_pair_distance(selected_id, candidate_id) else {
-                    continue;
-                };
-                if dist_rc < alpha * anchor_distance {
-                    occluded = true;
+        if final_alpha > 1.0 {
+            for &(candidate_id, _) in &filtered {
+                if selected.len() >= degree_limit {
                     break;
                 }
-            }
-
-            if !occluded {
-                selected.push(candidate_id);
+                if selected_ids.insert(candidate_id) {
+                    selected.push(candidate_id);
+                }
             }
         }
 
@@ -3484,10 +3636,10 @@ impl PQFlashIndex {
         if neighbor_idx >= self.node_ids.len() || node_id == neighbor {
             return;
         }
-        if self.node_ids.len() > 500_000 {
-            // For very large graphs, incremental reverse-link maintenance is expensive.
-            // We still keep it enabled up to 500K and rely on vamana_refine_pass() for
-            // full-graph reverse-edge recovery beyond that size.
+        if self.node_ids.len() > 100_000 {
+            // Guard: removing this causes -41% QPS and 9x build time regression
+            // at 1M scale. The vamana_refine_pass() handles full-graph reverse-edge
+            // recovery beyond this size.
             return;
         }
         let stride = self.flat_stride.max(1);
@@ -3562,151 +3714,151 @@ impl PQFlashIndex {
         self.node_neighbor_counts[neighbor_idx] = new_count as u32;
     }
 
-    fn vamana_refine_pass(&mut self, n_nodes: usize, build_l: usize, start_node: usize) {
+    fn vamana_refine_pass(&mut self, n_nodes: usize, build_l: usize, alpha: f32) {
         let stride = self.flat_stride.max(1);
+        let target_degree = self.config.max_degree.min(stride).max(1);
+        let refine_start = std::time::Instant::now();
 
+        // Phase 1: parallel beam search + prune (reads from same graph snapshot)
         #[cfg(feature = "parallel")]
-        let results: Vec<(usize, Vec<u32>)> = {
+        let mut rows: Vec<Vec<u32>> = {
             use rayon::prelude::*;
-            (start_node..n_nodes)
+            (0..n_nodes)
                 .into_par_iter()
                 .map(|i| {
                     let vector_i = self.node_vector(i).to_vec();
-                    let cands = self.vamana_build_search(&vector_i, build_l, n_nodes);
-                    let new_neighbors =
-                        self.robust_prune_scored(i, &cands, stride, ROBUST_PRUNE_ALPHA);
-                    (i, new_neighbors)
+                    let cands = self.vamana_build_search(&vector_i, build_l, n_nodes, &[]);
+                    self.robust_prune_scored(i, &cands, stride, alpha)
                 })
                 .collect()
         };
 
         #[cfg(not(feature = "parallel"))]
-        let results: Vec<(usize, Vec<u32>)> = (start_node..n_nodes)
+        let mut rows: Vec<Vec<u32>> = (0..n_nodes)
             .map(|i| {
                 let vector_i = self.node_vector(i).to_vec();
-                let cands = self.vamana_build_search(&vector_i, build_l, n_nodes);
-                let new_neighbors =
-                    self.robust_prune_scored(i, &cands, stride, ROBUST_PRUNE_ALPHA);
-                (i, new_neighbors)
+                let cands = self.vamana_build_search(&vector_i, build_l, n_nodes, &[]);
+                self.robust_prune_scored(i, &cands, stride, alpha)
             })
             .collect();
 
-        // 1) Apply forward edges (one row per node, no conflicts).
-        for (i, new_neighbors) in &results {
-            let start = *i * stride;
-            let count = new_neighbors.len().min(stride);
-            self.node_neighbor_counts[*i] = count as u32;
-            for j in 0..count {
-                self.node_neighbor_ids[start + j] = new_neighbors[j];
-            }
-            for j in count..stride {
-                self.node_neighbor_ids[start + j] = 0;
-            }
-        }
 
-        // 2) Collect reverse-edge updates by destination node.
+        // Phase 2: native-like batch reverse-edge handling. Aggregate reverse
+        // edges per target node, append lazily, and only prune once for rows
+        // that overflow physical storage.
         let mut reverse_incoming: Vec<Vec<u32>> = vec![Vec::new(); n_nodes];
-        for (i, new_neighbors) in &results {
-            let src = *i as u32;
-            for &nb in new_neighbors {
-                let nb_idx = nb as usize;
-                if nb_idx < n_nodes && nb_idx != *i {
-                    reverse_incoming[nb_idx].push(src);
+        for (src_idx, neighbors) in rows.iter().enumerate() {
+            let src = src_idx as u32;
+            for &dst in neighbors {
+                let dst_idx = dst as usize;
+                if dst_idx < n_nodes && dst_idx != src_idx {
+                    reverse_incoming[dst_idx].push(src);
                 }
             }
         }
 
-        // 3) Compute reverse-edge pruned neighbor lists (parallel when enabled).
         #[cfg(feature = "parallel")]
-        let reverse_updates: Vec<(usize, Vec<u32>)> = {
+        {
             use rayon::prelude::*;
-            reverse_incoming
-                .into_par_iter()
+
+            rows.par_iter_mut()
                 .enumerate()
-                .filter_map(|(neighbor_idx, incoming)| {
-                    if incoming.is_empty() || neighbor_idx >= self.node_ids.len() {
-                        return None;
+                .for_each(|(node_idx, row)| {
+                    let incoming = &reverse_incoming[node_idx];
+                    if incoming.is_empty() {
+                        return;
                     }
 
-                    let start = neighbor_idx * stride;
-                    let count = self.node_neighbor_counts[neighbor_idx] as usize;
-                    let mut merged: Vec<u32> = self.node_neighbor_ids[start..start + count].to_vec();
-                    merged.extend(incoming);
+                    let mut merged = Vec::with_capacity(row.len() + incoming.len());
+                    let mut seen =
+                        HashSet::with_capacity((row.len() + incoming.len()).saturating_mul(2).max(1));
 
-                    // Remove self-loop and deduplicate candidates before scoring.
-                    let mut seen = HashSet::with_capacity(merged.len().saturating_mul(2).max(1));
-                    merged.retain(|&id| id as usize != neighbor_idx && seen.insert(id));
-                    if merged.is_empty() {
-                        return Some((neighbor_idx, Vec::new()));
+                    for &neighbor in row.iter() {
+                        let neighbor_idx = neighbor as usize;
+                        if neighbor_idx < n_nodes && neighbor_idx != node_idx && seen.insert(neighbor)
+                        {
+                            merged.push(neighbor);
+                        }
+                    }
+                    for &src in incoming.iter() {
+                        let src_idx = src as usize;
+                        if src_idx < n_nodes && src_idx != node_idx && seen.insert(src) {
+                            merged.push(src);
+                        }
                     }
 
-                    let anchor = self.node_vector(neighbor_idx).to_vec();
+                    if merged.len() <= stride {
+                        *row = merged;
+                        return;
+                    }
+
+                    let anchor = self.node_vector(node_idx).to_vec();
                     let mut scored: Vec<(u32, f32)> = merged
                         .into_iter()
-                        .filter(|&id| (id as usize) < self.node_ids.len())
                         .map(|id| (id, self.exact_distance(&anchor, self.node_vector(id as usize))))
                         .collect();
                     scored.sort_by(|a, b| a.1.total_cmp(&b.1));
-                    let selected = self.robust_prune_scored(
-                        neighbor_idx,
-                        &scored,
-                        stride,
-                        ROBUST_PRUNE_ALPHA,
-                    );
-                    Some((neighbor_idx, selected))
-                })
-                .collect()
-        };
+                    *row =
+                        self.robust_prune_scored(node_idx, &scored, target_degree, ROBUST_PRUNE_ALPHA);
+                });
+
+            let counts = &mut self.node_neighbor_counts[..n_nodes];
+            let neighbor_ids = &mut self.node_neighbor_ids[..n_nodes * stride];
+            neighbor_ids
+                .par_chunks_mut(stride)
+                .zip(counts.par_iter_mut())
+                .zip(rows.par_iter())
+                .for_each(|((row_slots, count_slot), row)| {
+                    let count = row.len().min(stride);
+                    *count_slot = count as u32;
+                    row_slots[..count].copy_from_slice(&row[..count]);
+                    row_slots[count..].fill(0);
+                });
+        }
 
         #[cfg(not(feature = "parallel"))]
-        let reverse_updates: Vec<(usize, Vec<u32>)> = reverse_incoming
-            .into_iter()
-            .enumerate()
-            .filter_map(|(neighbor_idx, incoming)| {
-                if incoming.is_empty() || neighbor_idx >= self.node_ids.len() {
-                    return None;
+        {
+            for (node_idx, row) in rows.iter_mut().enumerate() {
+                let incoming = &reverse_incoming[node_idx];
+                if !incoming.is_empty() {
+                    let mut merged = Vec::with_capacity(row.len() + incoming.len());
+                    let mut seen =
+                        HashSet::with_capacity((row.len() + incoming.len()).saturating_mul(2).max(1));
+
+                    for &neighbor in row.iter() {
+                        let neighbor_idx = neighbor as usize;
+                        if neighbor_idx < n_nodes && neighbor_idx != node_idx && seen.insert(neighbor)
+                        {
+                            merged.push(neighbor);
+                        }
+                    }
+                    for &src in incoming.iter() {
+                        let src_idx = src as usize;
+                        if src_idx < n_nodes && src_idx != node_idx && seen.insert(src) {
+                            merged.push(src);
+                        }
+                    }
+
+                    if merged.len() <= stride {
+                        *row = merged;
+                    } else {
+                        let anchor = self.node_vector(node_idx).to_vec();
+                        let mut scored: Vec<(u32, f32)> = merged
+                            .into_iter()
+                            .map(|id| (id, self.exact_distance(&anchor, self.node_vector(id as usize))))
+                            .collect();
+                        scored.sort_by(|a, b| a.1.total_cmp(&b.1));
+                        *row = self
+                            .robust_prune_scored(node_idx, &scored, target_degree, ROBUST_PRUNE_ALPHA);
+                    }
                 }
 
-                let start = neighbor_idx * stride;
-                let count = self.node_neighbor_counts[neighbor_idx] as usize;
-                let mut merged: Vec<u32> = self.node_neighbor_ids[start..start + count].to_vec();
-                merged.extend(incoming);
-
-                let mut seen = HashSet::with_capacity(merged.len().saturating_mul(2).max(1));
-                merged.retain(|&id| id as usize != neighbor_idx && seen.insert(id));
-                if merged.is_empty() {
-                    return Some((neighbor_idx, Vec::new()));
-                }
-
-                let anchor = self.node_vector(neighbor_idx).to_vec();
-                let mut scored: Vec<(u32, f32)> = merged
-                    .into_iter()
-                    .filter(|&id| (id as usize) < self.node_ids.len())
-                    .map(|id| (id, self.exact_distance(&anchor, self.node_vector(id as usize))))
-                    .collect();
-                scored.sort_by(|a, b| a.1.total_cmp(&b.1));
-                let selected = self.robust_prune_scored(
-                    neighbor_idx,
-                    &scored,
-                    stride,
-                    ROBUST_PRUNE_ALPHA,
-                );
-                Some((neighbor_idx, selected))
-            })
-            .collect();
-
-        // 4) Apply reverse-edge updates.
-        for (neighbor_idx, new_neighbors) in reverse_updates {
-            let start = neighbor_idx * stride;
-            let count = new_neighbors.len().min(stride);
-            self.node_neighbor_counts[neighbor_idx] = count as u32;
-            for j in 0..count {
-                self.node_neighbor_ids[start + j] = new_neighbors[j];
-            }
-            for j in count..stride {
-                self.node_neighbor_ids[start + j] = 0;
+                self.write_neighbor_row(node_idx, row, stride);
             }
         }
+
+        self.prune_graph_to_target_degree();
+        let _ = refine_start;
     }
 
     fn prune_graph_to_target_degree(&mut self) {
@@ -4729,6 +4881,34 @@ mod tests {
         assert!(
             !nbrs.contains(&3),
             "near-but-occluded edge should be pruned under alpha-occlusion"
+        );
+    }
+
+    #[test]
+    fn aisaq_link_back_no_guard_appends_into_empty_slots_without_prune() {
+        let config = AisaqConfig {
+            max_degree: 2,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::L2, 2).unwrap();
+        index.vectors = vec![
+            0.0f32, 0.0, // node 0
+            100.0, 0.0, // node 1 (far late node)
+            1.0, 0.0, // node 2 (near existing neighbor)
+        ];
+        set_flat_graph_for_tests(&mut index, 3, 2);
+        index.node_neighbor_counts[0] = 1;
+        index.node_neighbor_ids[0] = 2;
+
+        index.link_back_no_guard(0, 1, 2);
+
+        let cnt = index.node_neighbor_counts[0] as usize;
+        let nbrs = &index.node_neighbor_ids[0..cnt];
+        assert_eq!(cnt, 2);
+        assert!(nbrs.contains(&2));
+        assert!(
+            nbrs.contains(&1),
+            "reverse-edge recovery should preserve the far back-link while slots remain"
         );
     }
 
