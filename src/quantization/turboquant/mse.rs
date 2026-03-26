@@ -4,12 +4,58 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use super::codebook::gaussian_lloyd_max_centroids;
-use super::config::TurboQuantConfig;
+use super::config::{TurboQuantConfig, TurboRotationBackend};
 use super::packed::{pack_codes, unpack_codes};
+use super::rotation::HadamardRotation;
+
+enum Rotation {
+    Dense { matrix: Vec<f32>, dim: usize },
+    Hadamard(HadamardRotation),
+}
+
+impl Rotation {
+    fn rotate(&self, v: &[f32]) -> Vec<f32> {
+        match self {
+            Self::Dense { matrix, dim } => {
+                let mut out = vec![0.0f32; *dim];
+                for (row_idx, out_value) in out.iter_mut().enumerate() {
+                    let row = &matrix[row_idx * *dim..(row_idx + 1) * *dim];
+                    *out_value = row.iter().zip(v.iter()).map(|(a, b)| a * b).sum();
+                }
+                out
+            }
+            Self::Hadamard(rotation) => rotation.rotate(v),
+        }
+    }
+
+    fn inverse_rotate(&self, y: &[f32]) -> Vec<f32> {
+        match self {
+            Self::Dense { matrix, dim } => {
+                let mut out = vec![0.0f32; *dim];
+                for col in 0..*dim {
+                    let mut sum = 0.0f32;
+                    for row in 0..*dim {
+                        sum += matrix[row * *dim + col] * y[row];
+                    }
+                    out[col] = sum;
+                }
+                out
+            }
+            Self::Hadamard(rotation) => rotation.inverse_rotate(y),
+        }
+    }
+
+    fn output_len(&self) -> usize {
+        match self {
+            Self::Dense { dim, .. } => *dim,
+            Self::Hadamard(rotation) => rotation.d_pad,
+        }
+    }
+}
 
 pub struct TurboQuantMse {
     pub config: TurboQuantConfig,
-    rotation_matrix: Vec<f32>,
+    rotation: Rotation,
     centroids: Vec<f32>,
 }
 
@@ -21,16 +67,24 @@ impl TurboQuantMse {
             "bits_per_dim must be in 1..=8"
         );
 
-        let rotation_matrix = build_dense_orthogonal_rotation(config.dim, config.rotation_seed);
-        let scale = (config.dim as f32).sqrt().recip();
-        let centroids = gaussian_lloyd_max_centroids(config.bits_per_dim, config.dim)
+        let rotation = match config.rotation_backend {
+            TurboRotationBackend::DenseOrthogonal => Rotation::Dense {
+                matrix: build_dense_orthogonal_rotation(config.dim, config.rotation_seed),
+                dim: config.dim,
+            },
+            TurboRotationBackend::Hadamard => {
+                Rotation::Hadamard(HadamardRotation::new(config.dim, config.rotation_seed))
+            }
+        };
+        let scale = (config.padded_dim() as f32).sqrt().recip();
+        let centroids = gaussian_lloyd_max_centroids(config.bits_per_dim, config.padded_dim())
             .into_iter()
             .map(|c| (c as f32) * scale)
             .collect();
 
         Self {
             config,
-            rotation_matrix,
+            rotation,
             centroids,
         }
     }
@@ -42,8 +96,8 @@ impl TurboQuantMse {
     pub fn encode(&self, v: &[f32]) -> Vec<u8> {
         assert_eq!(v.len(), self.config.dim);
         let owned = self.preprocess_input(v);
-        let rotated = self.rotate_slice(&owned);
-        let codes: Vec<u16> = rotated
+        let rotated = self.rotation.rotate(&owned);
+        let codes: Vec<u16> = rotated[..self.config.dim]
             .iter()
             .map(|&value| self.closest_centroid_index(value) as u16)
             .collect();
@@ -84,13 +138,16 @@ impl TurboQuantMse {
 
     pub fn decode(&self, code: &[u8]) -> Vec<f32> {
         let rotated = self.decode_rotated(code);
-        self.inverse_rotate_slice(&rotated)
+        let mut full = vec![0.0f32; self.rotation.output_len()];
+        full[..self.config.dim].copy_from_slice(&rotated);
+        self.rotation.inverse_rotate(&full)
     }
 
     pub fn rotate_query(&self, query: &[f32]) -> Vec<f32> {
         assert_eq!(query.len(), self.config.dim);
         let owned = self.preprocess_input(query);
-        self.rotate_slice(&owned)
+        let full = self.rotation.rotate(&owned);
+        full[..self.config.dim].to_vec()
     }
 
     pub fn score_ip(&self, q_rotated: &[f32], code: &[u8]) -> f32 {
@@ -151,29 +208,6 @@ impl TurboQuantMse {
             return v.to_vec();
         }
         normalize_vector(v)
-    }
-
-    fn rotate_slice(&self, v: &[f32]) -> Vec<f32> {
-        let dim = self.config.dim;
-        let mut out = vec![0.0f32; dim];
-        for (row_idx, out_value) in out.iter_mut().enumerate() {
-            let row = &self.rotation_matrix[row_idx * dim..(row_idx + 1) * dim];
-            *out_value = row.iter().zip(v.iter()).map(|(a, b)| a * b).sum();
-        }
-        out
-    }
-
-    fn inverse_rotate_slice(&self, v: &[f32]) -> Vec<f32> {
-        let dim = self.config.dim;
-        let mut out = vec![0.0f32; dim];
-        for col in 0..dim {
-            let mut sum = 0.0f32;
-            for row in 0..dim {
-                sum += self.rotation_matrix[row * dim + col] * v[row];
-            }
-            out[col] = sum;
-        }
-        out
     }
 
     fn closest_centroid_index(&self, value: f32) -> usize {
@@ -243,6 +277,22 @@ mod tests {
 
         let decoded = tq.decode(&code);
         assert_eq!(decoded.len(), dim, "decoded len mismatch");
+    }
+
+    #[test]
+    fn test_hadamard_backend_keeps_code_size_and_decode_shape() {
+        let dim = 96usize;
+        let bits = 4u8;
+        let config = TurboQuantConfig::new(dim, bits).with_hadamard();
+        let code_bytes = config.code_bytes();
+        let tq = TurboQuantMse::new(config);
+
+        let vector: Vec<f32> = (0..dim).map(|i| (i as f32 / dim as f32) - 0.5).collect();
+        let code = tq.encode(&vector);
+        let decoded = tq.decode(&code);
+
+        assert_eq!(code.len(), code_bytes);
+        assert_eq!(decoded.len(), dim);
     }
 
     #[test]

@@ -13,6 +13,7 @@ pub struct IvfTurboQuantConfig {
     pub metric_type: MetricType,
     pub bits_per_dim: u8,
     pub rotation_seed: u64,
+    pub hadamard: bool,
 }
 
 impl IvfTurboQuantConfig {
@@ -24,6 +25,7 @@ impl IvfTurboQuantConfig {
             metric_type: MetricType::L2,
             bits_per_dim,
             rotation_seed: 42,
+            hadamard: true,
         }
     }
 
@@ -41,6 +43,11 @@ impl IvfTurboQuantConfig {
         self.rotation_seed = rotation_seed;
         self
     }
+
+    pub fn with_hadamard(mut self, hadamard: bool) -> Self {
+        self.hadamard = hadamard;
+        self
+    }
 }
 
 pub type IvfTurboQuantEntry = (i64, Vec<u8>);
@@ -56,10 +63,7 @@ pub struct IvfTurboQuantIndex {
 
 impl IvfTurboQuantIndex {
     pub fn new(config: IvfTurboQuantConfig) -> Self {
-        let quantizer = TurboQuantMse::new(
-            TurboQuantConfig::new(config.dim, config.bits_per_dim)
-                .with_rotation_seed(config.rotation_seed),
-        );
+        let quantizer = TurboQuantMse::new(Self::build_quantizer_config(&config));
         Self {
             config,
             centroids: Vec::new(),
@@ -88,10 +92,7 @@ impl IvfTurboQuantIndex {
         let mut km = KMeans::new(self.config.nlist, self.config.dim);
         km.train(&training);
         self.centroids = km.centroids().to_vec();
-        self.quantizer = TurboQuantMse::new(
-            TurboQuantConfig::new(self.config.dim, self.config.bits_per_dim)
-                .with_rotation_seed(self.config.rotation_seed),
-        );
+        self.quantizer = TurboQuantMse::new(Self::build_quantizer_config(&self.config));
         self.trained = true;
         Ok(())
     }
@@ -169,6 +170,16 @@ impl IvfTurboQuantIndex {
 
     pub fn count(&self) -> usize {
         self.ntotal
+    }
+
+    fn build_quantizer_config(ivf_config: &IvfTurboQuantConfig) -> TurboQuantConfig {
+        let base = TurboQuantConfig::new(ivf_config.dim, ivf_config.bits_per_dim)
+            .with_rotation_seed(ivf_config.rotation_seed);
+        if ivf_config.hadamard {
+            base.with_hadamard()
+        } else {
+            base.with_dense_rotation()
+        }
     }
 
     fn search_single(

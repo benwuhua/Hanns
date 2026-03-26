@@ -3,6 +3,18 @@ pub enum TurboQuantMode {
     Mse,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TurboRotationBackend {
+    DenseOrthogonal,
+    Hadamard,
+}
+
+impl Default for TurboRotationBackend {
+    fn default() -> Self {
+        Self::Hadamard
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TurboQuantConfig {
     pub dim: usize,
@@ -10,6 +22,7 @@ pub struct TurboQuantConfig {
     pub mode: TurboQuantMode,
     pub rotation_seed: u64,
     pub normalize_for_cosine: bool,
+    pub rotation_backend: TurboRotationBackend,
 }
 
 impl TurboQuantConfig {
@@ -25,6 +38,7 @@ impl TurboQuantConfig {
             mode: TurboQuantMode::Mse,
             rotation_seed: 42,
             normalize_for_cosine: false,
+            rotation_backend: TurboRotationBackend::default(),
         }
     }
 
@@ -36,6 +50,23 @@ impl TurboQuantConfig {
     pub fn with_normalize_for_cosine(mut self, normalize_for_cosine: bool) -> Self {
         self.normalize_for_cosine = normalize_for_cosine;
         self
+    }
+
+    pub fn with_hadamard(mut self) -> Self {
+        self.rotation_backend = TurboRotationBackend::Hadamard;
+        self
+    }
+
+    pub fn with_dense_rotation(mut self) -> Self {
+        self.rotation_backend = TurboRotationBackend::DenseOrthogonal;
+        self
+    }
+
+    pub fn padded_dim(&self) -> usize {
+        match self.rotation_backend {
+            TurboRotationBackend::Hadamard => self.dim.next_power_of_two(),
+            TurboRotationBackend::DenseOrthogonal => self.dim,
+        }
     }
 
     pub fn code_bytes(&self) -> usize {
