@@ -3660,7 +3660,7 @@ impl PQFlashIndex {
             .collect();
         scored.sort_by(|a, b| a.1.total_cmp(&b.1));
         let selected =
-            self.robust_prune_scored(neighbor_idx, &scored, effective_limit, ROBUST_PRUNE_ALPHA);
+            self.robust_prune_scored(neighbor_idx, &scored, effective_limit, 1.0);
         let new_count = selected.len();
         for (i, nb) in selected.into_iter().enumerate() {
             self.node_neighbor_ids[start + i] = nb;
