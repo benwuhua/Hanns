@@ -182,6 +182,7 @@ Previous baselines (2026-03-18) shown in parentheses where significantly changed
 | DiskANN (1M) | 1M | 1595s | **4,556** | L=128, R=48, recall@10=0.303 (random data) |
 | PQFlash NoPQ SIFT-1M (mem) | 1M | **244s** | **6,062** | recall@10=0.9941 (SIFT-1M, 2026-03-26, x86) |
 | PQFlash NoPQ SIFT-1M (disk/mmap) | 1M | 244s | **401** | recall@10=0.9941, cold mmap start; save=0.84s (2026-03-26) |
+| PQFlash PQ32 SIFT-1M (disk V3) | 1M | ~200s | **2,074** | recall@10=0.9146, V3 separated layout 236B/node (2026-03-26, x86) |
 | PQFlash NoPQ | 10K | 4.26s | **10,518** | |
 | PQFlash PQ32 | 10K | 13.47s | **5,214** | |
 | DiskANN 100K | 100K | 117.8s | **8,881** | L=128, R=48 |
