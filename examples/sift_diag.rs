@@ -379,19 +379,25 @@ fn sift1m_disk_pq_uring() {
 
     drop(index);
 
-    let load_start = Instant::now();
-    let disk_index = PQFlashIndex::load(tmp_dir.path()).expect("load");
-    let load_secs = load_start.elapsed().as_secs_f64();
-    println!("load (disk_pq_uring mode): {:.2}s", load_secs);
+    for group_size in [8usize, 16, 32] {
+        let load_start = Instant::now();
+        let mut disk_index = PQFlashIndex::load(tmp_dir.path()).expect("load");
+        disk_index.set_uring_group_size(group_size);
+        let load_secs = load_start.elapsed().as_secs_f64();
 
-    let search_start = Instant::now();
-    let result = disk_index.search_batch(&queries, TOP_K).expect("search_batch");
-    let search_secs = search_start.elapsed().as_secs_f64().max(f64::EPSILON);
-    let qps = query_n as f64 / search_secs;
-    let recall = compute_recall_at_k(&result.ids, &gt, query_n, TOP_K, gt_k);
+        let search_start = Instant::now();
+        let result = disk_index.search_batch(&queries, TOP_K).expect("search_batch");
+        let search_secs = search_start.elapsed().as_secs_f64().max(f64::EPSILON);
+        let qps = query_n as f64 / search_secs;
+        let recall = compute_recall_at_k(&result.ids, &gt, query_n, TOP_K, gt_k);
 
-    println!("disk_pq_uring QPS: {:.0}", qps);
-    println!("disk_pq_uring recall@10: {:.4}", recall);
+        println!("group_size={} load (disk_pq_uring mode): {:.2}s", group_size, load_secs);
+        println!("group_size={} disk_pq_uring QPS: {:.0}", group_size, qps);
+        println!(
+            "group_size={} disk_pq_uring recall@10: {:.4}",
+            group_size, recall
+        );
+    }
     println!("(note: 需要 Linux + --features async-io 才会走 grouped io_uring storage 路径)");
 }
 

@@ -72,6 +72,9 @@ pub struct AisaqConfig {
     /// Search-time beam batch size for sync sector-batch expansion.
     #[serde(default = "default_beam_batch_size")]
     pub beam_batch_size: usize,
+    /// Cross-query io_uring group size (default 8). Only used on Linux with async-io feature.
+    #[serde(default = "default_uring_group_size")]
+    pub uring_group_size: usize,
     pub warm_up: bool,
     pub filter_threshold: f32,
     #[serde(default)]
@@ -112,6 +115,10 @@ fn default_beam_batch_size() -> usize {
     8
 }
 
+fn default_uring_group_size() -> usize {
+    8
+}
+
 const GRAPH_SLACK_FACTOR: f32 = 1.3;
 const ROBUST_PRUNE_ALPHA: f32 = 1.2;
 
@@ -142,6 +149,7 @@ impl Default for AisaqConfig {
             build_search_list_size: 0,
             build_batch_size: 512,
             beam_batch_size: 8,
+            uring_group_size: 8,
             warm_up: false,
             filter_threshold: -1.0,
             search_io_limit: None,
@@ -906,6 +914,10 @@ impl PQFlashIndex {
             sq8_codes: Vec::new(),
             scratch_pool: Mutex::new(Vec::new()),
         })
+    }
+
+    pub fn set_uring_group_size(&mut self, group_size: usize) {
+        self.config.uring_group_size = group_size.max(1);
     }
 
     /// Soft-delete node by external id. Returns true if found and marked.
@@ -2777,10 +2789,13 @@ impl PQFlashIndex {
             return Ok(SearchResult::new(vec![], vec![], 0.0));
         }
 
-        let group_size = 8usize;
+        let group_size = self.config.uring_group_size.max(1);
         let mut all_ids = Vec::with_capacity(n_queries * k);
         let mut all_distances = Vec::with_capacity(n_queries * k);
         let mut total_visited = 0usize;
+        let mut total_rounds = 0usize;
+        let mut total_sqe = 0usize;
+        let mut total_groups = 0usize;
 
         for group in queries.chunks(self.dim).collect::<Vec<_>>().chunks(group_size) {
             let mut states = Vec::with_capacity(group.len());
@@ -2816,6 +2831,8 @@ impl PQFlashIndex {
                         break;
                     }
 
+                    total_rounds += 1;
+                    total_sqe += all_node_ids.len();
                     let raw_results = self.read_nodes_batch_ioring(&all_node_ids)?;
                     let mut node_map = HashMap::with_capacity(all_node_ids.len());
                     let mut pages_map = HashMap::with_capacity(all_node_ids.len());
@@ -2864,7 +2881,26 @@ impl PQFlashIndex {
                 pool.push(std::mem::take(&mut state.scratch));
             }
             group_result?;
+            total_groups += 1;
         }
+
+        let avg_sqe_per_round = if total_rounds == 0 {
+            0.0
+        } else {
+            total_sqe as f64 / total_rounds as f64
+        };
+        let avg_rounds_per_group = if total_groups == 0 {
+            0.0
+        } else {
+            total_rounds as f64 / total_groups as f64
+        };
+        eprintln!(
+            "[grouped_uring] groups={} rounds={} avg_sqe_per_round={:.1} avg_rounds_per_group={:.1}",
+            total_groups,
+            total_rounds,
+            avg_sqe_per_round,
+            avg_rounds_per_group
+        );
 
         let mut result = SearchResult::new(all_ids, all_distances, 0.0);
         result.num_visited = total_visited;
