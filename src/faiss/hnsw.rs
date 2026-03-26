@@ -1960,12 +1960,16 @@ impl HnswIndex {
 
         let mut processed = 0;
         let phase2_start = std::time::Instant::now();
+        let mut par_search_time = std::time::Duration::ZERO;
+        let mut serial_update_time = std::time::Duration::ZERO;
+        let mut shrink_time = std::time::Duration::ZERO;
 
         for (batch_idx, batch_start) in (0..n).step_by(batch_size).enumerate() {
             let batch_end = (batch_start + batch_size).min(n);
             let current_batch_size = batch_end - batch_start;
 
             // Parallel neighbor search (read-only)
+            let par_search_start = std::time::Instant::now();
             let batch_results: Vec<BatchNeighborResults> = (batch_start..batch_end)
                 .into_par_iter()
                 .map(|idx| {
@@ -1976,10 +1980,12 @@ impl HnswIndex {
                     (idx, node_level, neighbors)
                 })
                 .collect();
+            par_search_time += par_search_start.elapsed();
 
             let mut layer0_nodes_to_shrink: Vec<usize> = Vec::new();
 
             // Serial graph update (avoids race conditions)
+            let serial_update_start = std::time::Instant::now();
             for (idx, node_level, neighbors_per_layer) in batch_results {
                 if base_count == 0 && idx == first_new_idx {
                     continue;
@@ -1997,12 +2003,24 @@ impl HnswIndex {
                     );
                 }
             }
+            serial_update_time += serial_update_start.elapsed();
 
+            let shrink_start = std::time::Instant::now();
             layer0_nodes_to_shrink.sort_unstable();
             layer0_nodes_to_shrink.dedup();
-            for node_idx in layer0_nodes_to_shrink {
-                self.shrink_layer_neighbors_heuristic_idx(node_idx, 0, self.m_max0);
+            let pruned: Vec<(usize, Vec<(usize, f32)>)> = layer0_nodes_to_shrink
+                .par_iter()
+                .map(|&node_idx| {
+                    (
+                        node_idx,
+                        self.compute_shrink_candidates(node_idx, 0, self.m_max0),
+                    )
+                })
+                .collect();
+            for (node_idx, new_neighbors) in pruned {
+                self.apply_shrink_result(node_idx, 0, new_neighbors);
             }
+            shrink_time += shrink_start.elapsed();
 
             processed += current_batch_size;
 
@@ -2024,6 +2042,23 @@ impl HnswIndex {
 
         let phase2_time = phase2_start.elapsed();
         let total_time = start_time.elapsed();
+        let serial_fraction = if phase2_time.is_zero() {
+            0.0
+        } else {
+            (serial_update_time + shrink_time).as_secs_f64() / phase2_time.as_secs_f64() * 100.0
+        };
+
+        eprintln!(
+            "[HNSW] phase2 breakdown: par_search={:.2}s serial_update={:.2}s shrink={:.2}s total={:.2}s",
+            par_search_time.as_secs_f64(),
+            serial_update_time.as_secs_f64(),
+            shrink_time.as_secs_f64(),
+            phase2_time.as_secs_f64()
+        );
+        eprintln!(
+            "[HNSW] serial_fraction={:.1}% (serial_update+shrink vs total)",
+            serial_fraction
+        );
 
         eprintln!(
             "[HNSW] Parallel build completed: {} vectors in {:?} (phase1: {:?}, phase2: {:?})",
@@ -3108,15 +3143,15 @@ impl HnswIndex {
     ///
     /// OPT-035: This fixes the recall gap caused by truncate_to_best which only kept
     /// closest neighbors without considering diversity.
-    fn shrink_layer_neighbors_heuristic_idx(
-        &mut self,
+    fn compute_shrink_candidates(
+        &self,
         node_idx: usize,
         level: usize,
         m_max: usize,
-    ) {
+    ) -> Vec<(usize, f32)> {
         let node_info = &self.node_info[node_idx];
         if level > node_info.max_layer {
-            return;
+            return Vec::new();
         }
 
         // Get current neighbors as (idx, dist) pairs
@@ -3128,11 +3163,11 @@ impl HnswIndex {
             .collect();
 
         if current.len() <= m_max {
-            return; // No need to shrink
+            return current;
         }
 
         // Sort by distance (closest first)
-        let mut sorted: Vec<(usize, f32)> = current;
+        let mut sorted = current;
         sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
         // Apply diversification heuristic from THIS node's perspective
@@ -3160,16 +3195,24 @@ impl HnswIndex {
             // OPT-037: keep the hnswlib-style no-backfill behavior here.
         }
 
-        // NOTE: no backfill here; FAISS can optionally refill pruned layer-0
-        // candidates through `keep_max_size_level0`.
+        selected
+    }
 
-        // Pre-compute IDs before mutable borrow
-        let new_neighbors: Vec<(i64, f32)> = selected
+    fn apply_shrink_result(
+        &mut self,
+        node_idx: usize,
+        level: usize,
+        new_neighbors: Vec<(usize, f32)>,
+    ) {
+        if new_neighbors.is_empty() {
+            return;
+        }
+
+        let new_neighbors: Vec<(i64, f32)> = new_neighbors
             .iter()
             .map(|&(idx, dist)| (self.get_id_from_idx(idx), dist))
             .collect();
 
-        // Update the node's neighbors
         let node_info = &mut self.node_info[node_idx];
         let layer_nbrs = &mut node_info.layer_neighbors[level];
         layer_nbrs.ids.clear();
@@ -3177,6 +3220,16 @@ impl HnswIndex {
         for (id, dist) in new_neighbors {
             layer_nbrs.push(id, dist);
         }
+    }
+
+    fn shrink_layer_neighbors_heuristic_idx(
+        &mut self,
+        node_idx: usize,
+        level: usize,
+        m_max: usize,
+    ) {
+        let new_neighbors = self.compute_shrink_candidates(node_idx, level, m_max);
+        self.apply_shrink_result(node_idx, level, new_neighbors);
     }
 
     /// BUG-006: Calculate distance between two nodes (by index)
