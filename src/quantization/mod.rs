@@ -10,6 +10,7 @@ pub mod refine;
 pub mod residual_pq;
 pub mod rq;
 pub mod sq;
+pub mod turboquant;
 
 pub use dual_pca::DualPca;
 pub use hvq::{HvqConfig, HvqQuantizer};
@@ -25,3 +26,4 @@ pub use residual_pq::{
 };
 pub use rq::{RQConfig, ResidualQuantizer};
 pub use sq::{ScalarQuantizer, Sq4Quantizer, Sq8Quantizer};
+pub use turboquant::{TurboQuantConfig, TurboQuantMode, TurboQuantMse};

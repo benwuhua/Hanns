@@ -135,6 +135,17 @@ impl LegalMatrix {
             );
         }
 
+        // === IVF-TurboQuant ===
+        for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16] {
+            add_legal(
+                &mut legal_index_datatype,
+                &mut legal_combinations,
+                IndexType::IvfTurboQuant,
+                *dt,
+                vec![MetricType::L2, MetricType::Ip, MetricType::Cosine],
+            );
+        }
+
         // === HNSW ===
         for dt in &[
             DataType::Float,

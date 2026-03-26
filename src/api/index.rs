@@ -32,6 +32,8 @@ pub enum IndexType {
     HnswPq,
     /// IVF-RaBitQ (Rotated Adaptive Bit Quantization)
     IvfRabitq,
+    /// IVF-TurboQuant (Dense-rotation data-oblivious scalar quantization)
+    IvfTurboQuant,
     /// IVF-FLAT-CC (Concurrent Version)
     IvfFlatCc,
     /// IVF-SQ8 (Scalar Quantization 8-bit)
@@ -76,6 +78,9 @@ impl FromStr for IndexType {
             "hnsw_prq" | "hnsw-prq" => Ok(IndexType::HnswPrq),
             "hnsw_pq" | "hnsw-pq" => Ok(IndexType::HnswPq),
             "ivf_rabitq" | "ivf-rabitq" | "rabitq" => Ok(IndexType::IvfRabitq),
+            "ivf_turboquant" | "ivf-turboquant" | "turboquant" => {
+                Ok(IndexType::IvfTurboQuant)
+            }
             "ivf_flat_cc" | "ivf-flat-cc" | "ivfcc" => Ok(IndexType::IvfFlatCc),
             "ivf_sq8" | "ivf-sq8" | "ivfsq8" => Ok(IndexType::IvfSq8),
             "ivf_sq_cc" | "ivf-sq-cc" | "ivfsqcc" => Ok(IndexType::IvfSqCc),
@@ -301,6 +306,12 @@ pub struct IndexParams {
     /// For RaBitQ: number of bits for query
     #[serde(default)]
     pub rabitq_bits_query: Option<usize>,
+    /// For TurboQuant: scalar quantization bits per rotated dimension
+    #[serde(default)]
+    pub turbo_bits_per_dim: Option<u8>,
+    /// For TurboQuant: seeded dense orthogonal rotation
+    #[serde(default)]
+    pub turbo_rotation_seed: Option<u64>,
     /// For IVF-CC: segment size for concurrent operations
     #[serde(default)]
     pub ssize: Option<usize>,
@@ -399,6 +410,15 @@ impl IndexParams {
         Self {
             nlist: Some(nlist),
             nprobe: Some(nprobe),
+            ..Default::default()
+        }
+    }
+
+    pub fn ivf_turboquant(nlist: usize, nprobe: usize, bits_per_dim: u8) -> Self {
+        Self {
+            nlist: Some(nlist),
+            nprobe: Some(nprobe),
+            turbo_bits_per_dim: Some(bits_per_dim),
             ..Default::default()
         }
     }
@@ -563,6 +583,30 @@ mod tests {
         let params = IndexParams::ivf_sq8(256, 8);
         assert_eq!(params.nlist, Some(256));
         assert_eq!(params.nprobe, Some(8));
+    }
+
+    #[test]
+    fn test_index_type_from_str_ivf_turboquant() {
+        assert_eq!(
+            "ivf_turboquant".parse::<IndexType>().ok(),
+            Some(IndexType::IvfTurboQuant)
+        );
+        assert_eq!(
+            "ivf-turboquant".parse::<IndexType>().ok(),
+            Some(IndexType::IvfTurboQuant)
+        );
+        assert_eq!(
+            "turboquant".parse::<IndexType>().ok(),
+            Some(IndexType::IvfTurboQuant)
+        );
+    }
+
+    #[test]
+    fn test_index_params_ivf_turboquant() {
+        let params = IndexParams::ivf_turboquant(1024, 16, 6);
+        assert_eq!(params.nlist, Some(1024));
+        assert_eq!(params.nprobe, Some(16));
+        assert_eq!(params.turbo_bits_per_dim, Some(6));
     }
 
     #[test]

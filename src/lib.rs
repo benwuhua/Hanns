@@ -68,7 +68,9 @@ pub use faiss::{
     FlashLayout, HnswIndex, IvfPqIndex, IvfSq8Index, MemIndex, PQFlashIndex, PageCache,
     PageCacheStats, ScaNNConfig, ScaNNIndex,
 };
-pub use faiss::{IvfRaBitqConfig, IvfRaBitqIndex, IvfSqCcIndex};
+pub use faiss::{
+    IvfRaBitqConfig, IvfRaBitqIndex, IvfSqCcIndex, IvfTurboQuantConfig, IvfTurboQuantIndex,
+};
 
 use tracing::info;
 
