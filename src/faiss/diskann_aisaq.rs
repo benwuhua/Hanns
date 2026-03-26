@@ -729,6 +729,8 @@ fn pages_touched(offset: usize, len: usize, page_size: usize) -> usize {
 struct DiskStorage {
     file_group: FileGroup,
     page_cache: PageCache,
+    #[cfg(all(feature = "async-io", target_os = "linux"))]
+    raw_file: std::sync::Arc<File>,
 }
 
 #[derive(Debug)]
@@ -2170,6 +2172,8 @@ impl PQFlashIndex {
                 .pq_read_page_cache_size
                 .max(metadata.flash_layout.page_size),
         )?;
+        #[cfg(all(feature = "async-io", target_os = "linux"))]
+        let raw_file = std::sync::Arc::new(OpenOptions::new().read(true).open(file_group.data_path())?);
 
         let mut index = Self {
             config: metadata.config,
@@ -2192,6 +2196,8 @@ impl PQFlashIndex {
             storage: Some(DiskStorage {
                 file_group,
                 page_cache,
+                #[cfg(all(feature = "async-io", target_os = "linux"))]
+                raw_file,
             }),
             mmap_storage: None,
             loaded_node_cache: None,
@@ -2691,6 +2697,24 @@ impl PQFlashIndex {
     ) -> Result<Vec<(Candidate, std::sync::Arc<LoadedNode>)>> {
         if batch.is_empty() {
             return Ok(Vec::new());
+        }
+
+        #[cfg(all(feature = "async-io", target_os = "linux"))]
+        if self.storage.is_some() && batch.len() > 1 {
+            let node_ids: Vec<u32> = batch.iter().map(|candidate| candidate.node_id).collect();
+            let raw_results = self.read_nodes_batch_ioring(&node_ids)?;
+            let mut out = Vec::with_capacity(batch.len());
+            for (i, candidate) in batch.iter().enumerate() {
+                let (bytes, pages_loaded) = &raw_results[i];
+                let node = self.deserialize_node(candidate.node_id, bytes)?;
+                io.record_node_access(
+                    candidate.node_id,
+                    self.flash_layout.node_bytes,
+                    *pages_loaded,
+                );
+                out.push((*candidate, std::sync::Arc::new(node)));
+            }
+            return Ok(out);
         }
 
         #[cfg(feature = "parallel")]
@@ -3215,17 +3239,17 @@ impl PQFlashIndex {
             .storage
             .as_ref()
             .ok_or_else(|| KnowhereError::Storage("missing disk storage".to_string()))?;
-        let data_path = storage.file_group.data_path();
-        let file = OpenOptions::new().read(true).open(data_path)?;
+        let file = &*storage.raw_file;
         let offset = node_id as usize * self.flash_layout.node_bytes;
-        let mut bytes = vec![0u8; self.flash_layout.node_bytes];
+        let node_bytes = self.flash_layout.node_bytes;
+        let mut bytes = vec![0u8; node_bytes];
 
         let mut ring = IoUring::new(2)
             .map_err(|e| KnowhereError::Storage(format!("io_uring init failed: {e}")))?;
         let entry = opcode::Read::new(
             types::Fd(file.as_raw_fd()),
             bytes.as_mut_ptr(),
-            bytes.len() as u32,
+            node_bytes as u32,
         )
         .offset(offset as u64)
         .build()
@@ -3251,18 +3275,82 @@ impl PQFlashIndex {
                 -res
             )));
         }
-        if res as usize != self.flash_layout.node_bytes {
+        if res as usize != node_bytes {
             return Err(KnowhereError::Storage(format!(
                 "io_uring short read: got {} expected {}",
-                res, self.flash_layout.node_bytes
+                res, node_bytes
             )));
         }
 
-        let pages_loaded = self
-            .flash_layout
-            .node_bytes
-            .div_ceil(self.flash_layout.page_size.max(1));
+        let pages_loaded = node_bytes.div_ceil(self.flash_layout.page_size.max(1));
         Ok((bytes, pages_loaded))
+    }
+
+    #[cfg(all(feature = "async-io", target_os = "linux"))]
+    fn read_nodes_batch_ioring(&self, node_ids: &[u32]) -> Result<Vec<(Vec<u8>, usize)>> {
+        let storage = self
+            .storage
+            .as_ref()
+            .ok_or_else(|| KnowhereError::Storage("missing disk storage".to_string()))?;
+        let file = &*storage.raw_file;
+        let node_bytes = self.flash_layout.node_bytes;
+        let page_size = self.flash_layout.page_size.max(1);
+        let n = node_ids.len();
+
+        let ring_cap = n.min(128).max(1) as u32;
+        let mut ring = IoUring::new(ring_cap)
+            .map_err(|e| KnowhereError::Storage(format!("io_uring batch init failed: {e}")))?;
+        let mut buffers: Vec<Vec<u8>> = (0..n).map(|_| vec![0u8; node_bytes]).collect();
+
+        let batch = ring_cap as usize;
+        for chunk_start in (0..n).step_by(batch) {
+            let chunk_end = (chunk_start + batch).min(n);
+            let chunk_len = chunk_end - chunk_start;
+
+            for i in 0..chunk_len {
+                let nid = node_ids[chunk_start + i];
+                let offset = nid as u64 * node_bytes as u64;
+                let buf = &mut buffers[chunk_start + i];
+                let entry = opcode::Read::new(
+                    types::Fd(file.as_raw_fd()),
+                    buf.as_mut_ptr(),
+                    node_bytes as u32,
+                )
+                .offset(offset)
+                .build()
+                .user_data(i as u64);
+                unsafe {
+                    ring.submission().push(&entry).map_err(|_| {
+                        KnowhereError::Storage("io_uring batch SQ full".to_string())
+                    })?;
+                }
+            }
+
+            ring.submit_and_wait(chunk_len)
+                .map_err(|e| KnowhereError::Storage(format!("io_uring batch submit failed: {e}")))?;
+
+            for cqe in ring.completion() {
+                if cqe.result() < 0 {
+                    return Err(KnowhereError::Storage(format!(
+                        "io_uring batch read errno={}",
+                        -cqe.result()
+                    )));
+                }
+                if cqe.result() as usize != node_bytes {
+                    return Err(KnowhereError::Storage(format!(
+                        "io_uring batch short read: got {} expected {}",
+                        cqe.result(),
+                        node_bytes
+                    )));
+                }
+            }
+        }
+
+        let pages_per_node = node_bytes.div_ceil(page_size);
+        Ok(buffers
+            .into_iter()
+            .map(|buf| (buf, pages_per_node))
+            .collect())
     }
 
     fn validate_vectors(&self, vectors: &[f32]) -> Result<()> {
