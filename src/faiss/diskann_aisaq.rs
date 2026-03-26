@@ -2502,6 +2502,8 @@ impl PQFlashIndex {
 
         let outcome: Result<SearchResult> = with_visited(self.node_count, |visited| {
             (|| {
+                let prefetch_enabled = self.storage.is_some();
+                let mut next_prefetch = Vec::new();
                 for candidate in self.rank_entry_candidates(query, pq_table_slice, &mut io)? {
                     scratch.frontier.push(candidate);
                 }
@@ -2562,6 +2564,11 @@ impl PQFlashIndex {
                         break;
                     }
 
+                    if prefetch_enabled && !next_prefetch.is_empty() {
+                        self.batch_prefetch_neighbors(&next_prefetch);
+                        next_prefetch.clear();
+                    }
+
                     let loaded_batch = self.load_node_batch_sync(&batch, &mut io)?;
                     for (_, node) in loaded_batch {
                         let unseen: Vec<u32> = node
@@ -2607,6 +2614,9 @@ impl PQFlashIndex {
                         }
                         neighbor_scores.sort_by(|left, right| left.score.total_cmp(&right.score));
                         for neighbor in neighbor_scores.into_iter().take(expand_limit) {
+                            if prefetch_enabled {
+                                next_prefetch.push(neighbor.node_id);
+                            }
                             scratch.frontier.push(neighbor);
                         }
                     }
@@ -2685,50 +2695,37 @@ impl PQFlashIndex {
 
         #[cfg(feature = "parallel")]
         {
-            if batch.len() <= 1 {
-                let candidate = batch[0];
-                let node = self.load_node(candidate.node_id, NodeAccessMode::Node, io)?;
-                return Ok(vec![(candidate, node)]);
-            }
+            if self.storage.is_some() && batch.len() > 1 {
+                use rayon::prelude::*;
 
-            let loaded = std::thread::scope(|scope| {
-                let mut handles = Vec::with_capacity(batch.len());
-                for &candidate in batch {
-                    handles.push(scope.spawn(move || {
+                let loaded: Vec<Result<(Candidate, std::sync::Arc<LoadedNode>, usize)>> = batch
+                    .par_iter()
+                    .copied()
+                    .map(|candidate| {
                         let mut local_io = self.io_template.clone();
                         local_io.reset_stats();
                         let node =
                             self.load_node(candidate.node_id, NodeAccessMode::Node, &mut local_io)?;
-                        Ok::<_, KnowhereError>((candidate, node, local_io.stats().pages_read))
-                    }));
-                }
+                        Ok((candidate, node, local_io.stats().pages_read))
+                    })
+                    .collect();
 
-                let mut out = Vec::with_capacity(batch.len());
-                for handle in handles {
-                    let joined = handle.join().map_err(|_| {
-                        KnowhereError::InternalError(
-                            "sync batch load thread panicked".to_string(),
-                        )
-                    })?;
-                    out.push(joined?);
+                let mut out = Vec::with_capacity(loaded.len());
+                for item in loaded {
+                    let (candidate, node, pages_read) = item?;
+                    io.record_node_access(candidate.node_id, self.flash_layout.node_bytes, pages_read);
+                    out.push((candidate, node));
                 }
-                Ok::<_, KnowhereError>(out)
-            })?;
-
-            let mut out = Vec::with_capacity(loaded.len());
-            for (candidate, node, pages_read) in loaded {
-                io.record_node_access(candidate.node_id, self.flash_layout.node_bytes, pages_read);
-                out.push((candidate, node));
+                return Ok(out);
             }
-            return Ok(out);
         }
 
-        #[cfg(not(feature = "parallel"))]
-        {
-            let candidate = batch[0];
+        let mut out = Vec::with_capacity(batch.len());
+        for &candidate in batch {
             let node = self.load_node(candidate.node_id, NodeAccessMode::Node, io)?;
-            Ok(vec![(candidate, node)])
+            out.push((candidate, node));
         }
+        Ok(out)
     }
 
     async fn load_node_batch_async(
@@ -3337,7 +3334,6 @@ impl PQFlashIndex {
         Ok(())
     }
 
-    #[allow(dead_code)]
     fn batch_prefetch_neighbors(&self, neighbor_ids: &[u32]) {
         let Some(storage) = &self.storage else {
             return;
