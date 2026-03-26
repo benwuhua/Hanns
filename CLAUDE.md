@@ -180,7 +180,8 @@ Previous baselines (2026-03-18) shown in parentheses where significantly changed
 | HNSW (10K) | 10K | — | **27,505** | benchmark fn, ef=50 |
 | HNSW (1M, M=16) | 1M | **375s** (parallel, 8t) | **6,374** | ef=50, recall=0.125; ef=200: QPS=1945/recall=0.309; was 938s serial |
 | DiskANN (1M) | 1M | 1595s | **4,556** | L=128, R=48, recall@10=0.303 (random data) |
-| PQFlash NoPQ SIFT-1M | 1M | **355s** | **6,268** | recall@10=0.9943 (SIFT-1M, 2026-03-26, lazy overflow refine) |
+| PQFlash NoPQ SIFT-1M (mem) | 1M | **244s** | **6,062** | recall@10=0.9941 (SIFT-1M, 2026-03-26, x86) |
+| PQFlash NoPQ SIFT-1M (disk/mmap) | 1M | 244s | **401** | recall@10=0.9941, cold mmap start; save=0.84s (2026-03-26) |
 | PQFlash NoPQ | 10K | 4.26s | **10,518** | |
 | PQFlash PQ32 | 10K | 13.47s | **5,214** | |
 | DiskANN 100K | 100K | 117.8s | **8,881** | L=128, R=48 |
