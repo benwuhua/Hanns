@@ -122,7 +122,12 @@ impl IvfTurboQuantIndex {
             let raw = &data[i * self.config.dim..(i + 1) * self.config.dim];
             let vector = self.preprocess_vector(raw);
             let cluster = self.find_best_centroid(&vector);
-            let code = self.quantizer.encode(&vector);
+            let centroid =
+                &self.centroids[cluster * self.config.dim..(cluster + 1) * self.config.dim];
+            // Encode residual (v - c): residuals are smaller than full vectors →
+            // less quantization error. Centroid term q·c is recovered exactly at search.
+            let residual = subtract_slices(&vector, centroid);
+            let code = self.quantizer.encode(&residual);
             let id = ids
                 .map(|values| values[i])
                 .unwrap_or((self.ntotal + i) as i64);
@@ -188,12 +193,25 @@ impl IvfTurboQuantIndex {
     ) -> Vec<(i64, f32)> {
         let processed_query = self.preprocess_vector(query);
         let coarse = self.rank_centroids(&processed_query, nprobe);
-        // Pre-rotate query once outside the cluster loop (O(d log d) with FWHT)
+        // Pre-rotate query once: Π·q (d_pad coords for FWHT). Used for residual scoring:
+        // score(q,v) = q·c + score_ip(Π·q, TQ(Π·(v-c))) ≈ q·c + q·(v-c) = q·v
         let query_rotated = self.quantizer.rotate_query(&processed_query);
 
         let mut candidates = Vec::new();
         let lists = self.inverted_lists.read();
         for cluster in coarse {
+            let centroid =
+                &self.centroids[cluster * self.config.dim..(cluster + 1) * self.config.dim];
+            // Exact centroid score (same for all vectors in this list)
+            let centroid_score = dot_product(&processed_query, centroid);
+            let residual_query_rotated = match self.config.metric_type {
+                MetricType::L2 => {
+                    let rq = subtract_slices(&processed_query, centroid);
+                    Some(self.quantizer.rotate_query(&rq))
+                }
+                _ => None,
+            };
+
             if let Some(list) = lists.get(&cluster) {
                 for (id, code) in list {
                     if let Some(predicate) = filter {
@@ -202,14 +220,17 @@ impl IvfTurboQuantIndex {
                         }
                     }
 
-                    // Encode full vectors (not residuals): score_ip(Π·q, TQ(v)) ≈ q·v
                     let distance = match self.config.metric_type {
                         MetricType::L2 => {
-                            let decoded = self.quantizer.decode(code);
-                            l2_distance(&processed_query, &decoded)
+                            let q_rot = residual_query_rotated.as_ref().expect("l2 residual");
+                            self.quantizer.score_l2(q_rot, code)
                         }
-                        MetricType::Ip => -self.quantizer.score_ip(&query_rotated, code),
-                        MetricType::Cosine => 1.0 - self.quantizer.score_ip(&query_rotated, code),
+                        MetricType::Ip => {
+                            -(centroid_score + self.quantizer.score_ip(&query_rotated, code))
+                        }
+                        MetricType::Cosine => {
+                            1.0 - (centroid_score + self.quantizer.score_ip(&query_rotated, code))
+                        }
                         MetricType::Hamming => continue,
                     };
 
@@ -285,6 +306,10 @@ impl IvfTurboQuantIndex {
         }
         vector.iter().map(|&x| x / norm).collect()
     }
+}
+
+fn subtract_slices(left: &[f32], right: &[f32]) -> Vec<f32> {
+    left.iter().zip(right.iter()).map(|(&l, &r)| l - r).collect()
 }
 
 fn dot_product(left: &[f32], right: &[f32]) -> f32 {
