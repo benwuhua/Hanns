@@ -1,4 +1,4 @@
-//! Wikipedia-Cohere 1M TurboQuant benchmark (IP, dim=768)
+//! Wikipedia-Cohere 1M TurboQuant benchmark (IP, dim=768, Hadamard rotation by default)
 //! Usage:
 //!   cargo run --example cohere_turboquant -- <optional_data_dir>
 
@@ -10,6 +10,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use knowhere_rs::api::{MetricType, SearchRequest};
+use knowhere_rs::faiss::ivf_turboquant::TurboQuantEncoding;
 use knowhere_rs::faiss::{IvfTurboQuantConfig, IvfTurboQuantIndex};
 use rayon::prelude::*;
 
@@ -95,6 +96,14 @@ fn compute_recall(results: &[Vec<i64>], gt: &[Vec<i32>], top_k: usize) -> f32 {
     hits as f32 / (n * top_k) as f32
 }
 
+fn encoding_label(enc: &TurboQuantEncoding) -> &'static str {
+    match enc {
+        TurboQuantEncoding::Residual => "residual",
+        TurboQuantEncoding::FullVector => "full",
+        TurboQuantEncoding::NormalizedResidual => "norm_resid",
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let data_dir_arg = env::args()
         .nth(1)
@@ -148,45 +157,53 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("setup: train_size={} eval_queries={}", train_n, eval_n);
 
-    for &bits_per_dim in &TURBO_BITS_SWEEP {
-        let mut index = IvfTurboQuantIndex::new(
-            IvfTurboQuantConfig::new(base_dim, IVF_NLIST, bits_per_dim)
-                .with_metric(MetricType::Ip),
-        );
+    let encodings = [TurboQuantEncoding::NormalizedResidual];
+    let bits_sweep: &[u8] = &[2, 8];
 
-        let t_build = Instant::now();
-        index.train(train)?;
-        index.add(&base, None)?;
-        println!(
-            "[TurboQuant] bits={} build_time={:.2}s",
-            bits_per_dim,
-            t_build.elapsed().as_secs_f64()
-        );
-
-        for &nprobe in &IVF_NPROBE_SWEEP {
-            let req = SearchRequest {
-                top_k: TOP_K,
-                nprobe,
-                ..Default::default()
-            };
-
-            let t_batch = Instant::now();
-            queries.par_chunks_exact(base_dim).for_each(|q| {
-                let _ = index.search(q, &req);
-            });
-            let qps = query_n as f64 / t_batch.elapsed().as_secs_f64().max(f64::EPSILON);
-
-            let mut results = Vec::with_capacity(eval_n);
-            for q in queries.chunks_exact(base_dim).take(eval_n) {
-                let res = index.search(q, &req)?;
-                results.push(normalize_ids(&res.ids, TOP_K));
-            }
-
-            let recall = compute_recall(&results, &gt[..eval_n], TOP_K);
-            println!(
-                "[TurboQuant] bits={} nprobe={}: recall@10={:.4}, QPS={:.0}",
-                bits_per_dim, nprobe, recall, qps
+    for encoding in &encodings {
+        let label = encoding_label(encoding);
+        for &bits_per_dim in bits_sweep {
+            let mut index = IvfTurboQuantIndex::new(
+                IvfTurboQuantConfig::new(base_dim, IVF_NLIST, bits_per_dim)
+                    .with_metric(MetricType::Ip)
+                    .with_encoding(encoding.clone()),
             );
+
+            let t_build = Instant::now();
+            index.train(train)?;
+            index.add(&base, None)?;
+            println!(
+                "[TQ/{}] bits={} build_time={:.2}s",
+                label,
+                bits_per_dim,
+                t_build.elapsed().as_secs_f64()
+            );
+
+            for &nprobe in &IVF_NPROBE_SWEEP {
+                let req = SearchRequest {
+                    top_k: TOP_K,
+                    nprobe,
+                    ..Default::default()
+                };
+
+                let t_batch = Instant::now();
+                queries.par_chunks_exact(base_dim).for_each(|q| {
+                    let _ = index.search(q, &req);
+                });
+                let qps = query_n as f64 / t_batch.elapsed().as_secs_f64().max(f64::EPSILON);
+
+                let mut results = Vec::with_capacity(eval_n);
+                for q in queries.chunks_exact(base_dim).take(eval_n) {
+                    let res = index.search(q, &req)?;
+                    results.push(normalize_ids(&res.ids, TOP_K));
+                }
+
+                let recall = compute_recall(&results, &gt[..eval_n], TOP_K);
+                println!(
+                    "[TQ/{}] bits={} nprobe={}: recall@10={:.4}, QPS={:.0}",
+                    label, bits_per_dim, nprobe, recall, qps
+                );
+            }
         }
     }
 
