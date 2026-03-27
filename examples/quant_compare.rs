@@ -16,8 +16,38 @@ const EXPECTED_DIM: usize = 768;
 const TOP_K: usize = 10;
 const TRAIN_SIZE: usize = 100_000;
 const EVAL_QUERIES: usize = 5_000;
-const PQ_M: usize = 96;
-const BITS_SWEEP: [u8; 4] = [1, 2, 4, 8];
+
+struct Tier {
+    label: &'static str,
+    pq_m: usize,
+    pq_nbits: usize,
+    tq_bits: u8,
+    hvq_bits: u8,
+}
+
+const TIERS: [Tier; 3] = [
+    Tier {
+        label: "32x",
+        pq_m: 96,
+        pq_nbits: 8,
+        tq_bits: 1,
+        hvq_bits: 1,
+    },
+    Tier {
+        label: "8x",
+        pq_m: 384,
+        pq_nbits: 8,
+        tq_bits: 3,
+        hvq_bits: 4,
+    },
+    Tier {
+        label: "4x",
+        pq_m: 768,
+        pq_nbits: 8,
+        tq_bits: 6,
+        hvq_bits: 8,
+    },
+];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct MinScored {
@@ -246,8 +276,8 @@ fn pq_score_ip_table(pq: &ProductQuantizer, table: &[f32], code: &[u8]) -> f32 {
     score
 }
 
-fn pq_code_bytes(bits: u8) -> usize {
-    PQ_M * bits as usize / 8
+fn pq_code_bytes(m: usize, nbits: usize) -> usize {
+    m * nbits / 8
 }
 
 fn tq_code_bytes(bits: u8) -> usize {
@@ -258,10 +288,10 @@ fn hvq_code_bytes(bits: u8) -> usize {
     8 + (EXPECTED_DIM * bits as usize).div_ceil(8)
 }
 
-fn print_row(method: &str, bits: u8, code_bytes: usize, build_s: f64, recall: f32, qps: f64) {
+fn print_row(method: &str, tier: &str, code_bytes: usize, build_s: f64, recall: f32, qps: f64) {
     println!(
         "{:<8} {:>4} {:>11} {:>8.2} {:>10.4} {:>10.0}",
-        method, bits, code_bytes, build_s, recall, qps
+        method, tier, code_bytes, build_s, recall, qps
     );
 }
 
@@ -300,13 +330,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let eval_queries = EVAL_QUERIES.min(query_n).min(gt.len());
 
     println!("=== Quantizer Comparison: Cohere 768D, IP metric ===");
+    println!("=== (TQ uses normalized vectors; PQ/HVQ use raw vectors) ===");
     println!(
         "{:<8} {:>4} {:>11} {:>8} {:>10} {:>10}",
-        "method", "bits", "code_bytes", "build_s", "recall@10", "scan_qps"
+        "method", "tier", "code_bytes", "build_s", "recall@10", "scan_qps"
     );
 
-    for &bits in &BITS_SWEEP {
-        let pq_config = PQConfig::new(EXPECTED_DIM, PQ_M, bits as usize);
+    for tier in &TIERS {
+        let pq_config = PQConfig::new(EXPECTED_DIM, tier.pq_m, tier.pq_nbits);
         let mut pq = ProductQuantizer::new(pq_config);
         let t_build = Instant::now();
         pq.train(train_n, train)?;
@@ -322,11 +353,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
         let scan_qps = eval_queries as f64 / t_scan.elapsed().as_secs_f64().max(f64::EPSILON);
         let recall = compute_recall(&pq_results, &gt[..eval_queries], TOP_K);
-        print_row("PQ", bits, pq_code_bytes(bits), build_s, recall, scan_qps);
-    }
+        print_row(
+            "PQ",
+            tier.label,
+            pq_code_bytes(tier.pq_m, tier.pq_nbits),
+            build_s,
+            recall,
+            scan_qps,
+        );
 
-    for &bits in &BITS_SWEEP {
-        let tq_config = TurboQuantConfig::new(EXPECTED_DIM, bits).with_hadamard();
+        let tq_config = TurboQuantConfig::new(EXPECTED_DIM, tier.tq_bits)
+            .with_hadamard()
+            .with_normalize_for_cosine(true);
         let tq = TurboQuantMse::new(tq_config.clone());
         let t_build = Instant::now();
         let tq_codes = tq.encode_batch(base_n, &base);
@@ -336,7 +374,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let t_scan = Instant::now();
         let tq_results = evaluate_queries(&queries, EXPECTED_DIM, eval_queries, TOP_K, |query| {
             let q_rot = tq.rotate_query(query);
-            let adc = (bits <= 6).then(|| tq.precompute_adc_table(&q_rot));
+            let adc = (tier.tq_bits <= 6).then(|| tq.precompute_adc_table(&q_rot));
             scan_topk_codes(&tq_codes, tq_code_size, TOP_K, |_idx, code| match &adc {
                 Some(table) => tq.score_ip_adc(table, code),
                 None => tq.score_ip(&q_rot, code),
@@ -344,14 +382,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
         let scan_qps = eval_queries as f64 / t_scan.elapsed().as_secs_f64().max(f64::EPSILON);
         let recall = compute_recall(&tq_results, &gt[..eval_queries], TOP_K);
-        print_row("TQ", bits, tq_code_bytes(bits), build_s, recall, scan_qps);
-    }
+        print_row(
+            "TQ",
+            tier.label,
+            tq_code_bytes(tier.tq_bits),
+            build_s,
+            recall,
+            scan_qps,
+        );
 
-    for &bits in &BITS_SWEEP {
         let hvq = HvqQuantizer::new(
             HvqConfig {
                 dim: EXPECTED_DIM,
-                nbits: bits,
+                nbits: tier.hvq_bits,
             },
             42,
         );
@@ -369,7 +412,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
         let scan_qps = eval_queries as f64 / t_scan.elapsed().as_secs_f64().max(f64::EPSILON);
         let recall = compute_recall(&hvq_results, &gt[..eval_queries], TOP_K);
-        print_row("HVQ", bits, hvq_code_bytes(bits), build_s, recall, scan_qps);
+        print_row(
+            "HVQ",
+            tier.label,
+            hvq_code_bytes(tier.hvq_bits),
+            build_s,
+            recall,
+            scan_qps,
+        );
     }
 
     Ok(())
