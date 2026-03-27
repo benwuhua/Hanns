@@ -18,7 +18,7 @@ const DEFAULT_DATA_DIR: &str = "/data/work/datasets/wikipedia-cohere-1m";
 const TOP_K: usize = 10;
 const IVF_NLIST: usize = 1024;
 const IVF_TRAIN_SIZE: usize = 100_000;
-const TURBO_BITS_SWEEP: [u8; 3] = [4, 6, 8];
+const TURBO_BITS_SWEEP: [u8; 2] = [4, 6];
 const IVF_NPROBE_SWEEP: [usize; 4] = [8, 16, 32, 64];
 const EXPECTED_DIM: usize = 768;
 
@@ -101,6 +101,7 @@ fn encoding_label(enc: &TurboQuantEncoding) -> &'static str {
         TurboQuantEncoding::Residual => "residual",
         TurboQuantEncoding::FullVector => "full",
         TurboQuantEncoding::NormalizedResidual => "norm_resid",
+        TurboQuantEncoding::Prod => "prod",
     }
 }
 
@@ -157,8 +158,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("setup: train_size={} eval_queries={}", train_n, eval_n);
 
-    let encodings = [TurboQuantEncoding::NormalizedResidual];
-    let bits_sweep: &[u8] = &[2, 8];
+    let encodings = [
+        TurboQuantEncoding::NormalizedResidual,
+        TurboQuantEncoding::Prod,
+    ];
+    let bits_sweep: &[u8] = &TURBO_BITS_SWEEP;
 
     for encoding in &encodings {
         let label = encoding_label(encoding);
