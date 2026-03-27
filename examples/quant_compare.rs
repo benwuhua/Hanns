@@ -255,7 +255,7 @@ fn tq_code_bytes(bits: u8) -> usize {
 }
 
 fn hvq_code_bytes(bits: u8) -> usize {
-    (EXPECTED_DIM * bits as usize).div_ceil(8)
+    8 + (EXPECTED_DIM * bits as usize).div_ceil(8)
 }
 
 fn print_row(method: &str, bits: u8, code_bytes: usize, build_s: f64, recall: f32, qps: f64) {
@@ -358,13 +358,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         let t_build = Instant::now();
         let hvq_codes = hvq.encode_batch(base_n, &base, 0);
         let build_s = t_build.elapsed().as_secs_f64();
-        let hvq_storage_size = EXPECTED_DIM + 8;
+        let hvq_storage_size = hvq.code_size_bytes();
 
         let t_scan = Instant::now();
         let hvq_results = evaluate_queries(&queries, EXPECTED_DIM, eval_queries, TOP_K, |query| {
             let q_rot = hvq.rotate_query(query);
             scan_topk_codes(&hvq_codes, hvq_storage_size, TOP_K, |_idx, code| {
-                -hvq.adc_distance_prerotated(&q_rot, code, 0.0)
+                hvq.adc_distance_prerotated(&q_rot, code, 0.0)
             })
         });
         let scan_qps = eval_queries as f64 / t_scan.elapsed().as_secs_f64().max(f64::EPSILON);
