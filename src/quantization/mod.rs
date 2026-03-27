@@ -27,5 +27,6 @@ pub use residual_pq::{
 pub use rq::{RQConfig, ResidualQuantizer};
 pub use sq::{ScalarQuantizer, Sq4Quantizer, Sq8Quantizer};
 pub use turboquant::{
-    HadamardRotation, TurboQuantConfig, TurboQuantMode, TurboQuantMse, TurboRotationBackend,
+    HadamardRotation, TurboQuantConfig, TurboQuantMode, TurboQuantMse, TurboQuantProd,
+    TurboRotationBackend,
 };
