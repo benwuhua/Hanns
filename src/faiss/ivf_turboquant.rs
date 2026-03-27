@@ -276,6 +276,17 @@ impl IvfTurboQuantIndex {
         } else {
             (None, None)
         };
+        let normalized_residual_ip_adc = if self.config.metric_type == MetricType::Ip
+            && self.config.encoding == TurboQuantEncoding::NormalizedResidual
+            && self.config.bits_per_dim <= 6
+        {
+            Some(
+                self.quantizer
+                    .precompute_adc_table(query_rotated.as_ref().expect("residual")),
+            )
+        } else {
+            None
+        };
 
         let mut candidates = Vec::new();
         let lists = self.inverted_lists.read();
@@ -366,12 +377,16 @@ impl IvfTurboQuantIndex {
                             }
                             TurboQuantEncoding::NormalizedResidual => {
                                 // q·v = q·c + ||r||·score_ip(Π·q, TQ(Π·r̂)) where r̂=r/||r||
+                                let ip_approx = if let Some(adc) = &normalized_residual_ip_adc {
+                                    self.quantizer.score_ip_adc(adc, code)
+                                } else {
+                                    self.quantizer.score_ip(
+                                        query_rotated.as_ref().expect("residual"),
+                                        code,
+                                    )
+                                };
                                 -(centroid_score
-                                    + r_norm
-                                        * self.quantizer.score_ip(
-                                            query_rotated.as_ref().expect("residual"),
-                                            code,
-                                        ))
+                                    + r_norm * ip_approx)
                             }
                         },
                         MetricType::Cosine => match self.config.encoding {

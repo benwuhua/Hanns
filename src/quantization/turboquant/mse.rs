@@ -150,28 +150,71 @@ impl TurboQuantMse {
     }
 
     pub fn score_ip(&self, q_rotated: &[f32], code: &[u8]) -> f32 {
-        let qdim = self.rotation.output_len();
-        assert_eq!(q_rotated.len(), qdim);
-        let indices = unpack_codes(code, qdim, self.config.bits_per_dim);
-        q_rotated
-            .iter()
-            .zip(indices.iter())
-            .map(|(&q, &idx)| q * self.centroids[idx as usize])
-            .sum()
+        self.score_ip_noalloc(q_rotated, code)
     }
 
     pub fn score_l2(&self, q_rotated: &[f32], code: &[u8]) -> f32 {
+        self.score_l2_noalloc(q_rotated, code)
+    }
+
+    /// Zero-alloc IP score: decode packed indices on the fly.
+    pub fn score_ip_noalloc(&self, q_rotated: &[f32], code: &[u8]) -> f32 {
         let qdim = self.rotation.output_len();
         assert_eq!(q_rotated.len(), qdim);
-        let indices = unpack_codes(code, qdim, self.config.bits_per_dim);
-        q_rotated
-            .iter()
-            .zip(indices.iter())
-            .map(|(&q, &idx)| {
-                let diff = q - self.centroids[idx as usize];
-                diff * diff
-            })
-            .sum()
+        let bits = self.config.bits_per_dim as usize;
+        let mask = (1u32 << bits) - 1;
+        let mut score = 0.0f32;
+        for (i, &q) in q_rotated.iter().enumerate() {
+            let idx = decode_packed_index(code, i, bits, mask);
+            score += q * self.centroids[idx];
+        }
+        score
+    }
+
+    /// Zero-alloc L2 score: decode packed indices on the fly.
+    pub fn score_l2_noalloc(&self, q_rotated: &[f32], code: &[u8]) -> f32 {
+        let qdim = self.rotation.output_len();
+        assert_eq!(q_rotated.len(), qdim);
+        let bits = self.config.bits_per_dim as usize;
+        let mask = (1u32 << bits) - 1;
+        let mut score = 0.0f32;
+        for (i, &q) in q_rotated.iter().enumerate() {
+            let idx = decode_packed_index(code, i, bits, mask);
+            let diff = q - self.centroids[idx];
+            score += diff * diff;
+        }
+        score
+    }
+
+    /// Precompute ADC table for a rotated query. Most useful for bits <= 6.
+    pub fn precompute_adc_table(&self, q_rotated: &[f32]) -> Vec<f32> {
+        let qdim = self.rotation.output_len();
+        assert_eq!(q_rotated.len(), qdim);
+        let n_centroids = 1usize << self.config.bits_per_dim;
+        let mut table = vec![0.0f32; qdim * n_centroids];
+        for i in 0..qdim {
+            let base = i * n_centroids;
+            for c in 0..n_centroids {
+                table[base + c] = q_rotated[i] * self.centroids[c];
+            }
+        }
+        table
+    }
+
+    /// Score using a precomputed ADC table. Zero alloc, no multiply in the hot loop.
+    pub fn score_ip_adc(&self, adc_table: &[f32], code: &[u8]) -> f32 {
+        let qdim = self.rotation.output_len();
+        let bits = self.config.bits_per_dim as usize;
+        let n_centroids = 1usize << bits;
+        assert_eq!(adc_table.len(), qdim * n_centroids);
+
+        let mask = (1u32 << bits) - 1;
+        let mut score = 0.0f32;
+        for i in 0..qdim {
+            let idx = decode_packed_index(code, i, bits, mask);
+            score += adc_table[i * n_centroids + idx];
+        }
+        score
     }
 
     pub fn reconstruction_mse(&self, data: &[f32]) -> f32 {
@@ -257,6 +300,16 @@ fn normalize_vector(v: &[f32]) -> Vec<f32> {
     v.iter().map(|&x| x / norm).collect()
 }
 
+fn decode_packed_index(code: &[u8], coord: usize, bits: usize, mask: u32) -> usize {
+    let bit_offset = coord * bits;
+    let byte_idx = bit_offset / 8;
+    let bit_in_byte = bit_offset % 8;
+    let low = code.get(byte_idx).copied().unwrap_or(0) as u32;
+    let high = code.get(byte_idx + 1).copied().unwrap_or(0) as u32;
+    let word = low | (high << 8);
+    ((word >> bit_in_byte) & mask) as usize
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,5 +385,28 @@ mod tests {
             assert!(mse < prev_mse, "bits={bits}: mse={mse} should be < prev={prev_mse}");
             prev_mse = mse;
         }
+    }
+
+    #[test]
+    fn test_zero_alloc_scores_match_existing_paths() {
+        let dim = 64usize;
+        let config = TurboQuantConfig::new(dim, 4).with_hadamard();
+        let tq = TurboQuantMse::new(config);
+
+        let vector: Vec<f32> = (0..dim).map(|i| (i as f32 / dim as f32) - 0.5).collect();
+        let query: Vec<f32> = (0..dim).map(|i| 0.3 - i as f32 / dim as f32).collect();
+        let code = tq.encode(&vector);
+        let q_rot = tq.rotate_query(&query);
+        let adc = tq.precompute_adc_table(&q_rot);
+
+        let ip = tq.score_ip(&q_rot, &code);
+        let ip_noalloc = tq.score_ip_noalloc(&q_rot, &code);
+        let ip_adc = tq.score_ip_adc(&adc, &code);
+        let l2 = tq.score_l2(&q_rot, &code);
+        let l2_noalloc = tq.score_l2_noalloc(&q_rot, &code);
+
+        assert!((ip - ip_noalloc).abs() < 1e-6);
+        assert!((ip - ip_adc).abs() < 1e-6);
+        assert!((l2 - l2_noalloc).abs() < 1e-6);
     }
 }
