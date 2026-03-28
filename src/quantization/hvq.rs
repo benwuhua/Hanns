@@ -246,7 +246,7 @@ impl HvqQuantizer {
     }
 
     fn parse_code<'a>(&self, code: &'a [u8]) -> (f32, f32, f32, &'a [u8]) {
-        assert!(
+        debug_assert!(
             code.len() >= 12,
             "HVQ code too short: expected at least 12 bytes, got {}",
             code.len()
@@ -254,7 +254,13 @@ impl HvqQuantizer {
         let norm_o = f32::from_le_bytes(code[0..4].try_into().unwrap());
         let vmax = f32::from_le_bytes(code[4..8].try_into().unwrap());
         let base_quant_dist = f32::from_le_bytes(code[8..12].try_into().unwrap());
-        (norm_o, vmax, base_quant_dist, &code[12..])
+        let packed = &code[12..];
+        debug_assert_eq!(
+            packed.len(),
+            (self.config.dim * self.config.nbits as usize).div_ceil(8),
+            "HVQ packed payload size mismatch"
+        );
+        (norm_o, vmax, base_quant_dist, packed)
     }
 
     fn decode_unit(&self, packed_code: &[u8], vmax: f32) -> Vec<f32> {
@@ -469,8 +475,8 @@ impl HvqQuantizer {
         }
     }
 
-    pub fn score_code(&self, state: &HvqQueryState, code: &[u8]) -> f32 {
-        assert_eq!(state.q_rot.len(), self.config.dim);
+    fn score_code_alloc(&self, state: &HvqQueryState, code: &[u8]) -> f32 {
+        debug_assert_eq!(state.q_rot.len(), self.config.dim);
         let (norm_o, vmax, base_quant_dist, packed_code) = self.parse_code(code);
         let o_hat = self.decode_unit(packed_code, vmax);
         let ip: f32 = state
@@ -485,6 +491,45 @@ impl HvqQuantizer {
             0.0
         };
         state.centroid_score + centered_score
+    }
+
+    /// Zero-allocation hot path: stream quantized residual bits and accumulate the
+    /// dot product directly instead of materializing temporary decoded vectors.
+    pub fn score_code(&self, state: &HvqQueryState, code: &[u8]) -> f32 {
+        debug_assert_eq!(state.q_rot.len(), self.config.dim);
+        let (norm_o, vmax, base_quant_dist, packed_code) = self.parse_code(code);
+        if base_quant_dist <= 1e-12 {
+            return state.centroid_score;
+        }
+
+        let nbits = self.config.nbits as usize;
+        let levels = (1u32 << self.config.nbits) as f32;
+        let scale = (2.0 * vmax) / levels.max(1.0);
+        let offset = -vmax;
+        let mask = (1u32 << nbits) - 1;
+
+        let mut bit_buffer = 0u32;
+        let mut bits_in_buffer = 0usize;
+        let mut byte_idx = 0usize;
+        let mut ip = 0.0f32;
+
+        for &q in &state.q_rot {
+            while bits_in_buffer < nbits {
+                let next = packed_code.get(byte_idx).copied().unwrap_or(0) as u32;
+                bit_buffer |= next << bits_in_buffer;
+                bits_in_buffer += 8;
+                byte_idx += 1;
+            }
+
+            let raw = (bit_buffer & mask) as u8;
+            bit_buffer >>= nbits;
+            bits_in_buffer -= nbits;
+
+            let decoded = Self::dequantize_scalar(raw, scale, offset);
+            ip += q * decoded;
+        }
+
+        state.centroid_score + norm_o * ip / base_quant_dist
     }
 
     pub fn adc_distance_prerotated(&self, q_rot: &[f32], code: &[u8], _base_dist: f32) -> f32 {
@@ -648,6 +693,43 @@ mod tests {
         let recall = hits as f32 / total as f32;
         println!("hvq_recall@10={:.3}", recall);
         assert!(recall.is_finite());
+    }
+
+    #[test]
+    fn test_score_code_zero_alloc_matches_reference() {
+        let dim = 96usize;
+        let n = 128usize;
+        let nq = 8usize;
+        let nrefine = 4usize;
+
+        let mut rng = StdRng::seed_from_u64(123);
+        let data: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0f32..1.0)).collect();
+        let queries: Vec<f32> = (0..nq * dim).map(|_| rng.gen_range(-1.0f32..1.0)).collect();
+
+        let mut hvq = HvqQuantizer::new(HvqConfig { dim, nbits: 4 }, 7);
+        hvq.train(n, &data);
+        let codes = hvq.encode_batch(n, &data, nrefine);
+        let code_size = hvq.code_size_bytes();
+
+        for query in queries.chunks_exact(dim) {
+            let q_rot = hvq.rotate_query(query);
+            let state = hvq.precompute_query_state(&q_rot);
+
+            for code in codes.chunks_exact(code_size) {
+                let reference = hvq.score_code_alloc(&state, code);
+                let streamed = hvq.score_code(&state, code);
+                let diff = (reference - streamed).abs();
+                let tol = 1e-5 * reference.abs().max(1.0);
+                assert!(
+                    diff <= tol,
+                    "score mismatch: reference={} streamed={} diff={} tol={}",
+                    reference,
+                    streamed,
+                    diff,
+                    tol
+                );
+            }
+        }
     }
 
     #[test]
