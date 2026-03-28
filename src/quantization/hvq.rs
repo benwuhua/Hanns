@@ -476,12 +476,12 @@ impl HvqQuantizer {
         }
 
         let mut levels_abs = vec![0u16; dim];
-        let mut best_levels = levels_abs.clone();
         let mut sum_sq = 0.0f32;
         let mut sum_xc = 0.0f32;
         let mut best_sum_sq = 0.0f32;
         let mut best_sum_xc = 0.0f32;
         let mut best_objective = 0.0f32;
+        let mut best_t = 0.0f32;
 
         while let Some(event) = heap.pop() {
             let current_threshold = event.threshold;
@@ -525,18 +525,25 @@ impl HvqQuantizer {
             };
             if objective > best_objective + 1e-10 {
                 best_objective = objective;
-                best_levels.clone_from_slice(&levels_abs);
+                best_t = current_threshold;
                 best_sum_sq = sum_sq;
                 best_sum_xc = sum_xc;
             }
         }
 
+        // Reconstruct codes from best_t (ExRaBitQ style: store t, rebuild once)
+        // Threshold for level k = (k - 0.5) / abs_o[i], so at time t:
+        //   level[i] = floor(t * abs_o[i] + 0.5)
         let scale = vmax / half_levels_f.max(1.0);
         let ip = scale * best_sum_xc;
         let qed_length = scale * scale * best_sum_sq;
         let mut codes = Vec::with_capacity(dim);
         for i in 0..dim {
-            let magnitude = best_levels[i];
+            let magnitude = if abs_o[i] > 1e-12 {
+                ((best_t * abs_o[i] + 0.5).floor() as u16).min(max_level[i])
+            } else {
+                0
+            };
             let code = if non_negative[i] {
                 half_levels + magnitude
             } else {
