@@ -18,7 +18,9 @@ pub struct HvqConfig {
 #[derive(Clone, Debug)]
 pub struct HvqQueryState {
     pub q_rot: Vec<f32>,
+    pub q_sum: f32,
     pub q_quantized: Vec<i8>,
+    pub q_quantized_sum: i32,
     pub q_scale: f32,
     pub centroid_score: f32,
 }
@@ -637,6 +639,7 @@ impl HvqQuantizer {
 
     pub fn precompute_query_state(&self, q_rot: &[f32]) -> HvqQueryState {
         assert_eq!(q_rot.len(), self.config.dim);
+        let q_sum: f32 = q_rot.iter().sum();
         let q_max = q_rot
             .iter()
             .copied()
@@ -648,6 +651,7 @@ impl HvqQuantizer {
             .iter()
             .map(|&value| (value / q_scale).round().clamp(-127.0, 127.0) as i8)
             .collect();
+        let q_quantized_sum = q_quantized.iter().map(|&value| value as i32).sum();
         let centroid_score = q_rot
             .iter()
             .zip(self.rotated_centroid.iter())
@@ -655,7 +659,9 @@ impl HvqQuantizer {
             .sum();
         HvqQueryState {
             q_rot: q_rot.to_vec(),
+            q_sum,
             q_quantized,
+            q_quantized_sum,
             q_scale,
             centroid_score,
         }
@@ -716,6 +722,19 @@ impl HvqQuantizer {
         state.centroid_score + norm_o * ip / base_quant_dist
     }
 
+    fn score_code_1bit_avx512(&self, state: &HvqQueryState, code: &[u8]) -> f32 {
+        #[cfg(target_arch = "x86_64")]
+        {
+            // SAFETY: callers only dispatch here after AVX512F runtime detection.
+            return unsafe { self.score_code_1bit_avx512_impl(state, code) };
+        }
+
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            self.score_code_scalar(state, code)
+        }
+    }
+
     fn score_code_simd(&self, state: &HvqQueryState, code: &[u8]) -> f32 {
         debug_assert_eq!(state.q_rot.len(), self.config.dim);
         debug_assert_eq!(state.q_quantized.len(), self.config.dim);
@@ -727,50 +746,32 @@ impl HvqQuantizer {
         let levels = (1u32 << self.config.nbits) as f32;
         let code_scale = (2.0 * vmax) / levels.max(1.0);
         let offset = -vmax;
-        let q_sum: i32 = state.q_quantized.iter().map(|&value| value as i32).sum();
 
         let int_ip = match self.config.nbits {
-            8 => dot_u8_i8_avx512(packed_code, &state.q_quantized),
-            4 => {
-                let mut total = 0i32;
-                let mut q_offset = 0usize;
-                let mut expanded = [0u8; 128];
-
-                for chunk in packed_code.chunks(64) {
-                    let decoded_len = (chunk.len() * 2).min(self.config.dim - q_offset);
-                    for (chunk_idx, &byte) in chunk.iter().enumerate() {
-                        let out = chunk_idx * 2;
-                        expanded[out] = byte & 0x0F;
-                        if out + 1 < decoded_len {
-                            expanded[out + 1] = (byte >> 4) & 0x0F;
-                        }
-                    }
-                    total += dot_u8_i8_avx512(
-                        &expanded[..decoded_len],
-                        &state.q_quantized[q_offset..q_offset + decoded_len],
-                    );
-                    q_offset += decoded_len;
-                }
-
-                total
-            }
+            8 => dot_u8_i8_vnni_assumed(packed_code, &state.q_quantized),
+            4 => dot_packed_u4_i8_vnni(packed_code, &state.q_quantized),
             _ => return self.score_code_scalar(state, code),
         };
 
-        let float_ip = state.q_scale * (code_scale * int_ip as f32 + offset * q_sum as f32);
+        let float_ip =
+            state.q_scale * (code_scale * int_ip as f32 + offset * state.q_quantized_sum as f32);
         state.centroid_score + norm_o * float_ip / base_quant_dist
     }
 
-    /// Zero-allocation hot path with AVX512VNNI acceleration for 8-bit / 4-bit codes,
-    /// and scalar fallback for unsupported bit widths or CPUs.
+    /// Zero-allocation hot path with AVX512 acceleration for 1-bit and AVX512VNNI
+    /// acceleration for 4-bit / 8-bit codes, with scalar fallback otherwise.
     pub fn score_code(&self, state: &HvqQueryState, code: &[u8]) -> f32 {
         #[cfg(target_arch = "x86_64")]
         {
-            if matches!(self.config.nbits, 4 | 8)
-                && std::arch::is_x86_feature_detected!("avx512vnni")
-                && std::arch::is_x86_feature_detected!("avx512f")
-            {
-                return self.score_code_simd(state, code);
+            if std::arch::is_x86_feature_detected!("avx512f") {
+                if self.config.nbits == 1 {
+                    return self.score_code_1bit_avx512(state, code);
+                }
+                if matches!(self.config.nbits, 4 | 8)
+                    && std::arch::is_x86_feature_detected!("avx512vnni")
+                {
+                    return self.score_code_simd(state, code);
+                }
             }
         }
 
@@ -801,6 +802,147 @@ pub fn dot_u8_i8_avx512(a: &[u8], b: &[i8]) -> i32 {
         .zip(b.iter())
         .map(|(&x, &y)| x as i32 * y as i32)
         .sum()
+}
+
+#[inline]
+fn dot_u8_i8_vnni_assumed(a: &[u8], b: &[i8]) -> i32 {
+    debug_assert_eq!(a.len(), b.len());
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: all callers are gated by runtime AVX512F+VNNI detection.
+        return unsafe { dot_u8_i8_avx512_impl(a, b) };
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        a.iter()
+            .zip(b.iter())
+            .map(|(&x, &y)| x as i32 * y as i32)
+            .sum()
+    }
+}
+
+#[inline]
+fn unpack_packed_u4_scalar(packed: &[u8], out: &mut [u8]) {
+    debug_assert!(out.len() >= packed.len() * 2);
+    for (idx, &byte) in packed.iter().enumerate() {
+        let out_idx = idx * 2;
+        out[out_idx] = byte & 0x0F;
+        out[out_idx + 1] = (byte >> 4) & 0x0F;
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn unpack_packed_u4_into(packed: &[u8], out: &mut [u8]) {
+    use std::arch::x86_64::*;
+
+    debug_assert!(out.len() >= packed.len() * 2);
+
+    let mut in_offset = 0usize;
+    let mut out_offset = 0usize;
+    let nibble_mask = _mm_set1_epi8(0x0F);
+
+    while in_offset + 16 <= packed.len() {
+        // SAFETY: the chunk bounds are checked by the loop condition and the output
+        // slice has at least 32 bytes available for every 16-byte input block.
+        unsafe {
+            let packed_chunk = _mm_loadu_si128(packed.as_ptr().add(in_offset) as *const __m128i);
+            let low = _mm_and_si128(packed_chunk, nibble_mask);
+            let shifted = _mm_srli_epi16(packed_chunk, 4);
+            let high = _mm_and_si128(shifted, nibble_mask);
+            let interleaved_lo = _mm_unpacklo_epi8(low, high);
+            let interleaved_hi = _mm_unpackhi_epi8(low, high);
+            _mm_storeu_si128(
+                out.as_mut_ptr().add(out_offset) as *mut __m128i,
+                interleaved_lo,
+            );
+            _mm_storeu_si128(
+                out.as_mut_ptr().add(out_offset + 16) as *mut __m128i,
+                interleaved_hi,
+            );
+        }
+        in_offset += 16;
+        out_offset += 32;
+    }
+
+    unpack_packed_u4_scalar(
+        &packed[in_offset..],
+        &mut out[out_offset..out_offset + (packed.len() - in_offset) * 2],
+    );
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[inline]
+fn unpack_packed_u4_into(packed: &[u8], out: &mut [u8]) {
+    unpack_packed_u4_scalar(packed, out);
+}
+
+#[inline]
+fn dot_packed_u4_i8_vnni(packed: &[u8], q_quantized: &[i8]) -> i32 {
+    debug_assert!(q_quantized.len() <= packed.len() * 2);
+
+    let mut total = 0i32;
+    let mut q_offset = 0usize;
+    let mut expanded = [0u8; 128];
+
+    for chunk in packed.chunks(64) {
+        let expanded_len = chunk.len() * 2;
+        unpack_packed_u4_into(chunk, &mut expanded[..expanded_len]);
+
+        let decoded_len = expanded_len.min(q_quantized.len() - q_offset);
+        total += dot_u8_i8_vnni_assumed(
+            &expanded[..decoded_len],
+            &q_quantized[q_offset..q_offset + decoded_len],
+        );
+        q_offset += decoded_len;
+    }
+
+    total
+}
+
+#[cfg(target_arch = "x86_64")]
+impl HvqQuantizer {
+    #[target_feature(enable = "avx512f")]
+    unsafe fn score_code_1bit_avx512_impl(&self, state: &HvqQueryState, code: &[u8]) -> f32 {
+        use std::arch::x86_64::*;
+
+        debug_assert_eq!(state.q_rot.len(), self.config.dim);
+        let (norm_o, vmax, base_quant_dist, packed_code) = self.parse_code(code);
+        if base_quant_dist <= 1e-12 {
+            return state.centroid_score;
+        }
+
+        let vector_dims = self.config.dim / 16 * 16;
+        let mut acc = _mm512_setzero_ps();
+
+        for chunk_idx in 0..(vector_dims / 16) {
+            let q_offset = chunk_idx * 16;
+            let bit_offset = chunk_idx * 2;
+            let mask_bits =
+                u16::from_le_bytes([packed_code[bit_offset], packed_code[bit_offset + 1]]);
+            let mask = mask_bits as __mmask16;
+
+            // SAFETY: q_offset..q_offset+16 stays in-bounds by loop construction.
+            let q_vec = unsafe { _mm512_loadu_ps(state.q_rot.as_ptr().add(q_offset)) };
+            let selected = _mm512_maskz_mov_ps(mask, q_vec);
+            acc = _mm512_add_ps(acc, selected);
+        }
+
+        let mut float_sum = _mm512_reduce_add_ps(acc);
+        for idx in vector_dims..self.config.dim {
+            let byte_idx = idx / 8;
+            let bit_idx = idx % 8;
+            let bit = (packed_code[byte_idx] >> bit_idx) & 1;
+            if bit != 0 {
+                float_sum += state.q_rot[idx];
+            }
+        }
+
+        // Preserve current scalar semantics for 1-bit codes: {-vmax, 0}.
+        let ip = float_sum - state.q_sum;
+        state.centroid_score + norm_o * vmax * ip / base_quant_dist
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -986,13 +1128,12 @@ mod tests {
             return;
         }
 
-        let dim = 64usize;
         let n = 64usize;
         let nq = 6usize;
         let nrefine = 4usize;
         let mut rng = StdRng::seed_from_u64(20260328);
 
-        for &nbits in &[4u8, 8u8] {
+        for &(nbits, dim) in &[(4u8, 131usize), (8u8, 130usize)] {
             let data = normalize_rows(
                 &(0..n * dim)
                     .map(|_| rng.gen_range(-1.0f32..1.0))
@@ -1036,6 +1177,63 @@ mod tests {
                         simd
                     );
                 }
+            }
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_score_code_1bit_avx512_matches_scalar() {
+        if !std::arch::is_x86_feature_detected!("avx512f") {
+            return;
+        }
+
+        let dim = 131usize;
+        let n = 64usize;
+        let nq = 6usize;
+        let nrefine = 4usize;
+        let mut rng = StdRng::seed_from_u64(20260329);
+
+        let data = normalize_rows(
+            &(0..n * dim)
+                .map(|_| rng.gen_range(-1.0f32..1.0))
+                .collect::<Vec<_>>(),
+            dim,
+        );
+        let queries = normalize_rows(
+            &(0..nq * dim)
+                .map(|_| rng.gen_range(-1.0f32..1.0))
+                .collect::<Vec<_>>(),
+            dim,
+        );
+
+        let mut hvq = HvqQuantizer::new(HvqConfig { dim, nbits: 1 }, 31);
+        hvq.train(n, &data);
+        let codes = hvq.encode_batch(n, &data, nrefine);
+        let code_size = hvq.code_size_bytes();
+
+        for query in queries.chunks_exact(dim) {
+            let q_rot = hvq.rotate_query(query);
+            let state = hvq.precompute_query_state(&q_rot);
+
+            for code in codes.chunks_exact(code_size) {
+                let scalar = hvq.score_code_scalar(&state, code);
+                let avx512 = hvq.score_code_1bit_avx512(&state, code);
+                let dispatched = hvq.score_code(&state, code);
+                let diff = (scalar - avx512).abs();
+                assert!(
+                    diff < 1e-4,
+                    "1-bit AVX512 score drift too large: scalar={} avx512={} diff={}",
+                    scalar,
+                    avx512,
+                    diff
+                );
+                assert!(
+                    (dispatched - avx512).abs() <= f32::EPSILON,
+                    "1-bit score_code dispatch mismatch: dispatched={} avx512={}",
+                    dispatched,
+                    avx512
+                );
             }
         }
     }
