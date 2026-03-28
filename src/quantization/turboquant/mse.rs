@@ -175,11 +175,15 @@ impl TurboQuantMse {
         self.score_ip_noalloc(q_rotated, code)
     }
 
+    pub fn score_cosine(&self, q_rotated: &[f32], code: &[u8]) -> f32 {
+        self.score_cosine_noalloc(q_rotated, code)
+    }
+
     pub fn score_l2(&self, q_rotated: &[f32], code: &[u8]) -> f32 {
         self.score_l2_noalloc(q_rotated, code)
     }
 
-    /// Zero-alloc IP score: decode packed indices on the fly.
+    /// IP score: norm * cosine_score when normalize_for_cosine, raw dot otherwise.
     pub fn score_ip_noalloc(&self, q_rotated: &[f32], code: &[u8]) -> f32 {
         let qdim = self.rotation.output_len();
         assert_eq!(q_rotated.len(), qdim);
@@ -194,8 +198,27 @@ impl TurboQuantMse {
         norm * score
     }
 
-    /// Zero-alloc L2 score: decode packed indices on the fly.
+    /// Cosine score: raw dot in normalized space (ignores stored norm).
+    pub fn score_cosine_noalloc(&self, q_rotated: &[f32], code: &[u8]) -> f32 {
+        let qdim = self.rotation.output_len();
+        assert_eq!(q_rotated.len(), qdim);
+        let (_, packed_code) = self.parse_code(code);
+        let bits = self.config.bits_per_dim as usize;
+        let mask = (1u32 << bits) - 1;
+        let mut score = 0.0f32;
+        for (i, &q) in q_rotated.iter().enumerate() {
+            let idx = decode_packed_index(packed_code, i, bits, mask);
+            score += q * self.centroids[idx];
+        }
+        score
+    }
+
+    /// L2 score. Not supported with normalize_for_cosine (use score_ip or score_cosine).
     pub fn score_l2_noalloc(&self, q_rotated: &[f32], code: &[u8]) -> f32 {
+        assert!(
+            !self.config.normalize_for_cosine,
+            "score_l2 is not supported with normalize_for_cosine=true; use score_ip or score_cosine"
+        );
         let qdim = self.rotation.output_len();
         assert_eq!(q_rotated.len(), qdim);
         let (_, packed_code) = self.parse_code(code);
@@ -225,10 +248,20 @@ impl TurboQuantMse {
         table
     }
 
-    /// Score using a precomputed ADC table. Zero alloc, no multiply in the hot loop.
+    /// IP score using a precomputed ADC table: norm * table_score.
     pub fn score_ip_adc(&self, adc_table: &[f32], code: &[u8]) -> f32 {
-        let qdim = self.rotation.output_len();
         let (norm, packed_code) = self.parse_code(code);
+        norm * self.score_adc_inner(adc_table, packed_code)
+    }
+
+    /// Cosine score using a precomputed ADC table (ignores stored norm).
+    pub fn score_cosine_adc(&self, adc_table: &[f32], code: &[u8]) -> f32 {
+        let (_, packed_code) = self.parse_code(code);
+        self.score_adc_inner(adc_table, packed_code)
+    }
+
+    fn score_adc_inner(&self, adc_table: &[f32], packed_code: &[u8]) -> f32 {
+        let qdim = self.rotation.output_len();
         let bits = self.config.bits_per_dim as usize;
         let n_centroids = 1usize << bits;
         assert_eq!(adc_table.len(), qdim * n_centroids);
@@ -239,7 +272,7 @@ impl TurboQuantMse {
             let idx = decode_packed_index(packed_code, i, bits, mask);
             score += adc_table[i * n_centroids + idx];
         }
-        norm * score
+        score
     }
 
     pub fn reconstruction_mse(&self, data: &[f32]) -> f32 {
@@ -499,7 +532,7 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_for_cosine_ip_decode_and_l2_use_norm_prefix_correctly() {
+    fn test_normalize_for_cosine_ip_cosine_decode() {
         let dim = 8usize;
         let config = TurboQuantConfig::new(dim, 4)
             .with_dense_rotation()
@@ -513,18 +546,11 @@ mod tests {
         let adc = tq.precompute_adc_table(&q_rot);
         let rotated = tq.decode_rotated(packed);
         let cosine_ip: f32 = q_rot.iter().zip(rotated.iter()).map(|(&q, &x)| q * x).sum();
-        let manual_l2: f32 = q_rot
-            .iter()
-            .zip(rotated.iter())
-            .map(|(&q, &x)| {
-                let diff = q - x;
-                diff * diff
-            })
-            .sum();
 
         let ip = tq.score_ip(&q_rot, &code);
         let ip_adc = tq.score_ip_adc(&adc, &code);
-        let l2_prefixed = tq.score_l2(&q_rot, &code);
+        let cos = tq.score_cosine(&q_rot, &code);
+        let cos_adc = tq.score_cosine_adc(&adc, &code);
 
         assert!(
             (ip - stored_norm * cosine_ip).abs() < 1e-5,
@@ -540,10 +566,16 @@ mod tests {
             stored_norm
         );
         assert!(
-            (l2_prefixed - manual_l2).abs() < 1e-6,
-            "l2 with prefixed code {} != manual {}",
-            l2_prefixed,
-            manual_l2
+            (cos - cosine_ip).abs() < 1e-5,
+            "cosine {} != raw cosine {}",
+            cos,
+            cosine_ip
+        );
+        assert!(
+            (cos_adc - cosine_ip).abs() < 1e-5,
+            "cosine_adc {} != raw cosine {}",
+            cos_adc,
+            cosine_ip
         );
 
         let expected: Vec<f32> = tq
