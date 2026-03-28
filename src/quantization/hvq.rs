@@ -841,7 +841,8 @@ fn unpack_packed_u4_into(packed: &[u8], out: &mut [u8]) {
 
     let mut in_offset = 0usize;
     let mut out_offset = 0usize;
-    let nibble_mask = _mm_set1_epi8(0x0F);
+    // SAFETY: SSE2 intrinsic, always available on x86_64.
+    let nibble_mask = unsafe { _mm_set1_epi8(0x0F) };
 
     while in_offset + 16 <= packed.len() {
         // SAFETY: the chunk bounds are checked by the loop condition and the output
