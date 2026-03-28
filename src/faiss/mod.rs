@@ -24,7 +24,6 @@ pub mod ivf_sq_cc;
 pub mod ivfpq;
 pub mod lazy_index;
 pub mod mem_index;
-pub mod pq;
 pub mod pq_simd;
 pub mod raw;
 pub mod scann;
@@ -59,7 +58,6 @@ pub use ivf_turboquant::{IvfTurboQuantConfig, IvfTurboQuantIndex};
 pub use ivf_sq_cc::IvfSqCcIndex;
 pub use ivfpq::IvfPqIndex;
 pub use mem_index::MemIndex;
-pub use pq::PqEncoder;
 pub use scann::{ScaNNConfig, ScaNNIndex};
 pub use sparse::{SparseIndex, SparseVector};
 pub use sparse_inverted::{

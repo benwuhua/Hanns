@@ -20,8 +20,8 @@ use std::os::fd::AsRawFd;
 use crate::api::{IndexConfig, KnowhereError, MetricType, Result, SearchResult};
 use crate::bitset::BitsetView;
 use crate::dataset::Dataset;
-use crate::faiss::pq::PqEncoder;
 use crate::index::{Index, IndexError};
+use crate::quantization::{PQConfig, ProductQuantizer};
 use crate::search::{
     is_visited_thread_local, mark_thread_local, reset_thread_local, with_visited,
 };
@@ -474,33 +474,35 @@ struct LoadedNodeRef<'a> {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct SerializedPqEncoder {
+struct SerializedPq {
     m: usize,
     k: usize,
     nbits: usize,
     dim: usize,
     sub_dim: usize,
-    codebooks: Vec<f32>,
+    centroids: Vec<f32>,
 }
 
-impl SerializedPqEncoder {
-    fn from_encoder(encoder: &PqEncoder) -> Self {
+impl SerializedPq {
+    fn from_quantizer(quantizer: &ProductQuantizer) -> Self {
         Self {
-            m: encoder.m,
-            k: encoder.k,
-            nbits: encoder.nbits,
-            dim: encoder.dim,
-            sub_dim: encoder.sub_dim,
-            codebooks: encoder.codebooks.clone(),
+            m: quantizer.m(),
+            k: quantizer.ksub(),
+            nbits: quantizer.nbits(),
+            dim: quantizer.dim(),
+            sub_dim: quantizer.sub_dim(),
+            centroids: quantizer.centroids().to_vec(),
         }
     }
 
-    fn into_encoder(self) -> PqEncoder {
-        let mut encoder = PqEncoder::new(self.dim, self.m, self.k);
-        encoder.nbits = self.nbits;
-        encoder.sub_dim = self.sub_dim;
-        encoder.codebooks = self.codebooks;
-        encoder
+    fn into_quantizer(self) -> ProductQuantizer {
+        let mut quantizer = ProductQuantizer::new(PQConfig::new(self.dim, self.m, self.nbits));
+        debug_assert_eq!(self.k, quantizer.ksub());
+        debug_assert_eq!(self.sub_dim, quantizer.sub_dim());
+        quantizer
+            .set_centroids(self.centroids)
+            .expect("serialized PQ centroids must match config");
+        quantizer
     }
 }
 
@@ -515,7 +517,7 @@ struct AisaqMetadata {
     entry_points: Vec<u32>,
     trained: bool,
     node_count: usize,
-    pq_encoder: Option<SerializedPqEncoder>,
+    pq_encoder: Option<SerializedPq>,
 }
 
 #[derive(Clone, Debug)]
@@ -861,7 +863,7 @@ pub struct PQFlashIndex {
     /// Flat PQ codes loaded in RAM for disk-backed search fast coarse scoring.
     disk_pq_codes: Vec<u8>,
     flat_stride: usize,
-    pq_encoder: Option<PqEncoder>,
+    pq_encoder: Option<ProductQuantizer>,
     pq_code_size: usize,
     entry_points: Vec<u32>,
     io_template: BeamSearchIO,
@@ -1057,10 +1059,11 @@ impl PQFlashIndex {
         if self.config.disk_pq_dims > 0 {
             let m = resolve_pq_chunks(self.dim, self.config.disk_pq_dims);
             let k = resolve_pq_centroids(training_data.len() / self.dim);
-            let mut encoder = PqEncoder::new(self.dim, m, k);
-            encoder.train(training_data, 25);
-            self.pq_code_size = encoder.m;
-            self.pq_encoder = Some(encoder);
+            let nbits = k.ilog2() as usize;
+            let mut quantizer = ProductQuantizer::new(PQConfig::new(self.dim, m, nbits));
+            quantizer.train(training_data.len() / self.dim, training_data)?;
+            self.pq_code_size = quantizer.code_size();
+            self.pq_encoder = Some(quantizer);
             self.flash_layout.inline_pq_bytes = self.pq_code_size.max(self.config.inline_pq);
             self.flash_layout.node_bytes = self.flash_layout.vector_bytes
                 + self.flash_layout.neighbor_bytes
@@ -1142,7 +1145,10 @@ impl PQFlashIndex {
                         let inline_pq = self
                             .pq_encoder
                             .as_ref()
-                            .map(|pq| pq.encode(vector))
+                            .map(|pq| {
+                                pq.encode(vector)
+                                    .expect("trained PQ quantizer must encode matching vector")
+                            })
                             .unwrap_or_default();
 
                         let ext_id = if let Some(ids) = external_ids {
@@ -1213,7 +1219,10 @@ impl PQFlashIndex {
                 let inline_pq = self
                     .pq_encoder
                     .as_ref()
-                    .map(|pq| pq.encode(vector))
+                    .map(|pq| {
+                        pq.encode(vector)
+                            .expect("trained PQ quantizer must encode matching vector")
+                    })
                     .unwrap_or_default();
 
                 let ext_id = external_ids.map(|ids| ids[row]).unwrap_or(node_id as i64);
@@ -1327,7 +1336,10 @@ impl PQFlashIndex {
         let inline_pq = self
             .pq_encoder
             .as_ref()
-            .map(|pq| pq.encode(vector))
+            .map(|pq| {
+                pq.encode(vector)
+                    .expect("trained PQ quantizer must encode matching vector")
+            })
             .unwrap_or_default();
 
         self.append_node_placeholder(vector, ext_id, &inline_pq, stride, pq_size);
@@ -1395,7 +1407,10 @@ impl PQFlashIndex {
                     let inline_pq = self
                         .pq_encoder
                         .as_ref()
-                        .map(|pq| pq.encode(vector))
+                        .map(|pq| {
+                            pq.encode(vector)
+                                .expect("trained PQ quantizer must encode matching vector")
+                        })
                         .unwrap_or_default();
                     (neighbors, inline_pq)
                 })
@@ -1420,7 +1435,10 @@ impl PQFlashIndex {
                 let inline_pq = self
                     .pq_encoder
                     .as_ref()
-                    .map(|pq| pq.encode(vector))
+                    .map(|pq| {
+                        pq.encode(vector)
+                            .expect("trained PQ quantizer must encode matching vector")
+                    })
                     .unwrap_or_default();
                 (neighbors, inline_pq)
             })
@@ -1609,10 +1627,10 @@ impl PQFlashIndex {
         }
 
         let n = self.node_ids.len();
-        let m = encoder.m;
-        let k = encoder.k;
-        let total_dim = encoder.dim;
-        let sub_dim = encoder.sub_dim;
+        let m = encoder.m();
+        let k = encoder.ksub();
+        let total_dim = encoder.dim();
+        let sub_dim = encoder.sub_dim();
         if k != 256 {
             return Err(KnowhereError::InvalidArg(format!(
                 "native DiskANN PQ export requires k=256, got k={k}"
@@ -1656,7 +1674,7 @@ impl PQFlashIndex {
                 for d in 0..sub_dim {
                     let src = mi * 256 * sub_dim + centroid_id * sub_dim + d;
                     let dst = centroid_id * total_dim + mi * sub_dim + d;
-                    pivots[dst] = encoder.codebooks[src];
+                    pivots[dst] = encoder.centroids()[src];
                 }
             }
         }
@@ -2022,7 +2040,7 @@ impl PQFlashIndex {
             node_pq_codes: Vec::new(),
             disk_pq_codes: Vec::new(),
             flat_stride: 0,
-            pq_encoder: metadata.pq_encoder.map(SerializedPqEncoder::into_encoder),
+            pq_encoder: metadata.pq_encoder.map(SerializedPq::into_quantizer),
             pq_code_size: metadata.pq_code_size,
             entry_points: metadata.entry_points,
             io_template,
@@ -2155,7 +2173,7 @@ impl PQFlashIndex {
             pq_encoder: self
                 .pq_encoder
                 .as_ref()
-                .map(SerializedPqEncoder::from_encoder),
+                .map(SerializedPq::from_quantizer),
         };
         let metadata_bytes = bincode::serialize(&metadata)
             .map_err(|error| KnowhereError::Codec(error.to_string()))?;
@@ -2270,7 +2288,7 @@ impl PQFlashIndex {
             node_pq_codes: Vec::new(),
             disk_pq_codes: Vec::new(),
             flat_stride: 0,
-            pq_encoder: metadata.pq_encoder.map(SerializedPqEncoder::into_encoder),
+            pq_encoder: metadata.pq_encoder.map(SerializedPq::into_quantizer),
             pq_code_size: metadata.pq_code_size,
             entry_points: metadata.entry_points,
             io_template,
@@ -2609,7 +2627,7 @@ impl PQFlashIndex {
         let pq_table = self
             .pq_encoder
             .as_ref()
-            .map(|encoder| encoder.build_distance_table(query));
+            .map(|encoder| encoder.build_distance_table_l2(query));
         let pq_table_slice = pq_table.as_ref().map(|v| v.as_slice());
         let sq8_query = if self.config.use_sq8_prefilter && self.metric_type == MetricType::L2 {
             self.sq8_quantizer
@@ -2941,7 +2959,7 @@ impl PQFlashIndex {
         let pq_table = self
             .pq_encoder
             .as_ref()
-            .map(|encoder| encoder.build_distance_table(query));
+            .map(|encoder| encoder.build_distance_table_l2(query));
         let pq_table_slice = pq_table.as_ref().map(|v| v.as_slice());
         let sq8_q = if self.config.use_sq8_prefilter && self.metric_type == MetricType::L2 {
             self.sq8_quantizer
@@ -3283,7 +3301,7 @@ impl PQFlashIndex {
         let pq_table = self
             .pq_encoder
             .as_ref()
-            .map(|encoder| encoder.build_distance_table(query));
+            .map(|encoder| encoder.build_distance_table_l2(query));
 
         let mut frontier = BinaryHeap::new();
         let mut expanded = Vec::new();
@@ -4012,7 +4030,9 @@ impl PQFlashIndex {
         }
         // Build PQ distance table if available (ADC lookup — 4-8x faster than exact distance)
         let pq_table: Option<Vec<f32>> = if self.pq_code_size > 0 && !self.node_pq_codes.is_empty() {
-            self.pq_encoder.as_ref().map(|pq| pq.build_distance_table(query))
+            self.pq_encoder
+                .as_ref()
+                .map(|pq| pq.build_distance_table_l2(query))
         } else {
             None
         };

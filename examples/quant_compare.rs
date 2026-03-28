@@ -348,8 +348,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         let t_scan = Instant::now();
         let hvq_results = evaluate_queries(&queries, EXPECTED_DIM, eval_queries, TOP_K, |query| {
             let q_rot = hvq.rotate_query(query);
+            let state = hvq.precompute_query_state(&q_rot);
             scan_topk_codes(&hvq_codes, hvq_storage_size, TOP_K, |_idx, code| {
-                hvq.adc_distance_prerotated(&q_rot, code, 0.0)
+                hvq.score_code(&state, code)
             })
         });
         let scan_qps = eval_queries as f64 / t_scan.elapsed().as_secs_f64().max(f64::EPSILON);

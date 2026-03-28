@@ -12,8 +12,8 @@ use std::path::Path;
 use crate::api::{MetricType, Result as ApiResult};
 use crate::bitset::BitsetView;
 use crate::dataset::Dataset;
-use crate::faiss::pq::PqEncoder;
 use crate::index::{Index, IndexError, SearchResult};
+use crate::quantization::{PQConfig, ProductQuantizer};
 
 /// Maximum number of layers in the HNSW graph
 const MAX_LAYERS: usize = 16;
@@ -159,7 +159,7 @@ pub struct HnswPqIndex {
     /// Level multiplier for random level generation
     level_multiplier: f32,
     /// PQ encoder
-    pq: PqEncoder,
+    pq: ProductQuantizer,
 }
 
 impl HnswPqIndex {
@@ -179,8 +179,12 @@ impl HnswPqIndex {
         }
 
         // Create PQ encoder
-        let pq = PqEncoder::new(config.dim, config.pq_m, config.pq_k);
-        let _code_size = config.pq_m; // 1 byte per subvector
+        let pq = ProductQuantizer::new(PQConfig::new(
+            config.dim,
+            config.pq_m,
+            config.pq_k.ilog2() as usize,
+        ));
+        let _code_size = pq.code_size();
 
         // Calculate level multiplier: m_l = 1 / ln(M)
         let level_multiplier = 1.0 / (config.m as f32).ln().max(1.0);
@@ -250,7 +254,7 @@ impl HnswPqIndex {
     /// Compute distance between a query and a stored PQ code using lookup table
     #[allow(dead_code)]
     fn compute_distance_to_code(&self, query: &[f32], code: &[u8]) -> f32 {
-        let table = self.pq.build_adc_table(query);
+        let table = self.pq.build_distance_table_l2(query);
         self.compute_distance_to_code_with_table(&table, code)
     }
 
@@ -267,7 +271,10 @@ impl HnswPqIndex {
         }
 
         // Train PQ encoder
-        self.pq.train(vectors, 50); // 50 iterations
+        let n = vectors.len() / self.config.dim;
+        self.pq
+            .train(n, vectors)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
         self.trained = true;
         Ok(())
     }
@@ -287,7 +294,7 @@ impl HnswPqIndex {
         self.node_info.reserve(n);
         self.ids.reserve(n);
 
-        let code_size = self.config.pq_m;
+        let code_size = self.pq.code_size();
 
         for i in 0..n {
             let start = i * self.config.dim;
@@ -300,7 +307,10 @@ impl HnswPqIndex {
             let node_level = self.random_level();
 
             // Encode vector with PQ
-            let code = self.pq.encode(vec);
+            let code = self
+                .pq
+                .encode(vec)
+                .map_err(|e| IndexError::Unsupported(e.to_string()))?;
 
             // Create node info
             let node_info = NodeInfo::new(node_level, self.config.m, code_size);
@@ -439,7 +449,7 @@ impl HnswPqIndex {
         let mut visited = HashSet::new();
         let mut candidates: BinaryHeap<(OrderedDist, usize)> = BinaryHeap::new();
         let mut results: Vec<(usize, f32)> = Vec::new();
-        let table = self.pq.build_adc_table(query);
+        let table = self.pq.build_distance_table_l2(query);
 
         // Initialize with entry point
         let entry_dist =
@@ -578,7 +588,7 @@ impl HnswPqIndex {
         let mut visited = HashSet::new();
         let mut candidates: BinaryHeap<(OrderedDist, usize)> = BinaryHeap::new();
         let mut results: BinaryHeap<(OrderedDist, usize)> = BinaryHeap::new();
-        let table = self.pq.build_adc_table(query);
+        let table = self.pq.build_distance_table_l2(query);
 
         // Initialize with entry point
         let entry_dist =
@@ -653,7 +663,7 @@ impl HnswPqIndex {
             self.id_to_idx.len() * (std::mem::size_of::<i64>() + std::mem::size_of::<usize>());
 
         // Approximate PQ size
-        let pq_size = self.pq.codebooks.len() * std::mem::size_of::<f32>();
+        let pq_size = self.pq.centroids().len() * std::mem::size_of::<f32>();
 
         node_info_size + ids_size + id_to_idx_size + pq_size
     }
@@ -680,8 +690,8 @@ impl HnswPqIndex {
         file.write_all(&self.level_multiplier.to_le_bytes())?;
         file.write_all(&[u8::from(self.trained)])?;
 
-        file.write_all(&(self.pq.codebooks.len() as u64).to_le_bytes())?;
-        for &v in &self.pq.codebooks {
+        file.write_all(&(self.pq.centroids().len() as u64).to_le_bytes())?;
+        for &v in self.pq.centroids() {
             file.write_all(&v.to_le_bytes())?;
         }
 
@@ -821,8 +831,10 @@ impl HnswPqIndex {
             metric_type: MetricType::L2,
         };
 
-        let mut pq = PqEncoder::new(dim, pq_m, pq_k);
-        pq.codebooks = codebooks;
+        let mut pq =
+            ProductQuantizer::new(PQConfig::new(dim, pq_m, pq_k.ilog2() as usize));
+        pq.set_centroids(codebooks)
+            .map_err(|e| crate::api::KnowhereError::Codec(e.to_string()))?;
 
         let _ = trained_flag;
         Ok(Self {

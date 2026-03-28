@@ -3,12 +3,12 @@
 
 use crate::faiss::pq_simd::PqDistance;
 use crate::faiss::IvfIndex;
-use crate::faiss::PqEncoder;
+use crate::quantization::{PQConfig, ProductQuantizer};
 
 /// 端到端测试：IVF-PQ 索引
 pub struct IvfPqIndex {
     pub ivf: IvfIndex,
-    pub pq: PqEncoder,
+    pub pq: ProductQuantizer,
     pub dim: usize,
     pub nlist: usize,
     pub m: usize,
@@ -19,7 +19,7 @@ impl IvfPqIndex {
     pub fn new(dim: usize, nlist: usize, m: usize, k: usize) -> Self {
         Self {
             ivf: IvfIndex::new(dim, nlist),
-            pq: PqEncoder::new(dim, m, k),
+            pq: ProductQuantizer::new(PQConfig::new(dim, m, k.ilog2() as usize)),
             dim,
             nlist,
             m,
@@ -29,7 +29,8 @@ impl IvfPqIndex {
 
     /// 训练
     pub fn train(&mut self, data: &[f32]) {
-        self.pq.train(data, 20);
+        let n = data.len() / self.dim;
+        self.pq.train(n, data).expect("valid IVF-PQ training data");
         self.ivf.train(data);
     }
 

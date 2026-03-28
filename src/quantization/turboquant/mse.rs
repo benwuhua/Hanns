@@ -90,19 +90,33 @@ impl TurboQuantMse {
     }
 
     pub fn code_size_bytes(&self) -> usize {
-        self.config.code_bytes()
+        if self.config.normalize_for_cosine {
+            4 + self.config.code_bytes()
+        } else {
+            self.config.code_bytes()
+        }
     }
 
     pub fn encode(&self, v: &[f32]) -> Vec<u8> {
         assert_eq!(v.len(), self.config.dim);
+        let norm = if self.config.normalize_for_cosine {
+            vector_l2_norm(v)
+        } else {
+            1.0
+        };
         let owned = self.preprocess_input(v);
         let rotated = self.rotation.rotate(&owned); // d_pad for Hadamard, dim for Dense
         let codes: Vec<u16> = rotated
             .iter()
             .map(|&value| self.closest_centroid_index(value) as u16)
             .collect();
+        let mut payload = Vec::with_capacity(self.config.code_bytes());
+        pack_codes(&codes, self.config.bits_per_dim, &mut payload);
         let mut packed = Vec::with_capacity(self.code_size_bytes());
-        pack_codes(&codes, self.config.bits_per_dim, &mut packed);
+        if self.config.normalize_for_cosine {
+            packed.extend_from_slice(&norm.to_le_bytes());
+        }
+        packed.extend_from_slice(&payload);
         packed
     }
 
@@ -130,15 +144,23 @@ impl TurboQuantMse {
         {
             let mut out = Vec::with_capacity(n * code_bytes);
             for i in 0..n {
-                out.extend_from_slice(&self.encode(&data[i * self.config.dim..(i + 1) * self.config.dim]));
+                out.extend_from_slice(
+                    &self.encode(&data[i * self.config.dim..(i + 1) * self.config.dim]),
+                );
             }
             out
         }
     }
 
     pub fn decode(&self, code: &[u8]) -> Vec<f32> {
-        let rotated = self.decode_rotated(code); // length = quantize_dim (d_pad or dim)
-        self.rotation.inverse_rotate(&rotated)
+        let (norm, packed_code) = self.parse_code(code);
+        let rotated = self.decode_rotated(packed_code); // length = quantize_dim (d_pad or dim)
+        let decoded = self.rotation.inverse_rotate(&rotated);
+        if self.config.normalize_for_cosine {
+            decoded.into_iter().map(|x| x * norm).collect()
+        } else {
+            decoded
+        }
     }
 
     /// Rotate query and return all quantize_dim coordinates (d_pad for Hadamard).
@@ -161,25 +183,27 @@ impl TurboQuantMse {
     pub fn score_ip_noalloc(&self, q_rotated: &[f32], code: &[u8]) -> f32 {
         let qdim = self.rotation.output_len();
         assert_eq!(q_rotated.len(), qdim);
+        let (norm, packed_code) = self.parse_code(code);
         let bits = self.config.bits_per_dim as usize;
         let mask = (1u32 << bits) - 1;
         let mut score = 0.0f32;
         for (i, &q) in q_rotated.iter().enumerate() {
-            let idx = decode_packed_index(code, i, bits, mask);
+            let idx = decode_packed_index(packed_code, i, bits, mask);
             score += q * self.centroids[idx];
         }
-        score
+        norm * score
     }
 
     /// Zero-alloc L2 score: decode packed indices on the fly.
     pub fn score_l2_noalloc(&self, q_rotated: &[f32], code: &[u8]) -> f32 {
         let qdim = self.rotation.output_len();
         assert_eq!(q_rotated.len(), qdim);
+        let (_, packed_code) = self.parse_code(code);
         let bits = self.config.bits_per_dim as usize;
         let mask = (1u32 << bits) - 1;
         let mut score = 0.0f32;
         for (i, &q) in q_rotated.iter().enumerate() {
-            let idx = decode_packed_index(code, i, bits, mask);
+            let idx = decode_packed_index(packed_code, i, bits, mask);
             let diff = q - self.centroids[idx];
             score += diff * diff;
         }
@@ -204,6 +228,7 @@ impl TurboQuantMse {
     /// Score using a precomputed ADC table. Zero alloc, no multiply in the hot loop.
     pub fn score_ip_adc(&self, adc_table: &[f32], code: &[u8]) -> f32 {
         let qdim = self.rotation.output_len();
+        let (norm, packed_code) = self.parse_code(code);
         let bits = self.config.bits_per_dim as usize;
         let n_centroids = 1usize << bits;
         assert_eq!(adc_table.len(), qdim * n_centroids);
@@ -211,10 +236,10 @@ impl TurboQuantMse {
         let mask = (1u32 << bits) - 1;
         let mut score = 0.0f32;
         for i in 0..qdim {
-            let idx = decode_packed_index(code, i, bits, mask);
+            let idx = decode_packed_index(packed_code, i, bits, mask);
             score += adc_table[i * n_centroids + idx];
         }
-        score
+        norm * score
     }
 
     pub fn reconstruction_mse(&self, data: &[f32]) -> f32 {
@@ -246,6 +271,31 @@ impl TurboQuantMse {
             .into_iter()
             .map(|idx| self.centroids[idx as usize])
             .collect()
+    }
+
+    fn parse_code<'a>(&self, code: &'a [u8]) -> (f32, &'a [u8]) {
+        if self.config.normalize_for_cosine {
+            assert!(
+                code.len() >= 4,
+                "TurboQuantMse code too short for norm prefix: {}",
+                code.len()
+            );
+            let norm = f32::from_le_bytes(code[0..4].try_into().unwrap());
+            let packed_code = &code[4..];
+            assert_eq!(
+                packed_code.len(),
+                self.config.code_bytes(),
+                "TurboQuantMse packed code size mismatch"
+            );
+            (norm, packed_code)
+        } else {
+            assert_eq!(
+                code.len(),
+                self.config.code_bytes(),
+                "TurboQuantMse packed code size mismatch"
+            );
+            (1.0, code)
+        }
     }
 
     fn preprocess_input(&self, v: &[f32]) -> Vec<f32> {
@@ -293,11 +343,15 @@ fn sample_standard_normal(rng: &mut StdRng) -> f32 {
 }
 
 fn normalize_vector(v: &[f32]) -> Vec<f32> {
-    let norm = v.iter().map(|&x| x * x).sum::<f32>().sqrt();
+    let norm = vector_l2_norm(v);
     if norm <= 1e-12 {
         return v.to_vec();
     }
     v.iter().map(|&x| x / norm).collect()
+}
+
+fn vector_l2_norm(v: &[f32]) -> f32 {
+    v.iter().map(|&x| x * x).sum::<f32>().sqrt()
 }
 
 fn decode_packed_index(code: &[u8], coord: usize, bits: usize, mask: u32) -> usize {
@@ -368,10 +422,14 @@ mod tests {
     fn test_mse_decreases_with_more_bits() {
         let dim = 128usize;
         let mut rng_val = 42u64;
-        let v: Vec<f32> = (0..dim).map(|_| {
-            rng_val = rng_val.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            ((rng_val >> 33) as f32 / u32::MAX as f32) - 0.5
-        }).collect();
+        let v: Vec<f32> = (0..dim)
+            .map(|_| {
+                rng_val = rng_val
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((rng_val >> 33) as f32 / u32::MAX as f32) - 0.5
+            })
+            .collect();
         let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
         let v: Vec<f32> = v.iter().map(|x| x / norm).collect();
 
@@ -381,8 +439,16 @@ mod tests {
             let tq = TurboQuantMse::new(config);
             let code = tq.encode(&v);
             let decoded = tq.decode(&code);
-            let mse: f32 = v.iter().zip(&decoded).map(|(a, b)| (a - b).powi(2)).sum::<f32>() / dim as f32;
-            assert!(mse < prev_mse, "bits={bits}: mse={mse} should be < prev={prev_mse}");
+            let mse: f32 = v
+                .iter()
+                .zip(&decoded)
+                .map(|(a, b)| (a - b).powi(2))
+                .sum::<f32>()
+                / dim as f32;
+            assert!(
+                mse < prev_mse,
+                "bits={bits}: mse={mse} should be < prev={prev_mse}"
+            );
             prev_mse = mse;
         }
     }
@@ -408,5 +474,92 @@ mod tests {
         assert!((ip - ip_noalloc).abs() < 1e-6);
         assert!((ip - ip_adc).abs() < 1e-6);
         assert!((l2 - l2_noalloc).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_normalize_for_cosine_prefixes_norm_and_code_size() {
+        let dim = 8usize;
+        let config = TurboQuantConfig::new(dim, 4).with_normalize_for_cosine(true);
+        let tq = TurboQuantMse::new(config.clone());
+        let vector = vec![3.0, 4.0, -2.0, 1.0, 0.5, -0.25, 2.5, -1.5];
+        let expected_norm = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+        let code = tq.encode(&vector);
+        let (stored_norm, packed) = tq.parse_code(&code);
+
+        assert_eq!(tq.code_size_bytes(), 4 + config.code_bytes());
+        assert_eq!(code.len(), 4 + config.code_bytes());
+        assert_eq!(packed.len(), config.code_bytes());
+        assert!(
+            (stored_norm - expected_norm).abs() < 1e-6,
+            "stored norm {} != expected {}",
+            stored_norm,
+            expected_norm
+        );
+    }
+
+    #[test]
+    fn test_normalize_for_cosine_ip_decode_and_l2_use_norm_prefix_correctly() {
+        let dim = 8usize;
+        let config = TurboQuantConfig::new(dim, 4)
+            .with_dense_rotation()
+            .with_normalize_for_cosine(true);
+        let tq = TurboQuantMse::new(config);
+        let vector = vec![3.0, 4.0, -2.0, 1.0, 0.5, -0.25, 2.5, -1.5];
+        let query = vec![0.25, -1.0, 0.75, 0.5, -0.5, 1.5, -0.25, 0.125];
+        let code = tq.encode(&vector);
+        let (stored_norm, packed) = tq.parse_code(&code);
+        let q_rot = tq.rotate_query(&query);
+        let adc = tq.precompute_adc_table(&q_rot);
+        let rotated = tq.decode_rotated(packed);
+        let cosine_ip: f32 = q_rot.iter().zip(rotated.iter()).map(|(&q, &x)| q * x).sum();
+        let manual_l2: f32 = q_rot
+            .iter()
+            .zip(rotated.iter())
+            .map(|(&q, &x)| {
+                let diff = q - x;
+                diff * diff
+            })
+            .sum();
+
+        let ip = tq.score_ip(&q_rot, &code);
+        let ip_adc = tq.score_ip_adc(&adc, &code);
+        let l2_prefixed = tq.score_l2(&q_rot, &code);
+
+        assert!(
+            (ip - stored_norm * cosine_ip).abs() < 1e-5,
+            "ip {} != norm {} * cosine {}",
+            ip,
+            stored_norm,
+            cosine_ip
+        );
+        assert!(
+            (ip_adc - stored_norm * cosine_ip).abs() < 1e-5,
+            "adc ip {} did not rescale by norm {}",
+            ip_adc,
+            stored_norm
+        );
+        assert!(
+            (l2_prefixed - manual_l2).abs() < 1e-6,
+            "l2 with prefixed code {} != manual {}",
+            l2_prefixed,
+            manual_l2
+        );
+
+        let expected: Vec<f32> = tq
+            .rotation
+            .inverse_rotate(&rotated)
+            .into_iter()
+            .map(|x| x * stored_norm)
+            .collect();
+        let decoded = tq.decode(&code);
+        for (lhs, rhs) in decoded.iter().zip(expected.iter()) {
+            assert!(
+                (*lhs - *rhs).abs() < 1e-5,
+                "decoded {} != expected {}",
+                lhs,
+                rhs
+            );
+        }
     }
 }

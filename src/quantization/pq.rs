@@ -47,7 +47,7 @@ impl PQConfig {
 
     /// Get the code size in bytes
     pub fn code_size(&self) -> usize {
-        self.m * self.nbits / 8
+        (self.m * self.nbits).div_ceil(8)
     }
 
     /// Validate the configuration
@@ -104,6 +104,26 @@ impl ProductQuantizer {
     /// Get the configuration
     pub fn config(&self) -> &PQConfig {
         &self.config
+    }
+
+    pub fn m(&self) -> usize {
+        self.config.m
+    }
+
+    pub fn ksub(&self) -> usize {
+        self.config.ksub()
+    }
+
+    pub fn sub_dim(&self) -> usize {
+        self.config.sub_dim()
+    }
+
+    pub fn dim(&self) -> usize {
+        self.config.dim
+    }
+
+    pub fn nbits(&self) -> usize {
+        self.config.nbits
     }
 
     /// Check if trained
@@ -336,10 +356,46 @@ impl ProductQuantizer {
     /// For L2: lower is better. For IP: higher is better.
     pub fn compute_distance_with_table(&self, table: &[f32], code: &[u8]) -> f32 {
         let ksub = self.config.ksub();
+        let m = self.config.m;
+
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            std::arch::x86_64::_mm_prefetch(
+                table.as_ptr() as *const i8,
+                std::arch::x86_64::_MM_HINT_T0,
+            );
+        }
+
         let mut sum = 0.0f32;
-        for sub_q in 0..self.config.m {
-            let idx = self.extract_index(code, sub_q);
-            sum += table[sub_q * ksub + idx];
+        let chunks4 = (m / 4) * 4;
+
+        if self.config.nbits == 8 {
+            let mut sub_q = 0usize;
+            while sub_q < chunks4 {
+                sum += table[sub_q * ksub + code[sub_q] as usize];
+                sum += table[(sub_q + 1) * ksub + code[sub_q + 1] as usize];
+                sum += table[(sub_q + 2) * ksub + code[sub_q + 2] as usize];
+                sum += table[(sub_q + 3) * ksub + code[sub_q + 3] as usize];
+                sub_q += 4;
+            }
+            while sub_q < m {
+                sum += table[sub_q * ksub + code[sub_q] as usize];
+                sub_q += 1;
+            }
+            return sum;
+        }
+
+        let mut sub_q = 0usize;
+        while sub_q < chunks4 {
+            sum += table[sub_q * ksub + self.extract_index(code, sub_q)];
+            sum += table[(sub_q + 1) * ksub + self.extract_index(code, sub_q + 1)];
+            sum += table[(sub_q + 2) * ksub + self.extract_index(code, sub_q + 2)];
+            sum += table[(sub_q + 3) * ksub + self.extract_index(code, sub_q + 3)];
+            sub_q += 4;
+        }
+        while sub_q < m {
+            sum += table[sub_q * ksub + self.extract_index(code, sub_q)];
+            sub_q += 1;
         }
         sum
     }
@@ -479,7 +535,6 @@ impl ProductQuantizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::quantization::kmeans::KMeans;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
 

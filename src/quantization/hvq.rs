@@ -14,6 +14,12 @@ pub struct HvqConfig {
     pub nbits: u8,
 }
 
+#[derive(Clone, Debug)]
+pub struct HvqQueryState {
+    pub q_rot: Vec<f32>,
+    pub centroid_score: f32,
+}
+
 #[doc = "⚠️ Experimental: no native parity"]
 pub struct HvqQuantizer {
     pub config: HvqConfig,
@@ -81,7 +87,7 @@ impl HvqQuantizer {
         self.rotated_centroid = self.rotate(&self.centroid);
     }
 
-    pub fn rotate(&self, v: &[f32]) -> Vec<f32> {
+    fn rotate_scalar(&self, v: &[f32]) -> Vec<f32> {
         assert_eq!(v.len(), self.config.dim);
         let dim = self.config.dim;
         let mut out = vec![0.0f32; dim];
@@ -92,12 +98,64 @@ impl HvqQuantizer {
         out
     }
 
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2,fma")]
+    unsafe fn rotate_avx2(&self, v: &[f32]) -> Vec<f32> {
+        use std::arch::x86_64::*;
+
+        assert_eq!(v.len(), self.config.dim);
+        let dim = self.config.dim;
+        let simd_len = dim / 8 * 8;
+        let mut out = vec![0.0f32; dim];
+
+        for (r, out_r) in out.iter_mut().enumerate().take(dim) {
+            let row = &self.rotation_matrix[r * dim..(r + 1) * dim];
+            let mut acc = _mm256_setzero_ps();
+            let mut c = 0usize;
+
+            while c < simd_len {
+                let row_chunk = unsafe { _mm256_loadu_ps(row.as_ptr().add(c)) };
+                let vec_chunk = unsafe { _mm256_loadu_ps(v.as_ptr().add(c)) };
+                acc = _mm256_fmadd_ps(row_chunk, vec_chunk, acc);
+                c += 8;
+            }
+
+            let mut lanes = [0.0f32; 8];
+            unsafe { _mm256_storeu_ps(lanes.as_mut_ptr(), acc) };
+            let mut sum = lanes.into_iter().sum::<f32>();
+
+            while c < dim {
+                sum += row[c] * v[c];
+                c += 1;
+            }
+
+            *out_r = sum;
+        }
+
+        out
+    }
+
+    pub fn rotate(&self, v: &[f32]) -> Vec<f32> {
+        assert_eq!(v.len(), self.config.dim);
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::arch::is_x86_feature_detected!("avx2")
+                && std::arch::is_x86_feature_detected!("fma")
+            {
+                // SAFETY: the required CPU features are checked at runtime.
+                return unsafe { self.rotate_avx2(v) };
+            }
+        }
+
+        self.rotate_scalar(v)
+    }
+
     /// Explicit query rotation helper for search path.
     pub fn rotate_query(&self, query: &[f32]) -> Vec<f32> {
         self.rotate(query)
     }
 
-    pub fn inverse_rotate(&self, v: &[f32]) -> Vec<f32> {
+    fn inverse_rotate_scalar(&self, v: &[f32]) -> Vec<f32> {
         assert_eq!(v.len(), self.config.dim);
         let dim = self.config.dim;
         let mut out = vec![0.0f32; dim];
@@ -109,6 +167,54 @@ impl HvqQuantizer {
             *out_c = sum;
         }
         out
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2,fma")]
+    unsafe fn inverse_rotate_avx2(&self, v: &[f32]) -> Vec<f32> {
+        use std::arch::x86_64::*;
+
+        assert_eq!(v.len(), self.config.dim);
+        let dim = self.config.dim;
+        let simd_len = dim / 8 * 8;
+        let mut out = vec![0.0f32; dim];
+        let out_ptr = out.as_mut_ptr();
+
+        for (r, &vr) in v.iter().enumerate().take(dim) {
+            let row = &self.rotation_matrix[r * dim..(r + 1) * dim];
+            let scale = _mm256_set1_ps(vr);
+            let mut c = 0usize;
+
+            while c < simd_len {
+                let row_chunk = unsafe { _mm256_loadu_ps(row.as_ptr().add(c)) };
+                let out_chunk = unsafe { _mm256_loadu_ps(out_ptr.add(c)) };
+                let updated = _mm256_fmadd_ps(row_chunk, scale, out_chunk);
+                unsafe { _mm256_storeu_ps(out_ptr.add(c), updated) };
+                c += 8;
+            }
+
+            while c < dim {
+                out[c] += row[c] * vr;
+                c += 1;
+            }
+        }
+
+        out
+    }
+
+    pub fn inverse_rotate(&self, v: &[f32]) -> Vec<f32> {
+        assert_eq!(v.len(), self.config.dim);
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::arch::is_x86_feature_detected!("avx2")
+                && std::arch::is_x86_feature_detected!("fma")
+            {
+                // SAFETY: the required CPU features are checked at runtime.
+                return unsafe { self.inverse_rotate_avx2(v) };
+            }
+        }
+
+        self.inverse_rotate_scalar(v)
     }
 
     pub fn compute_scale_offset(rotated: &[f32], nbits: u8) -> (f32, f32) {
@@ -169,10 +275,7 @@ impl HvqQuantizer {
             0.0
         };
         let mut reconstructed = self.decode_unit(packed_code, vmax);
-        for (value, &centroid) in reconstructed
-            .iter_mut()
-            .zip(self.rotated_centroid.iter())
-        {
+        for (value, &centroid) in reconstructed.iter_mut().zip(self.rotated_centroid.iter()) {
             *value = *value * scale + centroid;
         }
         reconstructed
@@ -353,22 +456,40 @@ impl HvqQuantizer {
         self.adc_distance_prerotated(&q_rot, code, base_dist)
     }
 
-    pub fn adc_distance_prerotated(&self, q_rot: &[f32], code: &[u8], _base_dist: f32) -> f32 {
+    pub fn precompute_query_state(&self, q_rot: &[f32]) -> HvqQueryState {
         assert_eq!(q_rot.len(), self.config.dim);
+        let centroid_score = q_rot
+            .iter()
+            .zip(self.rotated_centroid.iter())
+            .map(|(a, b)| a * b)
+            .sum();
+        HvqQueryState {
+            q_rot: q_rot.to_vec(),
+            centroid_score,
+        }
+    }
+
+    pub fn score_code(&self, state: &HvqQueryState, code: &[u8]) -> f32 {
+        assert_eq!(state.q_rot.len(), self.config.dim);
         let (norm_o, vmax, base_quant_dist, packed_code) = self.parse_code(code);
         let o_hat = self.decode_unit(packed_code, vmax);
-        let ip: f32 = q_rot.iter().zip(o_hat.iter()).map(|(a, b)| a * b).sum();
+        let ip: f32 = state
+            .q_rot
+            .iter()
+            .zip(o_hat.iter())
+            .map(|(a, b)| a * b)
+            .sum();
         let centered_score = if base_quant_dist > 1e-12 {
             norm_o * ip / base_quant_dist
         } else {
             0.0
         };
-        let centroid_score: f32 = q_rot
-            .iter()
-            .zip(self.rotated_centroid.iter())
-            .map(|(a, b)| a * b)
-            .sum();
-        centroid_score + centered_score
+        state.centroid_score + centered_score
+    }
+
+    pub fn adc_distance_prerotated(&self, q_rot: &[f32], code: &[u8], _base_dist: f32) -> f32 {
+        let state = self.precompute_query_state(q_rot);
+        self.score_code(&state, code)
     }
 }
 
@@ -457,7 +578,11 @@ mod tests {
         }
         let avg_rel_err = rel_err_sum / n as f32;
         println!("hvq_roundtrip avg_relative_error={:.4}", avg_rel_err);
-        assert!(avg_rel_err < 0.15, "avg relative error too high: {}", avg_rel_err);
+        assert!(
+            avg_rel_err < 0.15,
+            "avg relative error too high: {}",
+            avg_rel_err
+        );
     }
 
     #[test]
@@ -468,12 +593,8 @@ mod tests {
         let top_k = 10usize;
 
         let mut rng = StdRng::seed_from_u64(42);
-        let train: Vec<f32> = (0..n * dim)
-            .map(|_| rng.gen_range(-1.0f32..1.0))
-            .collect();
-        let queries: Vec<f32> = (0..nq * dim)
-            .map(|_| rng.gen_range(-1.0f32..1.0))
-            .collect();
+        let train: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0f32..1.0)).collect();
+        let queries: Vec<f32> = (0..nq * dim).map(|_| rng.gen_range(-1.0f32..1.0)).collect();
 
         let normalize_rows = |data: &[f32], dim: usize| -> Vec<f32> {
             let mut out = Vec::with_capacity(data.len());
@@ -541,5 +662,76 @@ mod tests {
         let simd = dot_u8_i8_avx512(&a, &b);
         assert_eq!(scalar, simd, "SIMD result must match scalar");
         println!("dot_u8_i8 scalar={} simd={}", scalar, simd);
+    }
+
+    #[test]
+    fn test_hvq_rotate_matches_scalar_reference() {
+        let dim = 24usize;
+        let hvq = HvqQuantizer::new(HvqConfig { dim, nbits: 4 }, 7);
+        let query: Vec<f32> = (0..dim).map(|i| (i as f32 - 12.0) * 0.125).collect();
+
+        let scalar = hvq.rotate_scalar(&query);
+        let rotated = hvq.rotate(&query);
+
+        for (lhs, rhs) in scalar.iter().zip(rotated.iter()) {
+            assert!(
+                (*lhs - *rhs).abs() <= 1e-5,
+                "rotate mismatch: scalar={} rotated={}",
+                lhs,
+                rhs
+            );
+        }
+    }
+
+    #[test]
+    fn test_hvq_inverse_rotate_matches_scalar_reference() {
+        let dim = 24usize;
+        let hvq = HvqQuantizer::new(HvqConfig { dim, nbits: 4 }, 11);
+        let query: Vec<f32> = (0..dim).map(|i| ((i as f32) * 0.25).sin()).collect();
+
+        let scalar = hvq.inverse_rotate_scalar(&query);
+        let rotated = hvq.inverse_rotate(&query);
+
+        for (lhs, rhs) in scalar.iter().zip(rotated.iter()) {
+            assert!(
+                (*lhs - *rhs).abs() <= 1e-5,
+                "inverse_rotate mismatch: scalar={} rotated={}",
+                lhs,
+                rhs
+            );
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_hvq_avx2_helpers_match_scalar_reference() {
+        let dim = 31usize;
+        let hvq = HvqQuantizer::new(HvqConfig { dim, nbits: 6 }, 13);
+        let query: Vec<f32> = (0..dim).map(|i| ((i as f32) * 0.17).cos()).collect();
+
+        if std::arch::is_x86_feature_detected!("avx2") && std::arch::is_x86_feature_detected!("fma")
+        {
+            let rotate_scalar = hvq.rotate_scalar(&query);
+            let inverse_scalar = hvq.inverse_rotate_scalar(&query);
+            let rotate_simd = unsafe { hvq.rotate_avx2(&query) };
+            let inverse_simd = unsafe { hvq.inverse_rotate_avx2(&query) };
+
+            for (lhs, rhs) in rotate_scalar.iter().zip(rotate_simd.iter()) {
+                assert!(
+                    (*lhs - *rhs).abs() <= 1e-5,
+                    "rotate_avx2 mismatch: scalar={} simd={}",
+                    lhs,
+                    rhs
+                );
+            }
+            for (lhs, rhs) in inverse_scalar.iter().zip(inverse_simd.iter()) {
+                assert!(
+                    (*lhs - *rhs).abs() <= 1e-5,
+                    "inverse_rotate_avx2 mismatch: scalar={} simd={}",
+                    lhs,
+                    rhs
+                );
+            }
+        }
     }
 }

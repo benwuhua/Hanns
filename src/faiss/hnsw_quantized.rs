@@ -4,9 +4,8 @@
 //! 内存优化版本
 
 use crate::api::{Result, SearchRequest, SearchResult as ApiSearchResult};
-use crate::faiss::PqEncoder;
 use crate::index::{Index, IndexError, SearchResult as IndexSearchResult};
-use crate::quantization::ScalarQuantizer;
+use crate::quantization::{PQConfig, ProductQuantizer, ScalarQuantizer};
 
 /// HNSW 量化配置
 #[derive(Clone)]
@@ -490,7 +489,7 @@ pub struct HnswPqIndex {
     vectors: Vec<f32>,
     quantized_vectors: Vec<Vec<u8>>, // 每个向量的 PQ 码
 
-    pq: PqEncoder,
+    pq: ProductQuantizer,
 
     graph: Vec<Vec<(i64, f32)>>,
     ids: Vec<i64>,
@@ -511,7 +510,7 @@ impl HnswPqIndex {
             },
             vectors: Vec::new(),
             quantized_vectors: Vec::new(),
-            pq: PqEncoder::new(dim, m, k),
+            pq: ProductQuantizer::new(PQConfig::new(dim, m, k.ilog2() as usize)),
             graph: Vec::new(),
             ids: Vec::new(),
             next_id: 0,
@@ -527,7 +526,7 @@ impl HnswPqIndex {
         }
 
         // 训练 PQ 码书
-        self.pq.train(vectors, 20);
+        self.pq.train(n, vectors)?;
 
         self.trained = true;
         Ok(n)
@@ -546,7 +545,7 @@ impl HnswPqIndex {
             let vector = &vectors[start..start + self.dim];
 
             // PQ 编码
-            let code = self.pq.encode(vector);
+            let code = self.pq.encode(vector)?;
 
             let id = ids.map(|ids| ids[i]).unwrap_or(self.next_id);
             self.next_id += 1;
@@ -569,7 +568,7 @@ impl HnswPqIndex {
         let k = req.top_k;
 
         // 构建查询的距离表
-        let distance_table = self.pq.build_distance_table(query);
+        let distance_table = self.pq.build_distance_table_l2(query);
 
         // 搜索
         let mut results: Vec<(i64, f32)> = (0..self.ids.len())
