@@ -277,7 +277,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         "method", "tier", "code_bytes", "build_s", "recall@10", "scan_qps"
     );
 
+    let args: Vec<String> = std::env::args().collect();
+    let enabled_methods: Vec<&str> = if args.len() > 1 {
+        args[1].split(',').collect()
+    } else {
+        vec!["PQ", "TQ", "HVQ"]
+    };
+
     for tier in &TIERS {
+        if enabled_methods.iter().any(|m| m.eq_ignore_ascii_case("PQ")) {
         let pq_config = PQConfig::new(EXPECTED_DIM, tier.pq_m, tier.pq_nbits);
         let mut pq = ProductQuantizer::new(pq_config);
         let t_build = Instant::now();
@@ -302,7 +310,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             recall,
             scan_qps,
         );
+        }
 
+        if enabled_methods.iter().any(|m| m.eq_ignore_ascii_case("TQ")) {
         let tq_config = TurboQuantConfig::new(EXPECTED_DIM, tier.tq_bits)
             .with_hadamard()
             .with_normalize_for_cosine(true);
@@ -331,7 +341,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             recall,
             scan_qps,
         );
+        }
 
+        if enabled_methods.iter().any(|m| m.eq_ignore_ascii_case("HVQ")) {
         let mut hvq = HvqQuantizer::new(
             HvqConfig {
                 dim: EXPECTED_DIM,
@@ -363,6 +375,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             recall,
             scan_qps,
         );
+        }
     }
 
     Ok(())
