@@ -20,6 +20,8 @@ pub struct HvqQuantizer {
     pub rotation_matrix: Vec<f32>, // row-major dim x dim
     pub scale: f32,
     pub offset: f32,
+    pub centroid: Vec<f32>,
+    pub rotated_centroid: Vec<f32>,
 }
 
 impl HvqQuantizer {
@@ -50,7 +52,33 @@ impl HvqQuantizer {
             rotation_matrix,
             scale: 1.0,
             offset: 0.0,
+            centroid: vec![0.0; dim],
+            rotated_centroid: vec![0.0; dim],
         }
+    }
+
+    pub fn train(&mut self, n: usize, data: &[f32]) {
+        assert!(n > 0, "n must be > 0");
+        assert_eq!(
+            data.len(),
+            n * self.config.dim,
+            "expected {} floats, got {}",
+            n * self.config.dim,
+            data.len()
+        );
+
+        self.centroid.fill(0.0);
+        for row in data.chunks_exact(self.config.dim) {
+            for (c, &value) in self.centroid.iter_mut().zip(row.iter()) {
+                *c += value;
+            }
+        }
+
+        let inv_n = 1.0 / n as f32;
+        for value in &mut self.centroid {
+            *value *= inv_n;
+        }
+        self.rotated_centroid = self.rotate(&self.centroid);
     }
 
     pub fn rotate(&self, v: &[f32]) -> Vec<f32> {
@@ -90,7 +118,7 @@ impl HvqQuantizer {
             .map(f32::abs)
             .fold(0.0f32, f32::max)
             .max(1e-6);
-        let levels = ((1u32 << nbits) - 1) as f32;
+        let levels = (1u32 << nbits) as f32;
         let mut scale = (2.0 * max_v) / levels.max(1.0);
         if scale.abs() < 1e-6 {
             scale = 1e-6;
@@ -108,23 +136,24 @@ impl HvqQuantizer {
     }
 
     pub fn code_size_bytes(&self) -> usize {
-        8 + (self.config.dim * self.config.nbits as usize).div_ceil(8)
+        12 + (self.config.dim * self.config.nbits as usize).div_ceil(8)
     }
 
-    fn parse_code<'a>(&self, code: &'a [u8]) -> (f32, f32, &'a [u8]) {
+    fn parse_code<'a>(&self, code: &'a [u8]) -> (f32, f32, f32, &'a [u8]) {
         assert!(
-            code.len() >= 8,
-            "HVQ code too short: expected at least 8 bytes, got {}",
+            code.len() >= 12,
+            "HVQ code too short: expected at least 12 bytes, got {}",
             code.len()
         );
         let norm_o = f32::from_le_bytes(code[0..4].try_into().unwrap());
         let vmax = f32::from_le_bytes(code[4..8].try_into().unwrap());
-        (norm_o, vmax, &code[8..])
+        let base_quant_dist = f32::from_le_bytes(code[8..12].try_into().unwrap());
+        (norm_o, vmax, base_quant_dist, &code[12..])
     }
 
     fn decode_unit(&self, packed_code: &[u8], vmax: f32) -> Vec<f32> {
         let indices = unpack_codes(packed_code, self.config.dim, self.config.nbits);
-        let levels = ((1u32 << self.config.nbits) - 1) as f32;
+        let levels = (1u32 << self.config.nbits) as f32;
         let scale = (2.0 * vmax) / levels.max(1.0);
         indices
             .into_iter()
@@ -133,16 +162,30 @@ impl HvqQuantizer {
     }
 
     fn reconstruct_rotated(&self, code: &[u8]) -> Vec<f32> {
-        let (norm_o, vmax, packed_code) = self.parse_code(code);
-        self.decode_unit(packed_code, vmax)
-            .into_iter()
-            .map(|x| x * norm_o)
-            .collect()
+        let (norm_o, vmax, base_quant_dist, packed_code) = self.parse_code(code);
+        let scale = if base_quant_dist > 1e-12 {
+            norm_o / base_quant_dist
+        } else {
+            0.0
+        };
+        let mut reconstructed = self.decode_unit(packed_code, vmax);
+        for (value, &centroid) in reconstructed
+            .iter_mut()
+            .zip(self.rotated_centroid.iter())
+        {
+            *value = *value * scale + centroid;
+        }
+        reconstructed
     }
 
     pub fn encode(&self, v: &[f32], nrefine: usize) -> Vec<u8> {
         assert_eq!(v.len(), self.config.dim);
-        let o = self.rotate(v);
+        let v_centered: Vec<f32> = v
+            .iter()
+            .zip(self.centroid.iter())
+            .map(|(a, b)| a - b)
+            .collect();
+        let o = self.rotate(&v_centered);
         let nbits = self.config.nbits;
         let norm_o = o.iter().map(|x| x * x).sum::<f32>().sqrt();
         let o_hat: Vec<f32> = if norm_o > 1e-12 {
@@ -165,35 +208,87 @@ impl HvqQuantizer {
             .map(|&x| Self::quantize_scalar(x, scale, offset, nbits) as u16)
             .collect();
 
-        let max_refine = nrefine.min(8);
-        for _ in 0..max_refine {
+        let dequant = |code: u16| Self::dequantize_scalar(code as u8, scale, offset);
+        let mut ip: f32 = codes
+            .iter()
+            .zip(o_hat.iter())
+            .map(|(&code, &target)| dequant(code) * target)
+            .sum();
+        let mut qed_length: f32 = codes
+            .iter()
+            .map(|&code| {
+                let value = dequant(code);
+                value * value
+            })
+            .sum();
+        let mut objective = if qed_length > 1e-12 {
+            ip * ip / qed_length
+        } else {
+            0.0
+        };
+
+        let max_refine = nrefine.min(6);
+        for _round in 0..max_refine {
             let mut improved = false;
             for i in 0..self.config.dim {
                 let current = codes[i];
-                let current_dot =
-                    Self::dequantize_scalar(current as u8, scale, offset) * o_hat[i];
-                let mut best_code = current;
-                let mut best_dot = current_dot;
+                let old_val = dequant(current);
+                let target_val = if ip.abs() > 1e-12 {
+                    o_hat[i] * qed_length / ip
+                } else {
+                    o_hat[i]
+                };
+                let target_code = ((target_val - offset) / scale)
+                    .round()
+                    .clamp(0.0, max_code as f32) as u16;
 
-                if current < max_code {
-                    let candidate = current + 1;
-                    let dot = Self::dequantize_scalar(candidate as u8, scale, offset) * o_hat[i];
-                    if dot > best_dot + 1e-7 {
-                        best_dot = dot;
-                        best_code = candidate;
+                let mut candidates = [u16::MAX; 5];
+                let mut candidate_len = 0usize;
+                let mut push_candidate = |candidate: i32| {
+                    if candidate < 0 || candidate > max_code as i32 {
+                        return;
                     }
-                }
-                if current > 0 {
-                    let candidate = current - 1;
-                    let dot = Self::dequantize_scalar(candidate as u8, scale, offset) * o_hat[i];
-                    if dot > best_dot + 1e-7 {
-                        best_dot = dot;
+                    let candidate = candidate as u16;
+                    if candidate == current {
+                        return;
+                    }
+                    if candidates[..candidate_len].contains(&candidate) {
+                        return;
+                    }
+                    candidates[candidate_len] = candidate;
+                    candidate_len += 1;
+                };
+                push_candidate(target_code as i32 - 1);
+                push_candidate(target_code as i32);
+                push_candidate(target_code as i32 + 1);
+                push_candidate(current as i32 - 1);
+                push_candidate(current as i32 + 1);
+
+                let mut best_code = current;
+                let mut best_ip = ip;
+                let mut best_qed = qed_length;
+                let mut best_objective = objective;
+                for &candidate in &candidates[..candidate_len] {
+                    let new_val = dequant(candidate);
+                    let new_ip = ip - o_hat[i] * old_val + o_hat[i] * new_val;
+                    let new_qed = qed_length - old_val * old_val + new_val * new_val;
+                    if new_qed <= 1e-12 {
+                        continue;
+                    }
+                    let new_objective = new_ip * new_ip / new_qed;
+                    if new_objective > best_objective + 1e-10 {
                         best_code = candidate;
+                        best_ip = new_ip;
+                        best_qed = new_qed;
+                        best_objective = new_objective;
                     }
                 }
 
                 if best_code != current {
                     codes[i] = best_code;
+                    ip = best_ip;
+                    qed_length = best_qed;
+                    objective = best_objective;
                     improved = true;
                 }
             }
@@ -203,12 +298,15 @@ impl HvqQuantizer {
             }
         }
 
+        let base_quant_dist = qed_length.sqrt();
+
         let mut packed_bits = Vec::with_capacity((self.config.dim * nbits as usize).div_ceil(8));
         pack_codes(&codes, nbits, &mut packed_bits);
 
         let mut packed = Vec::with_capacity(self.code_size_bytes());
         packed.extend_from_slice(&norm_o.to_le_bytes());
         packed.extend_from_slice(&vmax.to_le_bytes());
+        packed.extend_from_slice(&base_quant_dist.to_le_bytes());
         packed.extend_from_slice(&packed_bits);
         packed
     }
@@ -245,8 +343,9 @@ impl HvqQuantizer {
         }
     }
 
-    pub fn base_quant_dist(&self, _v: &[f32], _code: &[u8]) -> f32 {
-        0.0
+    pub fn base_quant_dist(&self, _v: &[f32], code: &[u8]) -> f32 {
+        let (_, _, base_quant_dist, _) = self.parse_code(code);
+        base_quant_dist
     }
 
     pub fn adc_distance(&self, query: &[f32], code: &[u8], base_dist: f32) -> f32 {
@@ -256,10 +355,20 @@ impl HvqQuantizer {
 
     pub fn adc_distance_prerotated(&self, q_rot: &[f32], code: &[u8], _base_dist: f32) -> f32 {
         assert_eq!(q_rot.len(), self.config.dim);
-        let (norm_o, vmax, packed_code) = self.parse_code(code);
+        let (norm_o, vmax, base_quant_dist, packed_code) = self.parse_code(code);
         let o_hat = self.decode_unit(packed_code, vmax);
         let ip: f32 = q_rot.iter().zip(o_hat.iter()).map(|(a, b)| a * b).sum();
-        norm_o * ip
+        let centered_score = if base_quant_dist > 1e-12 {
+            norm_o * ip / base_quant_dist
+        } else {
+            0.0
+        };
+        let centroid_score: f32 = q_rot
+            .iter()
+            .zip(self.rotated_centroid.iter())
+            .map(|(a, b)| a * b)
+            .sum();
+        centroid_score + centered_score
     }
 }
 
@@ -333,7 +442,8 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let data: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0f32..1.0)).collect();
 
-        let hvq = HvqQuantizer::new(HvqConfig { dim, nbits: 8 }, 42);
+        let mut hvq = HvqQuantizer::new(HvqConfig { dim, nbits: 8 }, 42);
+        hvq.train(n, &data);
 
         let mut rel_err_sum = 0.0f32;
         for i in 0..n {
@@ -376,7 +486,8 @@ mod tests {
         let train = normalize_rows(&train, dim);
         let queries = normalize_rows(&queries, dim);
 
-        let hvq = HvqQuantizer::new(HvqConfig { dim, nbits: 4 }, 42);
+        let mut hvq = HvqQuantizer::new(HvqConfig { dim, nbits: 4 }, 42);
+        hvq.train(n, &train);
 
         let mut codes = Vec::with_capacity(n);
         for i in 0..n {

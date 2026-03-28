@@ -7,6 +7,7 @@
 
 use super::kmeans::KMeans;
 use crate::api::{KnowhereError, Result};
+use rayon::prelude::*;
 
 /// Product Quantization configuration
 #[derive(Clone, Debug)]
@@ -159,42 +160,44 @@ impl ProductQuantizer {
 
         let sub_dim = self.config.sub_dim();
         let ksub = self.config.ksub();
+        let dim = self.config.dim;
+        let m = self.config.m;
 
         // Initialize centroids (m x ksub x sub_dim)
-        let total_centroids = self.config.m * ksub * sub_dim;
+        let total_centroids = m * ksub * sub_dim;
         self.centroids = vec![0.0f32; total_centroids];
 
-        // Train each subquantizer independently using k-means
-        for sub_q in 0..self.config.m {
-            let sub_centroid_offset = sub_q * ksub * sub_dim;
+        // OPT-004: 动态调整迭代次数，避免小数据集训练过慢
+        // - n < 10K: 10 次迭代（快速训练）
+        // - 10K <= n < 100K: 25 次迭代
+        // - n >= 100K: 50 次迭代
+        let max_iter = if n < 10_000 {
+            10
+        } else if n < 100_000 {
+            25
+        } else {
+            50
+        };
 
-            // Extract subvectors for this subquantizer
-            let mut sub_vectors = Vec::with_capacity(n * sub_dim);
-            for i in 0..n {
-                let vec_offset = i * self.config.dim;
-                let sub_offset = vec_offset + sub_q * sub_dim;
-                sub_vectors.extend_from_slice(&x[sub_offset..sub_offset + sub_dim]);
-            }
+        let trained: Vec<Vec<f32>> = (0..m)
+            .into_par_iter()
+            .map(|sub_q| {
+                let mut sub_vectors = Vec::with_capacity(n * sub_dim);
+                for i in 0..n {
+                    let offset = i * dim + sub_q * sub_dim;
+                    sub_vectors.extend_from_slice(&x[offset..offset + sub_dim]);
+                }
 
-            // Run k-means with adaptive iterations
-            // OPT-004: 动态调整迭代次数，避免小数据集训练过慢
-            // - n < 10K: 10 次迭代（快速训练）
-            // - 10K <= n < 100K: 25 次迭代
-            // - n >= 100K: 50 次迭代
-            let max_iter = if n < 10_000 {
-                10
-            } else if n < 100_000 {
-                25
-            } else {
-                50
-            };
+                let mut kmeans = KMeans::new(ksub, sub_dim);
+                kmeans.set_max_iter(max_iter);
+                kmeans.train(&sub_vectors);
+                kmeans.centroids().to_vec()
+            })
+            .collect();
 
-            let mut kmeans = KMeans::new(ksub, sub_dim);
-            kmeans.set_max_iter(max_iter);
-            let centroids_slice =
-                &mut self.centroids[sub_centroid_offset..sub_centroid_offset + ksub * sub_dim];
-            kmeans.train(&sub_vectors);
-            centroids_slice.copy_from_slice(kmeans.centroids());
+        for (sub_q, codebook) in trained.into_iter().enumerate() {
+            let offset = sub_q * ksub * sub_dim;
+            self.centroids[offset..offset + ksub * sub_dim].copy_from_slice(&codebook);
         }
 
         self.is_trained = true;
@@ -268,17 +271,77 @@ impl ProductQuantizer {
         }
 
         let code_size = self.config.code_size();
-        let mut codes = vec![0u8; n * code_size];
+        let dim = self.config.dim;
+        let codes: Vec<Vec<u8>> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let vec_offset = i * dim;
+                self.encode(&x[vec_offset..vec_offset + dim])
+                    .expect("validated PQ encode_batch input")
+            })
+            .collect();
 
-        for i in 0..n {
-            let vec_offset = i * self.config.dim;
-            let code_offset = i * code_size;
-
-            let code = self.encode(&x[vec_offset..vec_offset + self.config.dim])?;
-            codes[code_offset..code_offset + code_size].copy_from_slice(&code);
+        let mut flat = Vec::with_capacity(n * code_size);
+        for code in codes {
+            flat.extend_from_slice(&code);
         }
 
-        Ok(codes)
+        Ok(flat)
+    }
+
+    /// Build L2 distance table for ADC (Asymmetric Distance Computation)
+    /// Returns flat table [m * ksub] where table[sub_q * ksub + c] = L2(query_sub, centroid_c)
+    pub fn build_distance_table_l2(&self, query: &[f32]) -> Vec<f32> {
+        let sub_dim = self.config.sub_dim();
+        let ksub = self.config.ksub();
+        let mut table = vec![0.0f32; self.config.m * ksub];
+        for sub_q in 0..self.config.m {
+            let query_sub = &query[sub_q * sub_dim..(sub_q + 1) * sub_dim];
+            for c in 0..ksub {
+                let offset = sub_q * ksub * sub_dim + c * sub_dim;
+                let centroid = &self.centroids[offset..offset + sub_dim];
+                let mut dist = 0.0f32;
+                for j in 0..sub_dim {
+                    let d = query_sub[j] - centroid[j];
+                    dist += d * d;
+                }
+                table[sub_q * ksub + c] = dist;
+            }
+        }
+        table
+    }
+
+    /// Build IP distance table for ADC
+    /// Returns flat table [m * ksub] where table[sub_q * ksub + c] = dot(query_sub, centroid_c)
+    pub fn build_distance_table_ip(&self, query: &[f32]) -> Vec<f32> {
+        let sub_dim = self.config.sub_dim();
+        let ksub = self.config.ksub();
+        let mut table = vec![0.0f32; self.config.m * ksub];
+        for sub_q in 0..self.config.m {
+            let query_sub = &query[sub_q * sub_dim..(sub_q + 1) * sub_dim];
+            for c in 0..ksub {
+                let offset = sub_q * ksub * sub_dim + c * sub_dim;
+                let centroid = &self.centroids[offset..offset + sub_dim];
+                let mut ip = 0.0f32;
+                for j in 0..sub_dim {
+                    ip += query_sub[j] * centroid[j];
+                }
+                table[sub_q * ksub + c] = ip;
+            }
+        }
+        table
+    }
+
+    /// Score a PQ code using a precomputed distance table. O(m) per code.
+    /// For L2: lower is better. For IP: higher is better.
+    pub fn compute_distance_with_table(&self, table: &[f32], code: &[u8]) -> f32 {
+        let ksub = self.config.ksub();
+        let mut sum = 0.0f32;
+        for sub_q in 0..self.config.m {
+            let idx = self.extract_index(code, sub_q);
+            sum += table[sub_q * ksub + idx];
+        }
+        sum
     }
 
     /// Find nearest centroid for a subvector
@@ -492,6 +555,32 @@ mod tests {
         // Compute distance (should be 0 or very small for self)
         let dist = pq.compute_distance(&query, &code);
         assert!(dist >= 0.0);
+    }
+
+    #[test]
+    fn test_pq_adc_table() {
+        let dim = 64;
+        let config = PQConfig::new(dim, 8, 8);
+        let mut pq = ProductQuantizer::new(config);
+        let train_data = create_test_vectors(1000, dim);
+        pq.train(1000, &train_data).unwrap();
+
+        let query = create_test_vectors(1, dim);
+        let code = pq.encode(&query).unwrap();
+
+        let table = pq.build_distance_table_l2(&query);
+        let dist_table = pq.compute_distance_with_table(&table, &code);
+        let dist_direct = pq.compute_distance(&query, &code);
+        assert!(
+            (dist_table - dist_direct).abs() < 1e-4,
+            "table={} vs direct={}",
+            dist_table,
+            dist_direct
+        );
+
+        let ip_table = pq.build_distance_table_ip(&query);
+        let ip_score = pq.compute_distance_with_table(&ip_table, &code);
+        assert!(ip_score.is_finite());
     }
 
     #[test]

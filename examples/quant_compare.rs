@@ -221,71 +221,12 @@ where
     results
 }
 
-fn pq_extract_index(code: &[u8], sub_q: usize, nbits: usize) -> usize {
-    let byte_offset = sub_q * nbits / 8;
-    let bit_offset = (sub_q * nbits) % 8;
-
-    if nbits == 8 {
-        code[byte_offset] as usize
-    } else {
-        let mut idx = 0usize;
-        for bit in 0..nbits {
-            let byte_idx = byte_offset + (bit_offset + bit) / 8;
-            let bit_idx = (bit_offset + bit) % 8;
-            if byte_idx < code.len() && (code[byte_idx] >> bit_idx) & 1 != 0 {
-                idx |= 1 << bit;
-            }
-        }
-        idx
-    }
-}
-
-fn pq_build_ip_table(pq: &ProductQuantizer, query: &[f32]) -> Vec<f32> {
-    let cfg = pq.config();
-    let sub_dim = cfg.sub_dim();
-    let ksub = cfg.ksub();
-    let centroids = pq.centroids();
-    let mut table = vec![0.0f32; cfg.m * ksub];
-
-    for sub_q in 0..cfg.m {
-        let query_sub = &query[sub_q * sub_dim..(sub_q + 1) * sub_dim];
-        for c in 0..ksub {
-            let offset = sub_q * ksub * sub_dim + c * sub_dim;
-            let centroid = &centroids[offset..offset + sub_dim];
-            table[sub_q * ksub + c] = query_sub
-                .iter()
-                .zip(centroid.iter())
-                .map(|(&a, &b)| a * b)
-                .sum();
-        }
-    }
-
-    table
-}
-
-fn pq_score_ip_table(pq: &ProductQuantizer, table: &[f32], code: &[u8]) -> f32 {
-    let cfg = pq.config();
-    let ksub = cfg.ksub();
-    let mut score = 0.0f32;
-
-    for sub_q in 0..cfg.m {
-        let idx = pq_extract_index(code, sub_q, cfg.nbits);
-        score += table[sub_q * ksub + idx];
-    }
-
-    score
-}
-
-fn pq_code_bytes(m: usize, nbits: usize) -> usize {
-    m * nbits / 8
-}
-
 fn tq_code_bytes(bits: u8) -> usize {
     EXPECTED_DIM.next_power_of_two() * bits as usize / 8
 }
 
 fn hvq_code_bytes(bits: u8) -> usize {
-    8 + (EXPECTED_DIM * bits as usize).div_ceil(8)
+    12 + (EXPECTED_DIM * bits as usize).div_ceil(8)
 }
 
 fn print_row(method: &str, tier: &str, code_bytes: usize, build_s: f64, recall: f32, qps: f64) {
@@ -346,9 +287,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let t_scan = Instant::now();
         let pq_results = evaluate_queries(&queries, EXPECTED_DIM, eval_queries, TOP_K, |query| {
-            let table = pq_build_ip_table(&pq, query);
+            let table = pq.build_distance_table_ip(query);
             scan_topk_codes(&pq_codes, pq.code_size(), TOP_K, |_idx, code| {
-                pq_score_ip_table(&pq, &table, code)
+                pq.compute_distance_with_table(&table, code)
             })
         });
         let scan_qps = eval_queries as f64 / t_scan.elapsed().as_secs_f64().max(f64::EPSILON);
@@ -356,7 +297,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         print_row(
             "PQ",
             tier.label,
-            pq_code_bytes(tier.pq_m, tier.pq_nbits),
+            pq.code_size(),
             build_s,
             recall,
             scan_qps,
@@ -391,7 +332,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             scan_qps,
         );
 
-        let hvq = HvqQuantizer::new(
+        let mut hvq = HvqQuantizer::new(
             HvqConfig {
                 dim: EXPECTED_DIM,
                 nbits: tier.hvq_bits,
@@ -399,7 +340,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             42,
         );
         let t_build = Instant::now();
-        let hvq_codes = hvq.encode_batch(base_n, &base, 0);
+        hvq.train(train_n, train);
+        let hvq_codes = hvq.encode_batch(base_n, &base, 4);
         let build_s = t_build.elapsed().as_secs_f64();
         let hvq_storage_size = hvq.code_size_bytes();
 
