@@ -448,6 +448,7 @@ impl HvqQuantizer {
         let levels = 1u16 << self.config.nbits;
         let half_levels = levels / 2;
         let half_levels_f = half_levels as f32;
+        let max_code = half_levels; // max magnitude for negative dims
         let vmax = Self::unit_vmax(o_hat);
 
         let mut abs_o = Vec::with_capacity(dim);
@@ -455,69 +456,74 @@ impl HvqQuantizer {
         let mut max_level = Vec::with_capacity(dim);
         for &value in o_hat {
             abs_o.push(value.abs());
-            let is_non_negative = value >= 0.0;
-            non_negative.push(is_non_negative);
-            max_level.push(if is_non_negative {
+            let is_non_neg = value >= 0.0;
+            non_negative.push(is_non_neg);
+            max_level.push(if is_non_neg {
                 half_levels.saturating_sub(1)
             } else {
-                half_levels
+                max_code
             });
         }
 
-        let mut heap = BinaryHeap::new();
-        for (i, &abs_value) in abs_o.iter().enumerate() {
-            if abs_value > 1e-12 && max_level[i] >= 1 {
-                heap.push(CriticalValue {
-                    threshold: 0.5 / abs_value,
-                    dim: i,
-                    next_level: 1,
-                });
+        // Find max abs value for t_start pruning (ExRaBitQ style)
+        let max_abs = abs_o.iter().cloned().fold(0.0f32, f32::max);
+        if max_abs < 1e-12 {
+            let codes = vec![half_levels; dim];
+            return (codes, 0.0, 0.0);
+        }
+
+        // t_start: conservative start — only skip obviously-too-small t values
+        // ExRaBitQ uses max_code/3, we use 0 to guarantee dominance over greedy
+        let t_start = 0.0f32;
+
+        // Pre-generate ALL critical values with exact levels, sort once, scan linearly
+        // Critical value for dim i, level k: t = (k - 0.5) / abs_o[i]
+        let mut events: Vec<(f32, usize, u16)> = Vec::new(); // (threshold, dim, level)
+        for i in 0..dim {
+            let abs_val = abs_o[i];
+            if abs_val < 1e-12 {
+                continue;
+            }
+            let ml = max_level[i];
+            for k in 1..=ml {
+                let t = (k as f32 - 0.5) / abs_val;
+                events.push((t, i, k));
             }
         }
+
+        // Sort by threshold ascending, then by dim and level (match heap ordering)
+        events.sort_unstable_by(|a, b| {
+            a.0.total_cmp(&b.0)
+                .then_with(|| a.1.cmp(&b.1))
+                .then_with(|| a.2.cmp(&b.2))
+        });
 
         let mut levels_abs = vec![0u16; dim];
         let mut sum_sq = 0.0f32;
         let mut sum_xc = 0.0f32;
-        let mut best_sum_sq = 0.0f32;
-        let mut best_sum_xc = 0.0f32;
         let mut best_objective = 0.0f32;
         let mut best_t = 0.0f32;
+        let mut best_sum_sq = 0.0f32;
+        let mut best_sum_xc = 0.0f32;
 
-        while let Some(event) = heap.pop() {
-            let current_threshold = event.threshold;
-            let mut pending = Some(event);
-            while let Some(item) = pending.take() {
-                let idx = item.dim;
-                let new_level = item.next_level;
-                let abs_value = abs_o[idx];
-                let max_allowed = max_level[idx];
-
-                if new_level <= max_allowed {
-                    let old_level = levels_abs[idx];
-                    if new_level > old_level {
-                        sum_sq += (new_level * new_level - old_level * old_level) as f32;
-                        sum_xc += (new_level - old_level) as f32 * abs_value;
-                        levels_abs[idx] = new_level;
-                    }
-
-                    let next_level = new_level + 1;
-                    if next_level <= max_allowed {
-                        heap.push(CriticalValue {
-                            threshold: (new_level as f32 + 0.5) / abs_value,
-                            dim: idx,
-                            next_level,
-                        });
-                    }
+        // Linear scan through sorted events, batch same-threshold events
+        let n_events = events.len();
+        let mut ei = 0;
+        while ei < n_events {
+            let cur_t = events[ei].0;
+            // Process all events at this exact threshold (bit-exact match)
+            while ei < n_events && events[ei].0.to_bits() == cur_t.to_bits() {
+                let (_, idx, new_level) = events[ei];
+                let old_level = levels_abs[idx];
+                if new_level > old_level {
+                    sum_sq += (new_level as f32) * (new_level as f32)
+                        - (old_level as f32) * (old_level as f32);
+                    sum_xc += (new_level - old_level) as f32 * abs_o[idx];
+                    levels_abs[idx] = new_level;
                 }
-
-                pending = match heap.peek() {
-                    Some(next) if next.threshold.to_bits() == current_threshold.to_bits() => {
-                        heap.pop()
-                    }
-                    _ => None,
-                };
+                ei += 1;
             }
-
+            // Evaluate objective once per unique threshold
             let objective = if sum_sq > 0.0 {
                 (sum_xc * sum_xc) / sum_sq
             } else {
@@ -525,15 +531,13 @@ impl HvqQuantizer {
             };
             if objective > best_objective + 1e-10 {
                 best_objective = objective;
-                best_t = current_threshold;
+                best_t = cur_t;
                 best_sum_sq = sum_sq;
                 best_sum_xc = sum_xc;
             }
         }
 
-        // Reconstruct codes from best_t (ExRaBitQ style: store t, rebuild once)
-        // Threshold for level k = (k - 0.5) / abs_o[i], so at time t:
-        //   level[i] = floor(t * abs_o[i] + 0.5)
+        // Reconstruct codes from best_t; use exact accumulated sums for ip/qed
         let scale = vmax / half_levels_f.max(1.0);
         let ip = scale * best_sum_xc;
         let qed_length = scale * scale * best_sum_sq;
