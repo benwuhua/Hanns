@@ -14,6 +14,12 @@
 - Narrow performance ideas should start in a local `screen` phase and only become tracked work after `screen_result=promote`.
 - Before marking a feature `passing`, run `bash init.sh` and the feature's recorded remote verification steps.
 
+## Reasoning Principles
+- Default to first-principles reasoning: reduce each problem to irreducible facts, explicit constraints, and the actual acceptance target before choosing an approach.
+- Distinguish hard requirements from legacy implementation details, conventions, or accidental complexity; do not preserve historical structure unless it is required.
+- Prefer solutions derived from root causes and minimal necessary interfaces over cargo-culted parity work or surface-level patching.
+- When tradeoffs exist, explain the constraint chain that leads to the decision so the reasoning is inspectable and falsifiable.
+
 ## Build, Test, and Development Commands
 - `cargo build --verbose`: debug build of the library and binaries.
 - `cargo build --release --verbose`: optimized build for benchmarks/perf checks.

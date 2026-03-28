@@ -134,6 +134,20 @@ impl MetricType {
     }
 }
 
+/// Scalar quantization mode for HNSW traversal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[derive(Default)]
+pub enum SqMode {
+    /// Disable SQ, use raw vectors everywhere.
+    #[default]
+    None,
+    /// Use SQ8 for graph traversal and final scoring.
+    SQ8,
+    /// Use SQ8 for graph traversal, then rerank final candidates with raw vectors.
+    SQ8Refine,
+}
+
 impl FromStr for MetricType {
     type Err = String;
 
@@ -222,6 +236,9 @@ pub struct IndexParams {
     /// For HNSW: level factor
     #[serde(default)]
     pub ml: Option<f32>,
+    /// For HNSW: scalar quantization traversal mode
+    #[serde(default)]
+    pub sq_mode: Option<SqMode>,
     /// For DiskANN: max degree (R)
     #[serde(default)]
     pub max_degree: Option<usize>,
@@ -291,6 +308,15 @@ pub struct IndexParams {
     /// For DiskANN/AISAQ filtered search: threshold gate for exact fallback (-1 = disabled)
     #[serde(default)]
     pub disk_filter_threshold: Option<f32>,
+    /// For DiskANN/AISAQ: enable IO cutting early termination on search convergence
+    #[serde(default)]
+    pub disk_io_cutting: Option<bool>,
+    /// For DiskANN/AISAQ: minimum relative improvement required to reset IO cutting stale rounds
+    #[serde(default)]
+    pub disk_io_cutting_threshold: Option<f32>,
+    /// For DiskANN/AISAQ: number of stale rounds before IO cutting terminates search
+    #[serde(default)]
+    pub disk_io_cutting_patience: Option<usize>,
     /// For AISAQ: enable expanded exact rerank stage (default true)
     #[serde(default)]
     pub disk_rearrange: Option<bool>,

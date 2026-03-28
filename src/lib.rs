@@ -48,6 +48,7 @@ pub mod python;
 
 pub use api::{
     IndexConfig, IndexType, KnowhereError, MetricType, Result, SearchRequest, SearchResult,
+    SqMode,
 };
 pub use bitset::BitsetView;
 pub use comp::BloomFilter;

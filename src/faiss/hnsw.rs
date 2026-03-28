@@ -21,12 +21,13 @@ use std::time::{Duration, Instant};
 
 use crate::api::{
     DataType, IndexConfig, IndexType, MetricType, Predicate, Result, SearchRequest,
-    SearchResult as ApiSearchResult,
+    SearchResult as ApiSearchResult, SqMode,
 };
 use crate::bitset::BitsetView;
 use crate::dataset::Dataset;
 use crate::half::{bf16_l2_sq_batch_4, Bf16};
 use crate::index::{Index as IndexTrait, IndexError, SearchResult as IndexSearchResult};
+use crate::quantization::ScalarQuantizer;
 use crate::simd;
 
 type BatchNeighborResults = (usize, usize, Vec<Vec<(usize, f32)>>);
@@ -47,6 +48,7 @@ const HNSW_SEARCH_BF_TOPK_THRESHOLD: f32 = 0.5;
 thread_local! {
     static HNSW_SEARCH_SCRATCH_TLS: RefCell<SearchScratch> = RefCell::new(SearchScratch::new());
     static HNSW_COSINE_QUERY_NORM_TLS: std::cell::Cell<f32> = std::cell::Cell::new(0.0);
+    static HNSW_SQ_PRECOMPUTED_TLS: RefCell<Vec<i16>> = RefCell::new(Vec::new());
 }
 
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
@@ -1227,6 +1229,9 @@ pub struct HnswIndex {
     m_max0: usize,
     level_multiplier: f32,
     metric_type: MetricType,
+    sq_mode: SqMode,
+    sq_quantizer: Option<ScalarQuantizer>,
+    sq_codes: Vec<u8>,
     distance_to_idx_fn: DistanceToIdxFn,
     l2_distance_sq_ptr_kernel: simd::L2DistanceSqPtrKernel,
     // OPT-015: Flag to indicate if we're using sequential IDs (idx == id)
@@ -1243,7 +1248,26 @@ impl HnswIndex {
     }
 
     #[inline]
-    fn resolve_distance_to_idx_fn(metric_type: MetricType) -> DistanceToIdxFn {
+    fn resolve_sq_mode(config: &IndexConfig) -> SqMode {
+        config.params.sq_mode.unwrap_or_else(|| {
+            if config.index_type == IndexType::HnswSq {
+                SqMode::SQ8
+            } else {
+                SqMode::None
+            }
+        })
+    }
+
+    #[inline]
+    fn resolve_distance_to_idx_fn(metric_type: MetricType, sq_mode: SqMode) -> DistanceToIdxFn {
+        if sq_mode != SqMode::None {
+            return match metric_type {
+                MetricType::L2 => Self::distance_to_idx_sq_l2_dispatch,
+                MetricType::Ip => Self::distance_to_idx_sq_ip_dispatch,
+                MetricType::Cosine => Self::distance_to_idx_sq_cosine_dispatch,
+                MetricType::Hamming => Self::distance_to_idx_hamming_dispatch,
+            };
+        }
         match metric_type {
             MetricType::L2 => Self::distance_to_idx_l2_dispatch,
             MetricType::Ip => Self::distance_to_idx_ip_dispatch,
@@ -1281,6 +1305,60 @@ impl HnswIndex {
         };
         if q_norm > 0.0 {
             // stored vectors are pre-normalized during add/load for cosine metric
+            1.0 - ip / q_norm
+        } else {
+            1.0
+        }
+    }
+
+    #[inline(always)]
+    fn distance_to_idx_sq_l2_dispatch(index: &HnswIndex, query: &[f32], idx: usize) -> f32 {
+        let Some(sq) = index.sq_quantizer.as_ref() else {
+            return Self::distance_to_idx_l2_dispatch(index, query, idx);
+        };
+        let Some(start) = index.vector_start_offset(index.sq_codes.len(), idx) else {
+            return f32::INFINITY;
+        };
+        let code = &index.sq_codes[start..start + index.dim];
+        HNSW_SQ_PRECOMPUTED_TLS.with(|cell| {
+            let buf = cell.borrow();
+            if buf.len() == index.dim {
+                sq.sq_l2_precomputed(&buf[..], code)
+            } else {
+                sq.sq_l2_asymmetric(query, code)
+            }
+        })
+    }
+
+    #[inline(always)]
+    fn distance_to_idx_sq_ip_dispatch(index: &HnswIndex, query: &[f32], idx: usize) -> f32 {
+        let Some(sq) = index.sq_quantizer.as_ref() else {
+            return Self::distance_to_idx_ip_dispatch(index, query, idx);
+        };
+        let Some(start) = index.vector_start_offset(index.sq_codes.len(), idx) else {
+            return f32::INFINITY;
+        };
+        let code = &index.sq_codes[start..start + index.dim];
+        -sq.decode_dot_f32(code, query)
+    }
+
+    #[inline(always)]
+    fn distance_to_idx_sq_cosine_dispatch(index: &HnswIndex, query: &[f32], idx: usize) -> f32 {
+        let Some(sq) = index.sq_quantizer.as_ref() else {
+            return Self::distance_to_idx_cosine_dispatch(index, query, idx);
+        };
+        let Some(start) = index.vector_start_offset(index.sq_codes.len(), idx) else {
+            return f32::INFINITY;
+        };
+        let code = &index.sq_codes[start..start + index.dim];
+        let ip = sq.decode_dot_f32(code, query);
+        let q_norm = HNSW_COSINE_QUERY_NORM_TLS.with(|c| c.get());
+        let q_norm = if q_norm > 0.0 {
+            q_norm
+        } else {
+            simd::inner_product(query, query).sqrt()
+        };
+        if q_norm > 0.0 {
             1.0 - ip / q_norm
         } else {
             1.0
@@ -1355,7 +1433,8 @@ impl HnswIndex {
                 .map(|n| n.get())
                 .unwrap_or(4)
         });
-        let distance_to_idx_fn = Self::resolve_distance_to_idx_fn(config.metric_type);
+        let sq_mode = Self::resolve_sq_mode(config);
+        let distance_to_idx_fn = Self::resolve_distance_to_idx_fn(config.metric_type, sq_mode);
         let l2_distance_sq_ptr_kernel = simd::l2_distance_sq_ptr_kernel();
         let level_rng = config
             .params
@@ -1364,9 +1443,11 @@ impl HnswIndex {
             .unwrap_or_else(StdRng::from_entropy);
 
         let use_bf16_storage = Self::bf16_storage_enabled_for_config(config);
+        let mut config_stored = config.clone();
+        config_stored.params.sq_mode = Some(sq_mode);
 
         Ok(Self {
-            config: config.clone(),
+            config: config_stored,
             entry_point: None,
             vectors: Vec::new(),
             bf16_vectors: Vec::new(),
@@ -1386,6 +1467,9 @@ impl HnswIndex {
             max_level: 0,
             level_multiplier,
             metric_type: config.metric_type,
+            sq_mode,
+            sq_quantizer: None,
+            sq_codes: Vec::new(),
             distance_to_idx_fn,
             l2_distance_sq_ptr_kernel,
             use_sequential_ids: true,
@@ -1427,6 +1511,100 @@ impl HnswIndex {
         } else {
             self.bf16_vectors.clear();
         }
+    }
+
+    #[inline]
+    fn rebuild_sq_storage(&mut self) {
+        if self.sq_mode == SqMode::None || self.vectors.is_empty() {
+            self.sq_quantizer = None;
+            self.sq_codes.clear();
+            self.distance_to_idx_fn = Self::resolve_distance_to_idx_fn(self.metric_type, self.sq_mode);
+            self.config.params.sq_mode = Some(self.sq_mode);
+            return;
+        }
+
+        let mut sq = ScalarQuantizer::new(self.dim, 8);
+        sq.train(&self.vectors);
+        let codes = sq.encode_batch(&self.vectors);
+        self.sq_codes.clear();
+        self.sq_codes.reserve(codes.len() * self.dim);
+        for code in codes {
+            self.sq_codes.extend_from_slice(&code);
+        }
+        self.sq_quantizer = Some(sq);
+        self.distance_to_idx_fn = Self::resolve_distance_to_idx_fn(self.metric_type, self.sq_mode);
+        self.config.params.sq_mode = Some(self.sq_mode);
+    }
+
+    #[inline]
+    fn append_sq_code_for_idx(&mut self, idx: usize) {
+        if self.sq_mode == SqMode::None {
+            return;
+        }
+        let Some(sq) = self.sq_quantizer.as_ref() else {
+            self.rebuild_sq_storage();
+            return;
+        };
+        let start = idx * self.dim;
+        let code = sq.encode(&self.vectors[start..start + self.dim]);
+        self.sq_codes.extend_from_slice(&code);
+    }
+
+    #[inline]
+    fn prepare_search_query_context(&self, query: &[f32]) {
+        if self.metric_type == MetricType::Cosine {
+            let q_norm = simd::inner_product(query, query).sqrt();
+            HNSW_COSINE_QUERY_NORM_TLS.with(|c| c.set(q_norm));
+        }
+
+        if self.sq_mode != SqMode::None && self.metric_type == MetricType::L2 {
+            if let Some(sq) = self.sq_quantizer.as_ref() {
+                HNSW_SQ_PRECOMPUTED_TLS.with(|cell| {
+                    let mut buf = cell.borrow_mut();
+                    if buf.len() != self.dim {
+                        buf.resize(self.dim, 0);
+                    }
+                    sq.precompute_query_into(query, &mut buf);
+                });
+            }
+        }
+    }
+
+    #[inline]
+    fn clear_search_query_context(&self) {
+        if self.metric_type == MetricType::Cosine {
+            HNSW_COSINE_QUERY_NORM_TLS.with(|c| c.set(0.0));
+        }
+    }
+
+    #[inline]
+    fn raw_distance_to_idx(&self, query: &[f32], idx: usize) -> f32 {
+        match self.metric_type {
+            MetricType::L2 => self.l2_distance_to_idx(query, idx),
+            MetricType::Ip => Self::distance_to_idx_ip_dispatch(self, query, idx),
+            MetricType::Cosine => {
+                let Some(start) = self.vector_start_offset(self.vectors.len(), idx) else {
+                    return f32::INFINITY;
+                };
+                let stored = &self.vectors[start..start + self.dim];
+                let ip = simd::inner_product(query, stored);
+                let q_norm = simd::inner_product(query, query).sqrt();
+                if q_norm > 0.0 { 1.0 - ip / q_norm } else { 1.0 }
+            }
+            MetricType::Hamming => f32::INFINITY,
+        }
+    }
+
+    #[inline]
+    fn rerank_sq_results(&self, query: &[f32], results: &mut Vec<(i64, f32)>) {
+        if self.sq_mode != SqMode::SQ8Refine || results.is_empty() {
+            return;
+        }
+        for (id, dist) in results.iter_mut() {
+            let idx = self.get_idx_from_id_fast(*id);
+            *dist = self.raw_distance_to_idx(query, idx);
+        }
+        results.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
     }
 
     /// Generate a random level for a new node using exponential distribution
@@ -1539,6 +1717,11 @@ impl HnswIndex {
                 "vector dimension mismatch".to_string(),
             ));
         }
+        if self.sq_mode != SqMode::None {
+            self.sq_quantizer = None;
+            self.sq_codes.clear();
+            self.distance_to_idx_fn = Self::resolve_distance_to_idx_fn(self.metric_type, SqMode::None);
+        }
         self.trained = true;
         Ok(())
     }
@@ -1639,6 +1822,10 @@ impl HnswIndex {
             .map(|idx| self.node_info[idx].max_layer)
             .collect();
 
+        if self.sq_mode != SqMode::None {
+            self.rebuild_sq_storage();
+        }
+
         let mut scratch = SearchScratch::new();
         for (i, &node_level) in node_levels.iter().enumerate().take(n) {
             let idx = first_new_idx + i;
@@ -1717,6 +1904,10 @@ impl HnswIndex {
         let node_levels: Vec<usize> = (first_new_idx..first_new_idx + n)
             .map(|idx| self.node_info[idx].max_layer)
             .collect();
+
+        if self.sq_mode != SqMode::None {
+            self.rebuild_sq_storage();
+        }
 
         let mut scratch = SearchScratch::new();
         for (i, &node_level) in node_levels.iter().enumerate().take(n) {
@@ -1948,6 +2139,10 @@ impl HnswIndex {
             phase1_time
         );
 
+        if self.sq_mode != SqMode::None {
+            self.rebuild_sq_storage();
+        }
+
         // Phase 2: Batched parallel graph construction
         // OPT-031: Dynamic batch size strategy based on vector count and dimensions
         let batch_size = self.calculate_optimal_batch_size(n, self.dim);
@@ -2162,6 +2357,10 @@ impl HnswIndex {
                 self.max_level = node_levels[i];
                 self.entry_point = Some(id);
             }
+        }
+
+        if self.sq_mode != SqMode::None {
+            self.rebuild_sq_storage();
         }
 
         let batch_size = self.calculate_optimal_batch_size(n, self.dim);
@@ -2640,6 +2839,9 @@ impl HnswIndex {
         self.ids.push(assigned_id);
         // OPT-021: Removed HashMap insert
         self.append_dense_vector(vector);
+        if self.sq_mode != SqMode::None {
+            self.append_sq_code_for_idx(idx);
+        }
         self.node_info.push(node_info);
 
         // If this is the first node, set it as entry point
@@ -3821,13 +4023,16 @@ impl HnswIndex {
             let q_start = q_idx * self.dim;
             let query_vec = &query[q_start..q_start + self.dim];
 
-            let results = if should_bruteforce {
+            let mut results = if should_bruteforce {
                 self.brute_force_search(query_vec, k, |_id, idx| {
                     idx >= bitset.len() || !bitset.get(idx)
                 })
             } else {
                 self.search_single_with_bitset(query_vec, ef, k, bitset)
             };
+            if should_bruteforce {
+                self.rerank_sq_results(query_vec, &mut results);
+            }
 
             for (id, dist) in results.into_iter().take(k) {
                 all_ids.push(id);
@@ -5224,7 +5429,10 @@ impl HnswIndex {
             return vec![];
         }
 
-        if self.metric_type == MetricType::Cosine && self.ids.len() <= ef.max(k).max(64) {
+        if self.sq_mode == SqMode::None
+            && self.metric_type == MetricType::Cosine
+            && self.ids.len() <= ef.max(k).max(64)
+        {
             return self
                 .brute_force_search(query, k, |_id, idx| idx >= bitset.len() || !bitset.get(idx));
         }
@@ -5382,7 +5590,7 @@ impl HnswIndex {
             return vec![];
         }
 
-        if self.metric_type == MetricType::L2 && filter.is_none() {
+        if self.sq_mode == SqMode::None && self.metric_type == MetricType::L2 && filter.is_none() {
             return self.search_single_l2_unfiltered(query, ef, k);
         }
 
@@ -5392,11 +5600,15 @@ impl HnswIndex {
         // BUG-P1-001: Cosine on tiny collections can be sensitive to graph entry-point
         // randomness. Use deterministic exhaustive ranking for small-N to keep
         // IP/Cosine metric semantics aligned and avoid flaky top-1 ordering.
-        if self.metric_type == MetricType::Cosine && self.ids.len() <= ef.max(k).max(64) {
+        if self.sq_mode == SqMode::None
+            && self.metric_type == MetricType::Cosine
+            && self.ids.len() <= ef.max(k).max(64)
+        {
             return self.brute_force_search(query, k, |id, _idx| filter_fn(id));
         }
 
-        if self.metric_type == MetricType::Cosine && filter.is_none() {
+        if self.sq_mode == SqMode::None && self.metric_type == MetricType::Cosine && filter.is_none()
+        {
             return self.search_single_cosine_unfiltered(query, ef, k);
         }
 
@@ -5405,8 +5617,8 @@ impl HnswIndex {
         let mut scratch = SearchScratch::new();
         if self.metric_type == MetricType::Cosine {
             scratch.query_norm_cache = simd::inner_product(query, query).sqrt();
-            HNSW_COSINE_QUERY_NORM_TLS.with(|c| c.set(scratch.query_norm_cache));
         }
+        self.prepare_search_query_context(query);
         let mut curr_ep_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
         let mut best_ep_idx = curr_ep_idx;
         let mut curr_ep_dist = self.distance(query, curr_ep_idx);
@@ -5475,9 +5687,8 @@ impl HnswIndex {
             }
         }
 
-        if self.metric_type == MetricType::Cosine {
-            HNSW_COSINE_QUERY_NORM_TLS.with(|c| c.set(0.0));
-        }
+        self.rerank_sq_results(query, &mut final_results);
+        self.clear_search_query_context();
 
         final_results
     }
@@ -5637,6 +5848,7 @@ impl HnswIndex {
 
         // Multi-layer search with layer-wise jumping: start from top layer
         let mut scratch = SearchScratch::new();
+        self.prepare_search_query_context(query);
         let mut curr_ep_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
 
         // Enhanced layer descent with bitset filtering
@@ -5691,6 +5903,8 @@ impl HnswIndex {
             }
         }
 
+        self.rerank_sq_results(query, &mut final_results);
+        self.clear_search_query_context();
         final_results
     }
 
@@ -5918,7 +6132,7 @@ impl HnswIndex {
 
         // Magic and version
         file.write_all(b"HNSW")?;
-        file.write_all(&4u32.to_le_bytes())?; // Version 4: add deleted-id persistence
+        file.write_all(&5u32.to_le_bytes())?; // Version 5: persist SQ mode/quantizer/codes
 
         // Config
         file.write_all(&(self.dim as u32).to_le_bytes())?;
@@ -5931,6 +6145,33 @@ impl HnswIndex {
 
         // Metric type
         file.write_all(&(self.metric_type as u8).to_le_bytes())?;
+
+        // SQ state
+        let sq_mode = match self.sq_mode {
+            SqMode::None => 0u8,
+            SqMode::SQ8 => 1u8,
+            SqMode::SQ8Refine => 2u8,
+        };
+        file.write_all(&[sq_mode])?;
+        if let Some(sq) = &self.sq_quantizer {
+            file.write_all(&[1u8])?;
+            file.write_all(&(sq.dim as u32).to_le_bytes())?;
+            file.write_all(&[sq.bit as u8])?;
+            let quantizer_type = match sq.quantizer_type {
+                crate::quantization::sq::QuantizerType::Uniform => 0u8,
+                crate::quantization::sq::QuantizerType::Learned => 1u8,
+                crate::quantization::sq::QuantizerType::Quant4 => 2u8,
+            };
+            file.write_all(&[quantizer_type])?;
+            file.write_all(&sq.min_val.to_le_bytes())?;
+            file.write_all(&sq.max_val.to_le_bytes())?;
+            file.write_all(&sq.scale.to_le_bytes())?;
+            file.write_all(&sq.offset.to_le_bytes())?;
+        } else {
+            file.write_all(&[0u8])?;
+        }
+        file.write_all(&(self.sq_codes.len() as u64).to_le_bytes())?;
+        file.write_all(&self.sq_codes)?;
 
         // Number of vectors
         file.write_all(&(self.ids.len() as u64).to_le_bytes())?;
@@ -6269,7 +6510,10 @@ impl HnswIndex {
         let mut index = Self::new(&bootstrap_config)?;
         index.dim = dim;
         index.metric_type = metric_type;
-        index.distance_to_idx_fn = Self::resolve_distance_to_idx_fn(metric_type);
+        index.sq_mode = SqMode::None;
+        index.sq_quantizer = None;
+        index.sq_codes.clear();
+        index.distance_to_idx_fn = Self::resolve_distance_to_idx_fn(metric_type, index.sq_mode);
         index.l2_distance_sq_ptr_kernel = simd::l2_distance_sq_ptr_kernel();
         index.entry_point = entry_point;
         index.max_level = max_level;
@@ -6284,6 +6528,7 @@ impl HnswIndex {
         index.ef_search = ef_construction.max(1);
         index.level_multiplier = if mult > 0.0 { mult } else { 1.0 / (m as f32).ln() };
         index.use_sequential_ids = true;
+        index.config.params.sq_mode = Some(index.sq_mode);
         index.rebuild_bf16_storage();
         index.refresh_layer0_flat_graph();
         Ok(index)
@@ -6308,7 +6553,7 @@ impl HnswIndex {
         file.read_exact(&mut ver)?;
         let version = u32::from_le_bytes(ver);
 
-        if version != 3 && version != 4 {
+        if version != 3 && version != 4 && version != 5 {
             return Err(crate::api::KnowhereError::Codec(format!(
                 "unsupported version: {}",
                 version
@@ -6347,7 +6592,79 @@ impl HnswIndex {
         let mut buf1 = [0u8; 1];
         file.read_exact(&mut buf1)?;
         self.metric_type = MetricType::from_bytes(buf1[0]);
-        self.distance_to_idx_fn = Self::resolve_distance_to_idx_fn(self.metric_type);
+        if version >= 5 {
+            file.read_exact(&mut buf1)?;
+            self.sq_mode = match buf1[0] {
+                0 => SqMode::None,
+                1 => SqMode::SQ8,
+                2 => SqMode::SQ8Refine,
+                other => {
+                    return Err(crate::api::KnowhereError::Codec(format!(
+                        "unsupported sq_mode tag: {}",
+                        other
+                    )))
+                }
+            };
+
+            file.read_exact(&mut buf1)?;
+            if buf1[0] == 1 {
+                file.read_exact(&mut buf4)?;
+                let sq_dim = u32::from_le_bytes(buf4) as usize;
+                if sq_dim != self.dim {
+                    return Err(crate::api::KnowhereError::Codec(format!(
+                        "sq quantizer dim mismatch: {} != {}",
+                        sq_dim, self.dim
+                    )));
+                }
+                file.read_exact(&mut buf1)?;
+                let bit = buf1[0] as usize;
+                file.read_exact(&mut buf1)?;
+                let quantizer_type = match buf1[0] {
+                    0 => crate::quantization::sq::QuantizerType::Uniform,
+                    1 => crate::quantization::sq::QuantizerType::Learned,
+                    2 => crate::quantization::sq::QuantizerType::Quant4,
+                    other => {
+                        return Err(crate::api::KnowhereError::Codec(format!(
+                            "unsupported sq quantizer_type tag: {}",
+                            other
+                        )))
+                    }
+                };
+
+                let mut fbuf = [0u8; 4];
+                file.read_exact(&mut fbuf)?;
+                let min_val = f32::from_le_bytes(fbuf);
+                file.read_exact(&mut fbuf)?;
+                let max_val = f32::from_le_bytes(fbuf);
+                file.read_exact(&mut fbuf)?;
+                let scale = f32::from_le_bytes(fbuf);
+                file.read_exact(&mut fbuf)?;
+                let offset = f32::from_le_bytes(fbuf);
+
+                self.sq_quantizer = Some(ScalarQuantizer {
+                    dim: sq_dim,
+                    bit,
+                    quantizer_type,
+                    min_val,
+                    max_val,
+                    scale,
+                    offset,
+                });
+            } else {
+                self.sq_quantizer = None;
+            }
+
+            let mut buf8 = [0u8; 8];
+            file.read_exact(&mut buf8)?;
+            let sq_code_len = u64::from_le_bytes(buf8) as usize;
+            self.sq_codes = vec![0u8; sq_code_len];
+            file.read_exact(&mut self.sq_codes)?;
+        } else {
+            self.sq_mode = SqMode::None;
+            self.sq_quantizer = None;
+            self.sq_codes.clear();
+        }
+        self.distance_to_idx_fn = Self::resolve_distance_to_idx_fn(self.metric_type, self.sq_mode);
         self.l2_distance_sq_ptr_kernel = simd::l2_distance_sq_ptr_kernel();
 
         // Number of vectors
@@ -6377,6 +6694,16 @@ impl HnswIndex {
             }
         }
         self.rebuild_bf16_storage();
+        if version >= 5
+            && self.sq_mode != SqMode::None
+            && self.sq_codes.len() != count.saturating_mul(self.dim)
+        {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "sq code length mismatch: {} != {}",
+                self.sq_codes.len(),
+                count * self.dim
+            )));
+        }
 
         // IDs
         self.ids = Vec::with_capacity(count);
@@ -6475,6 +6802,9 @@ impl HnswIndex {
         }
 
         self.refresh_layer0_flat_graph();
+        self.config.metric_type = self.metric_type;
+        self.config.dim = self.dim;
+        self.config.params.sq_mode = Some(self.sq_mode);
         self.trained = true;
         Ok(())
     }
@@ -7435,6 +7765,68 @@ mod tests {
 
         index.refresh_layer0_flat_graph();
         index
+    }
+
+    fn sq_test_config(metric_type: MetricType, sq_mode: SqMode) -> IndexConfig {
+        IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type,
+            dim: 32,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(12),
+                ef_construction: Some(96),
+                ef_search: Some(96),
+                num_threads: Some(1),
+                sq_mode: Some(sq_mode),
+                ..Default::default()
+            },
+        }
+    }
+
+    fn sq_test_vectors(n: usize, dim: usize) -> Vec<f32> {
+        let mut vectors = Vec::with_capacity(n * dim);
+        for i in 0..n {
+            let base = i as f32 / n.max(1) as f32;
+            for d in 0..dim {
+                let wave = (((i * 17 + d * 13) % 31) as f32 - 15.0) * 0.0005;
+                vectors.push((base + d as f32 * 0.0001 + wave).clamp(0.0, 1.0));
+            }
+        }
+        vectors
+    }
+
+    fn exact_top1_l2(vectors: &[f32], dim: usize, query: &[f32]) -> i64 {
+        let mut best_idx = 0usize;
+        let mut best_dist = f32::INFINITY;
+        for (idx, vector) in vectors.chunks_exact(dim).enumerate() {
+            let dist: f32 = query
+                .iter()
+                .zip(vector.iter())
+                .map(|(&a, &b)| {
+                    let diff = a - b;
+                    diff * diff
+                })
+                .sum();
+            if dist < best_dist {
+                best_dist = dist;
+                best_idx = idx;
+            }
+        }
+        best_idx as i64
+    }
+
+    fn exact_top1_ip(vectors: &[f32], dim: usize, query: &[f32]) -> i64 {
+        let mut best_idx = 0usize;
+        let mut best_score = f32::NEG_INFINITY;
+        for (idx, vector) in vectors.chunks_exact(dim).enumerate() {
+            let score = simd::inner_product(query, vector);
+            if score > best_score {
+                best_score = score;
+                best_idx = idx;
+            }
+        }
+        best_idx as i64
     }
 
     fn deterministic_layer0_batch4_index() -> HnswIndex {
@@ -10112,6 +10504,137 @@ mod tests {
         assert!(
             !idx.node_info[0].layer_neighbors[0].ids.is_empty(),
             "level0 neighbors should be parsed"
+        );
+    }
+
+    #[test]
+    fn test_hnsw_sq8_basic() {
+        let dim = 32;
+        let vectors = sq_test_vectors(256, dim);
+        let config = sq_test_config(MetricType::L2, SqMode::SQ8);
+        let mut index = HnswIndex::new(&config).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        assert!(index.sq_quantizer.is_some(), "SQ quantizer should be trained");
+        assert_eq!(index.sq_codes.len(), 256 * dim);
+
+        let req = SearchRequest {
+            top_k: 1,
+            nprobe: 10,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+
+        let mut matches = 0usize;
+        let query_ids = [7usize, 23, 51, 87, 119, 143, 191, 223];
+        for &q_idx in &query_ids {
+            let mut query = vectors[q_idx * dim..(q_idx + 1) * dim].to_vec();
+            query[0] += 0.0004;
+            query[1] -= 0.0002;
+            let expected = exact_top1_l2(&vectors, dim, &query);
+            let result = index.search(&query, &req).unwrap();
+            if result.ids[0] == expected {
+                matches += 1;
+            }
+        }
+
+        assert!(
+            matches >= query_ids.len() / 2,
+            "SQ8 traversal should recover a majority of exact top-1 neighbors, got {matches}/{}",
+            query_ids.len()
+        );
+    }
+
+    #[test]
+    fn test_hnsw_sq8_refine() {
+        let dim = 32;
+        let vectors = sq_test_vectors(256, dim);
+
+        let mut sq_index = HnswIndex::new(&sq_test_config(MetricType::L2, SqMode::SQ8)).unwrap();
+        sq_index.train(&vectors).unwrap();
+        sq_index.add(&vectors, None).unwrap();
+
+        let mut refine_index =
+            HnswIndex::new(&sq_test_config(MetricType::L2, SqMode::SQ8Refine)).unwrap();
+        refine_index.train(&vectors).unwrap();
+        refine_index.add(&vectors, None).unwrap();
+
+        let req = SearchRequest {
+            top_k: 1,
+            nprobe: 10,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+
+        let mut sq_matches = 0usize;
+        let mut refine_matches = 0usize;
+        let query_ids = [3usize, 11, 19, 27, 35, 47, 63, 95, 127, 159, 191, 223];
+        for &q_idx in &query_ids {
+            let mut query = vectors[q_idx * dim..(q_idx + 1) * dim].to_vec();
+            query[0] += 0.0005;
+            query[2] -= 0.0003;
+            let expected = exact_top1_l2(&vectors, dim, &query);
+            let sq_result = sq_index.search(&query, &req).unwrap();
+            let refine_result = refine_index.search(&query, &req).unwrap();
+            if sq_result.ids[0] == expected {
+                sq_matches += 1;
+            }
+            if refine_result.ids[0] == expected {
+                refine_matches += 1;
+            }
+        }
+
+        assert!(
+            refine_matches >= sq_matches,
+            "SQ8Refine should not reduce exact top-1 matches (sq8={sq_matches}, refine={refine_matches})"
+        );
+    }
+
+    #[test]
+    fn test_hnsw_sq8_ip() {
+        let dim = 32;
+        let mut vectors = Vec::with_capacity(64 * dim);
+        for i in 0..64usize {
+            let mut vector = vec![0.0f32; dim];
+            let primary = i % dim;
+            vector[primary] = if i < dim { 1.0 } else { 0.75 };
+            if i >= dim {
+                vector[(primary + 7) % dim] = 0.25;
+            }
+            vectors.extend_from_slice(&vector);
+        }
+        let config = sq_test_config(MetricType::Ip, SqMode::SQ8);
+        let mut index = HnswIndex::new(&config).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        let req = SearchRequest {
+            top_k: 5,
+            nprobe: 128,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+
+        let mut hits = 0usize;
+        let query_ids = [0usize, 3, 7, 11, 15, 19, 23, 27, 31];
+        for &q_idx in &query_ids {
+            let query = vectors[q_idx * dim..(q_idx + 1) * dim].to_vec();
+            let expected = exact_top1_ip(&vectors, dim, &query);
+            let result = index.search(&query, &req).unwrap();
+            if result.ids.iter().take(req.top_k).any(|&id| id == expected) {
+                hits += 1;
+            }
+        }
+
+        assert!(
+            hits >= (query_ids.len() * 2) / 3,
+            "SQ8 IP traversal should recover a majority of exact top-1 neighbors within top-{k}, got {hits}/{}",
+            query_ids.len(),
+            k = req.top_k
         );
     }
 }

@@ -21,12 +21,11 @@ use crate::api::{IndexConfig, KnowhereError, MetricType, Result, SearchResult};
 use crate::bitset::BitsetView;
 use crate::dataset::Dataset;
 use crate::index::{Index, IndexError};
+use crate::quantization::hvq::{HvqConfig, HvqQuantizer, HvqQueryState};
 use crate::quantization::{PQConfig, ProductQuantizer};
-use crate::search::{
-    is_visited_thread_local, mark_thread_local, reset_thread_local, with_visited,
-};
 #[cfg(all(feature = "async-io", target_os = "linux"))]
 use crate::search::VisitedList;
+use crate::search::{is_visited_thread_local, mark_thread_local, reset_thread_local, with_visited};
 use crate::simd;
 #[cfg(all(feature = "async-io", target_os = "linux"))]
 use io_uring::{opcode, types, IoUring};
@@ -90,6 +89,24 @@ pub struct AisaqConfig {
     /// 1.0 = strict bound, >1.0 = conservative bound, f32::MAX = effectively disabled.
     #[serde(default = "default_early_stop_alpha")]
     pub early_stop_alpha: f32,
+    /// Enable IO cutting (beam search early termination on convergence).
+    #[serde(default)]
+    pub io_cutting_enabled: bool,
+    /// Minimum relative improvement required to reset IO cutting stale rounds.
+    #[serde(default = "default_io_cutting_threshold")]
+    pub io_cutting_threshold: f32,
+    /// Number of stale rounds before IO cutting terminates the beam search.
+    #[serde(default = "default_io_cutting_patience")]
+    pub io_cutting_patience: usize,
+    /// Use HVQ quantizer for coarse beam-search scoring (alternative to PQ).
+    #[serde(default)]
+    pub use_hvq: bool,
+    /// HVQ bits per dimension (1-8).
+    #[serde(default = "default_hvq_nbits")]
+    pub hvq_nbits: usize,
+    /// HVQ encoding refinement iterations.
+    #[serde(default = "default_hvq_nrefine")]
+    pub hvq_nrefine: usize,
     /// Enable SQ8 prefilter distance in beam-search hot path.
     #[serde(default)]
     pub use_sq8_prefilter: bool,
@@ -105,6 +122,22 @@ fn default_refine_passes() -> usize {
 
 fn default_early_stop_alpha() -> f32 {
     1.5
+}
+
+fn default_io_cutting_threshold() -> f32 {
+    0.02
+}
+
+fn default_io_cutting_patience() -> usize {
+    3
+}
+
+fn default_hvq_nbits() -> usize {
+    4
+}
+
+fn default_hvq_nrefine() -> usize {
+    3
 }
 
 fn default_build_batch_size() -> usize {
@@ -157,6 +190,12 @@ impl Default for AisaqConfig {
             run_refine_pass: true,
             num_refine_passes: 2,
             early_stop_alpha: 1.5,
+            io_cutting_enabled: false,
+            io_cutting_threshold: 0.02,
+            io_cutting_patience: 3,
+            use_hvq: false,
+            hvq_nbits: 4,
+            hvq_nrefine: 3,
             use_sq8_prefilter: false,
         }
     }
@@ -181,12 +220,21 @@ impl AisaqConfig {
                 .clamp(100, 300),
             random_init_edges: params.disk_random_init_edges.unwrap_or(0).min(64),
             random_seed: params.random_seed.unwrap_or(42),
-            build_degree_slack_pct: params.disk_build_degree_slack_pct.unwrap_or(100).clamp(100, 300),
+            build_degree_slack_pct: params
+                .disk_build_degree_slack_pct
+                .unwrap_or(100)
+                .clamp(100, 300),
             build_search_list_size: 0,
             build_dram_budget_gb: params.disk_build_dram_budget_gb.unwrap_or(0.0),
             pq_read_page_cache_size: gb_to_bytes(params.disk_search_cache_budget_gb.unwrap_or(0.0)),
             warm_up: params.disk_warm_up.unwrap_or(false),
-            filter_threshold: params.disk_filter_threshold.unwrap_or(-1.0).clamp(-1.0, 1.0),
+            filter_threshold: params
+                .disk_filter_threshold
+                .unwrap_or(-1.0)
+                .clamp(-1.0, 1.0),
+            io_cutting_enabled: params.disk_io_cutting.unwrap_or(false),
+            io_cutting_threshold: params.disk_io_cutting_threshold.unwrap_or(0.02).max(0.0),
+            io_cutting_patience: params.disk_io_cutting_patience.unwrap_or(3).max(1),
             ..Self::default()
         }
     }
@@ -227,6 +275,16 @@ impl AisaqConfig {
                 "filter_threshold must be in [-1.0, 1.0]".to_string(),
             ));
         }
+        if self.io_cutting_patience == 0 {
+            return Err(KnowhereError::InvalidArg(
+                "io_cutting_patience must be greater than 0".to_string(),
+            ));
+        }
+        if !(1..=8).contains(&self.hvq_nbits) {
+            return Err(KnowhereError::InvalidArg(
+                "hvq_nbits must be in range 1..=8".to_string(),
+            ));
+        }
         if self.build_degree_slack_pct < 100 {
             return Err(KnowhereError::InvalidArg(
                 "build_degree_slack_pct must be at least 100".to_string(),
@@ -262,7 +320,11 @@ impl FlashLayout {
         let neighbor_bytes = (config.max_degree + 1) * std::mem::size_of::<u32>();
         let id_bytes = std::mem::size_of::<i64>();
         let has_separated_vectors = config.disk_pq_dims > 0;
-        let hot_vector_bytes = if has_separated_vectors { 0 } else { vector_bytes };
+        let hot_vector_bytes = if has_separated_vectors {
+            0
+        } else {
+            vector_bytes
+        };
         let node_bytes = hot_vector_bytes + neighbor_bytes + inline_pq_bytes + id_bytes;
 
         Self {
@@ -507,6 +569,45 @@ impl SerializedPq {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+struct SerializedHvq {
+    dim: usize,
+    nbits: u8,
+    rotation_matrix: Vec<f32>,
+    scale: f32,
+    offset: f32,
+    centroid: Vec<f32>,
+    rotated_centroid: Vec<f32>,
+}
+
+impl SerializedHvq {
+    fn from_quantizer(quantizer: &HvqQuantizer) -> Self {
+        Self {
+            dim: quantizer.config.dim,
+            nbits: quantizer.config.nbits,
+            rotation_matrix: quantizer.rotation_matrix.clone(),
+            scale: quantizer.scale,
+            offset: quantizer.offset,
+            centroid: quantizer.centroid.clone(),
+            rotated_centroid: quantizer.rotated_centroid.clone(),
+        }
+    }
+
+    fn into_quantizer(self) -> HvqQuantizer {
+        HvqQuantizer {
+            config: HvqConfig {
+                dim: self.dim,
+                nbits: self.nbits,
+            },
+            rotation_matrix: self.rotation_matrix,
+            scale: self.scale,
+            offset: self.offset,
+            centroid: self.centroid,
+            rotated_centroid: self.rotated_centroid,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct AisaqMetadata {
     version: u32,
     config: AisaqConfig,
@@ -518,6 +619,8 @@ struct AisaqMetadata {
     trained: bool,
     node_count: usize,
     pq_encoder: Option<SerializedPq>,
+    #[serde(default)]
+    hvq_quantizer: Option<SerializedHvq>,
 }
 
 #[derive(Clone, Debug)]
@@ -623,7 +726,7 @@ impl PageCache {
             let shard_idx = page_id % PAGE_CACHE_SHARDS;
             let mut shard = self.shards[shard_idx].lock();
             let page = if let Some(arc) = shard.pages.get(&page_id) {
-                let page = std::sync::Arc::clone(arc);  // clone while borrow is live
+                let page = std::sync::Arc::clone(arc); // clone while borrow is live
                 shard.stats.page_hits += 1;
                 touch_lru(&mut shard.lru, page_id);
                 page
@@ -831,6 +934,7 @@ struct BeamSearchState {
     query: Vec<f32>,
     k: usize,
     pq_table: Option<Vec<f32>>,
+    hvq_state: Option<HvqQueryState>,
     sq8_query: Option<Vec<i16>>,
     scratch: AisaqScratch,
     visited: VisitedList,
@@ -865,6 +969,8 @@ pub struct PQFlashIndex {
     flat_stride: usize,
     pq_encoder: Option<ProductQuantizer>,
     pq_code_size: usize,
+    hvq_quantizer: Option<HvqQuantizer>,
+    hvq_codes: Vec<u8>,
     entry_points: Vec<u32>,
     io_template: BeamSearchIO,
     trained: bool,
@@ -904,6 +1010,8 @@ impl PQFlashIndex {
             flat_stride: 0,
             pq_encoder: None,
             pq_code_size: 0,
+            hvq_quantizer: None,
+            hvq_codes: Vec::new(),
             entry_points: Vec::new(),
             io_template,
             trained: false,
@@ -965,6 +1073,11 @@ impl PQFlashIndex {
         }
         let stride = self.flat_stride.max(1);
         let pq_size = self.pq_code_size.max(1);
+        let hvq_size = self
+            .hvq_quantizer
+            .as_ref()
+            .map(|hvq| hvq.code_size_bytes())
+            .unwrap_or(0);
 
         let mut old_to_new: Vec<Option<u32>> = vec![None; old_n];
         let mut kept = 0usize;
@@ -981,6 +1094,7 @@ impl PQFlashIndex {
         let mut new_neighbor_counts = vec![0u32; kept];
         let mut new_neighbor_ids = vec![0u32; kept * stride];
         let mut new_node_pq_codes = vec![0u8; kept * pq_size];
+        let mut new_hvq_codes = vec![0u8; kept * hvq_size];
 
         for old_idx in 0..old_n {
             let Some(new_idx_u32) = old_to_new[old_idx] else {
@@ -989,7 +1103,8 @@ impl PQFlashIndex {
             let new_idx = new_idx_u32 as usize;
 
             new_node_ids.push(self.node_ids[old_idx]);
-            new_vectors.extend_from_slice(&self.vectors[old_idx * self.dim..(old_idx + 1) * self.dim]);
+            new_vectors
+                .extend_from_slice(&self.vectors[old_idx * self.dim..(old_idx + 1) * self.dim]);
 
             let old_pq_start = old_idx * pq_size;
             let new_pq_start = new_idx * pq_size;
@@ -998,6 +1113,16 @@ impl PQFlashIndex {
             {
                 new_node_pq_codes[new_pq_start..new_pq_start + pq_size]
                     .copy_from_slice(&self.node_pq_codes[old_pq_start..old_pq_start + pq_size]);
+            }
+            if hvq_size > 0 {
+                let old_hvq_start = old_idx * hvq_size;
+                let new_hvq_start = new_idx * hvq_size;
+                if old_hvq_start + hvq_size <= self.hvq_codes.len()
+                    && new_hvq_start + hvq_size <= new_hvq_codes.len()
+                {
+                    new_hvq_codes[new_hvq_start..new_hvq_start + hvq_size]
+                        .copy_from_slice(&self.hvq_codes[old_hvq_start..old_hvq_start + hvq_size]);
+                }
             }
 
             let old_start = old_idx * stride;
@@ -1037,6 +1162,7 @@ impl PQFlashIndex {
         self.node_neighbor_counts = new_neighbor_counts;
         self.node_neighbor_ids = new_neighbor_ids;
         self.node_pq_codes = new_node_pq_codes;
+        self.hvq_codes = new_hvq_codes;
         self.disk_pq_codes.clear(); // stale after ID remapping; reload if needed
         self.entry_points = new_entry_points;
         self.node_count = kept;
@@ -1068,6 +1194,21 @@ impl PQFlashIndex {
             self.flash_layout.node_bytes = self.flash_layout.vector_bytes
                 + self.flash_layout.neighbor_bytes
                 + self.flash_layout.inline_pq_bytes;
+        }
+        if self.config.use_hvq {
+            let mut hvq = HvqQuantizer::new(
+                HvqConfig {
+                    dim: self.dim,
+                    nbits: self.config.hvq_nbits as u8,
+                },
+                self.config.random_seed,
+            );
+            hvq.train(training_data.len() / self.dim, training_data);
+            self.hvq_quantizer = Some(hvq);
+            self.hvq_codes.clear();
+        } else {
+            self.hvq_quantizer = None;
+            self.hvq_codes.clear();
         }
 
         self.trained = true;
@@ -1134,12 +1275,9 @@ impl PQFlashIndex {
                             self.select_neighbors(vector, stride)
                         } else {
                             let l = (stride * 3).max(32).min(graph_size_snapshot);
-                            let cands = self.vamana_build_search(vector, l, graph_size_snapshot, &[]);
-                            cands
-                                .iter()
-                                .take(stride)
-                                .map(|(id, _)| *id)
-                                .collect()
+                            let cands =
+                                self.vamana_build_search(vector, l, graph_size_snapshot, &[]);
+                            cands.iter().take(stride).map(|(id, _)| *id).collect()
                         };
 
                         let inline_pq = self
@@ -1250,6 +1388,19 @@ impl PQFlashIndex {
         }
 
         self.node_count = self.node_ids.len();
+        if let Some(hvq) = self.hvq_quantizer.as_ref() {
+            let code_size = hvq.code_size_bytes();
+            let expected_old = self.node_count.saturating_sub(num_vectors) * code_size;
+            if self.hvq_codes.len() == expected_old {
+                let new_codes = hvq.encode_batch(num_vectors, vectors, self.config.hvq_nrefine);
+                self.hvq_codes.extend_from_slice(&new_codes);
+            } else {
+                self.hvq_codes =
+                    hvq.encode_batch(self.node_count, &self.vectors, self.config.hvq_nrefine);
+            }
+        } else {
+            self.hvq_codes.clear();
+        }
         // Pre-refine random connectivity seeding. Batch Vamana can leave late nodes
         // connected mostly to a narrow snapshot of earlier nodes, so add a few
         // random long edges before global refinement to improve graph reachability.
@@ -1304,7 +1455,11 @@ impl PQFlashIndex {
         if self.config.use_sq8_prefilter && !self.vectors.is_empty() {
             let mut sq = crate::quantization::sq::ScalarQuantizer::new(self.dim, 8);
             sq.train(&self.vectors);
-            self.sq8_codes = sq.encode_batch(&self.vectors).into_iter().flatten().collect();
+            self.sq8_codes = sq
+                .encode_batch(&self.vectors)
+                .into_iter()
+                .flatten()
+                .collect();
             self.sq8_quantizer = Some(sq);
         } else {
             self.sq8_quantizer = None;
@@ -1507,12 +1662,26 @@ impl PQFlashIndex {
                     let mut scored: Vec<(u32, f32)> = backedges
                         .into_iter()
                         .filter(|&id| (id as usize) < self.node_ids.len())
-                        .map(|id| (id, self.exact_distance(&anchor, self.node_vector(id as usize))))
+                        .map(|id| {
+                            (
+                                id,
+                                self.exact_distance(&anchor, self.node_vector(id as usize)),
+                            )
+                        })
                         .collect();
                     scored.sort_by(|a, b| a.1.total_cmp(&b.1));
-                    scored.truncate(degree_limit.saturating_mul(3).max(degree_limit).min(scored.len()));
-                    let selected =
-                        self.robust_prune_scored(dst_idx, &scored, degree_limit, ROBUST_PRUNE_ALPHA);
+                    scored.truncate(
+                        degree_limit
+                            .saturating_mul(3)
+                            .max(degree_limit)
+                            .min(scored.len()),
+                    );
+                    let selected = self.robust_prune_scored(
+                        dst_idx,
+                        &scored,
+                        degree_limit,
+                        ROBUST_PRUNE_ALPHA,
+                    );
                     Some((dst_idx, selected))
                 })
                 .collect()
@@ -1541,10 +1710,20 @@ impl PQFlashIndex {
                 let mut scored: Vec<(u32, f32)> = backedges
                     .into_iter()
                     .filter(|&id| (id as usize) < self.node_ids.len())
-                    .map(|id| (id, self.exact_distance(&anchor, self.node_vector(id as usize))))
+                    .map(|id| {
+                        (
+                            id,
+                            self.exact_distance(&anchor, self.node_vector(id as usize)),
+                        )
+                    })
                     .collect();
                 scored.sort_by(|a, b| a.1.total_cmp(&b.1));
-                scored.truncate(degree_limit.saturating_mul(3).max(degree_limit).min(scored.len()));
+                scored.truncate(
+                    degree_limit
+                        .saturating_mul(3)
+                        .max(degree_limit)
+                        .min(scored.len()),
+                );
                 let selected =
                     self.robust_prune_scored(dst_idx, &scored, degree_limit, ROBUST_PRUNE_ALPHA);
                 Some((dst_idx, selected))
@@ -1800,8 +1979,7 @@ impl PQFlashIndex {
                 // Neighbor ids (max_degree slots, zero-padded).
                 let base = node_id * self.flat_stride;
                 for i in 0..max_degree {
-                    let neighbor = if i < count as usize
-                        && base + i < self.node_neighbor_ids.len()
+                    let neighbor = if i < count as usize && base + i < self.node_neighbor_ids.len()
                     {
                         self.node_neighbor_ids[base + i]
                     } else {
@@ -1871,9 +2049,9 @@ impl PQFlashIndex {
         }
 
         let read_u64 = |offset: usize| -> Result<u64> {
-            let bytes = mmap
-                .get(offset..offset + 8)
-                .ok_or_else(|| KnowhereError::Codec(format!("truncated disk header at {offset}")))?;
+            let bytes = mmap.get(offset..offset + 8).ok_or_else(|| {
+                KnowhereError::Codec(format!("truncated disk header at {offset}"))
+            })?;
             Ok(u64::from_le_bytes(bytes.try_into().unwrap()))
         };
 
@@ -1949,14 +2127,16 @@ impl PQFlashIndex {
                 .checked_mul(SECTOR_LEN)
                 .and_then(|v| v.checked_add(slot.saturating_mul(max_node_len)))
                 .ok_or_else(|| KnowhereError::Codec("native node offset overflow".to_string()))?;
-            let node_bytes = mmap.get(node_offset..node_offset + max_node_len).ok_or_else(|| {
-                KnowhereError::Codec(format!(
-                    "native node {} extends past file bounds at [{}..{})",
-                    node_id,
-                    node_offset,
-                    node_offset + max_node_len
-                ))
-            })?;
+            let node_bytes = mmap
+                .get(node_offset..node_offset + max_node_len)
+                .ok_or_else(|| {
+                    KnowhereError::Codec(format!(
+                        "native node {} extends past file bounds at [{}..{})",
+                        node_id,
+                        node_offset,
+                        node_offset + max_node_len
+                    ))
+                })?;
 
             let mut cursor = 0usize;
             for _ in 0..dim {
@@ -1979,13 +2159,10 @@ impl PQFlashIndex {
             index.node_neighbor_counts[node_id] = count as u32;
             let row_start = node_id * index.flat_stride;
             for slot in 0..max_degree {
-                let neighbor = u32::from_le_bytes(
-                    node_bytes[cursor..cursor + 4]
-                        .try_into()
-                        .map_err(|_| {
-                            KnowhereError::Codec("truncated native neighbor".to_string())
-                        })?,
-                );
+                let neighbor =
+                    u32::from_le_bytes(node_bytes[cursor..cursor + 4].try_into().map_err(
+                        |_| KnowhereError::Codec("truncated native neighbor".to_string()),
+                    )?);
                 cursor += 4;
                 if slot < count {
                     index.node_neighbor_ids[row_start + slot] =
@@ -2003,7 +2180,7 @@ impl PQFlashIndex {
         File::open(file_group.metadata_path())?.read_to_end(&mut metadata_bytes)?;
         let metadata: AisaqMetadata = bincode::deserialize(&metadata_bytes)
             .map_err(|error| KnowhereError::Codec(error.to_string()))?;
-        if metadata.version != 2 && metadata.version != 3 {
+        if metadata.version != 2 && metadata.version != 3 && metadata.version != 4 {
             return Err(KnowhereError::Codec(format!(
                 "unsupported AISAQ metadata version {}",
                 metadata.version
@@ -2022,7 +2199,7 @@ impl PQFlashIndex {
 
         let data_file = OpenOptions::new().read(true).open(file_group.data_path())?;
         let mmap = unsafe { Mmap::map(&data_file)? };
-        let vectors_mmap = if metadata.version == 3 {
+        let vectors_mmap = if metadata.flash_layout.has_separated_vectors {
             let vectors_file = File::open(file_group.vectors_path())?;
             Some(unsafe { Mmap::map(&vectors_file)? })
         } else {
@@ -2042,6 +2219,8 @@ impl PQFlashIndex {
             flat_stride: 0,
             pq_encoder: metadata.pq_encoder.map(SerializedPq::into_quantizer),
             pq_code_size: metadata.pq_code_size,
+            hvq_quantizer: metadata.hvq_quantizer.map(SerializedHvq::into_quantizer),
+            hvq_codes: Vec::new(),
             entry_points: metadata.entry_points,
             io_template,
             trained: metadata.trained,
@@ -2096,43 +2275,8 @@ impl PQFlashIndex {
             }
         }
 
-        if file_len > cursor {
-            data_file.seek(SeekFrom::Start(cursor))?;
-            let mut flag = [0u8; 1];
-            if data_file.read_exact(&mut flag).is_ok() && flag[0] == 1 {
-                let mut len_buf = [0u8; 8];
-                if data_file.read_exact(&mut len_buf).is_ok() {
-                    let code_len = u64::from_le_bytes(len_buf) as usize;
-                    let mut codes = vec![0u8; code_len];
-                    if data_file.read_exact(&mut codes).is_ok() {
-                        let mut dim_buf = [0u8; 8];
-                        let mut bit_buf = [0u8; 8];
-                        let mut min_buf = [0u8; 4];
-                        let mut max_buf = [0u8; 4];
-                        let mut scale_buf = [0u8; 4];
-                        let mut offset_buf = [0u8; 4];
-                        if data_file.read_exact(&mut dim_buf).is_ok()
-                            && data_file.read_exact(&mut bit_buf).is_ok()
-                            && data_file.read_exact(&mut min_buf).is_ok()
-                            && data_file.read_exact(&mut max_buf).is_ok()
-                            && data_file.read_exact(&mut scale_buf).is_ok()
-                            && data_file.read_exact(&mut offset_buf).is_ok()
-                        {
-                            let sq_dim = u64::from_le_bytes(dim_buf) as usize;
-                            let sq_bit = u64::from_le_bytes(bit_buf) as usize;
-                            let mut sq =
-                                crate::quantization::sq::ScalarQuantizer::new(sq_dim, sq_bit);
-                            sq.min_val = f32::from_le_bytes(min_buf);
-                            sq.max_val = f32::from_le_bytes(max_buf);
-                            sq.scale = f32::from_le_bytes(scale_buf);
-                            sq.offset = f32::from_le_bytes(offset_buf);
-                            index.sq8_codes = codes;
-                            index.sq8_quantizer = Some(sq);
-                        }
-                    }
-                }
-            }
-        }
+        index.read_optional_sq8_payload(&mut data_file, &mut cursor, file_len)?;
+        index.read_optional_hvq_payload(&mut data_file, &mut cursor, file_len)?;
         if index.pq_code_size > 0 {
             index.disk_pq_codes = index.load_disk_pq_codes()?;
         }
@@ -2154,14 +2298,138 @@ impl PQFlashIndex {
             .max(self.config.max_degree)
     }
 
+    fn write_optional_sq8_payload(&self, data_file: &mut File) -> Result<()> {
+        let use_sq8 = (!self.sq8_codes.is_empty() && self.sq8_quantizer.is_some()) as u8;
+        data_file.write_all(&[use_sq8])?;
+        if use_sq8 == 1 {
+            data_file.write_all(&(self.sq8_codes.len() as u64).to_le_bytes())?;
+            data_file.write_all(&self.sq8_codes)?;
+            let sq = self
+                .sq8_quantizer
+                .as_ref()
+                .expect("sq8 quantizer present when use_sq8 is set");
+            data_file.write_all(&(sq.dim as u64).to_le_bytes())?;
+            data_file.write_all(&(sq.bit as u64).to_le_bytes())?;
+            data_file.write_all(&sq.min_val.to_le_bytes())?;
+            data_file.write_all(&sq.max_val.to_le_bytes())?;
+            data_file.write_all(&sq.scale.to_le_bytes())?;
+            data_file.write_all(&sq.offset.to_le_bytes())?;
+        }
+        Ok(())
+    }
+
+    fn write_optional_hvq_payload(&self, data_file: &mut File) -> Result<()> {
+        let use_hvq = (!self.hvq_codes.is_empty() && self.hvq_quantizer.is_some()) as u8;
+        data_file.write_all(&[use_hvq])?;
+        if use_hvq == 1 {
+            data_file.write_all(&(self.hvq_codes.len() as u64).to_le_bytes())?;
+            data_file.write_all(&self.hvq_codes)?;
+        }
+        Ok(())
+    }
+
+    fn read_optional_sq8_payload(
+        &mut self,
+        data_file: &mut File,
+        cursor: &mut u64,
+        file_len: u64,
+    ) -> Result<()> {
+        if file_len <= *cursor {
+            return Ok(());
+        }
+
+        data_file.seek(SeekFrom::Start(*cursor))?;
+        let mut flag = [0u8; 1];
+        if data_file.read_exact(&mut flag).is_err() {
+            return Ok(());
+        }
+        *cursor += 1;
+
+        if flag[0] != 1 {
+            return Ok(());
+        }
+
+        let mut len_buf = [0u8; 8];
+        if data_file.read_exact(&mut len_buf).is_err() {
+            return Ok(());
+        }
+        *cursor += 8;
+        let code_len = u64::from_le_bytes(len_buf) as usize;
+
+        let mut codes = vec![0u8; code_len];
+        if data_file.read_exact(&mut codes).is_err() {
+            return Ok(());
+        }
+        *cursor += code_len as u64;
+
+        let mut dim_buf = [0u8; 8];
+        let mut bit_buf = [0u8; 8];
+        let mut min_buf = [0u8; 4];
+        let mut max_buf = [0u8; 4];
+        let mut scale_buf = [0u8; 4];
+        let mut offset_buf = [0u8; 4];
+        if data_file.read_exact(&mut dim_buf).is_ok()
+            && data_file.read_exact(&mut bit_buf).is_ok()
+            && data_file.read_exact(&mut min_buf).is_ok()
+            && data_file.read_exact(&mut max_buf).is_ok()
+            && data_file.read_exact(&mut scale_buf).is_ok()
+            && data_file.read_exact(&mut offset_buf).is_ok()
+        {
+            *cursor += 8 + 8 + 4 + 4 + 4 + 4;
+            let sq_dim = u64::from_le_bytes(dim_buf) as usize;
+            let sq_bit = u64::from_le_bytes(bit_buf) as usize;
+            let mut sq = crate::quantization::sq::ScalarQuantizer::new(sq_dim, sq_bit);
+            sq.min_val = f32::from_le_bytes(min_buf);
+            sq.max_val = f32::from_le_bytes(max_buf);
+            sq.scale = f32::from_le_bytes(scale_buf);
+            sq.offset = f32::from_le_bytes(offset_buf);
+            self.sq8_codes = codes;
+            self.sq8_quantizer = Some(sq);
+        }
+
+        Ok(())
+    }
+
+    fn read_optional_hvq_payload(
+        &mut self,
+        data_file: &mut File,
+        cursor: &mut u64,
+        file_len: u64,
+    ) -> Result<()> {
+        if file_len <= *cursor {
+            return Ok(());
+        }
+
+        data_file.seek(SeekFrom::Start(*cursor))?;
+        let mut flag = [0u8; 1];
+        if data_file.read_exact(&mut flag).is_err() {
+            return Ok(());
+        }
+        *cursor += 1;
+
+        if flag[0] != 1 {
+            return Ok(());
+        }
+
+        let mut len_buf = [0u8; 8];
+        if data_file.read_exact(&mut len_buf).is_err() {
+            return Ok(());
+        }
+        *cursor += 8;
+        let code_len = u64::from_le_bytes(len_buf) as usize;
+        let mut codes = vec![0u8; code_len];
+        if data_file.read_exact(&mut codes).is_err() {
+            return Ok(());
+        }
+        *cursor += code_len as u64;
+        self.hvq_codes = codes;
+        Ok(())
+    }
+
     pub fn save<P: AsRef<Path>>(&self, root: P) -> Result<FileGroup> {
         let file_group = FileGroup::create(root)?;
         let metadata = AisaqMetadata {
-            version: if self.flash_layout.has_separated_vectors {
-                3
-            } else {
-                2
-            },
+            version: 4,
             config: self.config.clone(),
             metric_type: self.metric_type,
             dim: self.dim,
@@ -2170,10 +2438,11 @@ impl PQFlashIndex {
             entry_points: self.entry_points.clone(),
             trained: self.trained,
             node_count: self.len(),
-            pq_encoder: self
-                .pq_encoder
+            pq_encoder: self.pq_encoder.as_ref().map(SerializedPq::from_quantizer),
+            hvq_quantizer: self
+                .hvq_quantizer
                 .as_ref()
-                .map(SerializedPq::from_quantizer),
+                .map(SerializedHvq::from_quantizer),
         };
         let metadata_bytes = bincode::serialize(&metadata)
             .map_err(|error| KnowhereError::Codec(error.to_string()))?;
@@ -2215,22 +2484,8 @@ impl PQFlashIndex {
         for &id in &self.deleted_ids {
             data_file.write_all(&(id as u64).to_le_bytes())?;
         }
-        let use_sq8 = (!self.sq8_codes.is_empty() && self.sq8_quantizer.is_some()) as u8;
-        data_file.write_all(&[use_sq8])?;
-        if use_sq8 == 1 {
-            data_file.write_all(&(self.sq8_codes.len() as u64).to_le_bytes())?;
-            data_file.write_all(&self.sq8_codes)?;
-            let sq = self
-                .sq8_quantizer
-                .as_ref()
-                .expect("sq8 quantizer present when use_sq8 is set");
-            data_file.write_all(&(sq.dim as u64).to_le_bytes())?;
-            data_file.write_all(&(sq.bit as u64).to_le_bytes())?;
-            data_file.write_all(&sq.min_val.to_le_bytes())?;
-            data_file.write_all(&sq.max_val.to_le_bytes())?;
-            data_file.write_all(&sq.scale.to_le_bytes())?;
-            data_file.write_all(&sq.offset.to_le_bytes())?;
-        }
+        self.write_optional_sq8_payload(&mut data_file)?;
+        self.write_optional_hvq_payload(&mut data_file)?;
         data_file.flush()?;
 
         Ok(file_group)
@@ -2242,7 +2497,7 @@ impl PQFlashIndex {
         File::open(file_group.metadata_path())?.read_to_end(&mut metadata_bytes)?;
         let metadata: AisaqMetadata = bincode::deserialize(&metadata_bytes)
             .map_err(|error| KnowhereError::Codec(error.to_string()))?;
-        if metadata.version != 2 && metadata.version != 3 {
+        if metadata.version != 2 && metadata.version != 3 && metadata.version != 4 {
             return Err(KnowhereError::Codec(format!(
                 "unsupported AISAQ metadata version {}",
                 metadata.version
@@ -2267,14 +2522,15 @@ impl PQFlashIndex {
                 .pq_read_page_cache_size
                 .max(metadata.flash_layout.page_size),
         )?;
-        let vectors_mmap = if metadata.version == 3 {
+        let vectors_mmap = if metadata.flash_layout.has_separated_vectors {
             let vectors_file = File::open(file_group.vectors_path())?;
             Some(unsafe { Mmap::map(&vectors_file)? })
         } else {
             None
         };
         #[cfg(all(feature = "async-io", target_os = "linux"))]
-        let raw_file = std::sync::Arc::new(OpenOptions::new().read(true).open(file_group.data_path())?);
+        let raw_file =
+            std::sync::Arc::new(OpenOptions::new().read(true).open(file_group.data_path())?);
 
         let mut index = Self {
             config: metadata.config,
@@ -2290,6 +2546,8 @@ impl PQFlashIndex {
             flat_stride: 0,
             pq_encoder: metadata.pq_encoder.map(SerializedPq::into_quantizer),
             pq_code_size: metadata.pq_code_size,
+            hvq_quantizer: metadata.hvq_quantizer.map(SerializedHvq::into_quantizer),
+            hvq_codes: Vec::new(),
             entry_points: metadata.entry_points,
             io_template,
             trained: metadata.trained,
@@ -2346,44 +2604,8 @@ impl PQFlashIndex {
             }
         }
 
-        // Optional SQ8 payload (forward-compatible EOF fallback).
-        if file_len > cursor {
-            data_file.seek(SeekFrom::Start(cursor))?;
-            let mut flag = [0u8; 1];
-            if data_file.read_exact(&mut flag).is_ok() && flag[0] == 1 {
-                let mut len_buf = [0u8; 8];
-                if data_file.read_exact(&mut len_buf).is_ok() {
-                    let code_len = u64::from_le_bytes(len_buf) as usize;
-                    let mut codes = vec![0u8; code_len];
-                    if data_file.read_exact(&mut codes).is_ok() {
-                        let mut dim_buf = [0u8; 8];
-                        let mut bit_buf = [0u8; 8];
-                        let mut min_buf = [0u8; 4];
-                        let mut max_buf = [0u8; 4];
-                        let mut scale_buf = [0u8; 4];
-                        let mut offset_buf = [0u8; 4];
-                        if data_file.read_exact(&mut dim_buf).is_ok()
-                            && data_file.read_exact(&mut bit_buf).is_ok()
-                            && data_file.read_exact(&mut min_buf).is_ok()
-                            && data_file.read_exact(&mut max_buf).is_ok()
-                            && data_file.read_exact(&mut scale_buf).is_ok()
-                            && data_file.read_exact(&mut offset_buf).is_ok()
-                        {
-                            let sq_dim = u64::from_le_bytes(dim_buf) as usize;
-                            let sq_bit = u64::from_le_bytes(bit_buf) as usize;
-                            let mut sq =
-                                crate::quantization::sq::ScalarQuantizer::new(sq_dim, sq_bit);
-                            sq.min_val = f32::from_le_bytes(min_buf);
-                            sq.max_val = f32::from_le_bytes(max_buf);
-                            sq.scale = f32::from_le_bytes(scale_buf);
-                            sq.offset = f32::from_le_bytes(offset_buf);
-                            index.sq8_codes = codes;
-                            index.sq8_quantizer = Some(sq);
-                        }
-                    }
-                }
-            }
-        }
+        index.read_optional_sq8_payload(&mut data_file, &mut cursor, file_len)?;
+        index.read_optional_hvq_payload(&mut data_file, &mut cursor, file_len)?;
         if index.config.cache_all_on_load {
             index.prime_loaded_node_cache()?;
         }
@@ -2629,6 +2851,7 @@ impl PQFlashIndex {
             .as_ref()
             .map(|encoder| encoder.build_distance_table_l2(query));
         let pq_table_slice = pq_table.as_ref().map(|v| v.as_slice());
+        let hvq_state = self.hvq_state_for_query(query);
         let sq8_query = if self.config.use_sq8_prefilter && self.metric_type == MetricType::L2 {
             self.sq8_quantizer
                 .as_ref()
@@ -2645,7 +2868,9 @@ impl PQFlashIndex {
         };
         scratch.reset();
 
-        for candidate in self.rank_entry_candidates(query, pq_table_slice, &mut io)? {
+        for candidate in
+            self.rank_entry_candidates(query, pq_table_slice, hvq_state.as_ref(), &mut io)?
+        {
             scratch.frontier.push(candidate);
         }
 
@@ -2653,6 +2878,7 @@ impl PQFlashIndex {
             query: query.to_vec(),
             k,
             pq_table,
+            hvq_state,
             sq8_query,
             scratch,
             visited: VisitedList::new(self.node_count),
@@ -2689,30 +2915,23 @@ impl PQFlashIndex {
             let mut neighbor_scores = Vec::with_capacity(unseen.len());
             for &neighbor in &unseen {
                 let score = if let Some(neighbor_node) = self.node_ref(neighbor) {
-                    if let (Some(encoder), Some(table)) = (&self.pq_encoder, pq_table_slice) {
-                        if !neighbor_node.inline_pq.is_empty() {
-                            state
-                                .io
-                                .record_pq_read(neighbor, neighbor_node.inline_pq.len());
-                            encoder.compute_distance_with_table(table, neighbor_node.inline_pq)
-                        } else if let Some(ref q_i16) = state.sq8_query {
-                            self.sq8_prefilter_distance(q_i16, neighbor as usize)
-                                .unwrap_or_else(|| {
-                                    self.exact_distance(&state.query, neighbor_node.vector)
-                                })
-                        } else {
-                            self.exact_distance(&state.query, neighbor_node.vector)
-                        }
-                    } else if let Some(ref q_i16) = state.sq8_query {
-                        self.sq8_prefilter_distance(q_i16, neighbor as usize)
-                            .unwrap_or_else(|| {
-                                self.exact_distance(&state.query, neighbor_node.vector)
-                            })
-                    } else {
-                        self.exact_distance(&state.query, neighbor_node.vector)
-                    }
+                    self.loaded_node_coarse_distance(
+                        neighbor,
+                        &state.query,
+                        neighbor_node,
+                        pq_table_slice,
+                        state.hvq_state.as_ref(),
+                        state.sq8_query.as_deref(),
+                        &mut state.io,
+                    )
                 } else {
-                    self.coarse_distance(neighbor, &state.query, pq_table_slice, &mut state.io)?
+                    self.coarse_distance(
+                        neighbor,
+                        &state.query,
+                        pq_table_slice,
+                        state.hvq_state.as_ref(),
+                        &mut state.io,
+                    )?
                 };
                 neighbor_scores.push(Candidate {
                     node_id: neighbor,
@@ -2783,8 +3002,11 @@ impl PQFlashIndex {
             } else {
                 let node =
                     self.load_node(candidate.node_id, NodeAccessMode::None, &mut state.io)?;
-                let distance =
-                    self.exact_distance_for_node_vector(&state.query, candidate.node_id, &node.vector)?;
+                let distance = self.exact_distance_for_node_vector(
+                    &state.query,
+                    candidate.node_id,
+                    &node.vector,
+                )?;
                 scored.push((node.id, distance));
             }
         }
@@ -2815,7 +3037,11 @@ impl PQFlashIndex {
         let mut total_sqe = 0usize;
         let mut total_groups = 0usize;
 
-        for group in queries.chunks(self.dim).collect::<Vec<_>>().chunks(group_size) {
+        for group in queries
+            .chunks(self.dim)
+            .collect::<Vec<_>>()
+            .chunks(group_size)
+        {
             let mut states = Vec::with_capacity(group.len());
             for query in group {
                 match self.init_beam_state(query, k) {
@@ -2961,6 +3187,7 @@ impl PQFlashIndex {
             .as_ref()
             .map(|encoder| encoder.build_distance_table_l2(query));
         let pq_table_slice = pq_table.as_ref().map(|v| v.as_slice());
+        let hvq_state = self.hvq_state_for_query(query);
         let sq8_q = if self.config.use_sq8_prefilter && self.metric_type == MetricType::L2 {
             self.sq8_quantizer
                 .as_ref()
@@ -2981,7 +3208,11 @@ impl PQFlashIndex {
             (|| {
                 let prefetch_enabled = self.storage.is_some();
                 let mut next_prefetch = Vec::new();
-                for candidate in self.rank_entry_candidates(query, pq_table_slice, &mut io)? {
+                let mut io_cutting_best_score = f32::INFINITY;
+                let mut io_cutting_stale_rounds = 0usize;
+                for candidate in
+                    self.rank_entry_candidates(query, pq_table_slice, hvq_state.as_ref(), &mut io)?
+                {
                     scratch.frontier.push(candidate);
                 }
 
@@ -2997,8 +3228,7 @@ impl PQFlashIndex {
                             scratch.frontier.peek().map(|c| c.score),
                             kth_best_score(&scratch.accepted, k),
                         ) {
-                            if frontier_best_dist
-                                >= result_kth_dist * self.config.early_stop_alpha
+                            if frontier_best_dist >= result_kth_dist * self.config.early_stop_alpha
                             {
                                 break;
                             }
@@ -3057,32 +3287,23 @@ impl PQFlashIndex {
                         let mut neighbor_scores = Vec::with_capacity(unseen.len());
                         for &neighbor in &unseen {
                             let score = if let Some(neighbor_node) = self.node_ref(neighbor) {
-                                if let (Some(encoder), Some(table)) = (&self.pq_encoder, pq_table_slice)
-                                {
-                                    if !neighbor_node.inline_pq.is_empty() {
-                                        io.record_pq_read(neighbor, neighbor_node.inline_pq.len());
-                                        encoder.compute_distance_with_table(
-                                            table,
-                                            neighbor_node.inline_pq,
-                                        )
-                                    } else if let Some(ref q_i16) = sq8_q {
-                                        self.sq8_prefilter_distance(q_i16, neighbor as usize)
-                                            .unwrap_or_else(|| {
-                                                self.exact_distance(query, neighbor_node.vector)
-                                            })
-                                    } else {
-                                        self.exact_distance(query, neighbor_node.vector)
-                                    }
-                                } else if let Some(ref q_i16) = sq8_q {
-                                    self.sq8_prefilter_distance(q_i16, neighbor as usize)
-                                        .unwrap_or_else(|| {
-                                            self.exact_distance(query, neighbor_node.vector)
-                                        })
-                                } else {
-                                    self.exact_distance(query, neighbor_node.vector)
-                                }
+                                self.loaded_node_coarse_distance(
+                                    neighbor,
+                                    query,
+                                    neighbor_node,
+                                    pq_table_slice,
+                                    hvq_state.as_ref(),
+                                    sq8_q.as_deref(),
+                                    &mut io,
+                                )
                             } else {
-                                self.coarse_distance(neighbor, query, pq_table_slice, &mut io)?
+                                self.coarse_distance(
+                                    neighbor,
+                                    query,
+                                    pq_table_slice,
+                                    hvq_state.as_ref(),
+                                    &mut io,
+                                )?
                             };
                             neighbor_scores.push(Candidate {
                                 node_id: neighbor,
@@ -3096,6 +3317,20 @@ impl PQFlashIndex {
                             }
                             scratch.frontier.push(neighbor);
                         }
+                    }
+
+                    if self.should_cut_io_on_convergence(
+                        scratch
+                            .accepted
+                            .iter()
+                            .map(|candidate| candidate.score)
+                            .fold(f32::INFINITY, f32::min),
+                        &mut io_cutting_best_score,
+                        &mut io_cutting_stale_rounds,
+                        scratch.accepted.len(),
+                        k,
+                    ) {
+                        break;
                     }
                 }
 
@@ -3125,8 +3360,11 @@ impl PQFlashIndex {
                         } else {
                             let node =
                                 self.load_node(candidate.node_id, NodeAccessMode::None, &mut io)?;
-                            let distance = self
-                                .exact_distance_for_node_vector(query, candidate.node_id, &node.vector)?;
+                            let distance = self.exact_distance_for_node_vector(
+                                query,
+                                candidate.node_id,
+                                &node.vector,
+                            )?;
                             Ok((node.id, distance))
                         }
                     })
@@ -3209,7 +3447,11 @@ impl PQFlashIndex {
                 let mut out = Vec::with_capacity(loaded.len());
                 for item in loaded {
                     let (candidate, node, pages_read) = item?;
-                    io.record_node_access(candidate.node_id, self.flash_layout.node_bytes, pages_read);
+                    io.record_node_access(
+                        candidate.node_id,
+                        self.flash_layout.node_bytes,
+                        pages_read,
+                    );
                     out.push((candidate, node));
                 }
                 return Ok(out);
@@ -3247,16 +3489,17 @@ impl PQFlashIndex {
                 handles.push(scope.spawn(move || {
                     let mut local_io = self.io_template.clone();
                     local_io.reset_stats();
-                    let node = self.load_node(candidate.node_id, NodeAccessMode::Node, &mut local_io)?;
+                    let node =
+                        self.load_node(candidate.node_id, NodeAccessMode::Node, &mut local_io)?;
                     Ok::<_, KnowhereError>((candidate, node, local_io.stats().pages_read))
                 }));
             }
 
             let mut out = Vec::with_capacity(batch.len());
             for handle in handles {
-                let joined = handle
-                    .join()
-                    .map_err(|_| KnowhereError::InternalError("async batch load thread panicked".to_string()))?;
+                let joined = handle.join().map_err(|_| {
+                    KnowhereError::InternalError("async batch load thread panicked".to_string())
+                })?;
                 let (candidate, node, pages_read) = joined?;
                 io.record_node_access(candidate.node_id, self.flash_layout.node_bytes, pages_read);
                 out.push((candidate, node));
@@ -3295,13 +3538,16 @@ impl PQFlashIndex {
         io.reset_stats();
 
         if self.should_force_exact_filter_scan(bitset) {
-            return self.exact_scan_allowed_async(query, k, bitset, &mut io).await;
+            return self
+                .exact_scan_allowed_async(query, k, bitset, &mut io)
+                .await;
         }
 
         let pq_table = self
             .pq_encoder
             .as_ref()
             .map(|encoder| encoder.build_distance_table_l2(query));
+        let hvq_state = self.hvq_state_for_query(query);
 
         let mut frontier = BinaryHeap::new();
         let mut expanded = Vec::new();
@@ -3312,6 +3558,7 @@ impl PQFlashIndex {
             .rank_entry_candidates_async(
                 query,
                 pq_table.as_ref().map(|v| v.as_slice()),
+                hvq_state.as_ref(),
                 &mut io,
             )
             .await?
@@ -3320,6 +3567,8 @@ impl PQFlashIndex {
         }
 
         let max_visit = self.compute_max_visit(k);
+        let mut io_cutting_best_score = f32::INFINITY;
+        let mut io_cutting_stale_rounds = 0usize;
         while expanded.len() < max_visit {
             let remaining_budget = max_visit.saturating_sub(expanded.len());
             let batch_cap = self.config.beamwidth.max(1).min(remaining_budget);
@@ -3343,7 +3592,7 @@ impl PQFlashIndex {
                 break;
             }
 
-                let loaded_batch = self.load_node_batch_async(&batch, &mut io).await?;
+            let loaded_batch = self.load_node_batch_async(&batch, &mut io).await?;
             for (_, node) in loaded_batch {
                 for &neighbor in &node.neighbors {
                     if is_visited_thread_local(neighbor) {
@@ -3362,6 +3611,7 @@ impl PQFlashIndex {
                             neighbor,
                             query,
                             pq_table.as_ref().map(|v| v.as_slice()),
+                            hvq_state.as_ref(),
                             &mut io,
                         )
                         .await?;
@@ -3376,6 +3626,19 @@ impl PQFlashIndex {
                 for neighbor in neighbor_scores.into_iter().take(expand_limit) {
                     frontier.push(neighbor);
                 }
+            }
+
+            if self.should_cut_io_on_convergence(
+                accepted
+                    .iter()
+                    .map(|candidate| candidate.score)
+                    .fold(f32::INFINITY, f32::min),
+                &mut io_cutting_best_score,
+                &mut io_cutting_stale_rounds,
+                accepted.len(),
+                k,
+            ) {
+                break;
             }
         }
 
@@ -3448,6 +3711,89 @@ impl PQFlashIndex {
             return io_limit;
         }
         io_limit.min(self.config.vectors_beamwidth)
+    }
+
+    #[inline]
+    fn should_cut_io_on_convergence(
+        &self,
+        current_best: f32,
+        best_score: &mut f32,
+        stale_rounds: &mut usize,
+        accepted_len: usize,
+        k: usize,
+    ) -> bool {
+        if !self.config.io_cutting_enabled || !current_best.is_finite() {
+            return false;
+        }
+
+        let improvement = if best_score.is_finite() {
+            (*best_score - current_best) / best_score.abs().max(1e-10)
+        } else {
+            1.0
+        };
+
+        if improvement > self.config.io_cutting_threshold {
+            *best_score = current_best;
+            *stale_rounds = 0;
+            false
+        } else {
+            *stale_rounds += 1;
+            *stale_rounds >= self.config.io_cutting_patience && accepted_len >= k
+        }
+    }
+
+    #[inline]
+    fn hvq_state_for_query(&self, query: &[f32]) -> Option<HvqQueryState> {
+        if !matches!(self.metric_type, MetricType::Ip | MetricType::Cosine) {
+            return None;
+        }
+        let hvq = self.hvq_quantizer.as_ref()?;
+        let q_rot = hvq.rotate_query(query);
+        Some(hvq.precompute_query_state(&q_rot))
+    }
+
+    #[inline]
+    fn hvq_coarse_distance(&self, node_id: u32, state: &HvqQueryState) -> Option<f32> {
+        let hvq = self.hvq_quantizer.as_ref()?;
+        let code_size = hvq.code_size_bytes();
+        let start = node_id as usize * code_size;
+        let code = self.hvq_codes.get(start..start + code_size)?;
+        let score = hvq.score_code(state, code);
+        Some(match self.metric_type {
+            MetricType::Ip => -score,
+            MetricType::Cosine => 1.0 - score,
+            _ => return None,
+        })
+    }
+
+    #[inline]
+    fn loaded_node_coarse_distance(
+        &self,
+        node_id: u32,
+        query: &[f32],
+        node: LoadedNodeRef<'_>,
+        pq_table: Option<&[f32]>,
+        hvq_state: Option<&HvqQueryState>,
+        sq8_query: Option<&[i16]>,
+        io: &mut BeamSearchIO,
+    ) -> f32 {
+        if let Some(state) = hvq_state {
+            if let Some(score) = self.hvq_coarse_distance(node_id, state) {
+                return score;
+            }
+        }
+        if let (Some(encoder), Some(table)) = (&self.pq_encoder, pq_table) {
+            if !node.inline_pq.is_empty() {
+                io.record_pq_read(node_id, node.inline_pq.len());
+                return encoder.compute_distance_with_table(table, node.inline_pq);
+            }
+        }
+        if let Some(q_i16) = sq8_query {
+            if let Some(score) = self.sq8_prefilter_distance(q_i16, node_id as usize) {
+                return score;
+            }
+        }
+        self.exact_distance(query, node.vector)
     }
 
     #[inline]
@@ -3576,11 +3922,12 @@ impl PQFlashIndex {
         &self,
         query: &[f32],
         pq_table: Option<&[f32]>,
+        hvq_state: Option<&HvqQueryState>,
         io: &mut BeamSearchIO,
     ) -> Result<Vec<Candidate>> {
         let mut ranked = Vec::new();
         for &entry in &self.entry_points {
-            let score = self.coarse_distance(entry, query, pq_table, io)?;
+            let score = self.coarse_distance(entry, query, pq_table, hvq_state, io)?;
             ranked.push(Candidate {
                 node_id: entry,
                 score,
@@ -3594,12 +3941,13 @@ impl PQFlashIndex {
         &self,
         query: &[f32],
         pq_table: Option<&[f32]>,
+        hvq_state: Option<&HvqQueryState>,
         io: &mut BeamSearchIO,
     ) -> Result<Vec<Candidate>> {
         let mut ranked = Vec::new();
         for &entry in &self.entry_points {
             let score = self
-                .coarse_distance_async(entry, query, pq_table, io)
+                .coarse_distance_async(entry, query, pq_table, hvq_state, io)
                 .await?;
             ranked.push(Candidate {
                 node_id: entry,
@@ -3644,7 +3992,11 @@ impl PQFlashIndex {
         self.storage
             .as_ref()
             .map(|storage| &storage.file_group)
-            .or_else(|| self.mmap_storage.as_ref().map(|storage| &storage.file_group))
+            .or_else(|| {
+                self.mmap_storage
+                    .as_ref()
+                    .map(|storage| &storage.file_group)
+            })
     }
 
     pub fn page_cache(&self) -> Option<&PageCache> {
@@ -3799,8 +4151,9 @@ impl PQFlashIndex {
                 }
             }
 
-            ring.submit_and_wait(chunk_len)
-                .map_err(|e| KnowhereError::Storage(format!("io_uring batch submit failed: {e}")))?;
+            ring.submit_and_wait(chunk_len).map_err(|e| {
+                KnowhereError::Storage(format!("io_uring batch submit failed: {e}"))
+            })?;
 
             for cqe in ring.completion() {
                 if cqe.result() < 0 {
@@ -3842,8 +4195,14 @@ impl PQFlashIndex {
         node_id: u32,
         query: &[f32],
         pq_table: Option<&[f32]>,
+        hvq_state: Option<&HvqQueryState>,
         io: &mut BeamSearchIO,
     ) -> Result<f32> {
+        if let Some(state) = hvq_state {
+            if let Some(score) = self.hvq_coarse_distance(node_id, state) {
+                return Ok(score);
+            }
+        }
         if let (Some(encoder), Some(table)) = (&self.pq_encoder, pq_table) {
             let pq_size = self.pq_code_size.max(1);
             let start = node_id as usize * pq_size;
@@ -3946,9 +4305,17 @@ impl PQFlashIndex {
         node_id: u32,
         query: &[f32],
         pq_table: Option<&[f32]>,
+        hvq_state: Option<&HvqQueryState>,
         io: &mut BeamSearchIO,
     ) -> Result<f32> {
-        let node = self.load_node_async(node_id, NodeAccessMode::Pq, io).await?;
+        if let Some(state) = hvq_state {
+            if let Some(score) = self.hvq_coarse_distance(node_id, state) {
+                return Ok(score);
+            }
+        }
+        let node = self
+            .load_node_async(node_id, NodeAccessMode::Pq, io)
+            .await?;
         if let (Some(encoder), Some(table)) = (&self.pq_encoder, pq_table) {
             let pq = &node.inline_pq;
             if !pq.is_empty() {
@@ -3986,7 +4353,9 @@ impl PQFlashIndex {
         let start = node_id as usize * vector_bytes;
         let end = start + vector_bytes;
         if end > mmap.len() {
-            return Err(KnowhereError::Codec("vectors_mmap out of range".to_string()));
+            return Err(KnowhereError::Codec(
+                "vectors_mmap out of range".to_string(),
+            ));
         }
         Ok(mmap[start..end]
             .chunks_exact(4)
@@ -4029,21 +4398,24 @@ impl PQFlashIndex {
             return Vec::new();
         }
         // Build PQ distance table if available (ADC lookup — 4-8x faster than exact distance)
-        let pq_table: Option<Vec<f32>> = if self.pq_code_size > 0 && !self.node_pq_codes.is_empty() {
+        let pq_table: Option<Vec<f32>> = if self.pq_code_size > 0 && !self.node_pq_codes.is_empty()
+        {
             self.pq_encoder
                 .as_ref()
                 .map(|pq| pq.build_distance_table_l2(query))
         } else {
             None
         };
+        let hvq_state = self.hvq_state_for_query(query);
         let stride = self.flat_stride.max(1);
-        let start_node = self
-            .entry_points
-            .first()
-            .copied()
-            .unwrap_or(0) as usize;
+        let start_node = self.entry_points.first().copied().unwrap_or(0) as usize;
         let start_node = start_node.min(graph_size - 1);
         let score_node = |node_idx: usize| -> f32 {
+            if let Some(ref state) = hvq_state {
+                if let Some(score) = self.hvq_coarse_distance(node_idx as u32, state) {
+                    return score;
+                }
+            }
             if let Some(ref table) = pq_table {
                 let code_start = node_idx * self.pq_code_size;
                 let code_end = code_start + self.pq_code_size;
@@ -4121,7 +4493,6 @@ impl PQFlashIndex {
         scored.into_iter().map(|(node_id, _)| node_id).collect()
     }
 
-
     #[cfg(test)]
     fn link_back(&mut self, neighbor: u32, node_id: u32) {
         self.link_back_with_limit(neighbor, node_id, self.config.max_degree);
@@ -4192,7 +4563,10 @@ impl PQFlashIndex {
             .collect();
 
         if filtered.len() <= degree_limit {
-            return filtered.into_iter().map(|(candidate_id, _)| candidate_id).collect();
+            return filtered
+                .into_iter()
+                .map(|(candidate_id, _)| candidate_id)
+                .collect();
         }
 
         let final_alpha = alpha.max(1.0);
@@ -4259,11 +4633,15 @@ impl PQFlashIndex {
         let anchor = self.node_vector(neighbor_idx).to_vec();
         let mut scored: Vec<(u32, f32)> = neighbor_list
             .iter()
-            .map(|&nb| (nb, self.exact_distance(&anchor, self.node_vector(nb as usize))))
+            .map(|&nb| {
+                (
+                    nb,
+                    self.exact_distance(&anchor, self.node_vector(nb as usize)),
+                )
+            })
             .collect();
         scored.sort_by(|a, b| a.1.total_cmp(&b.1));
-        let selected =
-            self.robust_prune_scored(neighbor_idx, &scored, effective_limit, 1.0);
+        let selected = self.robust_prune_scored(neighbor_idx, &scored, effective_limit, 1.0);
         let new_count = selected.len();
         for (i, nb) in selected.into_iter().enumerate() {
             self.node_neighbor_ids[start + i] = nb;
@@ -4298,7 +4676,12 @@ impl PQFlashIndex {
         let anchor = self.node_vector(neighbor_idx).to_vec();
         let mut scored: Vec<(u32, f32)> = neighbor_list
             .iter()
-            .map(|&nb| (nb, self.exact_distance(&anchor, self.node_vector(nb as usize))))
+            .map(|&nb| {
+                (
+                    nb,
+                    self.exact_distance(&anchor, self.node_vector(nb as usize)),
+                )
+            })
             .collect();
         scored.sort_by(|a, b| a.1.total_cmp(&b.1));
         let selected =
@@ -4341,7 +4724,6 @@ impl PQFlashIndex {
             })
             .collect();
 
-
         // Phase 2: native-like batch reverse-edge handling. Aggregate reverse
         // edges per target node, append lazily, and only prune once for rows
         // that overflow physical storage.
@@ -4360,46 +4742,48 @@ impl PQFlashIndex {
         {
             use rayon::prelude::*;
 
-            rows.par_iter_mut()
-                .enumerate()
-                .for_each(|(node_idx, row)| {
-                    let incoming = &reverse_incoming[node_idx];
-                    if incoming.is_empty() {
-                        return;
-                    }
+            rows.par_iter_mut().enumerate().for_each(|(node_idx, row)| {
+                let incoming = &reverse_incoming[node_idx];
+                if incoming.is_empty() {
+                    return;
+                }
 
-                    let mut merged = Vec::with_capacity(row.len() + incoming.len());
-                    let mut seen =
-                        HashSet::with_capacity((row.len() + incoming.len()).saturating_mul(2).max(1));
+                let mut merged = Vec::with_capacity(row.len() + incoming.len());
+                let mut seen =
+                    HashSet::with_capacity((row.len() + incoming.len()).saturating_mul(2).max(1));
 
-                    for &neighbor in row.iter() {
-                        let neighbor_idx = neighbor as usize;
-                        if neighbor_idx < n_nodes && neighbor_idx != node_idx && seen.insert(neighbor)
-                        {
-                            merged.push(neighbor);
-                        }
+                for &neighbor in row.iter() {
+                    let neighbor_idx = neighbor as usize;
+                    if neighbor_idx < n_nodes && neighbor_idx != node_idx && seen.insert(neighbor) {
+                        merged.push(neighbor);
                     }
-                    for &src in incoming.iter() {
-                        let src_idx = src as usize;
-                        if src_idx < n_nodes && src_idx != node_idx && seen.insert(src) {
-                            merged.push(src);
-                        }
+                }
+                for &src in incoming.iter() {
+                    let src_idx = src as usize;
+                    if src_idx < n_nodes && src_idx != node_idx && seen.insert(src) {
+                        merged.push(src);
                     }
+                }
 
-                    if merged.len() <= stride {
-                        *row = merged;
-                        return;
-                    }
+                if merged.len() <= stride {
+                    *row = merged;
+                    return;
+                }
 
-                    let anchor = self.node_vector(node_idx).to_vec();
-                    let mut scored: Vec<(u32, f32)> = merged
-                        .into_iter()
-                        .map(|id| (id, self.exact_distance(&anchor, self.node_vector(id as usize))))
-                        .collect();
-                    scored.sort_by(|a, b| a.1.total_cmp(&b.1));
-                    *row =
-                        self.robust_prune_scored(node_idx, &scored, target_degree, ROBUST_PRUNE_ALPHA);
-                });
+                let anchor = self.node_vector(node_idx).to_vec();
+                let mut scored: Vec<(u32, f32)> = merged
+                    .into_iter()
+                    .map(|id| {
+                        (
+                            id,
+                            self.exact_distance(&anchor, self.node_vector(id as usize)),
+                        )
+                    })
+                    .collect();
+                scored.sort_by(|a, b| a.1.total_cmp(&b.1));
+                *row =
+                    self.robust_prune_scored(node_idx, &scored, target_degree, ROBUST_PRUNE_ALPHA);
+            });
 
             let counts = &mut self.node_neighbor_counts[..n_nodes];
             let neighbor_ids = &mut self.node_neighbor_ids[..n_nodes * stride];
@@ -4421,12 +4805,15 @@ impl PQFlashIndex {
                 let incoming = &reverse_incoming[node_idx];
                 if !incoming.is_empty() {
                     let mut merged = Vec::with_capacity(row.len() + incoming.len());
-                    let mut seen =
-                        HashSet::with_capacity((row.len() + incoming.len()).saturating_mul(2).max(1));
+                    let mut seen = HashSet::with_capacity(
+                        (row.len() + incoming.len()).saturating_mul(2).max(1),
+                    );
 
                     for &neighbor in row.iter() {
                         let neighbor_idx = neighbor as usize;
-                        if neighbor_idx < n_nodes && neighbor_idx != node_idx && seen.insert(neighbor)
+                        if neighbor_idx < n_nodes
+                            && neighbor_idx != node_idx
+                            && seen.insert(neighbor)
                         {
                             merged.push(neighbor);
                         }
@@ -4444,11 +4831,20 @@ impl PQFlashIndex {
                         let anchor = self.node_vector(node_idx).to_vec();
                         let mut scored: Vec<(u32, f32)> = merged
                             .into_iter()
-                            .map(|id| (id, self.exact_distance(&anchor, self.node_vector(id as usize))))
+                            .map(|id| {
+                                (
+                                    id,
+                                    self.exact_distance(&anchor, self.node_vector(id as usize)),
+                                )
+                            })
                             .collect();
                         scored.sort_by(|a, b| a.1.total_cmp(&b.1));
-                        *row = self
-                            .robust_prune_scored(node_idx, &scored, target_degree, ROBUST_PRUNE_ALPHA);
+                        *row = self.robust_prune_scored(
+                            node_idx,
+                            &scored,
+                            target_degree,
+                            ROBUST_PRUNE_ALPHA,
+                        );
                     }
                 }
 
@@ -4684,10 +5080,12 @@ impl PQFlashIndex {
 
             let mut scored = Vec::with_capacity(bfs_candidates.len());
             for &node_id in &bfs_candidates {
-                let Ok(node) = self.load_node(node_id, NodeAccessMode::None, &mut distance_io) else {
+                let Ok(node) = self.load_node(node_id, NodeAccessMode::None, &mut distance_io)
+                else {
                     continue;
                 };
-                let Ok(distance) = self.exact_distance_for_node_vector(query, node_id, &node.vector)
+                let Ok(distance) =
+                    self.exact_distance_for_node_vector(query, node_id, &node.vector)
                 else {
                     continue;
                 };
@@ -4779,6 +5177,14 @@ impl PQFlashIndex {
         self.mmap_storage = None;
         self.loaded_node_cache = None;
         self.disk_pq_codes.clear();
+        if let Some(hvq) = self.hvq_quantizer.as_ref() {
+            let expected = n.saturating_mul(hvq.code_size_bytes());
+            if self.hvq_codes.len() != expected {
+                self.hvq_codes = hvq.encode_batch(n, &self.vectors, self.config.hvq_nrefine);
+            }
+        } else {
+            self.hvq_codes.clear();
+        }
         Ok(())
     }
 
@@ -4862,7 +5268,9 @@ impl PQFlashIndex {
             if let Some(loaded) = cache.get(&node_id) {
                 match access_mode {
                     NodeAccessMode::None => {}
-                    NodeAccessMode::Node => io.record_node_access(node_id, self.flash_layout.node_bytes, 0),
+                    NodeAccessMode::Node => {
+                        io.record_node_access(node_id, self.flash_layout.node_bytes, 0)
+                    }
                     NodeAccessMode::Pq => {
                         if !loaded.inline_pq.is_empty() {
                             io.record_pq_access(node_id, loaded.inline_pq.len(), 0);
@@ -4911,7 +5319,11 @@ impl PQFlashIndex {
                 ))
             })?;
             let loaded = self.deserialize_node(node_id, bytes)?;
-            let pages_loaded = pages_touched(offset, self.flash_layout.node_bytes, self.flash_layout.page_size);
+            let pages_loaded = pages_touched(
+                offset,
+                self.flash_layout.node_bytes,
+                self.flash_layout.page_size,
+            );
             match access_mode {
                 NodeAccessMode::None => {}
                 NodeAccessMode::Node => {
@@ -5138,8 +5550,8 @@ impl Index for PQFlashIndex {
         let mut all_dists = Vec::with_capacity(n_queries * top_k);
         for i in 0..n_queries {
             let q = &queries[i * self.dim..(i + 1) * self.dim];
-            let result =
-                PQFlashIndex::search(self, q, top_k).map_err(|e| IndexError::Unsupported(e.to_string()))?;
+            let result = PQFlashIndex::search(self, q, top_k)
+                .map_err(|e| IndexError::Unsupported(e.to_string()))?;
             all_ids.extend_from_slice(&result.ids);
             all_dists.extend_from_slice(&result.distances);
         }
@@ -5308,6 +5720,9 @@ mod tests {
                 disk_build_degree_slack_pct: Some(130),
                 disk_warm_up: Some(true),
                 disk_filter_threshold: Some(0.25),
+                disk_io_cutting: Some(true),
+                disk_io_cutting_threshold: Some(0.05),
+                disk_io_cutting_patience: Some(4),
                 random_seed: Some(9),
                 ..Default::default()
             },
@@ -5327,6 +5742,9 @@ mod tests {
         assert_eq!(mapped.build_degree_slack_pct, 130);
         assert!(mapped.warm_up);
         assert_eq!(mapped.filter_threshold, 0.25);
+        assert!(mapped.io_cutting_enabled);
+        assert_eq!(mapped.io_cutting_threshold, 0.05);
+        assert_eq!(mapped.io_cutting_patience, 4);
     }
 
     #[test]
@@ -5418,6 +5836,44 @@ mod tests {
     }
 
     #[test]
+    fn aisaq_io_cutting_preserves_top1_on_simple_search() {
+        let base_config = AisaqConfig {
+            max_degree: 4,
+            search_list_size: 32,
+            beamwidth: 4,
+            ..AisaqConfig::default()
+        };
+        let mut cut_config = base_config.clone();
+        cut_config.io_cutting_enabled = true;
+        cut_config.io_cutting_threshold = 1.0;
+        cut_config.io_cutting_patience = 1;
+
+        let vectors = vec![
+            0.0f32, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            2.0, 0.0, 0.0, 0.0, //
+            3.0, 0.0, 0.0, 0.0, //
+            4.0, 0.0, 0.0, 0.0, //
+            5.0, 0.0, 0.0, 0.0,
+        ];
+
+        let mut baseline = PQFlashIndex::new(base_config, MetricType::L2, 4).unwrap();
+        baseline.train(&vectors).unwrap();
+        baseline.add(&vectors).unwrap();
+
+        let mut cutting = PQFlashIndex::new(cut_config, MetricType::L2, 4).unwrap();
+        cutting.train(&vectors).unwrap();
+        cutting.add(&vectors).unwrap();
+
+        let query = [0.9f32, 0.0, 0.0, 0.0];
+        let baseline_result = baseline.search(&query, 3).unwrap();
+        let cutting_result = cutting.search(&query, 3).unwrap();
+
+        assert_eq!(cutting_result.ids.first(), baseline_result.ids.first());
+        assert!(cutting_result.num_visited <= baseline_result.num_visited);
+    }
+
+    #[test]
     fn aisaq_entry_points_use_centroid_anchor_instead_of_sequential_ids() {
         let config = AisaqConfig {
             num_entry_points: 2,
@@ -5462,7 +5918,6 @@ mod tests {
             "second entry should be a far diverse seed from the centroid anchor"
         );
     }
-
 
     #[test]
     fn aisaq_link_back_robust_prune_applies_alpha_occlusion() {
@@ -5806,6 +6261,28 @@ mod tests {
         out
     }
 
+    fn brute_force_topk_ip(
+        vectors: &[f32],
+        queries: &[f32],
+        dim: usize,
+        k: usize,
+    ) -> Vec<Vec<i64>> {
+        let n = vectors.len() / dim;
+        let nq = queries.len() / dim;
+        let mut out = Vec::with_capacity(nq);
+        for q_idx in 0..nq {
+            let q = &queries[q_idx * dim..(q_idx + 1) * dim];
+            let mut scored = Vec::with_capacity(n);
+            for idx in 0..n {
+                let v = &vectors[idx * dim..(idx + 1) * dim];
+                scored.push((idx as i64, -dot(q, v)));
+            }
+            scored.sort_by(|a, b| a.1.total_cmp(&b.1));
+            out.push(scored.into_iter().take(k).map(|(id, _)| id).collect());
+        }
+        out
+    }
+
     fn compute_recall(results: &SearchResult, ground_truth: &[Vec<i64>], k: usize) -> f64 {
         let mut hits = 0usize;
         for (query_idx, gt_ids) in ground_truth.iter().enumerate() {
@@ -5839,7 +6316,12 @@ mod tests {
         out
     }
 
-    fn run_batch_search(index: &PQFlashIndex, queries: &[f32], dim: usize, k: usize) -> SearchResult {
+    fn run_batch_search(
+        index: &PQFlashIndex,
+        queries: &[f32],
+        dim: usize,
+        k: usize,
+    ) -> SearchResult {
         let nq = queries.len() / dim;
         let mut ids = Vec::with_capacity(nq * k);
         let mut dists = Vec::with_capacity(nq * k);
@@ -5906,6 +6388,71 @@ mod tests {
     }
 
     #[test]
+    fn test_pqflash_hvq_coarse_scoring() {
+        let dim = 32usize;
+        let n = 1000usize;
+        let nq = 24usize;
+        let k = 5usize;
+        let mut rng = StdRng::seed_from_u64(123);
+        let normalize_rows = |data: &[f32], dim: usize| -> Vec<f32> {
+            let mut out = Vec::with_capacity(data.len());
+            for row in data.chunks_exact(dim) {
+                let norm = row.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
+                out.extend(row.iter().map(|x| x / norm));
+            }
+            out
+        };
+        let raw_vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let raw_queries: Vec<f32> = (0..nq * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let vectors = normalize_rows(&raw_vectors, dim);
+        let queries = normalize_rows(&raw_queries, dim);
+
+        let config = AisaqConfig {
+            max_degree: 16,
+            search_list_size: 64,
+            disk_pq_dims: 4,
+            use_hvq: true,
+            hvq_nbits: 4,
+            hvq_nrefine: 3,
+            ..AisaqConfig::default()
+        };
+        let mut index = PQFlashIndex::new(config, MetricType::Ip, dim).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors).unwrap();
+
+        let hvq = index
+            .hvq_quantizer
+            .as_ref()
+            .expect("hvq quantizer should be present");
+        let hvq_code_size = hvq.code_size_bytes();
+        assert_eq!(index.hvq_codes.len(), n * hvq_code_size);
+
+        let results = run_batch_search(&index, &queries, dim, k);
+        let gt = brute_force_topk_ip(&vectors, &queries, dim, k);
+        let recall = compute_recall(&results, &gt, k);
+        assert!(recall >= 0.35, "hvq coarse recall@{k} too low: {recall:.4}");
+
+        let dir = make_temp_dir("pqflash_hvq");
+        fs::create_dir_all(&dir).unwrap();
+        index.save(&dir).unwrap();
+        let loaded = PQFlashIndex::load(&dir).unwrap();
+
+        assert!(
+            loaded.hvq_quantizer.is_some(),
+            "hvq quantizer should roundtrip"
+        );
+        assert_eq!(loaded.hvq_codes.len(), n * hvq_code_size);
+
+        let loaded_results = run_batch_search(&loaded, &queries, dim, k);
+        let loaded_recall = compute_recall(&loaded_results, &gt, k);
+        assert!(
+            loaded_recall >= 0.35,
+            "loaded hvq coarse recall@{k} too low: {loaded_recall:.4}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn test_aisaq_range_search() {
         let dim = 16usize;
         let n = 100usize;
@@ -5933,8 +6480,14 @@ mod tests {
         let gt = brute_force_range_l2(&vectors, &query, dim, radius);
         let hit_ids: HashSet<i64> = hits.iter().map(|(id, _)| *id).collect();
 
-        assert!(!gt.is_empty(), "brute-force range search should find at least self");
-        assert!(!hits.is_empty(), "aisaq range search should return at least one hit");
+        assert!(
+            !gt.is_empty(),
+            "brute-force range search should find at least self"
+        );
+        assert!(
+            !hits.is_empty(),
+            "aisaq range search should return at least one hit"
+        );
         assert!(hits.iter().all(|(_, dist)| *dist <= radius + 1e-6));
         assert!(
             gt.iter().any(|(id, _)| hit_ids.contains(id)),
@@ -6201,7 +6754,10 @@ mod tests {
         assert_eq!(centroid_dim, dim as i32);
 
         assert_eq!(std::fs::metadata(&medoids_path).unwrap().len(), 12);
-        assert_eq!(std::fs::metadata(&centroids_path).unwrap().len(), (8 + dim * 4) as u64);
+        assert_eq!(
+            std::fs::metadata(&centroids_path).unwrap().len(),
+            (8 + dim * 4) as u64
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -6274,13 +6830,19 @@ mod tests {
         index.save(&dir).unwrap();
         let loaded = PQFlashIndex::load(&dir).unwrap();
 
-        assert!(loaded.vectors.is_empty(), "loaded index should use disk-backed path");
+        assert!(
+            loaded.vectors.is_empty(),
+            "loaded index should use disk-backed path"
+        );
         let results = run_batch_search(&loaded, &queries, dim, k);
         assert_eq!(results.ids.len(), nq * k);
         assert!(results.ids.iter().all(|&id| id >= 0));
         let gt = brute_force_topk_l2(&vectors, &queries, dim, k);
         let recall = compute_recall(&results, &gt, k);
-        assert!(recall >= 0.50, "disk path recall@{k} too low after load: {recall:.4}");
+        assert!(
+            recall >= 0.50,
+            "disk path recall@{k} too low after load: {recall:.4}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -6309,8 +6871,14 @@ mod tests {
         index.save(&dir).unwrap();
         let loaded = PQFlashIndex::load_with_mmap(&dir).unwrap();
 
-        assert!(loaded.vectors.is_empty(), "mmap-backed load should stay disk-backed");
-        assert!(loaded.mmap_storage.is_some(), "direct mmap storage should be set");
+        assert!(
+            loaded.vectors.is_empty(),
+            "mmap-backed load should stay disk-backed"
+        );
+        assert!(
+            loaded.mmap_storage.is_some(),
+            "direct mmap storage should be set"
+        );
         let results = run_batch_search(&loaded, &queries, dim, k);
         assert_eq!(results.ids.len(), nq * k);
         assert!(results.ids.iter().all(|&id| id >= 0));
@@ -6344,8 +6912,14 @@ mod tests {
         index.save(&dir).unwrap();
         let disk_index = PQFlashIndex::load(&dir).unwrap();
 
-        assert!(disk_index.vectors.is_empty(), "disk path should not materialize vectors");
-        assert!(disk_index.storage.is_some(), "disk path should keep disk storage");
+        assert!(
+            disk_index.vectors.is_empty(),
+            "disk path should not materialize vectors"
+        );
+        assert!(
+            disk_index.storage.is_some(),
+            "disk path should keep disk storage"
+        );
 
         let results = run_batch_search(&disk_index, &queries, dim, k);
         assert_eq!(results.ids.len(), nq * k);

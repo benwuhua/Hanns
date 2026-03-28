@@ -3,8 +3,10 @@
 //! 将浮点数映射到低精度表示 (通常是 8-bit)
 //! 参考: https://faiss.ai/cpp/html/ScalarQuantizer_8bit_avx512_8h.html
 
+use serde::{Deserialize, Serialize};
+
 /// SQ 量化类型
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum QuantizerType {
     /// 8-bit 均匀量化
     Uniform,
@@ -15,7 +17,7 @@ pub enum QuantizerType {
 }
 
 /// SQ 量化器配置
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScalarQuantizer {
     pub dim: usize,
     pub bit: usize, // 量化位数 (4 或 8)
