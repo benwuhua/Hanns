@@ -8,7 +8,6 @@ use nalgebra::DMatrix;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::cmp::Ordering;
-use std::collections::BinaryHeap;
 
 #[derive(Clone, Debug)]
 pub struct HvqConfig {
@@ -19,6 +18,8 @@ pub struct HvqConfig {
 #[derive(Clone, Debug)]
 pub struct HvqQueryState {
     pub q_rot: Vec<f32>,
+    pub q_quantized: Vec<i8>,
+    pub q_scale: f32,
     pub centroid_score: f32,
 }
 
@@ -636,6 +637,17 @@ impl HvqQuantizer {
 
     pub fn precompute_query_state(&self, q_rot: &[f32]) -> HvqQueryState {
         assert_eq!(q_rot.len(), self.config.dim);
+        let q_max = q_rot
+            .iter()
+            .copied()
+            .map(f32::abs)
+            .fold(0.0f32, f32::max)
+            .max(1e-6);
+        let q_scale = (q_max / 127.0).max(1e-6);
+        let q_quantized: Vec<i8> = q_rot
+            .iter()
+            .map(|&value| (value / q_scale).round().clamp(-127.0, 127.0) as i8)
+            .collect();
         let centroid_score = q_rot
             .iter()
             .zip(self.rotated_centroid.iter())
@@ -643,6 +655,8 @@ impl HvqQuantizer {
             .sum();
         HvqQueryState {
             q_rot: q_rot.to_vec(),
+            q_quantized,
+            q_scale,
             centroid_score,
         }
     }
@@ -665,9 +679,7 @@ impl HvqQuantizer {
         state.centroid_score + centered_score
     }
 
-    /// Zero-allocation hot path: stream quantized residual bits and accumulate the
-    /// dot product directly instead of materializing temporary decoded vectors.
-    pub fn score_code(&self, state: &HvqQueryState, code: &[u8]) -> f32 {
+    fn score_code_scalar(&self, state: &HvqQueryState, code: &[u8]) -> f32 {
         debug_assert_eq!(state.q_rot.len(), self.config.dim);
         let (norm_o, vmax, base_quant_dist, packed_code) = self.parse_code(code);
         if base_quant_dist <= 1e-12 {
@@ -702,6 +714,67 @@ impl HvqQuantizer {
         }
 
         state.centroid_score + norm_o * ip / base_quant_dist
+    }
+
+    fn score_code_simd(&self, state: &HvqQueryState, code: &[u8]) -> f32 {
+        debug_assert_eq!(state.q_rot.len(), self.config.dim);
+        debug_assert_eq!(state.q_quantized.len(), self.config.dim);
+        let (norm_o, vmax, base_quant_dist, packed_code) = self.parse_code(code);
+        if base_quant_dist <= 1e-12 {
+            return state.centroid_score;
+        }
+
+        let levels = (1u32 << self.config.nbits) as f32;
+        let code_scale = (2.0 * vmax) / levels.max(1.0);
+        let offset = -vmax;
+        let q_sum: i32 = state.q_quantized.iter().map(|&value| value as i32).sum();
+
+        let int_ip = match self.config.nbits {
+            8 => dot_u8_i8_avx512(packed_code, &state.q_quantized),
+            4 => {
+                let mut total = 0i32;
+                let mut q_offset = 0usize;
+                let mut expanded = [0u8; 128];
+
+                for chunk in packed_code.chunks(64) {
+                    let decoded_len = (chunk.len() * 2).min(self.config.dim - q_offset);
+                    for (chunk_idx, &byte) in chunk.iter().enumerate() {
+                        let out = chunk_idx * 2;
+                        expanded[out] = byte & 0x0F;
+                        if out + 1 < decoded_len {
+                            expanded[out + 1] = (byte >> 4) & 0x0F;
+                        }
+                    }
+                    total += dot_u8_i8_avx512(
+                        &expanded[..decoded_len],
+                        &state.q_quantized[q_offset..q_offset + decoded_len],
+                    );
+                    q_offset += decoded_len;
+                }
+
+                total
+            }
+            _ => return self.score_code_scalar(state, code),
+        };
+
+        let float_ip = state.q_scale * (code_scale * int_ip as f32 + offset * q_sum as f32);
+        state.centroid_score + norm_o * float_ip / base_quant_dist
+    }
+
+    /// Zero-allocation hot path with AVX512VNNI acceleration for 8-bit / 4-bit codes,
+    /// and scalar fallback for unsupported bit widths or CPUs.
+    pub fn score_code(&self, state: &HvqQueryState, code: &[u8]) -> f32 {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if matches!(self.config.nbits, 4 | 8)
+                && std::arch::is_x86_feature_detected!("avx512vnni")
+                && std::arch::is_x86_feature_detected!("avx512f")
+            {
+                return self.score_code_simd(state, code);
+            }
+        }
+
+        self.score_code_scalar(state, code)
     }
 
     pub fn adc_distance_prerotated(&self, q_rot: &[f32], code: &[u8], _base_dist: f32) -> f32 {
@@ -889,7 +962,7 @@ mod tests {
 
             for code in codes.chunks_exact(code_size) {
                 let reference = hvq.score_code_alloc(&state, code);
-                let streamed = hvq.score_code(&state, code);
+                let streamed = hvq.score_code_scalar(&state, code);
                 let diff = (reference - streamed).abs();
                 let tol = 1e-5 * reference.abs().max(1.0);
                 assert!(
@@ -900,6 +973,69 @@ mod tests {
                     diff,
                     tol
                 );
+            }
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_score_code_simd_matches_scalar() {
+        if !(std::arch::is_x86_feature_detected!("avx512vnni")
+            && std::arch::is_x86_feature_detected!("avx512f"))
+        {
+            return;
+        }
+
+        let dim = 64usize;
+        let n = 64usize;
+        let nq = 6usize;
+        let nrefine = 4usize;
+        let mut rng = StdRng::seed_from_u64(20260328);
+
+        for &nbits in &[4u8, 8u8] {
+            let data = normalize_rows(
+                &(0..n * dim)
+                    .map(|_| rng.gen_range(-1.0f32..1.0))
+                    .collect::<Vec<_>>(),
+                dim,
+            );
+            let queries = normalize_rows(
+                &(0..nq * dim)
+                    .map(|_| rng.gen_range(-1.0f32..1.0))
+                    .collect::<Vec<_>>(),
+                dim,
+            );
+
+            let mut hvq = HvqQuantizer::new(HvqConfig { dim, nbits }, 17 + nbits as u64);
+            hvq.train(n, &data);
+            let codes = hvq.encode_batch(n, &data, nrefine);
+            let code_size = hvq.code_size_bytes();
+
+            for query in queries.chunks_exact(dim) {
+                let q_rot = hvq.rotate_query(query);
+                let state = hvq.precompute_query_state(&q_rot);
+
+                for code in codes.chunks_exact(code_size) {
+                    let scalar = hvq.score_code_scalar(&state, code);
+                    let simd = hvq.score_code_simd(&state, code);
+                    let dispatched = hvq.score_code(&state, code);
+                    let diff = (scalar - simd).abs();
+                    assert!(
+                        diff < 1e-2,
+                        "SIMD score drift too large for nbits={}: scalar={} simd={} diff={}",
+                        nbits,
+                        scalar,
+                        simd,
+                        diff
+                    );
+                    assert!(
+                        (dispatched - simd).abs() <= f32::EPSILON,
+                        "score_code dispatch mismatch for nbits={}: dispatched={} simd={}",
+                        nbits,
+                        dispatched,
+                        simd
+                    );
+                }
             }
         }
     }
