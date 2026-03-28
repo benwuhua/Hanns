@@ -7,6 +7,8 @@ use nalgebra::linalg::QR;
 use nalgebra::DMatrix;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 
 #[derive(Clone, Debug)]
 pub struct HvqConfig {
@@ -28,6 +30,39 @@ pub struct HvqQuantizer {
     pub offset: f32,
     pub centroid: Vec<f32>,
     pub rotated_centroid: Vec<f32>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CriticalValue {
+    threshold: f32,
+    dim: usize,
+    next_level: u16,
+}
+
+impl PartialEq for CriticalValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.threshold.to_bits() == other.threshold.to_bits()
+            && self.dim == other.dim
+            && self.next_level == other.next_level
+    }
+}
+
+impl Eq for CriticalValue {}
+
+impl PartialOrd for CriticalValue {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CriticalValue {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .threshold
+            .total_cmp(&self.threshold)
+            .then_with(|| other.dim.cmp(&self.dim))
+            .then_with(|| other.next_level.cmp(&self.next_level))
+    }
 }
 
 impl HvqQuantizer {
@@ -287,29 +322,28 @@ impl HvqQuantizer {
         reconstructed
     }
 
-    pub fn encode(&self, v: &[f32], nrefine: usize) -> Vec<u8> {
-        assert_eq!(v.len(), self.config.dim);
-        let v_centered: Vec<f32> = v
-            .iter()
-            .zip(self.centroid.iter())
-            .map(|(a, b)| a - b)
-            .collect();
-        let o = self.rotate(&v_centered);
-        let nbits = self.config.nbits;
-        let norm_o = o.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let o_hat: Vec<f32> = if norm_o > 1e-12 {
-            o.iter().map(|x| x / norm_o).collect()
-        } else {
-            o.clone()
-        };
-
-        let vmax = o_hat
+    fn unit_vmax(o_hat: &[f32]) -> f32 {
+        o_hat
             .iter()
             .copied()
             .map(f32::abs)
             .fold(0.0f32, f32::max)
-            .max(1e-6);
-        let (scale, offset) = Self::compute_scale_offset(&o_hat, nbits);
+            .max(1e-6)
+    }
+
+    fn objective(ip: f32, qed_length: f32) -> f32 {
+        if qed_length > 1e-12 {
+            ip * ip / qed_length
+        } else {
+            0.0
+        }
+    }
+
+    fn greedy_quantize(&self, o_hat: &[f32], nrefine: usize) -> (Vec<u16>, f32, f32) {
+        debug_assert_eq!(o_hat.len(), self.config.dim);
+        let nbits = self.config.nbits;
+        let vmax = Self::unit_vmax(o_hat);
+        let (scale, offset) = Self::compute_scale_offset(o_hat, nbits);
         let max_code = ((1u32 << nbits) - 1) as u16;
 
         let mut codes: Vec<u16> = o_hat
@@ -330,11 +364,7 @@ impl HvqQuantizer {
                 value * value
             })
             .sum();
-        let mut objective = if qed_length > 1e-12 {
-            ip * ip / qed_length
-        } else {
-            0.0
-        };
+        let mut objective = Self::objective(ip, qed_length);
 
         let max_refine = nrefine.min(6);
         for _round in 0..max_refine {
@@ -384,7 +414,7 @@ impl HvqQuantizer {
                     if new_qed <= 1e-12 {
                         continue;
                     }
-                    let new_objective = new_ip * new_ip / new_qed;
+                    let new_objective = Self::objective(new_ip, new_qed);
                     if new_objective > best_objective + 1e-10 {
                         best_code = candidate;
                         best_ip = new_ip;
@@ -406,6 +436,137 @@ impl HvqQuantizer {
                 break;
             }
         }
+
+        let _ = vmax;
+        (codes, ip, qed_length)
+    }
+
+    fn fast_quantize(&self, o_hat: &[f32]) -> (Vec<u16>, f32, f32) {
+        debug_assert_eq!(o_hat.len(), self.config.dim);
+
+        let dim = self.config.dim;
+        let levels = 1u16 << self.config.nbits;
+        let half_levels = levels / 2;
+        let half_levels_f = half_levels as f32;
+        let vmax = Self::unit_vmax(o_hat);
+
+        let mut abs_o = Vec::with_capacity(dim);
+        let mut non_negative = Vec::with_capacity(dim);
+        let mut max_level = Vec::with_capacity(dim);
+        for &value in o_hat {
+            abs_o.push(value.abs());
+            let is_non_negative = value >= 0.0;
+            non_negative.push(is_non_negative);
+            max_level.push(if is_non_negative {
+                half_levels.saturating_sub(1)
+            } else {
+                half_levels
+            });
+        }
+
+        let mut heap = BinaryHeap::new();
+        for (i, &abs_value) in abs_o.iter().enumerate() {
+            if abs_value > 1e-12 && max_level[i] >= 1 {
+                heap.push(CriticalValue {
+                    threshold: 0.5 / abs_value,
+                    dim: i,
+                    next_level: 1,
+                });
+            }
+        }
+
+        let mut levels_abs = vec![0u16; dim];
+        let mut best_levels = levels_abs.clone();
+        let mut sum_sq = 0.0f32;
+        let mut sum_xc = 0.0f32;
+        let mut best_sum_sq = 0.0f32;
+        let mut best_sum_xc = 0.0f32;
+        let mut best_objective = 0.0f32;
+
+        while let Some(event) = heap.pop() {
+            let current_threshold = event.threshold;
+            let mut pending = Some(event);
+            while let Some(item) = pending.take() {
+                let idx = item.dim;
+                let new_level = item.next_level;
+                let abs_value = abs_o[idx];
+                let max_allowed = max_level[idx];
+
+                if new_level <= max_allowed {
+                    let old_level = levels_abs[idx];
+                    if new_level > old_level {
+                        sum_sq += (new_level * new_level - old_level * old_level) as f32;
+                        sum_xc += (new_level - old_level) as f32 * abs_value;
+                        levels_abs[idx] = new_level;
+                    }
+
+                    let next_level = new_level + 1;
+                    if next_level <= max_allowed {
+                        heap.push(CriticalValue {
+                            threshold: (new_level as f32 + 0.5) / abs_value,
+                            dim: idx,
+                            next_level,
+                        });
+                    }
+                }
+
+                pending = match heap.peek() {
+                    Some(next) if next.threshold.to_bits() == current_threshold.to_bits() => {
+                        heap.pop()
+                    }
+                    _ => None,
+                };
+            }
+
+            let objective = if sum_sq > 0.0 {
+                (sum_xc * sum_xc) / sum_sq
+            } else {
+                0.0
+            };
+            if objective > best_objective + 1e-10 {
+                best_objective = objective;
+                best_levels.clone_from_slice(&levels_abs);
+                best_sum_sq = sum_sq;
+                best_sum_xc = sum_xc;
+            }
+        }
+
+        let scale = vmax / half_levels_f.max(1.0);
+        let ip = scale * best_sum_xc;
+        let qed_length = scale * scale * best_sum_sq;
+        let mut codes = Vec::with_capacity(dim);
+        for i in 0..dim {
+            let magnitude = best_levels[i];
+            let code = if non_negative[i] {
+                half_levels + magnitude
+            } else {
+                half_levels - magnitude
+            };
+            codes.push(code);
+        }
+
+        (codes, ip, qed_length)
+    }
+
+    pub fn encode(&self, v: &[f32], nrefine: usize) -> Vec<u8> {
+        assert_eq!(v.len(), self.config.dim);
+        let v_centered: Vec<f32> = v
+            .iter()
+            .zip(self.centroid.iter())
+            .map(|(a, b)| a - b)
+            .collect();
+        let o = self.rotate(&v_centered);
+        let nbits = self.config.nbits;
+        let norm_o = o.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let o_hat: Vec<f32> = if norm_o > 1e-12 {
+            o.iter().map(|x| x / norm_o).collect()
+        } else {
+            o.clone()
+        };
+
+        let vmax = Self::unit_vmax(&o_hat);
+        let (codes, ip, qed_length) = self.fast_quantize(&o_hat);
+        let _ = (nrefine, ip);
 
         let base_quant_dist = qed_length.sqrt();
 
@@ -782,6 +943,218 @@ mod tests {
                 rhs
             );
         }
+    }
+
+    fn normalize_rows(data: &[f32], dim: usize) -> Vec<f32> {
+        let mut out = Vec::with_capacity(data.len());
+        for row in data.chunks_exact(dim) {
+            let norm = row.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
+            out.extend(row.iter().map(|x| x / norm));
+        }
+        out
+    }
+
+    fn encode_with_strategy(
+        hvq: &HvqQuantizer,
+        v: &[f32],
+        use_fast: bool,
+        nrefine: usize,
+    ) -> Vec<u8> {
+        let v_centered: Vec<f32> = v
+            .iter()
+            .zip(hvq.centroid.iter())
+            .map(|(a, b)| a - b)
+            .collect();
+        let o = hvq.rotate(&v_centered);
+        let norm_o = o.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let o_hat: Vec<f32> = if norm_o > 1e-12 {
+            o.iter().map(|x| x / norm_o).collect()
+        } else {
+            o.clone()
+        };
+        let vmax = HvqQuantizer::unit_vmax(&o_hat);
+        let (codes, _ip, qed_length) = if use_fast {
+            hvq.fast_quantize(&o_hat)
+        } else {
+            hvq.greedy_quantize(&o_hat, nrefine)
+        };
+        let base_quant_dist = qed_length.sqrt();
+
+        let mut packed_bits =
+            Vec::with_capacity((hvq.config.dim * hvq.config.nbits as usize).div_ceil(8));
+        pack_codes(&codes, hvq.config.nbits, &mut packed_bits);
+
+        let mut packed = Vec::with_capacity(hvq.code_size_bytes());
+        packed.extend_from_slice(&norm_o.to_le_bytes());
+        packed.extend_from_slice(&vmax.to_le_bytes());
+        packed.extend_from_slice(&base_quant_dist.to_le_bytes());
+        packed.extend_from_slice(&packed_bits);
+        packed
+    }
+
+    fn brute_force_topk_ip(
+        data: &[f32],
+        queries: &[f32],
+        dim: usize,
+        top_k: usize,
+    ) -> Vec<Vec<usize>> {
+        let n = data.len() / dim;
+        let mut out = Vec::with_capacity(queries.len() / dim);
+        for query in queries.chunks_exact(dim) {
+            let mut scored: Vec<(usize, f32)> = (0..n)
+                .map(|i| {
+                    let v = &data[i * dim..(i + 1) * dim];
+                    (
+                        i,
+                        query
+                            .iter()
+                            .zip(v.iter())
+                            .map(|(&a, &b)| a * b)
+                            .sum::<f32>(),
+                    )
+                })
+                .collect();
+            scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+            out.push(scored.into_iter().take(top_k).map(|(i, _)| i).collect());
+        }
+        out
+    }
+
+    fn quantized_topk(
+        hvq: &HvqQuantizer,
+        codes: &[u8],
+        queries: &[f32],
+        dim: usize,
+        top_k: usize,
+    ) -> Vec<Vec<usize>> {
+        let code_size = hvq.code_size_bytes();
+        let n = codes.len() / code_size;
+        let mut out = Vec::with_capacity(queries.len() / dim);
+        for query in queries.chunks_exact(dim) {
+            let q_rot = hvq.rotate_query(query);
+            let state = hvq.precompute_query_state(&q_rot);
+            let mut scored: Vec<(usize, f32)> = (0..n)
+                .map(|i| {
+                    let code = &codes[i * code_size..(i + 1) * code_size];
+                    (i, hvq.score_code(&state, code))
+                })
+                .collect();
+            scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+            out.push(scored.into_iter().take(top_k).map(|(i, _)| i).collect());
+        }
+        out
+    }
+
+    fn compute_recall(results: &[Vec<usize>], gt: &[Vec<usize>], top_k: usize) -> f32 {
+        let mut hits = 0usize;
+        let total = results.len() * top_k;
+        for (result, truth) in results.iter().zip(gt.iter()) {
+            for &idx in truth.iter().take(top_k) {
+                if result.iter().take(top_k).any(|&candidate| candidate == idx) {
+                    hits += 1;
+                }
+            }
+        }
+        hits as f32 / total.max(1) as f32
+    }
+
+    #[test]
+    fn test_fast_quantize_dominates_greedy() {
+        let dim = 64usize;
+        let samples = 100usize;
+        let mut rng = StdRng::seed_from_u64(2026);
+
+        for &nbits in &[1u8, 2, 4] {
+            let hvq = HvqQuantizer::new(HvqConfig { dim, nbits }, 99);
+            for _ in 0..samples {
+                let mut v: Vec<f32> = (0..dim).map(|_| rng.gen_range(-1.0f32..1.0)).collect();
+                let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
+                for value in &mut v {
+                    *value /= norm;
+                }
+
+                let (_fast_codes, fast_ip, fast_qed) = hvq.fast_quantize(&v);
+                let (_greedy_codes, greedy_ip, greedy_qed) = hvq.greedy_quantize(&v, 6);
+                let fast_objective = HvqQuantizer::objective(fast_ip, fast_qed);
+                let greedy_objective = HvqQuantizer::objective(greedy_ip, greedy_qed);
+                let tol = 1e-5 * fast_objective.abs().max(greedy_objective.abs()).max(1.0);
+
+                assert!(
+                    fast_objective + tol >= greedy_objective,
+                    "fast objective regressed for nbits={}: fast={} greedy={} tol={}",
+                    nbits,
+                    fast_objective,
+                    greedy_objective,
+                    tol
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_fast_quantize_recall_improvement() {
+        let dim = 32usize;
+        let clusters = 8usize;
+        let per_cluster = 40usize;
+        let nq = 32usize;
+        let top_k = 10usize;
+        let n = clusters * per_cluster;
+
+        let mut rng = StdRng::seed_from_u64(4242);
+        let centers: Vec<f32> = normalize_rows(
+            &(0..clusters * dim)
+                .map(|_| rng.gen_range(-1.0f32..1.0))
+                .collect::<Vec<_>>(),
+            dim,
+        );
+
+        let mut base = Vec::with_capacity(n * dim);
+        for cluster in 0..clusters {
+            let center = &centers[cluster * dim..(cluster + 1) * dim];
+            for _ in 0..per_cluster {
+                for &value in center {
+                    base.push(value + rng.gen_range(-0.08f32..0.08));
+                }
+            }
+        }
+        let base = normalize_rows(&base, dim);
+
+        let mut queries = Vec::with_capacity(nq * dim);
+        for _ in 0..nq {
+            let cluster = rng.gen_range(0..clusters);
+            let center = &centers[cluster * dim..(cluster + 1) * dim];
+            for &value in center {
+                queries.push(value + rng.gen_range(-0.08f32..0.08));
+            }
+        }
+        let queries = normalize_rows(&queries, dim);
+
+        let mut hvq = HvqQuantizer::new(HvqConfig { dim, nbits: 1 }, 42);
+        hvq.train(n, &base);
+
+        let mut fast_codes = Vec::with_capacity(n * hvq.code_size_bytes());
+        let mut greedy_codes = Vec::with_capacity(n * hvq.code_size_bytes());
+        for row in base.chunks_exact(dim) {
+            fast_codes.extend_from_slice(&encode_with_strategy(&hvq, row, true, 6));
+            greedy_codes.extend_from_slice(&encode_with_strategy(&hvq, row, false, 6));
+        }
+
+        let gt = brute_force_topk_ip(&base, &queries, dim, top_k);
+        let fast_results = quantized_topk(&hvq, &fast_codes, &queries, dim, top_k);
+        let greedy_results = quantized_topk(&hvq, &greedy_codes, &queries, dim, top_k);
+        let fast_recall = compute_recall(&fast_results, &gt, top_k);
+        let greedy_recall = compute_recall(&greedy_results, &gt, top_k);
+
+        println!(
+            "fast_quantize recall@{} fast={:.4} greedy={:.4}",
+            top_k, fast_recall, greedy_recall
+        );
+        assert!(
+            fast_recall + 1e-6 >= greedy_recall,
+            "fast quantize recall regressed: fast={} greedy={}",
+            fast_recall,
+            greedy_recall
+        );
     }
 
     #[cfg(target_arch = "x86_64")]
