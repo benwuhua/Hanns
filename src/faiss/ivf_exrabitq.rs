@@ -200,6 +200,41 @@ impl IvfExRaBitqIndex {
         self.ntotal
     }
 
+    pub fn count(&self) -> usize {
+        self.ntotal
+    }
+
+    pub fn has_raw_data(&self) -> bool {
+        false
+    }
+
+    pub fn size(&self) -> usize {
+        let centroids_size = self.centroids.len() * std::mem::size_of::<f32>();
+        let ids_size: usize = self
+            .clusters
+            .iter()
+            .map(|cluster| cluster.ids.len() * std::mem::size_of::<i64>())
+            .sum();
+        let codes_and_factors_size: usize = self
+            .clusters
+            .iter()
+            .flat_map(|cluster| cluster.encoded.iter())
+            .map(|entry| {
+                entry.short_code.len()
+                    + entry.long_code.len()
+                    + std::mem::size_of::<ExFactor>()
+                    + std::mem::size_of::<ExShortFactors>()
+                    + 2 * std::mem::size_of::<f32>()
+            })
+            .sum();
+
+        centroids_size + ids_size + codes_and_factors_size
+    }
+
+    pub fn set_nprobe(&mut self, nprobe: usize) {
+        self.config.nprobe = nprobe.max(1).min(self.config.nlist);
+    }
+
     pub fn train(&mut self, data: &[f32]) -> Result<()> {
         if self.config.metric_type != MetricType::L2 {
             return Err(KnowhereError::InvalidArg(
