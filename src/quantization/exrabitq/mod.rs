@@ -7,7 +7,8 @@ mod searcher;
 
 pub use config::ExRaBitQConfig;
 pub use fastscan::{
-    reference_short_distance, scalar_scan_layout, ExRaBitQFastScanState, ScoredCandidate,
+    reference_short_distance, scalar_scan_layout, scan_layout, simd_scan_layout,
+    ExRaBitQFastScanState, ScoredCandidate,
 };
 pub use layout::{ExRaBitQLayout, FAST_SIZE};
 pub use quantizer::{

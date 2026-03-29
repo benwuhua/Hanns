@@ -1,5 +1,5 @@
 use super::{
-    scalar_scan_layout, ExRaBitQFastScanState, ExRaBitQLayout, ExRaBitQQuantizer, ScoredCandidate,
+    scan_layout, ExRaBitQFastScanState, ExRaBitQLayout, ExRaBitQQuantizer, ScoredCandidate,
 };
 
 pub fn rerank_candidates(
@@ -55,6 +55,6 @@ pub fn scan_and_rerank(
     shortlist: usize,
     top_k: usize,
 ) -> Vec<(i64, f32)> {
-    let candidates = scalar_scan_layout(layout, state, shortlist.max(top_k));
+    let candidates = scan_layout(layout, state, shortlist.max(top_k));
     rerank_candidates(quantizer, layout, state, &candidates, top_k)
 }
