@@ -991,6 +991,7 @@ pub struct HvqFastScanState {
 
 pub struct HvqIndex {
     pub quantizer: HvqQuantizer,
+    pub rerank_quantizer: HvqQuantizer,
     pub codes: Vec<u8>,
     pub n: usize,
     pub fastscan_codes: Vec<u8>,
@@ -1023,7 +1024,7 @@ impl PartialOrd for MinScored {
 }
 
 impl HvqIndex {
-    pub fn build(quantizer: &HvqQuantizer, data: &[f32], n: usize) -> Self {
+    pub fn build(quantizer: &HvqQuantizer, data: &[f32], n: usize, rerank_nbits: u8) -> Self {
         assert_eq!(
             data.len(),
             n * quantizer.config.dim,
@@ -1032,8 +1033,26 @@ impl HvqIndex {
             data.len()
         );
 
-        let code_size = quantizer.code_size_bytes();
-        let codes = quantizer.encode_batch(n, data, 4);
+        let rerank_quantizer = if rerank_nbits == quantizer.config.nbits {
+            quantizer.clone()
+        } else {
+            let mut rq = HvqQuantizer::new(
+                HvqConfig {
+                    dim: quantizer.config.dim,
+                    nbits: rerank_nbits,
+                },
+                0,
+            );
+            rq.rotation_matrix = quantizer.rotation_matrix.clone();
+            rq.centroid = quantizer.centroid.clone();
+            rq.rotated_centroid = quantizer.rotated_centroid.clone();
+            rq.scale = quantizer.scale;
+            rq.offset = quantizer.offset;
+            rq
+        };
+
+        let code_size = rerank_quantizer.code_size_bytes();
+        let codes = rerank_quantizer.encode_batch(n, data, 4);
         let mut raw_codes = Vec::with_capacity(n);
         for row in data.chunks_exact(quantizer.config.dim) {
             let centered: Vec<f32> = row
@@ -1068,6 +1087,7 @@ impl HvqIndex {
 
         Self {
             quantizer: quantizer.clone(),
+            rerank_quantizer,
             codes,
             n,
             fastscan_codes,
@@ -1311,13 +1331,13 @@ impl HvqIndex {
         let n_candidates = k.saturating_mul(nprobe_factor).min(self.n);
         let candidates = self.fastscan_topk(&fs_state, n_candidates);
 
-        let bbit_state = self.quantizer.precompute_query_state(&q_rot);
-        let code_size = self.quantizer.code_size_bytes();
+        let bbit_state = self.rerank_quantizer.precompute_query_state(&q_rot);
+        let code_size = self.rerank_quantizer.code_size_bytes();
         let mut results: Vec<(usize, f32)> = candidates
             .iter()
             .map(|&(vid, _)| {
                 let code = &self.codes[vid * code_size..(vid + 1) * code_size];
-                (vid, self.quantizer.score_code(&bbit_state, code))
+                (vid, self.rerank_quantizer.score_code(&bbit_state, code))
             })
             .collect();
 
@@ -1779,7 +1799,7 @@ mod tests {
 
         let mut hvq = HvqQuantizer::new(HvqConfig { dim, nbits }, 42 + nbits as u64);
         hvq.train(n, &data);
-        let index = HvqIndex::build(&hvq, &data, n);
+        let index = HvqIndex::build(&hvq, &data, n, hvq.config.nbits);
         (index, queries)
     }
 
@@ -1857,7 +1877,7 @@ mod tests {
         let nq = 10usize;
         let top_k = 10usize;
         let (index, queries) = build_fastscan_fixture(dim, n, nq, 4, 20260331);
-        let gt = quantized_topk(&index.quantizer, &index.codes, &queries, dim, top_k);
+        let gt = quantized_topk(&index.rerank_quantizer, &index.codes, &queries, dim, top_k);
 
         let mut hits = 0usize;
         let mut total = 0usize;
@@ -1888,7 +1908,7 @@ mod tests {
         let nq = 10usize;
         let top_k = 10usize;
         let (index, queries) = build_fastscan_fixture(dim, n, nq, 4, 20260401);
-        let gt = quantized_topk(&index.quantizer, &index.codes, &queries, dim, top_k);
+        let gt = quantized_topk(&index.rerank_quantizer, &index.codes, &queries, dim, top_k);
 
         let mut results = Vec::with_capacity(nq);
         for query in queries.chunks_exact(dim) {
@@ -1911,6 +1931,86 @@ mod tests {
 
         let recall = compute_recall(&results, &gt, top_k);
         assert!(recall >= 0.5, "two-stage recall too low: recall={}", recall);
+    }
+
+    #[test]
+    fn test_hvq_index_decoupled_rerank() {
+        let dim = 64usize;
+        let clusters = 10usize;
+        let per_cluster = 50usize;
+        let nq = 10usize;
+        let top_k = 10usize;
+        let n = clusters * per_cluster;
+        let nprobe_factor = n.div_ceil(top_k);
+
+        let mut rng = StdRng::seed_from_u64(20260403);
+        let centers: Vec<f32> = normalize_rows(
+            &(0..clusters * dim)
+                .map(|_| rng.gen_range(-1.0f32..1.0))
+                .collect::<Vec<_>>(),
+            dim,
+        );
+
+        let mut data = Vec::with_capacity(n * dim);
+        for cluster in 0..clusters {
+            let center = &centers[cluster * dim..(cluster + 1) * dim];
+            for _ in 0..per_cluster {
+                for &value in center {
+                    data.push(value + rng.gen_range(-0.08f32..0.08));
+                }
+            }
+        }
+        let data = normalize_rows(&data, dim);
+
+        let mut queries = Vec::with_capacity(nq * dim);
+        for _ in 0..nq {
+            let cluster = rng.gen_range(0..clusters);
+            let center = &centers[cluster * dim..(cluster + 1) * dim];
+            for &value in center {
+                queries.push(value + rng.gen_range(-0.08f32..0.08));
+            }
+        }
+        let queries = normalize_rows(&queries, dim);
+        let gt = brute_force_topk_ip(&data, &queries, dim, top_k);
+
+        let mut hvq = HvqQuantizer::new(HvqConfig { dim, nbits: 1 }, 42);
+        hvq.train(n, &data);
+
+        let index_1bit = HvqIndex::build(&hvq, &data, n, 1);
+        let index_4bit = HvqIndex::build(&hvq, &data, n, 4);
+
+        assert_eq!(index_1bit.quantizer.config.nbits, 1);
+        assert_eq!(index_4bit.quantizer.config.nbits, 1);
+        assert_eq!(index_1bit.rerank_quantizer.config.nbits, 1);
+        assert_eq!(index_4bit.rerank_quantizer.config.nbits, 4);
+
+        let mut results_1bit = Vec::with_capacity(nq);
+        let mut results_4bit = Vec::with_capacity(nq);
+        for query in queries.chunks_exact(dim) {
+            results_1bit.push(
+                index_1bit
+                    .search(query, top_k, nprobe_factor)
+                    .into_iter()
+                    .map(|(id, _)| id)
+                    .collect::<Vec<_>>(),
+            );
+            results_4bit.push(
+                index_4bit
+                    .search(query, top_k, nprobe_factor)
+                    .into_iter()
+                    .map(|(id, _)| id)
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        let recall_1bit = compute_recall(&results_1bit, &gt, top_k);
+        let recall_4bit = compute_recall(&results_4bit, &gt, top_k);
+        assert!(
+            recall_4bit + 1e-6 >= recall_1bit,
+            "decoupled 4-bit rerank should not underperform 1-bit rerank: one_bit={} four_bit={}",
+            recall_1bit,
+            recall_4bit
+        );
     }
 
     #[cfg(target_arch = "x86_64")]

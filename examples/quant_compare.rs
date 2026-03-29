@@ -398,21 +398,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
 
         if enabled_methods.iter().any(|m| m.eq_ignore_ascii_case("HVQ2")) {
-        let mut hvq = HvqQuantizer::new(
+        let mut hvq_base = HvqQuantizer::new(
             HvqConfig {
                 dim: EXPECTED_DIM,
-                nbits: tier.hvq_bits,
+                nbits: 1,
             },
             42,
         );
-        hvq.train(train_n, train);
+        hvq_base.train(train_n, train);
 
         let build_start = Instant::now();
-        let hvq_index = HvqIndex::build(&hvq, &base, base_n);
+        let hvq_index = HvqIndex::build(&hvq_base, &base, base_n, tier.hvq_bits);
         let build_s = build_start.elapsed().as_secs_f64();
-        let code_bytes = hvq.code_size_bytes() + EXPECTED_DIM.div_ceil(8);
+        let code_bytes = hvq_index.rerank_quantizer.code_size_bytes() + EXPECTED_DIM.div_ceil(8);
 
-        for &nprobe_factor in &[10usize, 50, 100, 200, 500] {
+        for &nprobe_factor in &[10usize, 50, 100, 200, 500, 1000, 2000] {
             let t_scan = Instant::now();
             let hvq2_results: Vec<Vec<(usize, f32)>> = (0..eval_queries)
                 .into_par_iter()
