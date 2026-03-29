@@ -1,4 +1,8 @@
-use super::{config::ExRaBitQConfig, rotator::ExRaBitQRotator};
+use super::{
+    config::ExRaBitQConfig,
+    rotator::ExRaBitQRotator,
+    space::{decode_compact_levels, ip_fxu2, ip_fxu3, ip_fxu4, ip_fxu6, ip_fxu7, ip_fxu8},
+};
 use crate::quantization::turboquant::packed::{pack_codes, unpack_codes};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -36,7 +40,7 @@ pub struct EncodedVector {
 
 #[derive(Clone, Copy, Debug)]
 struct ThresholdEvent {
-    threshold: f32,
+    threshold: f64,
     dim: usize,
 }
 
@@ -108,6 +112,14 @@ impl ExRaBitQQuantizer {
         self.greedy_quantize_abs(&padded, rounds)
     }
 
+    pub fn compact_long_code_for_test(&self, raw_levels: &[u8]) -> Vec<u8> {
+        self.store_compacted_code(raw_levels)
+    }
+
+    pub fn decode_long_code_levels_for_test(&self, long_code: &[u8]) -> Vec<u8> {
+        decode_compact_levels(long_code, self.config.padded_dim(), self.config.ex_bits())
+    }
+
     pub fn rotate_query_residual(&self, query: &[f32], centroid: &[f32]) -> (Vec<f32>, f32) {
         assert_eq!(query.len(), self.config.dim);
         assert_eq!(centroid.len(), self.config.dim);
@@ -171,12 +183,9 @@ impl ExRaBitQQuantizer {
                 }
             })
             .collect();
-        let mut long_code = Vec::with_capacity(self.config.long_code_bytes());
-        pack_codes(
-            &signed_long_levels,
-            self.config.ex_bits() as u8,
-            &mut long_code,
-        );
+        let signed_long_levels_u8: Vec<u8> =
+            signed_long_levels.iter().map(|&value| value as u8).collect();
+        let long_code = self.store_compacted_code(&signed_long_levels_u8);
 
         let factor = ExFactor {
             xipnorm: if quantized.numerator > 1e-12 {
@@ -221,11 +230,8 @@ impl ExRaBitQQuantizer {
 
     pub fn decode_unit_from_codes(&self, short_code: &[u8], long_code: &[u8]) -> Vec<f32> {
         let signs = unpack_codes(short_code, self.config.padded_dim(), 1);
-        let stored_levels = unpack_codes(
-            long_code,
-            self.config.padded_dim(),
-            self.config.ex_bits() as u8,
-        );
+        let stored_levels =
+            decode_compact_levels(long_code, self.config.padded_dim(), self.config.ex_bits());
         let max_level = self.max_level() as u16;
 
         let mut magnitudes = vec![0u16; self.config.padded_dim()];
@@ -233,9 +239,9 @@ impl ExRaBitQQuantizer {
         for i in 0..self.config.padded_dim() {
             let sign_positive = signs[i] != 0;
             let magnitude = if sign_positive {
-                stored_levels[i]
+                stored_levels[i] as u16
             } else {
-                max_level.saturating_sub(stored_levels[i])
+                max_level.saturating_sub(stored_levels[i] as u16)
             };
             magnitudes[i] = magnitude;
             let mag_f = magnitude as f32;
@@ -300,28 +306,15 @@ impl ExRaBitQQuantizer {
 
     pub fn long_code_inner_product(&self, values: &[f32], long_code: &[u8]) -> f32 {
         debug_assert_eq!(values.len(), self.config.padded_dim());
-        let bits = self.config.ex_bits();
-        let mut result = 0.0f32;
-        let mut bit_offset = 0usize;
-        for &value in values {
-            let mut code = 0u32;
-            let mut written = 0usize;
-            let mut remaining = bits;
-            while remaining > 0 {
-                let byte_idx = bit_offset / 8;
-                let bit_idx = bit_offset % 8;
-                let take = remaining.min(8 - bit_idx);
-                let chunk_mask = (1u32 << take) - 1;
-                let chunk = ((long_code.get(byte_idx).copied().unwrap_or(0) as u32) >> bit_idx)
-                    & chunk_mask;
-                code |= chunk << written;
-                written += take;
-                bit_offset += take;
-                remaining -= take;
-            }
-            result += value * code as f32;
+        match self.config.ex_bits() {
+            2 => ip_fxu2(values, long_code, self.config.padded_dim()),
+            3 => ip_fxu3(values, long_code, self.config.padded_dim()),
+            4 => ip_fxu4(values, long_code, self.config.padded_dim()),
+            6 => ip_fxu6(values, long_code, self.config.padded_dim()),
+            7 => ip_fxu7(values, long_code, self.config.padded_dim()),
+            8 => ip_fxu8(values, long_code, self.config.padded_dim()),
+            bits => unreachable!("unsupported ex_bits {bits}"),
         }
-        result
     }
 
     fn normalize_abs_padded(&self, vector: &[f32]) -> Vec<f32> {
@@ -366,35 +359,133 @@ impl ExRaBitQQuantizer {
         }
     }
 
+    fn store_compacted_code(&self, raw_levels: &[u8]) -> Vec<u8> {
+        debug_assert_eq!(raw_levels.len(), self.config.padded_dim());
+        let mut compact = vec![0u8; self.config.long_code_bytes()];
+        let ex_bits = self.config.ex_bits();
+
+        match ex_bits {
+            8 => {
+                compact.copy_from_slice(raw_levels);
+            }
+            4 => {
+                for (src, dst) in raw_levels
+                    .chunks_exact(32)
+                    .zip(compact.chunks_exact_mut(16))
+                {
+                    for lane in 0..16 {
+                        dst[lane] = (src[lane] & 0x0F) | ((src[16 + lane] & 0x0F) << 4);
+                    }
+                }
+            }
+            2 => {
+                for (src, dst) in raw_levels
+                    .chunks_exact(64)
+                    .zip(compact.chunks_exact_mut(16))
+                {
+                    for lane in 0..16 {
+                        dst[lane] = (src[lane] & 0x03)
+                            | ((src[16 + lane] & 0x03) << 2)
+                            | ((src[32 + lane] & 0x03) << 4)
+                            | ((src[48 + lane] & 0x03) << 6);
+                    }
+                }
+            }
+            3 => {
+                for (src, dst) in raw_levels
+                    .chunks_exact(64)
+                    .zip(compact.chunks_exact_mut(24))
+                {
+                    for lane in 0..16 {
+                        dst[lane] = (src[lane] & 0x03)
+                            | ((src[16 + lane] & 0x03) << 2)
+                            | ((src[32 + lane] & 0x03) << 4)
+                            | ((src[48 + lane] & 0x03) << 6);
+                    }
+
+                    let mut top_bits = 0u64;
+                    for lane in 0..64 {
+                        let top = ((src[lane] >> 2) & 0x01) as u64;
+                        let pos = ((lane & 7) << 3) | (lane >> 3);
+                        top_bits |= top << pos;
+                    }
+                    dst[16..24].copy_from_slice(&top_bits.to_le_bytes());
+                }
+            }
+            6 => {
+                for (src, dst) in raw_levels
+                    .chunks_exact(64)
+                    .zip(compact.chunks_exact_mut(48))
+                {
+                    for lane in 0..16 {
+                        dst[lane] =
+                            (src[lane] & 0x3F) | (((src[32 + lane] >> 4) & 0x03) << 6);
+                        dst[16 + lane] = (src[16 + lane] & 0x3F)
+                            | (((src[48 + lane] >> 4) & 0x03) << 6);
+                        dst[32 + lane] =
+                            (src[32 + lane] & 0x0F) | ((src[48 + lane] & 0x0F) << 4);
+                    }
+                }
+            }
+            7 => {
+                for (src, dst) in raw_levels
+                    .chunks_exact(64)
+                    .zip(compact.chunks_exact_mut(56))
+                {
+                    for lane in 0..16 {
+                        dst[lane] =
+                            (src[lane] & 0x3F) | (((src[32 + lane] >> 4) & 0x03) << 6);
+                        dst[16 + lane] = (src[16 + lane] & 0x3F)
+                            | (((src[48 + lane] >> 4) & 0x03) << 6);
+                        dst[32 + lane] =
+                            (src[32 + lane] & 0x0F) | ((src[48 + lane] & 0x0F) << 4);
+                    }
+
+                    let mut top_bits = 0u64;
+                    for lane in 0..64 {
+                        let top = ((src[lane] >> 6) & 0x01) as u64;
+                        let pos = ((lane & 7) << 3) | (lane >> 3);
+                        top_bits |= top << pos;
+                    }
+                    dst[48..56].copy_from_slice(&top_bits.to_le_bytes());
+                }
+            }
+            bits => unreachable!("unsupported ex_bits {bits}"),
+        }
+
+        compact
+    }
+
     fn fast_quantize_abs(&self, values: &[f32]) -> QuantizationResult {
         debug_assert_eq!(values.len(), self.config.padded_dim());
         let max_level = self.max_level();
-        let max_o = values.iter().copied().fold(0.0f32, f32::max).max(1e-12);
-        let t_start = (max_level as f32 / 3.0) / max_o;
+        let max_o = values.iter().copied().fold(0.0f32, f32::max).max(1e-12) as f64;
+        let t_start = (((1usize << self.config.ex_bits()) - 1) / 3) as f64 / max_o;
+        let t_end = (((1usize << self.config.ex_bits()) - 1) + 10) as f64 / max_o;
         let mut current = vec![0u8; values.len()];
+        let mut sqr_denominator = values.len() as f64 * 0.25;
+        let mut numerator = 0.0f64;
 
         for (code, &value) in current.iter_mut().zip(values.iter()) {
-            let level = (t_start * value + 1e-5).floor();
-            *code = level.clamp(0.0, max_level as f32) as u8;
+            let level = (t_start * value as f64 + 1e-5f64).floor();
+            *code = level.clamp(0.0, max_level as f64) as u8;
+            let level = f64::from(*code);
+            sqr_denominator += level * level + level;
+            numerator += (level + 0.5) * value as f64;
         }
-
-        let mut current_eval = self.evaluate_codes(&current, values);
-        let mut best = current_eval.clone();
-        best.scale = t_start;
 
         let mut heap = BinaryHeap::new();
         for (dim, &value) in values.iter().enumerate() {
-            if value <= 1e-12 {
-                continue;
-            }
-            if current[dim] < max_level {
-                heap.push(ThresholdEvent {
-                    threshold: (current[dim] as f32 + 1.0) / value,
-                    dim,
-                });
-            }
+            let threshold = if value > 0.0 {
+                (f64::from(current[dim]) + 1.0) / value as f64
+            } else {
+                f64::INFINITY
+            };
+            heap.push(ThresholdEvent { threshold, dim });
         }
 
+        let mut max_ip = 0.0f64;
+        let mut best_t = 0.0f64;
         while let Some(event) = heap.pop() {
             let dim = event.dim;
             if current[dim] >= max_level {
@@ -402,30 +493,60 @@ impl ExRaBitQQuantizer {
             }
 
             current[dim] += 1;
-            let code_f = current[dim] as f32;
-            current_eval.numerator += values[dim];
-            current_eval.denominator += 2.0 * code_f;
-            current_eval.objective = if current_eval.denominator > 0.0 {
-                (current_eval.numerator * current_eval.numerator) / current_eval.denominator
-            } else {
-                0.0
-            };
+            let update_o_bar = f64::from(current[dim]);
+            sqr_denominator += 2.0 * update_o_bar;
+            numerator += values[dim] as f64;
 
-            if current_eval.objective > best.objective {
-                best = current_eval.clone();
-                best.codes = current.clone();
-                best.scale = event.threshold;
+            let cur_ip = numerator / sqr_denominator.sqrt();
+            if cur_ip > max_ip {
+                max_ip = cur_ip;
+                best_t = event.threshold;
             }
 
             if current[dim] < max_level {
-                heap.push(ThresholdEvent {
-                    threshold: (current[dim] as f32 + 1.0) / values[dim],
-                    dim,
-                });
+                let value = values[dim];
+                let next_threshold = if value > 0.0 {
+                    (f64::from(current[dim]) + 1.0) / value as f64
+                } else {
+                    f64::INFINITY
+                };
+                if next_threshold < t_end {
+                    heap.push(ThresholdEvent {
+                        threshold: next_threshold,
+                        dim,
+                    });
+                }
             }
         }
 
-        best
+        let mut final_codes = vec![0u8; values.len()];
+        sqr_denominator = values.len() as f64 * 0.25;
+        numerator = 0.0;
+        for (idx, &value) in values.iter().enumerate() {
+            let level = (best_t * value as f64 + 1e-5f64).floor();
+            let level = level.clamp(0.0, max_level as f64) as u8;
+            final_codes[idx] = level;
+            let level = f64::from(level);
+            sqr_denominator += level * level + level;
+            numerator += (level + 0.5) * value as f64;
+        }
+
+        let mut _ip_norm = (1.0 / numerator) as f32;
+        if !_ip_norm.is_finite() {
+            _ip_norm = 1.0;
+        }
+
+        QuantizationResult {
+            codes: final_codes,
+            numerator: numerator as f32,
+            denominator: sqr_denominator as f32,
+            objective: if sqr_denominator > 0.0 {
+                ((numerator * numerator) / sqr_denominator) as f32
+            } else {
+                0.0
+            },
+            scale: best_t as f32,
+        }
     }
 
     fn greedy_quantize_abs(&self, values: &[f32], rounds: usize) -> QuantizationResult {

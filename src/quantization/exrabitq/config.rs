@@ -46,6 +46,14 @@ impl ExRaBitQConfig {
     }
 
     pub fn long_code_bytes(&self) -> usize {
-        (self.padded_dim() * self.ex_bits()).div_ceil(8)
+        match self.ex_bits() {
+            2 => self.padded_dim() / 4,
+            3 => (self.padded_dim() / 64) * (16 + 8),
+            4 => self.padded_dim() / 2,
+            6 => (self.padded_dim() / 64) * 48,
+            7 => (self.padded_dim() / 64) * (48 + 8),
+            8 => self.padded_dim(),
+            bits => unreachable!("unsupported ex_bits {bits}"),
+        }
     }
 }
