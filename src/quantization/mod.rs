@@ -1,4 +1,5 @@
 pub mod dual_pca;
+pub mod exrabitq;
 pub mod hvq;
 pub mod kmeans;
 pub mod opq;
@@ -13,6 +14,7 @@ pub mod sq;
 pub mod turboquant;
 
 pub use dual_pca::DualPca;
+pub use exrabitq::{ExFactor, ExRaBitQConfig, ExRaBitQQuantizer, ExRaBitQRotator};
 pub use hvq::{HvqConfig, HvqFastScanState, HvqIndex, HvqQuantizer};
 pub use kmeans::KMeans;
 pub use opq::{OPQConfig, OptimizedProductQuantizer};
