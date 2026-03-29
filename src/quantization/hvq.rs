@@ -1186,18 +1186,85 @@ impl HvqIndex {
         scores
     }
 
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx512bw,avx2,ssse3")]
+    unsafe fn fastscan_block_avx512(&self, state: &HvqFastScanState, block: &[u8]) -> [i32; 32] {
+        use std::arch::x86_64::*;
+
+        debug_assert_eq!(block.len(), self.fastscan_block_size);
+
+        let n_groups = self.quantizer.config.dim.div_ceil(4);
+        let mut acc_lo = _mm256_setzero_si256();
+        let mut acc_hi = _mm256_setzero_si256();
+        let nibble_mask_128 = _mm_set1_epi8(0x0F_u8 as i8);
+
+        for group_idx in 0..n_groups {
+            let group_offset = group_idx * 16;
+            let lut_ptr = state.lut.as_ptr().add(group_idx * 16) as *const __m128i;
+            let lut_128 = _mm_loadu_si128(lut_ptr);
+
+            let data_lo_ptr = block.as_ptr().add(group_offset) as *const __m128i;
+            let data_lo_64 = _mm_loadl_epi64(data_lo_ptr);
+            let lo_nibbles = _mm_and_si128(data_lo_64, nibble_mask_128);
+            let hi_nibbles = _mm_and_si128(_mm_srli_epi16(data_lo_64, 4), nibble_mask_128);
+            let interleaved_lo = _mm_unpacklo_epi8(lo_nibbles, hi_nibbles);
+            let partial_lo = _mm_shuffle_epi8(lut_128, interleaved_lo);
+            let partial_lo_i16 = _mm256_cvtepi8_epi16(partial_lo);
+            acc_lo = _mm256_add_epi16(acc_lo, partial_lo_i16);
+
+            let data_hi_ptr = block.as_ptr().add(group_offset + 8) as *const __m128i;
+            let data_hi_64 = _mm_loadl_epi64(data_hi_ptr);
+            let hi_lo_nibbles = _mm_and_si128(data_hi_64, nibble_mask_128);
+            let hi_hi_nibbles = _mm_and_si128(_mm_srli_epi16(data_hi_64, 4), nibble_mask_128);
+            let interleaved_hi = _mm_unpacklo_epi8(hi_lo_nibbles, hi_hi_nibbles);
+            let partial_hi = _mm_shuffle_epi8(lut_128, interleaved_hi);
+            let partial_hi_i16 = _mm256_cvtepi8_epi16(partial_hi);
+            acc_hi = _mm256_add_epi16(acc_hi, partial_hi_i16);
+        }
+
+        let mut scores = [0i32; 32];
+
+        let lo_128_lo = _mm256_castsi256_si128(acc_lo);
+        let lo_128_hi = _mm256_extracti128_si256(acc_lo, 1);
+        let lo_i32_0 = _mm256_cvtepi16_epi32(lo_128_lo);
+        let lo_i32_1 = _mm256_cvtepi16_epi32(lo_128_hi);
+        _mm256_storeu_si256(scores.as_mut_ptr() as *mut __m256i, lo_i32_0);
+        _mm256_storeu_si256(scores.as_mut_ptr().add(8) as *mut __m256i, lo_i32_1);
+
+        let hi_128_lo = _mm256_castsi256_si128(acc_hi);
+        let hi_128_hi = _mm256_extracti128_si256(acc_hi, 1);
+        let hi_i32_0 = _mm256_cvtepi16_epi32(hi_128_lo);
+        let hi_i32_1 = _mm256_cvtepi16_epi32(hi_128_hi);
+        _mm256_storeu_si256(scores.as_mut_ptr().add(16) as *mut __m256i, hi_i32_0);
+        _mm256_storeu_si256(scores.as_mut_ptr().add(24) as *mut __m256i, hi_i32_1);
+
+        scores
+    }
+
     pub fn fastscan_topk(&self, state: &HvqFastScanState, n: usize) -> Vec<(usize, f32)> {
         if n == 0 || self.n == 0 {
             return Vec::new();
         }
 
         let mut heap = std::collections::BinaryHeap::with_capacity(n + 1);
+        #[cfg(target_arch = "x86_64")]
+        let use_avx512 = std::arch::is_x86_feature_detected!("avx512bw");
+
         for (block_idx, block) in self
             .fastscan_codes
             .chunks_exact(self.fastscan_block_size)
             .enumerate()
         {
+            #[cfg(target_arch = "x86_64")]
+            let raw_scores = if use_avx512 {
+                unsafe { self.fastscan_block_avx512(state, block) }
+            } else {
+                self.fastscan_block_scalar(state, block)
+            };
+
+            #[cfg(not(target_arch = "x86_64"))]
             let raw_scores = self.fastscan_block_scalar(state, block);
+
             for (slot, &raw_score) in raw_scores.iter().enumerate() {
                 let vid = block_idx * 32 + slot;
                 if vid >= self.n {
@@ -1838,6 +1905,40 @@ mod tests {
             "two-stage recall too low: recall={}",
             recall
         );
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_fastscan_avx512_matches_scalar() {
+        if !std::arch::is_x86_feature_detected!("avx512bw") {
+            return;
+        }
+
+        let dim = 64usize;
+        let n = 64usize;
+        let (index, queries) = build_fastscan_fixture(dim, n, 4, 4, 20260329);
+
+        for query in queries.chunks_exact(dim) {
+            let q_rot = index.quantizer.rotate_query(query);
+            let state = index.precompute_fastscan_state(&q_rot);
+
+            for (block_idx, block) in index
+                .fastscan_codes
+                .chunks_exact(index.fastscan_block_size)
+                .enumerate()
+            {
+                let scalar = index.fastscan_block_scalar(&state, block);
+                let avx512 = unsafe { index.fastscan_block_avx512(&state, block) };
+
+                for slot in 0..32usize {
+                    assert_eq!(
+                        scalar[slot], avx512[slot],
+                        "block={} slot={}: scalar={} avx512={}",
+                        block_idx, slot, scalar[slot], avx512[slot]
+                    );
+                }
+            }
+        }
     }
 
     #[test]

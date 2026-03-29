@@ -410,19 +410,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         let build_start = Instant::now();
         let hvq_index = HvqIndex::build(&hvq, &base, base_n);
         let build_s = build_start.elapsed().as_secs_f64();
-
-        let t_scan = Instant::now();
-        let hvq2_results: Vec<Vec<(usize, f32)>> = (0..eval_queries)
-            .into_par_iter()
-            .map(|qi| {
-                let query = &queries[qi * EXPECTED_DIM..(qi + 1) * EXPECTED_DIM];
-                hvq_index.search(query, TOP_K, 10)
-            })
-            .collect();
-        let scan_qps = eval_queries as f64 / t_scan.elapsed().as_secs_f64().max(f64::EPSILON);
-        let recall = compute_recall_from_tuples(&hvq2_results, &gt[..eval_queries], TOP_K);
         let code_bytes = hvq.code_size_bytes() + EXPECTED_DIM.div_ceil(8);
-        print_row("HVQ2", tier.label, code_bytes, build_s, recall, scan_qps);
+
+        for &nprobe_factor in &[10usize, 50, 100] {
+            let t_scan = Instant::now();
+            let hvq2_results: Vec<Vec<(usize, f32)>> = (0..eval_queries)
+                .into_par_iter()
+                .map(|qi| {
+                    let query = &queries[qi * EXPECTED_DIM..(qi + 1) * EXPECTED_DIM];
+                    hvq_index.search(query, TOP_K, nprobe_factor)
+                })
+                .collect();
+            let scan_qps = eval_queries as f64 / t_scan.elapsed().as_secs_f64().max(f64::EPSILON);
+            let recall = compute_recall_from_tuples(&hvq2_results, &gt[..eval_queries], TOP_K);
+            let label = format!("HVQ2-{}", nprobe_factor);
+            print_row(&label, tier.label, code_bytes, build_s, recall, scan_qps);
+        }
         }
     }
 
