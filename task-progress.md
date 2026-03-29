@@ -15,7 +15,7 @@
 - Current focus: `none`
 - Next feature: `none`
 - Strategic state: `final_rollup_closed_leadership_met` (see `docs/performance-program.md`)
-- Last updated: 2026-03-17
+- Last updated: 2026-03-29
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 - Workflow policy: capability-closure first for DiskANN/IVF-PQ (align to native/official feature set before further benchmark tuning); narrow performance hypotheses should start with `screen`, promote to tracked work only after `screen_result=promote`, and update durable docs only after authority verdicts
 - Progress: 66/66 features passing (100%)
@@ -32,6 +32,54 @@
   - new `src/quantization/exrabitq/` family
   - new `src/faiss/ivf_exrabitq.rs`
   - scalar correctness first, AVX512 fast scan second
+- Completed:
+  - landed the parallel Extended-RaBitQ stack under `src/quantization/exrabitq/`:
+    - config + padded-dimension rotation
+    - scalar fast quantizer / encoder core
+    - block-transposed short-code layout
+    - scalar fast-scan and high-accuracy scan paths
+    - AVX512-dispatched fast-scan kernel with scalar-parity tests
+  - added the first consumer in `src/faiss/ivf_exrabitq.rs`:
+    - train / add / search
+    - rerank path on long codes
+    - save/load with headered snapshot format
+    - `Index` trait wiring and metadata helpers
+  - wired public surfaces:
+    - FFI wrapper in `src/faiss/exrabitq_ffi.rs`
+    - JNI/Python bindings
+    - local benchmark harness `examples/exrabitq_compare.rs`
+  - kept the legacy `RaBitQEncoder` / `IvfRaBitqIndex` line intact while adding `IvfExRaBitq` as a parallel stack
+- Verification:
+  - local:
+    - `cargo test --test test_exrabitq_quantizer -- --nocapture` -> `ok`
+    - `cargo test --test test_exrabitq_fastscan -- --nocapture` -> `ok`
+    - `cargo test --test test_ivf_exrabitq -- --nocapture` -> `ok`
+    - `cargo test --test test_ivf_index_trait -- --nocapture` -> `ok`
+    - `cargo test --lib --features jni-bindings test_jni_ivf_exrabitq_round_trip -- --nocapture` -> `ok`
+    - `cargo check --tests --features python,jni-bindings` -> `ok`
+    - `cargo test --lib --features ffi exrabitq_ffi::tests:: -- --nocapture` -> `ok`
+    - `cargo run --example exrabitq_compare --release` -> `ok` (`EXRABITQ 4-bit synthetic fixture: recall@10=0.4480, search_qps=8186.8`)
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/build.sh --no-all-targets` -> `ok` (`/data/work/knowhere-rs-logs/build_20260329T084706Z.log`)
+    - `bash scripts/remote/test.sh --command "cargo test --test test_exrabitq_quantizer -- --nocapture"` -> `ok` (`run_id=20260329T084830Z_9030`)
+    - `bash scripts/remote/test.sh --command "cargo test --test test_exrabitq_fastscan -- --nocapture"` -> `ok` (`run_id=20260329T084900Z_9355`)
+    - `bash scripts/remote/test.sh --command "cargo test --test test_ivf_exrabitq -- --nocapture"` -> `ok` (`run_id=20260329T084920Z_9660`)
+    - `bash scripts/remote/test.sh --command "cargo run --example exrabitq_compare --release"` -> `ok` (`run_id=20260329T084937Z_9858`; `EXRABITQ 4-bit synthetic fixture: recall@10=0.4540, search_qps=5851.7`)
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - this screen line closed cleanly on the authority x86 host, so any next step should treat Extended-RaBitQ as promotable tracked work rather than reopening the old simplified RaBitQ path
+  - the local Python runtime lane is still compile-checked rather than fully executed on this mac because the repo's current `pyo3` `extension-module` test-link setup does not link cleanly here; JNI/FFI/local Rust and remote-x86 evidence are green
+- Git Commits:
+  - `e2f8400` `feat(api): add Extended-RaBitQ index contract`
+  - `2f20f78` `feat(exrabitq): add config rotation and quantizer core`
+  - `1c3340c` `feat(exrabitq): add scalar fast scan and IVF index`
+  - `5861814` `feat(exrabitq): add high-accuracy fast scan path`
+  - `3fa3a30` `feat(exrabitq): wire python and jni bindings`
+  - `3a90ecc` `feat(ffi): add Extended-RaBitQ bindings`
+  - `81e0d7a` `perf(exrabitq): add AVX512 fast scan dispatch`
+  - `302f70f` `feat(exrabitq): add local benchmark harness`
 
 ### Session 231 - 2026-03-17
 - Focus: `diskann-aisaq-rearrange-parameter-semantics`
