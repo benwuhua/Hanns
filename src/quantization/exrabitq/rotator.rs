@@ -7,8 +7,8 @@ use rand::{Rng, SeedableRng};
 #[derive(Clone)]
 pub struct ExRaBitQRotator {
     dim: usize,
-    matrix: Vec<f32>,           // row-major padded_dim x padded_dim
-    transpose: Vec<f32>,        // row-major padded_dim x padded_dim
+    matrix: Vec<f32>,    // row-major padded_dim x padded_dim
+    transpose: Vec<f32>, // row-major padded_dim x padded_dim
 }
 
 impl ExRaBitQRotator {

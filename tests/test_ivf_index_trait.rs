@@ -5,6 +5,7 @@
 
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 use knowhere_rs::dataset::Dataset;
+use knowhere_rs::faiss::ivf_exrabitq::{IvfExRaBitqConfig, IvfExRaBitqIndex};
 use knowhere_rs::faiss::ivf_rabitq::{IvfRaBitqConfig, IvfRaBitqIndex};
 use knowhere_rs::faiss::ivf_sq8::IvfSq8Index;
 use knowhere_rs::faiss::IvfPqIndex;
@@ -175,6 +176,46 @@ fn test_ivf_rabitq_ann_iterator() {
         }
     }
     assert!(count > 0);
+}
+
+#[test]
+fn test_ivf_exrabitq_index_trait_metadata() {
+    let config = IvfExRaBitqConfig::new(16, 4, 4);
+    let index = IvfExRaBitqIndex::new(config);
+
+    assert_eq!(Index::index_type(&index), "IVF-ExRaBitQ");
+    assert_eq!(Index::dim(&index), 16);
+    assert_eq!(Index::count(&index), 0);
+    assert!(!Index::is_trained(&index));
+    assert!(!Index::has_raw_data(&index));
+}
+
+#[test]
+fn test_ivf_exrabitq_index_trait_lifecycle() {
+    let config = IvfExRaBitqConfig::new(16, 4, 4)
+        .with_nprobe(2)
+        .with_rerank_k(32);
+    let mut index = IvfExRaBitqIndex::new(config);
+
+    let mut data = vec![0.0f32; 128 * 16];
+    for i in 0..128 {
+        for j in 0..16 {
+            data[i * 16 + j] = (i as f32) * 0.05 + (j as f32) * 0.01;
+        }
+    }
+
+    let dataset =
+        Dataset::from_vectors_with_ids(data.clone(), 16, (0..128).map(|i| i as i64).collect());
+    Index::train(&mut index, &dataset).unwrap();
+    Index::add(&mut index, &dataset).unwrap();
+
+    let query = Dataset::from_vectors(data[0..16].to_vec(), 16);
+    let result = Index::search(&index, &query, 5).unwrap();
+    assert_eq!(result.ids.len(), 5);
+    assert_eq!(result.ids[0], 0);
+
+    let get_result = Index::get_vector_by_ids(&index, &[0]);
+    assert!(get_result.is_err());
 }
 
 #[test]
