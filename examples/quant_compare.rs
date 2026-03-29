@@ -412,7 +412,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let build_s = build_start.elapsed().as_secs_f64();
         let code_bytes = hvq.code_size_bytes() + EXPECTED_DIM.div_ceil(8);
 
-        for &nprobe_factor in &[10usize, 50, 100] {
+        for &nprobe_factor in &[10usize, 50, 100, 200, 500] {
             let t_scan = Instant::now();
             let hvq2_results: Vec<Vec<(usize, f32)>> = (0..eval_queries)
                 .into_par_iter()
