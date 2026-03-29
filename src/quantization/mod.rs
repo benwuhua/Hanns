@@ -13,7 +13,7 @@ pub mod sq;
 pub mod turboquant;
 
 pub use dual_pca::DualPca;
-pub use hvq::{HvqConfig, HvqQuantizer};
+pub use hvq::{HvqConfig, HvqFastScanState, HvqIndex, HvqQuantizer};
 pub use kmeans::KMeans;
 pub use opq::{OPQConfig, OptimizedProductQuantizer};
 pub use pca::PcaTransform;

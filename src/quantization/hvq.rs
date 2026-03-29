@@ -25,6 +25,7 @@ pub struct HvqQueryState {
     pub centroid_score: f32,
 }
 
+#[derive(Clone)]
 #[doc = "⚠️ Experimental: no native parity"]
 pub struct HvqQuantizer {
     pub config: HvqConfig,
@@ -975,6 +976,286 @@ unsafe fn dot_u8_i8_avx512_impl(a: &[u8], b: &[i8]) -> i32 {
     total
 }
 
+#[derive(Clone, Debug)]
+pub struct HvqFastScanState {
+    pub q_rot: Vec<f32>,
+    pub q_sum: f32,
+    pub centroid_score: f32,
+    pub lut: Vec<i8>,
+    pub lut_scale: f32,
+}
+
+pub struct HvqIndex {
+    pub quantizer: HvqQuantizer,
+    pub codes: Vec<u8>,
+    pub n: usize,
+    pub fastscan_codes: Vec<u8>,
+    pub n_blocks: usize,
+    pub fastscan_block_size: usize,
+    pub norms: Vec<f32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MinScored {
+    id: usize,
+    score: f32,
+}
+
+impl Eq for MinScored {}
+
+impl Ord for MinScored {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .score
+            .total_cmp(&self.score)
+            .then_with(|| other.id.cmp(&self.id))
+    }
+}
+
+impl PartialOrd for MinScored {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl HvqIndex {
+    pub fn build(quantizer: &HvqQuantizer, data: &[f32], n: usize) -> Self {
+        assert_eq!(
+            data.len(),
+            n * quantizer.config.dim,
+            "expected {} floats, got {}",
+            n * quantizer.config.dim,
+            data.len()
+        );
+
+        let code_size = quantizer.code_size_bytes();
+        let codes = quantizer.encode_batch(n, data, 4);
+        let mut raw_codes = Vec::with_capacity(n);
+        for row in data.chunks_exact(quantizer.config.dim) {
+            let centered: Vec<f32> = row
+                .iter()
+                .zip(quantizer.centroid.iter())
+                .map(|(value, centroid)| value - centroid)
+                .collect();
+            let rotated = quantizer.rotate(&centered);
+            let norm_o = rotated.iter().map(|x| x * x).sum::<f32>().sqrt();
+            let o_hat: Vec<f32> = if norm_o > 1e-12 {
+                rotated.iter().map(|x| x / norm_o).collect()
+            } else {
+                rotated
+            };
+
+            let sign_codes: Vec<u16> = o_hat
+                .iter()
+                .map(|&value| if value >= 0.0 { 1u16 } else { 0u16 })
+                .collect();
+            let mut packed = Vec::with_capacity(quantizer.config.dim.div_ceil(8));
+            pack_codes(&sign_codes, 1, &mut packed);
+            raw_codes.push(packed);
+        }
+
+        let (fastscan_codes, n_blocks, fastscan_block_size) =
+            Self::transpose_to_fastscan(&raw_codes, quantizer.config.dim);
+
+        let mut norms = Vec::with_capacity(n);
+        for code in codes.chunks_exact(code_size) {
+            norms.push(f32::from_le_bytes(code[0..4].try_into().unwrap()));
+        }
+
+        Self {
+            quantizer: quantizer.clone(),
+            codes,
+            n,
+            fastscan_codes,
+            n_blocks,
+            fastscan_block_size,
+            norms,
+        }
+    }
+
+    fn transpose_to_fastscan(raw_codes: &[Vec<u8>], dim: usize) -> (Vec<u8>, usize, usize) {
+        let n_blocks = raw_codes.len().div_ceil(32);
+        let fastscan_block_size = dim.div_ceil(4) * 16;
+        let mut fastscan_codes = vec![0u8; n_blocks * fastscan_block_size];
+
+        for block_idx in 0..n_blocks {
+            let block_base = block_idx * fastscan_block_size;
+            for group_idx in 0..dim.div_ceil(4) {
+                let group_base = block_base + group_idx * 16;
+                for slot in 0..32usize {
+                    let vid = block_idx * 32 + slot;
+                    let mut nibble = 0u8;
+                    if vid < raw_codes.len() {
+                        for bit_pos in 0..4usize {
+                            let dim_idx = group_idx * 4 + bit_pos;
+                            if dim_idx >= dim {
+                                break;
+                            }
+                            let byte = raw_codes[vid][dim_idx / 8];
+                            let bit = (byte >> (dim_idx % 8)) & 1;
+                            nibble |= bit << bit_pos;
+                        }
+                    }
+
+                    let dst = group_base + slot / 2;
+                    if slot % 2 == 0 {
+                        fastscan_codes[dst] |= nibble;
+                    } else {
+                        fastscan_codes[dst] |= nibble << 4;
+                    }
+                }
+            }
+        }
+
+        (fastscan_codes, n_blocks, fastscan_block_size)
+    }
+
+    pub fn precompute_fastscan_state(&self, q_rot: &[f32]) -> HvqFastScanState {
+        assert_eq!(q_rot.len(), self.quantizer.config.dim);
+
+        let q_sum: f32 = q_rot.iter().sum();
+        let centroid_score = q_rot
+            .iter()
+            .zip(self.quantizer.rotated_centroid.iter())
+            .map(|(a, b)| a * b)
+            .sum();
+
+        let n_groups = self.quantizer.config.dim.div_ceil(4);
+        let mut lut_f32 = vec![0.0f32; n_groups * 16];
+        for group_idx in 0..n_groups {
+            let mut group = [0.0f32; 4];
+            for bit_pos in 0..4usize {
+                let dim_idx = group_idx * 4 + bit_pos;
+                if dim_idx < self.quantizer.config.dim {
+                    group[bit_pos] = q_rot[dim_idx];
+                }
+            }
+
+            for nibble in 0..16usize {
+                let mut value = 0.0f32;
+                for bit_pos in 0..4usize {
+                    let sign = if ((nibble >> bit_pos) & 1) != 0 {
+                        1.0f32
+                    } else {
+                        -1.0f32
+                    };
+                    value += group[bit_pos] * sign;
+                }
+                lut_f32[group_idx * 16 + nibble] = value;
+            }
+        }
+
+        let max_abs = lut_f32
+            .iter()
+            .copied()
+            .map(f32::abs)
+            .fold(0.0f32, f32::max)
+            .max(1e-6);
+        let lut_scale = (max_abs / 127.0).max(1e-6);
+        let lut = lut_f32
+            .into_iter()
+            .map(|value| (value / lut_scale).round().clamp(-127.0, 127.0) as i8)
+            .collect();
+
+        HvqFastScanState {
+            q_rot: q_rot.to_vec(),
+            q_sum,
+            centroid_score,
+            lut,
+            lut_scale,
+        }
+    }
+
+    fn fastscan_block_scalar(&self, state: &HvqFastScanState, block: &[u8]) -> [i32; 32] {
+        debug_assert_eq!(block.len(), self.fastscan_block_size);
+
+        let mut scores = [0i32; 32];
+        for group_idx in 0..self.quantizer.config.dim.div_ceil(4) {
+            let lut = &state.lut[group_idx * 16..(group_idx + 1) * 16];
+            let group_base = group_idx * 16;
+            for slot in 0..32usize {
+                let byte = block[group_base + slot / 2];
+                let nibble = if slot % 2 == 0 {
+                    byte & 0x0F
+                } else {
+                    (byte >> 4) & 0x0F
+                };
+                scores[slot] += lut[nibble as usize] as i32;
+            }
+        }
+        scores
+    }
+
+    pub fn fastscan_topk(&self, state: &HvqFastScanState, n: usize) -> Vec<(usize, f32)> {
+        if n == 0 || self.n == 0 {
+            return Vec::new();
+        }
+
+        let mut heap = std::collections::BinaryHeap::with_capacity(n + 1);
+        for (block_idx, block) in self
+            .fastscan_codes
+            .chunks_exact(self.fastscan_block_size)
+            .enumerate()
+        {
+            let raw_scores = self.fastscan_block_scalar(state, block);
+            for (slot, &raw_score) in raw_scores.iter().enumerate() {
+                let vid = block_idx * 32 + slot;
+                if vid >= self.n {
+                    continue;
+                }
+
+                let score = raw_score as f32 * state.lut_scale;
+                let candidate = MinScored { id: vid, score };
+                if heap.len() < n {
+                    heap.push(candidate);
+                    continue;
+                }
+                if let Some(worst) = heap.peek() {
+                    if candidate.score > worst.score
+                        || (candidate.score == worst.score && candidate.id < worst.id)
+                    {
+                        heap.pop();
+                        heap.push(candidate);
+                    }
+                }
+            }
+        }
+
+        let mut results = Vec::with_capacity(heap.len());
+        while let Some(item) = heap.pop() {
+            results.push((item.id, item.score));
+        }
+        results.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        results.truncate(n);
+        results
+    }
+
+    pub fn search(&self, query: &[f32], k: usize, nprobe_factor: usize) -> Vec<(usize, f32)> {
+        if k == 0 || self.n == 0 {
+            return Vec::new();
+        }
+
+        let q_rot = self.quantizer.rotate_query(query);
+        let fs_state = self.precompute_fastscan_state(&q_rot);
+        let n_candidates = k.saturating_mul(nprobe_factor).min(self.n);
+        let candidates = self.fastscan_topk(&fs_state, n_candidates);
+
+        let bbit_state = self.quantizer.precompute_query_state(&q_rot);
+        let code_size = self.quantizer.code_size_bytes();
+        let mut results: Vec<(usize, f32)> = candidates
+            .iter()
+            .map(|&(vid, _)| {
+                let code = &self.codes[vid * code_size..(vid + 1) * code_size];
+                (vid, self.quantizer.score_code(&bbit_state, code))
+            })
+            .collect();
+
+        results.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        results.truncate(k);
+        results
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1402,6 +1683,161 @@ mod tests {
             }
         }
         hits as f32 / total.max(1) as f32
+    }
+
+    fn build_fastscan_fixture(
+        dim: usize,
+        n: usize,
+        nq: usize,
+        nbits: u8,
+        seed: u64,
+    ) -> (HvqIndex, Vec<f32>) {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let data = normalize_rows(
+            &(0..n * dim)
+                .map(|_| rng.gen_range(-1.0f32..1.0))
+                .collect::<Vec<_>>(),
+            dim,
+        );
+        let queries = normalize_rows(
+            &(0..nq * dim)
+                .map(|_| rng.gen_range(-1.0f32..1.0))
+                .collect::<Vec<_>>(),
+            dim,
+        );
+
+        let mut hvq = HvqQuantizer::new(HvqConfig { dim, nbits }, 42 + nbits as u64);
+        hvq.train(n, &data);
+        let index = HvqIndex::build(&hvq, &data, n);
+        (index, queries)
+    }
+
+    #[test]
+    fn test_fastscan_layout_roundtrip() {
+        let dim = 32usize;
+        let n = 64usize;
+        let mut rng = StdRng::seed_from_u64(20260330);
+        let data = normalize_rows(
+            &(0..n * dim)
+                .map(|_| rng.gen_range(-1.0f32..1.0))
+                .collect::<Vec<_>>(),
+            dim,
+        );
+
+        let mut hvq = HvqQuantizer::new(HvqConfig { dim, nbits: 4 }, 7);
+        hvq.train(n, &data);
+
+        let mut raw_codes = Vec::with_capacity(n);
+        for row in data.chunks_exact(dim) {
+            let centered: Vec<f32> = row
+                .iter()
+                .zip(hvq.centroid.iter())
+                .map(|(value, centroid)| value - centroid)
+                .collect();
+            let rotated = hvq.rotate(&centered);
+            let norm_o = rotated.iter().map(|x| x * x).sum::<f32>().sqrt();
+            let o_hat: Vec<f32> = if norm_o > 1e-12 {
+                rotated.iter().map(|x| x / norm_o).collect()
+            } else {
+                rotated
+            };
+            let sign_codes: Vec<u16> = o_hat
+                .iter()
+                .map(|&value| if value >= 0.0 { 1u16 } else { 0u16 })
+                .collect();
+            let mut packed = Vec::with_capacity(dim.div_ceil(8));
+            pack_codes(&sign_codes, 1, &mut packed);
+            raw_codes.push(packed);
+        }
+
+        let (fastscan_codes, n_blocks, block_size) = HvqIndex::transpose_to_fastscan(&raw_codes, dim);
+        assert_eq!(n_blocks, 2);
+        assert_eq!(block_size, dim.div_ceil(4) * 16);
+
+        for vid in 0..n {
+            let block_idx = vid / 32;
+            let slot = vid % 32;
+            let block_base = block_idx * block_size;
+            for dim_idx in 0..dim {
+                let expected = (raw_codes[vid][dim_idx / 8] >> (dim_idx % 8)) & 1;
+                let group_idx = dim_idx / 4;
+                let bit_pos = dim_idx % 4;
+                let byte = fastscan_codes[block_base + group_idx * 16 + slot / 2];
+                let nibble = if slot % 2 == 0 {
+                    byte & 0x0F
+                } else {
+                    (byte >> 4) & 0x0F
+                };
+                let actual = (nibble >> bit_pos) & 1;
+                assert_eq!(
+                    actual, expected,
+                    "layout roundtrip mismatch for vid={} dim={}",
+                    vid, dim_idx
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_fastscan_scores_correlate_with_bruteforce() {
+        let dim = 64usize;
+        let n = 1000usize;
+        let nq = 10usize;
+        let top_k = 10usize;
+        let (index, queries) = build_fastscan_fixture(dim, n, nq, 4, 20260331);
+        let gt = quantized_topk(&index.quantizer, &index.codes, &queries, dim, top_k);
+
+        let mut hits = 0usize;
+        let mut total = 0usize;
+        for (qi, query) in queries.chunks_exact(dim).enumerate() {
+            let q_rot = index.quantizer.rotate_query(query);
+            let state = index.precompute_fastscan_state(&q_rot);
+            let candidates = index.fastscan_topk(&state, 100);
+            for &gt_id in gt[qi].iter().take(top_k) {
+                total += 1;
+                if candidates.iter().any(|&(candidate, _)| candidate == gt_id) {
+                    hits += 1;
+                }
+            }
+        }
+
+        let recall = hits as f32 / total.max(1) as f32;
+        assert!(
+            recall >= 0.7,
+            "fastscan top-100 recall too low: recall={}",
+            recall
+        );
+    }
+
+    #[test]
+    fn test_two_stage_search() {
+        let dim = 64usize;
+        let n = 1000usize;
+        let nq = 10usize;
+        let top_k = 10usize;
+        let (index, queries) = build_fastscan_fixture(dim, n, nq, 4, 20260401);
+        let gt = quantized_topk(&index.quantizer, &index.codes, &queries, dim, top_k);
+
+        let mut results = Vec::with_capacity(nq);
+        for query in queries.chunks_exact(dim) {
+            let search_results = index.search(query, top_k, 10);
+            assert_eq!(search_results.len(), top_k);
+            for pair in search_results.windows(2) {
+                assert!(
+                    pair[0].1 >= pair[1].1,
+                    "search results are not sorted: {:?}",
+                    search_results
+                );
+            }
+            results.push(search_results.into_iter().map(|(id, _)| id).collect::<Vec<_>>());
+        }
+
+        let recall = compute_recall(&results, &gt, top_k);
+        assert!(
+            recall >= 0.5,
+            "two-stage recall too low: recall={}",
+            recall
+        );
     }
 
     #[test]

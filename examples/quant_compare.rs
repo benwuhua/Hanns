@@ -7,7 +7,8 @@ use std::path::Path;
 use std::time::Instant;
 
 use knowhere_rs::quantization::{
-    HvqConfig, HvqQuantizer, PQConfig, ProductQuantizer, TurboQuantConfig, TurboQuantMse,
+    HvqConfig, HvqIndex, HvqQuantizer, PQConfig, ProductQuantizer, TurboQuantConfig,
+    TurboQuantMse,
 };
 use rayon::prelude::*;
 
@@ -130,6 +131,25 @@ fn compute_recall(results: &[Vec<i64>], gt: &[Vec<i32>], top_k: usize) -> f32 {
         let g = &gt[i];
         for &gid in g.iter().take(top_k.min(g.len())) {
             if r.iter().take(top_k.min(r.len())).any(|&rid| rid == gid as i64) {
+                hits += 1;
+            }
+        }
+    }
+    hits as f32 / (n * top_k) as f32
+}
+
+fn compute_recall_from_tuples(results: &[Vec<(usize, f32)>], gt: &[Vec<i32>], top_k: usize) -> f32 {
+    let n = results.len().min(gt.len());
+    if n == 0 || top_k == 0 {
+        return 0.0;
+    }
+
+    let mut hits = 0usize;
+    for i in 0..n {
+        let r = &results[i];
+        let g = &gt[i];
+        for &gid in g.iter().take(top_k.min(g.len())) {
+            if r.iter().take(top_k.min(r.len())).any(|&(rid, _)| rid == gid as usize) {
                 hits += 1;
             }
         }
@@ -281,7 +301,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let enabled_methods: Vec<&str> = if args.len() > 1 {
         args[1].split(',').collect()
     } else {
-        vec!["PQ", "TQ", "HVQ"]
+        vec!["PQ", "TQ", "HVQ", "HVQ2"]
     };
 
     for tier in &TIERS {
@@ -375,6 +395,34 @@ fn main() -> Result<(), Box<dyn Error>> {
             recall,
             scan_qps,
         );
+        }
+
+        if enabled_methods.iter().any(|m| m.eq_ignore_ascii_case("HVQ2")) {
+        let mut hvq = HvqQuantizer::new(
+            HvqConfig {
+                dim: EXPECTED_DIM,
+                nbits: tier.hvq_bits,
+            },
+            42,
+        );
+        hvq.train(train_n, train);
+
+        let build_start = Instant::now();
+        let hvq_index = HvqIndex::build(&hvq, &base, base_n);
+        let build_s = build_start.elapsed().as_secs_f64();
+
+        let t_scan = Instant::now();
+        let hvq2_results: Vec<Vec<(usize, f32)>> = (0..eval_queries)
+            .into_par_iter()
+            .map(|qi| {
+                let query = &queries[qi * EXPECTED_DIM..(qi + 1) * EXPECTED_DIM];
+                hvq_index.search(query, TOP_K, 10)
+            })
+            .collect();
+        let scan_qps = eval_queries as f64 / t_scan.elapsed().as_secs_f64().max(f64::EPSILON);
+        let recall = compute_recall_from_tuples(&hvq2_results, &gt[..eval_queries], TOP_K);
+        let code_bytes = hvq.code_size_bytes() + EXPECTED_DIM.div_ceil(8);
+        print_row("HVQ2", tier.label, code_bytes, build_s, recall, scan_qps);
         }
     }
 
