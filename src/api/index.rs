@@ -32,6 +32,8 @@ pub enum IndexType {
     HnswPq,
     /// IVF-RaBitQ (Rotated Adaptive Bit Quantization)
     IvfRabitq,
+    /// IVF-Extended-RaBitQ (two-stage fast-scan + rerank Euclidean quantization)
+    IvfExRaBitq,
     /// IVF-TurboQuant (Dense-rotation data-oblivious scalar quantization)
     IvfTurboQuant,
     /// IVF-FLAT-CC (Concurrent Version)
@@ -78,6 +80,9 @@ impl FromStr for IndexType {
             "hnsw_prq" | "hnsw-prq" => Ok(IndexType::HnswPrq),
             "hnsw_pq" | "hnsw-pq" => Ok(IndexType::HnswPq),
             "ivf_rabitq" | "ivf-rabitq" | "rabitq" => Ok(IndexType::IvfRabitq),
+            "ivf_exrabitq" | "ivf-exrabitq" | "extended-rabitq" | "exrabitq" => {
+                Ok(IndexType::IvfExRaBitq)
+            }
             "ivf_turboquant" | "ivf-turboquant" | "turboquant" => {
                 Ok(IndexType::IvfTurboQuant)
             }
@@ -332,6 +337,18 @@ pub struct IndexParams {
     /// For RaBitQ: number of bits for query
     #[serde(default)]
     pub rabitq_bits_query: Option<usize>,
+    /// For Extended-RaBitQ: total bits per rotated residual dimension
+    #[serde(default)]
+    pub exrabitq_bits_per_dim: Option<usize>,
+    /// For Extended-RaBitQ: use the higher-accuracy short-code scan mode
+    #[serde(default)]
+    pub exrabitq_use_high_accuracy_scan: Option<bool>,
+    /// For Extended-RaBitQ: candidate count kept for long-code rerank
+    #[serde(default)]
+    pub exrabitq_rerank_k: Option<usize>,
+    /// For Extended-RaBitQ: seeded dense rotation
+    #[serde(default)]
+    pub exrabitq_rotation_seed: Option<u64>,
     /// For TurboQuant: scalar quantization bits per rotated dimension
     #[serde(default)]
     pub turbo_bits_per_dim: Option<u8>,
@@ -445,6 +462,15 @@ impl IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),
             turbo_bits_per_dim: Some(bits_per_dim),
+            ..Default::default()
+        }
+    }
+
+    pub fn ivf_exrabitq(nlist: usize, nprobe: usize, bits_per_dim: usize) -> Self {
+        Self {
+            nlist: Some(nlist),
+            nprobe: Some(nprobe),
+            exrabitq_bits_per_dim: Some(bits_per_dim),
             ..Default::default()
         }
     }
@@ -633,6 +659,36 @@ mod tests {
         assert_eq!(params.nlist, Some(1024));
         assert_eq!(params.nprobe, Some(16));
         assert_eq!(params.turbo_bits_per_dim, Some(6));
+    }
+
+    #[test]
+    fn test_index_type_from_str_ivf_exrabitq() {
+        assert_eq!(
+            "ivf_exrabitq".parse::<IndexType>().ok(),
+            Some(IndexType::IvfExRaBitq)
+        );
+        assert_eq!(
+            "ivf-exrabitq".parse::<IndexType>().ok(),
+            Some(IndexType::IvfExRaBitq)
+        );
+        assert_eq!(
+            "extended-rabitq".parse::<IndexType>().ok(),
+            Some(IndexType::IvfExRaBitq)
+        );
+    }
+
+    #[test]
+    fn test_index_params_exrabitq_fields() {
+        let params = IndexParams {
+            exrabitq_bits_per_dim: Some(4),
+            exrabitq_use_high_accuracy_scan: Some(true),
+            exrabitq_rerank_k: Some(128),
+            exrabitq_rotation_seed: Some(17),
+            ..Default::default()
+        };
+
+        assert_eq!(params.exrabitq_bits_per_dim, Some(4));
+        assert_eq!(params.exrabitq_rerank_k, Some(128));
     }
 
     #[test]

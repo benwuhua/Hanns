@@ -22,6 +22,17 @@
 
 ## Session Log
 
+### Session 232 - 2026-03-29
+- Focus: `extended-rabitq-screen`
+- Mode:
+  - `screen`
+- Hypothesis:
+  - a parallel Extended-RaBitQ stack can land cleanly without breaking the existing `RaBitQEncoder` or `IvfRaBitqIndex`.
+- Expected mechanism:
+  - new `src/quantization/exrabitq/` family
+  - new `src/faiss/ivf_exrabitq.rs`
+  - scalar correctness first, AVX512 fast scan second
+
 ### Session 231 - 2026-03-17
 - Focus: `diskann-aisaq-rearrange-parameter-semantics`
 - Completed:

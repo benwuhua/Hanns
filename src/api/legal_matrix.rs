@@ -135,6 +135,17 @@ impl LegalMatrix {
             );
         }
 
+        // === IVF-Extended-RaBitQ ===
+        for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16] {
+            add_legal(
+                &mut legal_index_datatype,
+                &mut legal_combinations,
+                IndexType::IvfExRaBitq,
+                *dt,
+                vec![MetricType::L2],
+            );
+        }
+
         // === IVF-TurboQuant ===
         for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16] {
             add_legal(
@@ -478,6 +489,20 @@ mod tests {
             IndexType::SparseInverted,
             DataType::SparseFloat,
             MetricType::L2
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn test_validate_index_config_ivf_exrabitq_l2_only() {
+        assert!(validate_index_config(IndexType::IvfExRaBitq, DataType::Float, MetricType::L2)
+            .is_ok());
+        assert!(validate_index_config(IndexType::IvfExRaBitq, DataType::Float, MetricType::Ip)
+            .is_err());
+        assert!(validate_index_config(
+            IndexType::IvfExRaBitq,
+            DataType::Binary,
+            MetricType::Hamming
         )
         .is_err());
     }
