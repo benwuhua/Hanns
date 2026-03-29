@@ -580,7 +580,11 @@ impl HvqQuantizer {
         };
 
         let vmax = Self::unit_vmax(&o_hat);
-        let (codes, ip, qed_length) = self.fast_quantize(&o_hat);
+        let (codes, ip, qed_length) = if self.config.nbits >= 4 {
+            self.greedy_quantize(&o_hat, 6)
+        } else {
+            self.fast_quantize(&o_hat)
+        };
         let _ = (nrefine, ip);
 
         let base_quant_dist = qed_length.sqrt();
@@ -1817,7 +1821,8 @@ mod tests {
             raw_codes.push(packed);
         }
 
-        let (fastscan_codes, n_blocks, block_size) = HvqIndex::transpose_to_fastscan(&raw_codes, dim);
+        let (fastscan_codes, n_blocks, block_size) =
+            HvqIndex::transpose_to_fastscan(&raw_codes, dim);
         assert_eq!(n_blocks, 2);
         assert_eq!(block_size, dim.div_ceil(4) * 16);
 
@@ -1896,15 +1901,16 @@ mod tests {
                     search_results
                 );
             }
-            results.push(search_results.into_iter().map(|(id, _)| id).collect::<Vec<_>>());
+            results.push(
+                search_results
+                    .into_iter()
+                    .map(|(id, _)| id)
+                    .collect::<Vec<_>>(),
+            );
         }
 
         let recall = compute_recall(&results, &gt, top_k);
-        assert!(
-            recall >= 0.5,
-            "two-stage recall too low: recall={}",
-            recall
-        );
+        assert!(recall >= 0.5, "two-stage recall too low: recall={}", recall);
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -1969,6 +1975,77 @@ mod tests {
                     fast_objective,
                     greedy_objective,
                     tol
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_encode_strategy_selection() {
+        let dim = 64usize;
+        let n = 200usize;
+        let nq = 10usize;
+        let top_k = 10usize;
+        let nrefine = 6usize;
+        let mut rng = StdRng::seed_from_u64(20260402);
+
+        let data = normalize_rows(
+            &(0..n * dim)
+                .map(|_| rng.gen_range(-1.0f32..1.0))
+                .collect::<Vec<_>>(),
+            dim,
+        );
+        let queries = normalize_rows(
+            &(0..nq * dim)
+                .map(|_| rng.gen_range(-1.0f32..1.0))
+                .collect::<Vec<_>>(),
+            dim,
+        );
+        let gt = brute_force_topk_ip(&data, &queries, dim, top_k);
+
+        for &nbits in &[1u8, 2, 4, 8] {
+            let mut hvq = HvqQuantizer::new(HvqConfig { dim, nbits }, 42 + nbits as u64);
+            hvq.train(n, &data);
+
+            for row in data.chunks_exact(dim).take(8) {
+                let encoded = hvq.encode(row, nrefine);
+                let expected = encode_with_strategy(&hvq, row, nbits < 4, nrefine);
+                assert_eq!(
+                    encoded, expected,
+                    "encode strategy mismatch for nbits={}",
+                    nbits
+                );
+            }
+
+            if nbits >= 4 {
+                let mut fast_codes = Vec::with_capacity(n * hvq.code_size_bytes());
+                let mut greedy_codes = Vec::with_capacity(n * hvq.code_size_bytes());
+                let mut selected_codes = Vec::with_capacity(n * hvq.code_size_bytes());
+
+                for row in data.chunks_exact(dim) {
+                    fast_codes.extend_from_slice(&encode_with_strategy(&hvq, row, true, nrefine));
+                    greedy_codes
+                        .extend_from_slice(&encode_with_strategy(&hvq, row, false, nrefine));
+                    selected_codes.extend_from_slice(&hvq.encode(row, nrefine));
+                }
+
+                assert_eq!(
+                    selected_codes, greedy_codes,
+                    "encode should use greedy quantize for nbits={}",
+                    nbits
+                );
+
+                let fast_results = quantized_topk(&hvq, &fast_codes, &queries, dim, top_k);
+                let greedy_results = quantized_topk(&hvq, &greedy_codes, &queries, dim, top_k);
+                let fast_recall = compute_recall(&fast_results, &gt, top_k);
+                let greedy_recall = compute_recall(&greedy_results, &gt, top_k);
+
+                assert!(
+                    greedy_recall + 0.05 >= fast_recall,
+                    "greedy recall dropped too far for nbits={}: fast={} greedy={}",
+                    nbits,
+                    fast_recall,
+                    greedy_recall
                 );
             }
         }
