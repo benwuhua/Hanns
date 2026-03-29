@@ -1,8 +1,9 @@
-use super::{ExRaBitQLayout, FAST_SIZE};
+use super::{ExRaBitQLayout, ExRaBitQQuantizer, FAST_SIZE};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
 const HIGH_ACC_CONST_BOUND: f32 = 0.58;
+const HIGH_ACC_POS: [usize; 16] = [0, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0];
 
 #[derive(Clone, Debug)]
 pub struct ExRaBitQFastScanState {
@@ -21,6 +22,7 @@ pub struct ExRaBitQFastScanState {
     lut_lower: Vec<u8>,
     lut_upper: Vec<u8>,
     lut_shift: i32,
+    packed_high_acc_lut: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -100,6 +102,7 @@ impl ExRaBitQFastScanState {
             lut_lower,
             lut_upper,
             lut_shift: 0,
+            packed_high_acc_lut: Vec::new(),
         }
     }
 
@@ -131,37 +134,41 @@ impl ExRaBitQFastScanState {
         let mut lut = vec![0.0f32; n_groups * 16];
         let mut lut_lower = vec![0u8; n_groups * 16];
         let mut lut_upper = vec![0u8; n_groups * 16];
+        let mut packed_high_acc_lut = vec![0u8; n_groups * 32];
         let mut lut_shift = 0i32;
         for group_idx in 0..n_groups {
-            let mut group = [0i16; 4];
+            let mut quant_query = [0i32; 4];
             for bit_pos in 0..4usize {
                 let dim_idx = group_idx * 4 + bit_pos;
                 if dim_idx < padded_dim {
-                    group[bit_pos] = quantize_signed_query_value(unit_query[dim_idx], delta);
+                    quant_query[bit_pos] =
+                        quantize_signed_query_value(unit_query[dim_idx], delta) as i32;
                 }
             }
-            for nibble in 0..16usize {
-                let mut value = 0i32;
-                for bit_pos in 0..4usize {
-                    if ((nibble >> bit_pos) & 1) != 0 {
-                        value += group[bit_pos] as i32;
-                    }
+            let mut group_lut = [0i32; 16];
+            let mut group_min = 0i32;
+            for nibble in 1..16usize {
+                let lowbit = nibble & nibble.wrapping_neg();
+                group_lut[nibble] =
+                    group_lut[nibble - lowbit] + quant_query[HIGH_ACC_POS[nibble]];
+                if group_lut[nibble] < group_min {
+                    group_min = group_lut[nibble];
                 }
-                lut[group_idx * 16 + nibble] = value as f32;
             }
-
-            let group_slice = &lut[group_idx * 16..(group_idx + 1) * 16];
-            let group_min = group_slice
-                .iter()
-                .copied()
-                .map(|value| value as i32)
-                .min()
-                .unwrap_or(0);
             lut_shift += group_min;
+
+            let fill_lo = (group_idx / 4) * 128 + (group_idx % 4) * 16;
+            let fill_hi = fill_lo + 64;
             for nibble in 0..16usize {
-                let shifted = (group_slice[nibble] as i32 - group_min) as u32;
-                lut_lower[group_idx * 16 + nibble] = shifted as u8;
-                lut_upper[group_idx * 16 + nibble] = (shifted >> 8) as u8;
+                let value = group_lut[nibble];
+                lut[group_idx * 16 + nibble] = value as f32;
+                let shifted = (value - group_min) as u32;
+                let lo = shifted as u8;
+                let hi = (shifted >> 8) as u8;
+                lut_lower[group_idx * 16 + nibble] = lo;
+                lut_upper[group_idx * 16 + nibble] = hi;
+                packed_high_acc_lut[fill_lo + nibble] = lo;
+                packed_high_acc_lut[fill_hi + nibble] = hi;
             }
         }
 
@@ -181,6 +188,7 @@ impl ExRaBitQFastScanState {
             lut_lower,
             lut_upper,
             lut_shift,
+            packed_high_acc_lut,
         }
     }
 }
@@ -195,12 +203,20 @@ pub fn reference_short_distance(
 ) -> f32 {
     if state.use_high_accuracy {
         let mut selected_sum = 0i32;
-        for dim_idx in 0..state.unit_query.len() {
-            let byte = short_code[dim_idx / 8];
-            let bit = (byte >> (dim_idx % 8)) & 1;
-            if bit != 0 {
-                selected_sum +=
+        for group_idx in 0..state.unit_query.len().div_ceil(4) {
+            let mut quant_query = [0i32; 4];
+            for bit_pos in 0..4usize {
+                let dim_idx = group_idx * 4 + bit_pos;
+                if dim_idx >= state.unit_query.len() {
+                    break;
+                }
+                quant_query[bit_pos] =
                     quantize_signed_query_value(state.unit_query[dim_idx], state.delta) as i32;
+                let byte = short_code[dim_idx / 8];
+                let bit = (byte >> (dim_idx % 8)) & 1;
+                if bit != 0 {
+                    selected_sum += quant_query[bit_pos];
+                }
             }
         }
         let ip_xb_qprime = selected_sum as f32 * state.delta;
@@ -321,6 +337,52 @@ pub fn scan_layout(
     scalar_scan_layout(layout, state, top_k)
 }
 
+pub fn scan_layout_bitmask(
+    layout: &ExRaBitQLayout,
+    quantizer: &ExRaBitQQuantizer,
+    state: &ExRaBitQFastScanState,
+    top_k: usize,
+) -> Vec<(i64, f32)> {
+    if top_k == 0 || layout.is_empty() {
+        return Vec::new();
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    if state.use_high_accuracy
+        && std::arch::is_x86_feature_detected!("avx512bw")
+        && std::arch::is_x86_feature_detected!("avx512f")
+    {
+        return unsafe { scan_layout_bitmask_avx512(layout, quantizer, state, top_k) };
+    }
+
+    let fac_rescale = (1u32 << quantizer.config().ex_bits()) as f32;
+    let candidates = scalar_scan_layout(layout, state, layout.len());
+    let mut exact = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let idx = candidate.idx;
+        let distance = if state.use_high_accuracy {
+            let long_ip = quantizer.long_code_inner_product(&state.unit_query, layout.long_code_at(idx));
+            layout.x2_at(idx) + state.y2
+                - layout.factor_at(idx).xipnorm
+                    * state.y
+                    * (fac_rescale * candidate.rabitq_ip
+                        + long_ip
+                        - (fac_rescale - 0.5) * state.sumq)
+        } else {
+            let long_ip = quantizer.long_code_inner_product(&state.residual, layout.long_code_at(idx));
+            layout.x2_at(idx) + state.y2
+                - layout.factor_at(idx).xipnorm
+                    * (fac_rescale * candidate.rabitq_ip
+                        + long_ip
+                        - (fac_rescale - 1.0) * state.half_sum_residual)
+        };
+        exact.push((layout.id_at(idx), distance));
+    }
+    exact.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+    exact.truncate(top_k);
+    exact
+}
+
 #[cfg(target_arch = "x86_64")]
 pub fn simd_scan_layout(
     layout: &ExRaBitQLayout,
@@ -418,6 +480,96 @@ unsafe fn scan_layout_avx512(
 }
 
 #[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512bw,avx512f,avx2,ssse3,fma")]
+unsafe fn scan_layout_bitmask_avx512(
+    layout: &ExRaBitQLayout,
+    quantizer: &ExRaBitQQuantizer,
+    state: &ExRaBitQFastScanState,
+    top_k: usize,
+) -> Vec<(i64, f32)> {
+    use std::arch::x86_64::*;
+
+    let fac_rescale = (1u32 << quantizer.config().ex_bits()) as f32;
+    let mut heap = BinaryHeap::with_capacity(top_k + 1);
+    let mut distk = f32::INFINITY;
+
+    for block_idx in 0..layout.n_blocks() {
+        let idx_base = block_idx * FAST_SIZE;
+        let num_points = layout.len().saturating_sub(idx_base).min(FAST_SIZE);
+        if num_points == 0 {
+            break;
+        }
+
+        let mut onorm = [0.0f32; FAST_SIZE];
+        for slot in 0..num_points {
+            onorm[slot] = layout.x_norm_at(idx_base + slot);
+        }
+
+        let (mut mask, ip_xb_qprime) = accumulate_one_block_high_acc_avx512(
+            layout.fastscan_block(block_idx),
+            &state.packed_high_acc_lut,
+            &onorm,
+            state.sumq,
+            state.y,
+            state.delta,
+            state.lut_shift,
+            state.one_over_sqrt_d,
+            distk,
+            layout.padded_dim(),
+        );
+
+        if num_points < FAST_SIZE {
+            mask &= (1u32 << num_points) - 1;
+        }
+
+        while mask != 0 {
+            let lb = mask & mask.wrapping_neg();
+            let slot = lb.trailing_zeros() as usize;
+            mask &= mask - 1;
+
+            let idx = idx_base + slot;
+            let long_ip =
+                quantizer.long_code_inner_product(&state.unit_query, layout.long_code_at(idx));
+            let distance = layout.x2_at(idx) + state.y2
+                - layout.factor_at(idx).xipnorm
+                    * state.y
+                    * (fac_rescale * ip_xb_qprime[slot]
+                        + long_ip
+                        - (fac_rescale - 0.5) * state.sumq);
+            let candidate = ScoredCandidate {
+                idx,
+                distance,
+                rabitq_ip: ip_xb_qprime[slot],
+            };
+
+            if heap.len() < top_k {
+                heap.push(candidate);
+            } else if let Some(worst) = heap.peek() {
+                if candidate.distance < worst.distance
+                    || (candidate.distance == worst.distance && candidate.idx < worst.idx)
+                {
+                    heap.pop();
+                    heap.push(candidate);
+                }
+            }
+
+            if heap.len() == top_k {
+                if let Some(worst) = heap.peek() {
+                    distk = worst.distance;
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::with_capacity(heap.len());
+    while let Some(item) = heap.pop() {
+        out.push((layout.id_at(item.idx), item.distance));
+    }
+    out.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+    out
+}
+
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512bw,avx512f,avx2,ssse3")]
 unsafe fn fastscan_block_avx512(state: &ExRaBitQFastScanState, block: &[u8]) -> [u32; FAST_SIZE] {
     use std::arch::x86_64::*;
@@ -463,6 +615,112 @@ unsafe fn fastscan_block_avx512(state: &ExRaBitQFastScanState, block: &[u8]) -> 
     }
 
     unsafe { combine_accumulators(acc_lo_lower, acc_lo_upper, acc_hi_lower, acc_hi_upper) }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512bw,avx512f,avx2,ssse3,fma")]
+unsafe fn accumulate_one_block_high_acc_avx512(
+    block: &[u8],
+    packed_lut: &[u8],
+    onorm: &[f32; FAST_SIZE],
+    sumq: f32,
+    qnorm: f32,
+    delta: f32,
+    shift: i32,
+    one_over_sqrt_d: f32,
+    distk: f32,
+    padded_dim: usize,
+) -> (u32, [f32; FAST_SIZE]) {
+    use std::arch::x86_64::*;
+
+    let mut ip_xb_qprime = [0.0f32; FAST_SIZE];
+    let low_mask = _mm512_set1_epi8(0x0F_u8 as i8);
+    let mut accu = [[_mm512_setzero_si512(); 4]; 2];
+    let n_groups = padded_dim >> 2;
+
+    let mut codes_ptr = block.as_ptr();
+    let mut lut_ptr = packed_lut.as_ptr();
+    for _ in (0..n_groups).step_by(4) {
+        let c = _mm512_loadu_si512(codes_ptr as *const __m512i);
+        let lo = _mm512_and_si512(c, low_mask);
+        let hi = _mm512_and_si512(_mm512_srli_epi16(c, 4), low_mask);
+
+        for layer in 0..2 {
+            let lut = _mm512_loadu_si512(lut_ptr as *const __m512i);
+            let res_lo = _mm512_shuffle_epi8(lut, lo);
+            let res_hi = _mm512_shuffle_epi8(lut, hi);
+
+            accu[layer][0] = _mm512_add_epi16(accu[layer][0], res_lo);
+            accu[layer][1] = _mm512_add_epi16(accu[layer][1], _mm512_srli_epi16(res_lo, 8));
+            accu[layer][2] = _mm512_add_epi16(accu[layer][2], res_hi);
+            accu[layer][3] = _mm512_add_epi16(accu[layer][3], _mm512_srli_epi16(res_hi, 8));
+
+            lut_ptr = lut_ptr.add(64);
+        }
+        codes_ptr = codes_ptr.add(64);
+    }
+
+    let mut dis0 = [_mm512_setzero_si512(); 2];
+    let mut dis1 = [_mm512_setzero_si512(); 2];
+    for layer in 0..2 {
+        let mut tmp0 = _mm256_add_epi16(
+            _mm512_castsi512_si256(accu[layer][0]),
+            _mm512_extracti64x4_epi64(accu[layer][0], 1),
+        );
+        let tmp1 = _mm256_add_epi16(
+            _mm512_castsi512_si256(accu[layer][1]),
+            _mm512_extracti64x4_epi64(accu[layer][1], 1),
+        );
+        tmp0 = _mm256_sub_epi16(tmp0, _mm256_slli_epi16(tmp1, 8));
+        dis0[layer] = _mm512_add_epi32(
+            _mm512_cvtepu16_epi32(_mm256_permute2f128_si256(tmp0, tmp1, 0x21)),
+            _mm512_cvtepu16_epi32(_mm256_blend_epi32(tmp0, tmp1, 0xF0)),
+        );
+
+        let mut tmp2 = _mm256_add_epi16(
+            _mm512_castsi512_si256(accu[layer][2]),
+            _mm512_extracti64x4_epi64(accu[layer][2], 1),
+        );
+        let tmp3 = _mm256_add_epi16(
+            _mm512_castsi512_si256(accu[layer][3]),
+            _mm512_extracti64x4_epi64(accu[layer][3], 1),
+        );
+        tmp2 = _mm256_sub_epi16(tmp2, _mm256_slli_epi16(tmp3, 8));
+        dis1[layer] = _mm512_add_epi32(
+            _mm512_cvtepu16_epi32(_mm256_permute2f128_si256(tmp2, tmp3, 0x21)),
+            _mm512_cvtepu16_epi32(_mm256_blend_epi32(tmp2, tmp3, 0xF0)),
+        );
+    }
+
+    let res = [
+        _mm512_add_epi32(dis0[0], _mm512_slli_epi32(dis0[1], 8)),
+        _mm512_add_epi32(dis1[0], _mm512_slli_epi32(dis1[1], 8)),
+    ];
+
+    let simd_shift = _mm512_set1_epi32(shift);
+    let simd_delta = _mm512_set1_ps(delta);
+    let simd_sumq_const_bound = _mm512_set1_ps(0.5 * sumq - HIGH_ACC_CONST_BOUND);
+    let simd_qnorm_over_sqrtd = _mm512_set1_ps(-5.0 * qnorm * one_over_sqrt_d);
+    let simd_qnorm_sqr = _mm512_set1_ps(qnorm * qnorm);
+    let simd_distk = _mm512_set1_ps(distk);
+
+    let mut mask = 0u32;
+    for lane_group in 0..2usize {
+        let shifted = _mm512_add_epi32(res[lane_group], simd_shift);
+        let mut tmp = _mm512_cvtepi32_ps(shifted);
+        tmp = _mm512_mul_ps(tmp, simd_delta);
+        _mm512_storeu_ps(ip_xb_qprime.as_mut_ptr().add(lane_group * 16), tmp);
+
+        tmp = _mm512_sub_ps(tmp, simd_sumq_const_bound);
+        let simd_onorm = _mm512_loadu_ps(onorm.as_ptr().add(lane_group * 16));
+        tmp = _mm512_mul_ps(tmp, simd_qnorm_over_sqrtd);
+        tmp = _mm512_mul_ps(tmp, simd_onorm);
+        tmp = _mm512_add_ps(tmp, simd_qnorm_sqr);
+        tmp = _mm512_add_ps(tmp, _mm512_mul_ps(simd_onorm, simd_onorm));
+        mask |= (_mm512_cmp_ps_mask(tmp, simd_distk, _CMP_LT_OS) as u32) << (lane_group * 16);
+    }
+
+    (mask, ip_xb_qprime)
 }
 
 #[cfg(target_arch = "x86_64")]

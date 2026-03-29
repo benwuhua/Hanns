@@ -1,6 +1,7 @@
 use knowhere_rs::quantization::exrabitq::{
-    reference_short_distance, rerank_candidates, scalar_scan_layout, simd_scan_layout,
-    EncodedVector, ExRaBitQConfig, ExRaBitQFastScanState, ExRaBitQLayout, ExRaBitQQuantizer,
+    reference_short_distance, rerank_candidates, scalar_scan_layout, scan_and_rerank,
+    simd_scan_layout, EncodedVector, ExRaBitQConfig, ExRaBitQFastScanState, ExRaBitQLayout,
+    ExRaBitQQuantizer,
 };
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -192,5 +193,40 @@ fn test_fastscan_avx512_matches_scalar_for_8bit() {
         assert_eq!(lhs.idx, rhs.idx);
         assert!((lhs.distance - rhs.distance).abs() < 1e-5);
         assert!((lhs.rabitq_ip - rhs.rabitq_ip).abs() < 1e-5);
+    }
+}
+
+#[test]
+fn test_high_accuracy_bitmask_scan_matches_scalar_rerank() {
+    let (quantizer, data, centroid, _ids, _encoded, layout) = build_fixture(192, 64, 4);
+    let top_k = 10usize;
+
+    for query_idx in 0..4usize {
+        let query = &data[query_idx * 64..(query_idx + 1) * 64];
+        let (q_rot, y2) = quantizer.rotate_query_residual(query, &centroid);
+        let state = ExRaBitQFastScanState::new_high_accuracy(&q_rot, y2);
+
+        let scalar_candidates = scalar_scan_layout(&layout, &state, layout.len());
+        let exact_scalar = rerank_candidates(&quantizer, &layout, &state, &scalar_candidates, top_k);
+        let bitmask = scan_and_rerank(&quantizer, &layout, &state, 32, top_k);
+
+        let hits = exact_scalar
+            .iter()
+            .filter(|(id, _)| bitmask.iter().any(|(other_id, _)| other_id == id))
+            .count();
+        let recall = hits as f32 / top_k as f32;
+        assert!(
+            recall >= 1.0,
+            "query_idx={query_idx}: recall={} exact={:?} bitmask={:?}",
+            recall,
+            exact_scalar,
+            bitmask
+        );
+
+        assert_eq!(exact_scalar.len(), bitmask.len());
+        for (lhs, rhs) in exact_scalar.iter().zip(bitmask.iter()) {
+            assert_eq!(lhs.0, rhs.0, "query_idx={query_idx}");
+            assert!((lhs.1 - rhs.1).abs() < 1e-4, "query_idx={query_idx}: lhs={lhs:?} rhs={rhs:?}");
+        }
     }
 }

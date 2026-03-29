@@ -1,6 +1,7 @@
 use super::{
     scan_layout, ExRaBitQFastScanState, ExRaBitQLayout, ExRaBitQQuantizer, ScoredCandidate,
 };
+use super::fastscan::scan_layout_bitmask;
 
 pub fn rerank_candidates(
     quantizer: &ExRaBitQQuantizer,
@@ -55,6 +56,10 @@ pub fn scan_and_rerank(
     shortlist: usize,
     top_k: usize,
 ) -> Vec<(i64, f32)> {
+    if state.use_high_accuracy {
+        let _ = shortlist;
+        return scan_layout_bitmask(layout, quantizer, state, top_k);
+    }
     let candidates = scan_layout(layout, state, shortlist.max(top_k));
     rerank_candidates(quantizer, layout, state, &candidates, top_k)
 }
