@@ -23,13 +23,24 @@ pub fn rerank_candidates(
             x_norm: layout.x_norm_at(candidate.idx),
             x2: layout.x2_at(candidate.idx),
         };
-        let distance = quantizer.rerank_distance(
-            &state.residual,
-            state.half_sum_residual,
-            state.y2,
-            candidate.rabitq_ip,
-            &encoded,
-        );
+        let distance = if state.use_high_accuracy {
+            quantizer.rerank_distance_high_accuracy(
+                &state.unit_query,
+                state.sumq,
+                state.y,
+                state.y2,
+                candidate.rabitq_ip,
+                &encoded,
+            )
+        } else {
+            quantizer.rerank_distance(
+                &state.residual,
+                state.half_sum_residual,
+                state.y2,
+                candidate.rabitq_ip,
+                &encoded,
+            )
+        };
         reranked.push((layout.id_at(candidate.idx), distance));
     }
     reranked.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));

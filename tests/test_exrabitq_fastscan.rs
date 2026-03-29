@@ -84,6 +84,37 @@ fn test_scalar_fastscan_matches_reference_lower_bounds() {
 }
 
 #[test]
+fn test_high_accuracy_fastscan_matches_reference_lower_bounds() {
+    let (quantizer, data, centroid, _ids, _encoded, layout) = build_fixture(96, 32, 4);
+    let query = &data[1 * 32..2 * 32];
+    let (q_rot, y2) = quantizer.rotate_query_residual(query, &centroid);
+    let state = ExRaBitQFastScanState::new_high_accuracy(&q_rot, y2);
+
+    let fast = scalar_scan_layout(&layout, &state, layout.len());
+    let mut slow = Vec::with_capacity(layout.len());
+    for idx in 0..layout.len() {
+        slow.push((
+            idx,
+            reference_short_distance(
+                &state,
+                layout.short_code_at(idx),
+                layout.short_ip_at(idx),
+                layout.short_sum_xb_at(idx),
+                layout.short_err_at(idx),
+                layout.x2_at(idx),
+            ),
+        ));
+    }
+    slow.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+
+    assert_eq!(fast.len(), slow.len());
+    for (got, expected) in fast.iter().zip(slow.iter()) {
+        assert_eq!(got.idx, expected.0);
+        assert!((got.distance - expected.1).abs() < 1e-4);
+    }
+}
+
+#[test]
 fn test_rerank_returns_self_for_identical_query() {
     let (quantizer, data, centroid, ids, _encoded, layout) = build_fixture(96, 32, 4);
     let target = 0usize;

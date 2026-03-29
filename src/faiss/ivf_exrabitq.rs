@@ -22,6 +22,7 @@ pub struct IvfExRaBitqConfig {
     pub nprobe: usize,
     pub metric_type: MetricType,
     pub bits_per_dim: usize,
+    pub use_high_accuracy_scan: bool,
     pub rotation_seed: u64,
     pub rerank_k: usize,
 }
@@ -34,6 +35,7 @@ impl IvfExRaBitqConfig {
             nprobe: 1,
             metric_type: MetricType::L2,
             bits_per_dim,
+            use_high_accuracy_scan: false,
             rotation_seed: 42,
             rerank_k: 64,
         }
@@ -51,6 +53,11 @@ impl IvfExRaBitqConfig {
 
     pub fn with_rotation_seed(mut self, rotation_seed: u64) -> Self {
         self.rotation_seed = rotation_seed;
+        self
+    }
+
+    pub fn with_high_accuracy_scan(mut self, use_high_accuracy_scan: bool) -> Self {
+        self.use_high_accuracy_scan = use_high_accuracy_scan;
         self
     }
 
@@ -84,6 +91,10 @@ impl IvfExRaBitqConfig {
             nprobe,
             metric_type: config.metric_type,
             bits_per_dim,
+            use_high_accuracy_scan: config
+                .params
+                .exrabitq_use_high_accuracy_scan
+                .unwrap_or(false),
             rotation_seed,
             rerank_k,
         })
@@ -150,6 +161,7 @@ struct StoredConfig {
     nprobe: usize,
     metric_type: MetricType,
     bits_per_dim: usize,
+    use_high_accuracy_scan: bool,
     rotation_seed: u64,
     rerank_k: usize,
 }
@@ -298,6 +310,7 @@ impl IvfExRaBitqIndex {
                 nprobe: self.config.nprobe,
                 metric_type: self.config.metric_type,
                 bits_per_dim: self.config.bits_per_dim,
+                use_high_accuracy_scan: self.config.use_high_accuracy_scan,
                 rotation_seed: self.config.rotation_seed,
                 rerank_k: self.config.rerank_k,
             },
@@ -346,6 +359,7 @@ impl IvfExRaBitqIndex {
             nprobe: snapshot.config.nprobe,
             metric_type: snapshot.config.metric_type,
             bits_per_dim: snapshot.config.bits_per_dim,
+            use_high_accuracy_scan: snapshot.config.use_high_accuracy_scan,
             rotation_seed: snapshot.config.rotation_seed,
             rerank_k: snapshot.config.rerank_k,
         };
@@ -423,7 +437,11 @@ impl IvfExRaBitqIndex {
             let centroid =
                 &self.centroids[cluster_idx * self.config.dim..(cluster_idx + 1) * self.config.dim];
             let (q_rot, y2) = self.quantizer.rotate_query_residual(query, centroid);
-            let state = ExRaBitQFastScanState::new(&q_rot, y2);
+            let state = if self.config.use_high_accuracy_scan {
+                ExRaBitQFastScanState::new_high_accuracy(&q_rot, y2)
+            } else {
+                ExRaBitQFastScanState::new(&q_rot, y2)
+            };
             let mut reranked = scan_and_rerank(
                 &self.quantizer,
                 layout,

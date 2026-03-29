@@ -108,3 +108,31 @@ fn test_ivf_exrabitq_self_recall_on_training_points() {
 
     assert!(hits >= 12, "expected at least 12/16 self hits, got {hits}");
 }
+
+#[test]
+fn test_ivf_exrabitq_high_accuracy_search() {
+    let dim = 32;
+    let n = 384;
+    let data = random_vectors(n, dim, 13);
+    let ids: Vec<i64> = (0..n as i64).collect();
+    let config = IvfExRaBitqConfig::new(dim, 12, 4)
+        .with_metric(MetricType::L2)
+        .with_nprobe(12)
+        .with_high_accuracy_scan(true)
+        .with_rerank_k(128)
+        .with_rotation_seed(31);
+    let mut index = IvfExRaBitqIndex::new(config);
+    index.train(&data).unwrap();
+    index.add(&data, Some(&ids)).unwrap();
+
+    let req = SearchRequest {
+        top_k: 5,
+        nprobe: 12,
+        filter: None,
+        params: None,
+        radius: None,
+    };
+    let result = index.search(&data[0..dim], &req).unwrap();
+    assert_eq!(result.ids.len(), 5);
+    assert_eq!(result.ids[0], 0);
+}

@@ -281,6 +281,23 @@ impl ExRaBitQQuantizer {
                 * (fac_rescale * rabitq_ip + long_ip - (fac_rescale - 1.0) * half_sum_residual)
     }
 
+    pub fn rerank_distance_high_accuracy(
+        &self,
+        unit_query: &[f32],
+        sumq: f32,
+        y: f32,
+        y2: f32,
+        ip_xb_qprime: f32,
+        encoded: &EncodedVector,
+    ) -> f32 {
+        let fac_rescale = (1u32 << self.config.ex_bits()) as f32;
+        let long_ip = self.long_code_inner_product(unit_query, &encoded.long_code);
+        encoded.x2 + y2
+            - encoded.factor.xipnorm
+                * y
+                * (fac_rescale * ip_xb_qprime + long_ip - (fac_rescale - 0.5) * sumq)
+    }
+
     pub fn long_code_inner_product(&self, values: &[f32], long_code: &[u8]) -> f32 {
         debug_assert_eq!(values.len(), self.config.padded_dim());
         let bits = self.config.ex_bits();
