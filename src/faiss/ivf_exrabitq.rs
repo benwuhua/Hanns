@@ -15,6 +15,9 @@ use crate::quantization::exrabitq::{
 };
 use crate::quantization::KMeans;
 
+const EXRABITQ_MAGIC: &[u8; 8] = b"IVFXRBTQ";
+const EXRABITQ_VERSION: u32 = 1;
+
 #[derive(Clone, Debug)]
 pub struct IvfExRaBitqConfig {
     pub dim: usize,
@@ -193,6 +196,10 @@ impl IvfExRaBitqIndex {
         &self.config
     }
 
+    pub fn ntotal(&self) -> usize {
+        self.ntotal
+    }
+
     pub fn train(&mut self, data: &[f32]) -> Result<()> {
         if self.config.metric_type != MetricType::L2 {
             return Err(KnowhereError::InvalidArg(
@@ -340,8 +347,13 @@ impl IvfExRaBitqIndex {
             ntotal: self.ntotal,
         };
 
-        let bytes = bincode::serialize(&snapshot)
+        let payload = bincode::serialize(&snapshot)
             .map_err(|e| KnowhereError::Codec(format!("serialize exrabitq snapshot: {e}")))?;
+        let mut bytes = Vec::with_capacity(EXRABITQ_MAGIC.len() + 8 + payload.len());
+        bytes.extend_from_slice(EXRABITQ_MAGIC);
+        bytes.extend_from_slice(&EXRABITQ_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&(self.config.dim as u32).to_le_bytes());
+        bytes.extend_from_slice(&payload);
         let mut file = File::create(path)?;
         file.write_all(&bytes)?;
         Ok(())
@@ -350,7 +362,14 @@ impl IvfExRaBitqIndex {
     pub fn load(path: &Path) -> Result<Self> {
         let mut bytes = Vec::new();
         File::open(path)?.read_to_end(&mut bytes)?;
-        let snapshot: StoredSnapshot = bincode::deserialize(&bytes)
+        let payload = if bytes.starts_with(EXRABITQ_MAGIC) {
+            bytes.get(16..).ok_or_else(|| {
+                KnowhereError::Codec("exrabitq snapshot header too short".to_string())
+            })?
+        } else {
+            bytes.as_slice()
+        };
+        let snapshot: StoredSnapshot = bincode::deserialize(payload)
             .map_err(|e| KnowhereError::Codec(format!("deserialize exrabitq snapshot: {e}")))?;
 
         let config = IvfExRaBitqConfig {

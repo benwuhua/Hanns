@@ -36,7 +36,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest, SearchResult};
-use crate::faiss::{HnswIndex, IvfFlatIndex, IvfPqIndex, MemIndex};
+use crate::faiss::{HnswIndex, IvfExRaBitqIndex, IvfFlatIndex, IvfPqIndex, MemIndex};
 
 /// 内部索引枚举（避免 trait object 问题）
 enum InnerIndex {
@@ -44,6 +44,7 @@ enum InnerIndex {
     Hnsw(Box<HnswIndex>),
     IvfFlat(Box<IvfFlatIndex>),
     IvfPq(Box<IvfPqIndex>),
+    IvfExRaBitq(Box<IvfExRaBitqIndex>),
 }
 
 impl InnerIndex {
@@ -53,6 +54,7 @@ impl InnerIndex {
             InnerIndex::Hnsw(idx) => idx.train(vectors),
             InnerIndex::IvfFlat(idx) => idx.train(vectors).map(|_| ()),
             InnerIndex::IvfPq(idx) => idx.train(vectors),
+            InnerIndex::IvfExRaBitq(idx) => idx.train(vectors),
         }
     }
 
@@ -62,6 +64,7 @@ impl InnerIndex {
             InnerIndex::Hnsw(idx) => idx.add(vectors, ids),
             InnerIndex::IvfFlat(idx) => idx.add(vectors, ids),
             InnerIndex::IvfPq(idx) => idx.add(vectors, ids),
+            InnerIndex::IvfExRaBitq(idx) => idx.add(vectors, ids),
         }
     }
 
@@ -80,6 +83,7 @@ impl InnerIndex {
             }
             InnerIndex::IvfFlat(idx) => idx.search(query, req),
             InnerIndex::IvfPq(idx) => idx.search(query, req),
+            InnerIndex::IvfExRaBitq(idx) => idx.search(query, req),
         }
     }
 
@@ -91,6 +95,7 @@ impl InnerIndex {
                 "IVF-Flat save is not implemented".to_string(),
             )),
             InnerIndex::IvfPq(idx) => idx.save(path),
+            InnerIndex::IvfExRaBitq(idx) => idx.save(path),
         }
     }
 
@@ -102,6 +107,10 @@ impl InnerIndex {
                 "IVF-Flat load is not implemented".to_string(),
             )),
             InnerIndex::IvfPq(idx) => idx.load(path),
+            InnerIndex::IvfExRaBitq(idx) => {
+                *idx = Box::new(IvfExRaBitqIndex::load(path)?);
+                Ok(())
+            }
         }
     }
 
@@ -111,6 +120,7 @@ impl InnerIndex {
             InnerIndex::Hnsw(idx) => idx.ntotal(),
             InnerIndex::IvfFlat(idx) => idx.ntotal(),
             InnerIndex::IvfPq(idx) => idx.ntotal(),
+            InnerIndex::IvfExRaBitq(idx) => idx.ntotal(),
         }
     }
 
@@ -120,6 +130,7 @@ impl InnerIndex {
             InnerIndex::Hnsw(_) => "hnsw",
             InnerIndex::IvfFlat(_) => "ivf_flat",
             InnerIndex::IvfPq(_) => "ivf_pq",
+            InnerIndex::IvfExRaBitq(_) => "ivf_exrabitq",
         }
     }
 }
@@ -154,11 +165,14 @@ impl PyIndex {
             "hnsw" => IndexType::Hnsw,
             "ivf_flat" | "ivfflat" => IndexType::IvfFlat,
             "ivf_pq" | "ivfpq" => IndexType::IvfPq,
+            "ivf_exrabitq" | "ivf-exrabitq" | "exrabitq" | "extended-rabitq" => {
+                IndexType::IvfExRaBitq
+            }
             _ => {
                 return Err(PyValueError::new_err(format!(
-                    "Unknown index type: {} (supported: flat, hnsw, ivf_flat, ivf_pq)",
-                    index_type
-                )))
+                "Unknown index type: {} (supported: flat, hnsw, ivf_flat, ivf_pq, ivf_exrabitq)",
+                index_type
+            )))
             }
         };
 
@@ -186,6 +200,7 @@ impl PyIndex {
                 nlist: Some(nlist.unwrap_or(100)), // IVF default: 100 clusters
                 nprobe: Some(nprobe.unwrap_or(8)), // IVF default: 8 probes
                 nbits_per_idx: Some(nbits.unwrap_or(8)), // PQ default: 8 bits
+                exrabitq_bits_per_dim: Some(nbits.unwrap_or(4)),
                 ..Default::default()
             },
         };
@@ -209,6 +224,11 @@ impl PyIndex {
                     PyValueError::new_err(format!("Failed to create IVF-PQ index: {:?}", e))
                 })?))
             }
+            IndexType::IvfExRaBitq => InnerIndex::IvfExRaBitq(Box::new(
+                IvfExRaBitqIndex::from_index_config(&config).map_err(|e| {
+                    PyValueError::new_err(format!("Failed to create IVF-ExRaBitQ index: {:?}", e))
+                })?,
+            )),
             _ => {
                 return Err(PyValueError::new_err(format!(
                     "Unsupported index type: {:?}",
@@ -432,9 +452,37 @@ impl PyIndex {
                             },
                         },
                     )
+                } else if &magic == b"IVFX" {
+                    file.seek(SeekFrom::Start(0))?;
+                    let mut magic8 = [0u8; 8];
+                    file.read_exact(&mut magic8)?;
+                    if &magic8 != b"IVFXRBTQ" {
+                        return Err(PyValueError::new_err(format!(
+                            "Invalid magic number: {:?}",
+                            std::str::from_utf8(&magic)
+                        )));
+                    }
+
+                    let mut version = [0u8; 4];
+                    file.read_exact(&mut version)?;
+
+                    let mut dim_bytes = [0u8; 4];
+                    file.read_exact(&mut dim_bytes)?;
+                    let dim = u32::from_le_bytes(dim_bytes) as usize;
+
+                    (
+                        IndexType::IvfExRaBitq,
+                        IndexConfig {
+                            index_type: IndexType::IvfExRaBitq,
+                            dim,
+                            metric_type: MetricType::L2,
+                            data_type: crate::api::DataType::Float,
+                            params: IndexParams::ivf_exrabitq(100, 8, 4),
+                        },
+                    )
                 } else {
                     return Err(PyValueError::new_err(format!(
-                        "Invalid magic number: {:?}. Expected KWFL (Flat), HNSW (HNSW), or IVFPQ (IVF-PQ)",
+                        "Invalid magic number: {:?}. Expected KWFL (Flat), HNSW (HNSW), IVFPQ (IVF-PQ), or IVFXRBTQ (IVF-ExRaBitQ)",
                         std::str::from_utf8(&magic)
                     )));
                 }
@@ -457,6 +505,11 @@ impl PyIndex {
                     PyValueError::new_err(format!("Failed to create IVF-PQ index: {:?}", e))
                 })?))
             }
+            IndexType::IvfExRaBitq => InnerIndex::IvfExRaBitq(Box::new(
+                IvfExRaBitqIndex::from_index_config(&config).map_err(|e| {
+                    PyValueError::new_err(format!("Failed to create IVF-ExRaBitQ index: {:?}", e))
+                })?,
+            )),
             _ => {
                 return Err(PyValueError::new_err(format!(
                     "Unsupported index type: {:?}",
@@ -554,6 +607,21 @@ mod tests {
             None,
         );
         assert!(index.is_ok());
+
+        // 测试创建 IVF-ExRaBitQ 索引
+        let index = PyIndex::new(
+            "ivf_exrabitq",
+            128,
+            "l2",
+            None,
+            None,
+            None,
+            Some(32),
+            Some(4),
+            Some(4),
+        )
+        .expect("create ivf_exrabitq");
+        assert_eq!(index.index_type(), "ivf_exrabitq");
     }
 
     #[test]
