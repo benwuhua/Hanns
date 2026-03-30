@@ -15,12 +15,59 @@
 - Current focus: `none`
 - Next feature: `none`
 - Strategic state: `final_rollup_closed_leadership_met` (see `docs/performance-program.md`)
-- Last updated: 2026-03-29
+- Last updated: 2026-03-30
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 - Workflow policy: capability-closure first for DiskANN/IVF-PQ (align to native/official feature set before further benchmark tuning); narrow performance hypotheses should start with `screen`, promote to tracked work only after `screen_result=promote`, and update durable docs only after authority verdicts
 - Progress: 66/66 features passing (100%)
 
 ## Session Log
+
+### Session 233 - 2026-03-30
+- Focus: `sparse-ffi-milvus-closure`
+- Completed:
+  - reproduced and closed the remaining sparse C-ABI query-dimension bug:
+    - sparse search previously chunked query buffers by the index-side sparse
+      dimension, which broke Milvus multi-query sparse search when
+      `query_dim > index_dim`.
+    - sparse bitset filtering also used `doc_id` directly instead of the stored
+      row ordinal.
+  - added and verified new FFI regressions in `src/ffi.rs`:
+    - `test_ffi_sparse_inverted_search_accepts_query_dim_larger_than_index_dim`
+    - `test_search_with_bitset_sparse_inverted_accepts_query_dim_larger_than_index_dim`
+  - implemented the minimal FFI/runtime fixes:
+    - sparse query chunking now uses the query-side C-ABI dimension
+    - sparse bitset lookup now maps `doc_id -> row ordinal`
+    - sparse search routing covers both direct and bitset C-ABI entrypoints
+  - revalidated sparse library coverage locally and on the remote authority
+    machine.
+  - rebuilt the Milvus-consumed `libknowhere_rs.so` on `hannsdb-x86` and
+    reran the sparse-only standalone integration surface.
+  - confirmed the Milvus standalone sparse-only manifest is now fully green:
+    - `/data/work/milvus-rs-integ/artifacts/standalone-sparse-only-20260330-1/summary.json`
+    - `14 / 14 PASS`
+- Verification:
+  - local:
+    - `cargo test --lib test_ffi_sparse_inverted_search_accepts_query_dim_larger_than_index_dim -- --nocapture` -> `ok`
+    - `cargo test --lib test_search_with_bitset_sparse_inverted_accepts_query_dim_larger_than_index_dim -- --nocapture` -> `ok`
+    - `cargo test --lib sparse_inverted -- --nocapture` -> `ok` (`35 passed`)
+    - `cargo test --lib sparse_wand -- --nocapture` -> `ok` (`13 passed`)
+    - `rustfmt --check src/ffi.rs src/faiss/sparse_inverted.rs src/faiss/sparse_wand.rs` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `bash scripts/remote/test.sh --command "cargo test --lib sparse_wand -- --nocapture"` -> `ok` (`run_id=20260330T004200Z_45499`)
+    - `bash scripts/remote/test.sh --command "cargo test --lib sparse_inverted -- --nocapture"` -> `ok` (`run_id=20260330T004221Z_45730`)
+  - Milvus integration:
+    - rebuilt `/data/work/milvus-rs-integ/knowhere-rs-target/release/libknowhere_rs.so` on `hannsdb-x86`
+    - grouped sparse go standalone lane passed on `hannsdb-x86`
+    - sparse-only manifest rerun passed with `/data/work/milvus-rs-integ/artifacts/standalone-sparse-only-20260330-1/summary.json`
+- Result:
+  - `authority_result=pass`
+- Notes:
+  - this closes the sparse standalone blocker previously tracked in the Milvus
+    replaceability matrix as issue `0024`.
+  - no `feature-list.json` entry changed in this session; this was a
+    bugfix-and-integration closure round outside the tracked benchmark feature
+    queue.
 
 ### Session 232 - 2026-03-29
 - Focus: `extended-rabitq-screen`

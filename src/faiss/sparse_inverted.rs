@@ -8,7 +8,7 @@ use crate::dataset::Dataset;
 use crate::index::{AnnIterator, Index, IndexError, SearchResult};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
 
@@ -303,6 +303,12 @@ pub struct SparseInvertedIndex {
     bm25_params: Option<Bm25Params>,
     /// 每个文档的行和 (用于 BM25)
     row_sums: Vec<f32>,
+    /// 已索引文档 ID（保留插入顺序，供零分补齐和空向量重建使用）
+    #[serde(default)]
+    doc_ids: Vec<i64>,
+    /// 文档 ID 到插入序号的映射，用于 bitset 过滤和稳定恢复 row 语义
+    #[serde(default)]
+    doc_id_to_row: HashMap<i64, usize>,
     /// 向量数量
     n_rows: usize,
     /// 最大维度
@@ -331,19 +337,49 @@ impl SparseInvertedIndex {
             metric_type,
             bm25_params: None,
             row_sums: Vec::new(),
+            doc_ids: Vec::new(),
+            doc_id_to_row: HashMap::new(),
             n_rows: 0,
             max_dim: 0,
             next_dim_id: 0,
         }
     }
 
-    pub(crate) fn save_to_path(&self, path: &str) -> Result<(), IndexError> {
+    fn rebuild_doc_id_to_row(&mut self) {
+        self.doc_id_to_row.clear();
+        self.doc_id_to_row.extend(
+            self.doc_ids
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(row, doc_id)| (doc_id, row)),
+        );
+    }
+
+    pub(crate) fn serialize_to_bytes(&self) -> Result<Vec<u8>, IndexError> {
         let snapshot = SparseInvertedSnapshot {
             version: SPARSE_INVERTED_SNAPSHOT_VERSION,
             index: self.clone(),
         };
-        let bytes =
-            bincode::serialize(&snapshot).map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        bincode::serialize(&snapshot).map_err(|e| IndexError::Unsupported(e.to_string()))
+    }
+
+    pub(crate) fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, IndexError> {
+        let snapshot: SparseInvertedSnapshot =
+            bincode::deserialize(bytes).map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        if snapshot.version != SPARSE_INVERTED_SNAPSHOT_VERSION {
+            return Err(IndexError::Unsupported(format!(
+                "unsupported sparse snapshot version {}",
+                snapshot.version
+            )));
+        }
+        let mut index = snapshot.index;
+        index.rebuild_doc_id_to_row();
+        Ok(index)
+    }
+
+    pub(crate) fn save_to_path(&self, path: &str) -> Result<(), IndexError> {
+        let bytes = self.serialize_to_bytes()?;
         let mut file = File::create(path).map_err(|e| IndexError::Unsupported(e.to_string()))?;
         file.write_all(&bytes)
             .and_then(|_| file.flush())
@@ -355,15 +391,7 @@ impl SparseInvertedIndex {
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)
             .map_err(|e| IndexError::Unsupported(e.to_string()))?;
-        let snapshot: SparseInvertedSnapshot =
-            bincode::deserialize(&bytes).map_err(|e| IndexError::Unsupported(e.to_string()))?;
-        if snapshot.version != SPARSE_INVERTED_SNAPSHOT_VERSION {
-            return Err(IndexError::Unsupported(format!(
-                "unsupported sparse snapshot version {}",
-                snapshot.version
-            )));
-        }
-        *self = snapshot.index;
+        *self = Self::deserialize_from_bytes(&bytes)?;
         Ok(())
     }
 
@@ -381,6 +409,9 @@ impl SparseInvertedIndex {
 
     /// 添加向量
     pub fn add(&mut self, vector: &SparseVector, doc_id: i64) -> Result<(), String> {
+        self.doc_id_to_row.insert(doc_id, self.doc_ids.len());
+        self.doc_ids.push(doc_id);
+
         // 更新最大维度
         for elem in &vector.elements {
             if elem.dim > self.max_dim {
@@ -469,30 +500,12 @@ impl SparseInvertedIndex {
         // 解析查询向量 (应用 drop_ratio)
         let q_vec = self.parse_query(query, 0.0);
         if q_vec.is_empty() {
-            return vec![];
+            return self.finalize_search_results(Vec::new(), k, bitset);
         }
-
-        // 使用堆维护 top-k
-        let mut heap = MaxMinHeap::new(k);
 
         // 计算所有文档分数
         let scores = self.compute_all_distances(&q_vec);
-
-        // 添加到堆
-        for (doc_id, score) in scores {
-            if score != 0.0 {
-                // 检查 bitset
-                if let Some(bs) = bitset {
-                    if (doc_id as usize) < bs.len() && bs[doc_id as usize] {
-                        continue; // 被过滤
-                    }
-                }
-                heap.push(doc_id, score);
-            }
-        }
-
-        // 返回排序结果
-        heap.into_sorted_vec()
+        self.finalize_search_results(scores, k, bitset)
     }
 
     /// 计算所有文档的距离/分数
@@ -581,7 +594,10 @@ impl SparseInvertedIndex {
         }
 
         if elements.is_empty() {
-            None
+            self.doc_ids
+                .iter()
+                .any(|&indexed_doc_id| indexed_doc_id == doc_id)
+                .then(SparseVector::new)
         } else {
             let mut elems: Vec<_> = elements
                 .into_iter()
@@ -663,6 +679,84 @@ impl SparseInvertedIndex {
         let doc_id = ids.get(cursor).copied()?;
         let val = vals.get(cursor).copied()?;
         Some((doc_id, val))
+    }
+
+    fn doc_filtered(&self, doc_id: i64, bitset: Option<&[bool]>) -> bool {
+        let Some(row) = self.doc_id_to_row.get(&doc_id).copied() else {
+            return false;
+        };
+        bitset.and_then(|bs| bs.get(row)).copied().unwrap_or(false)
+    }
+
+    fn sort_results_desc(results: &mut [(i64, f32)]) {
+        results.sort_by(|(lhs_id, lhs_score), (rhs_id, rhs_score)| {
+            rhs_score
+                .partial_cmp(lhs_score)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| lhs_id.cmp(rhs_id))
+        });
+    }
+
+    fn finalize_search_results(
+        &self,
+        mut scored: Vec<(i64, f32)>,
+        k: usize,
+        bitset: Option<&[bool]>,
+    ) -> Vec<(i64, f32)> {
+        if k == 0 {
+            return Vec::new();
+        }
+
+        Self::sort_results_desc(&mut scored);
+
+        let mut positive = Vec::new();
+        let mut negative = Vec::new();
+        let mut selected_ids = HashSet::with_capacity(scored.len());
+
+        for (doc_id, score) in scored {
+            if self.doc_filtered(doc_id, bitset) || !selected_ids.insert(doc_id) {
+                continue;
+            }
+            match score.partial_cmp(&0.0).unwrap_or(Ordering::Equal) {
+                Ordering::Greater => positive.push((doc_id, score)),
+                Ordering::Less => negative.push((doc_id, score)),
+                Ordering::Equal => {
+                    selected_ids.remove(&doc_id);
+                }
+            }
+        }
+
+        let mut results = Vec::with_capacity(k.min(self.doc_ids.len()));
+        for item in positive {
+            if results.len() == k {
+                return results;
+            }
+            results.push(item);
+        }
+
+        if results.len() < k {
+            for &doc_id in &self.doc_ids {
+                if results.len() == k {
+                    return results;
+                }
+                if selected_ids.contains(&doc_id) || self.doc_filtered(doc_id, bitset) {
+                    continue;
+                }
+                selected_ids.insert(doc_id);
+                results.push((doc_id, 0.0));
+            }
+        }
+
+        if results.len() < k {
+            for item in negative {
+                if results.len() == k {
+                    break;
+                }
+                results.push(item);
+            }
+        }
+
+        results
     }
 }
 
@@ -903,7 +997,7 @@ impl<'a> SparseInvertedSearcher<'a> {
             .collect();
 
         if query_terms.is_empty() {
-            return Vec::new();
+            return self.index.finalize_search_results(Vec::new(), k, bitset);
         }
 
         let mut cursors: Vec<usize> = vec![0; query_terms.len()];
@@ -950,7 +1044,8 @@ impl<'a> SparseInvertedSearcher<'a> {
             }
         }
 
-        heap.into_sorted_vec()
+        self.index
+            .finalize_search_results(heap.into_sorted_vec(), k, bitset)
     }
 
     /// MaxScore 搜索
@@ -1058,6 +1153,17 @@ mod tests {
     }
 
     #[test]
+    fn test_sparse_inverted_index_get_vector_preserves_empty_doc() {
+        let mut index = SparseInvertedIndex::new(SparseMetricType::Ip);
+        index.add(&SparseVector::new(), 7).unwrap();
+
+        let retrieved = index
+            .get_vector_by_id(7)
+            .expect("empty sparse doc should still be addressable");
+        assert!(retrieved.elements.is_empty());
+    }
+
+    #[test]
     fn test_bm25_params() {
         let params = Bm25Params::new(1.5, 0.75, 100.0);
 
@@ -1153,6 +1259,41 @@ mod tests {
         let query = Dataset::from_vectors(vec![1.0, 0.0, 0.0, 0.0], 4);
         let result = Index::search(&index, &query, 1).unwrap();
         assert_eq!(result.ids.len(), 1);
+    }
+
+    #[test]
+    fn test_sparse_inverted_index_search_pads_zero_score_docs_to_topk() {
+        let mut index = SparseInvertedIndex::new(SparseMetricType::Ip);
+        index
+            .add(&SparseVector::from_pairs(&[(0, 1.0)]), 0)
+            .unwrap();
+        index
+            .add(&SparseVector::from_pairs(&[(1, 1.0)]), 1)
+            .unwrap();
+        index.add(&SparseVector::new(), 2).unwrap();
+
+        let query = SparseVector::from_pairs(&[(9, 1.0)]);
+        let results = index.search(&query, 3, None);
+
+        assert_eq!(results, vec![(0, 0.0), (1, 0.0), (2, 0.0)]);
+    }
+
+    #[test]
+    fn test_wand_search_pads_zero_score_docs_to_topk() {
+        let mut index = SparseInvertedIndex::new(SparseMetricType::Ip);
+        index
+            .add(&SparseVector::from_pairs(&[(0, 1.0)]), 0)
+            .unwrap();
+        index
+            .add(&SparseVector::from_pairs(&[(1, 1.0)]), 1)
+            .unwrap();
+        index.add(&SparseVector::new(), 2).unwrap();
+
+        let query = SparseVector::from_pairs(&[(9, 1.0)]);
+        let results = SparseInvertedSearcher::new(&index, InvertedIndexAlgo::DaatWand)
+            .search(&query, 3, None);
+
+        assert_eq!(results, vec![(0, 0.0), (1, 0.0), (2, 0.0)]);
     }
 
     #[test]

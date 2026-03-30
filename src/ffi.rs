@@ -53,7 +53,7 @@ use crate::api::{
 };
 use crate::faiss::{HnswIndex, IvfFlatIndex, IvfPqIndex, MemIndex, ScaNNConfig, ScaNNIndex};
 use crate::index::Index;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// C API 错误码
@@ -146,6 +146,15 @@ impl Default for CIndexConfig {
             data_type: 101, // Default to Float (101)
         }
     }
+}
+
+const SPARSE_PERSISTENCE_ENVELOPE_VERSION: u32 = 1;
+
+#[derive(Serialize, Deserialize)]
+struct SparsePersistenceEnvelope {
+    version: u32,
+    dim: usize,
+    payload: Vec<u8>,
 }
 
 /// C 风格的搜索结果
@@ -297,6 +306,7 @@ struct IndexWrapper {
     ivf_sq8: Option<crate::faiss::IvfSq8Index>,
     ivf_flat: Option<crate::faiss::IvfFlatIndex>,
     bin_ivf_flat: Option<crate::faiss::BinIvfFlatIndex>,
+    sparse_inverted: Option<crate::faiss::SparseInvertedIndex>,
     sparse_wand: Option<crate::faiss::SparseWandIndex>,
     sparse_wand_cc: Option<crate::faiss::SparseWandIndexCC>,
     minhash_lsh: Option<crate::index::MinHashLSHIndex>,
@@ -304,6 +314,57 @@ struct IndexWrapper {
 }
 
 impl IndexWrapper {
+    fn dense_chunk_to_sparse_query(
+        query_chunk: &[f32],
+    ) -> crate::faiss::sparse_inverted::SparseVector {
+        let elements = query_chunk
+            .iter()
+            .enumerate()
+            .filter(|(_, &v)| v != 0.0)
+            .map(|(j, &v)| crate::faiss::sparse_inverted::SparseVecElement {
+                dim: j as u32,
+                val: v,
+            })
+            .collect();
+        crate::faiss::sparse_inverted::SparseVector { elements }
+    }
+
+    fn search_sparse_queries<F>(
+        &self,
+        query: &[f32],
+        query_dim: usize,
+        mut search_one: F,
+    ) -> Result<ApiSearchResult, CError>
+    where
+        F: FnMut(&crate::faiss::sparse_inverted::SparseVector) -> Vec<(i64, f32)>,
+    {
+        if query_dim == 0 || query.is_empty() || query.len() % query_dim != 0 {
+            return Err(CError::InvalidArg);
+        }
+
+        let start = std::time::Instant::now();
+        let num_queries = query.len() / query_dim;
+        let mut ids = Vec::new();
+        let mut distances = Vec::new();
+
+        ids.reserve(num_queries);
+        distances.reserve(num_queries);
+
+        for query_chunk in query.chunks(query_dim) {
+            let sparse_query = Self::dense_chunk_to_sparse_query(query_chunk);
+            let results = search_one(&sparse_query);
+            ids.reserve(results.len());
+            distances.reserve(results.len());
+            for (id, distance) in results {
+                ids.push(id);
+                distances.push(distance);
+            }
+        }
+
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        Ok(ApiSearchResult::new(ids, distances, elapsed_ms))
+    }
+
     fn new(config: CIndexConfig) -> Option<Self> {
         let dim = config.dim;
         if dim == 0 {
@@ -381,6 +442,7 @@ impl IndexWrapper {
                     ivf_sq8: None,
                     ivf_flat: None,
                     bin_ivf_flat: None,
+                    sparse_inverted: None,
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
@@ -416,6 +478,7 @@ impl IndexWrapper {
                     ivf_sq8: None,
                     ivf_flat: None,
                     bin_ivf_flat: None,
+                    sparse_inverted: None,
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
@@ -424,7 +487,10 @@ impl IndexWrapper {
             }
             CIndexType::Scann => {
                 if metric != MetricType::L2 {
-                    eprintln!("ScaNN only supports L2 metric; got metric_type={:?}", metric);
+                    eprintln!(
+                        "ScaNN only supports L2 metric; got metric_type={:?}",
+                        metric
+                    );
                     return None;
                 }
                 if config.ef_search > 0 {
@@ -463,6 +529,7 @@ impl IndexWrapper {
                     ivf_sq8: None,
                     ivf_flat: None,
                     bin_ivf_flat: None,
+                    sparse_inverted: None,
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
@@ -544,6 +611,7 @@ impl IndexWrapper {
                     ivf_sq8: None,
                     ivf_flat: None,
                     bin_ivf_flat: None,
+                    sparse_inverted: None,
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
@@ -577,6 +645,7 @@ impl IndexWrapper {
                     ivf_sq8: None,
                     ivf_flat: None,
                     bin_ivf_flat: None,
+                    sparse_inverted: None,
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
@@ -625,6 +694,7 @@ impl IndexWrapper {
                     ivf_sq8: None,
                     ivf_flat: None,
                     bin_ivf_flat: None,
+                    sparse_inverted: None,
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
@@ -665,6 +735,7 @@ impl IndexWrapper {
                     ivf_sq8: None,
                     ivf_flat: None,
                     bin_ivf_flat: None,
+                    sparse_inverted: None,
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
@@ -703,6 +774,7 @@ impl IndexWrapper {
                     ivf_sq8: Some(ivf_sq8),
                     ivf_flat: None,
                     bin_ivf_flat: None,
+                    sparse_inverted: None,
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
@@ -740,6 +812,7 @@ impl IndexWrapper {
                     ivf_sq8: None,
                     ivf_flat: Some(ivf_flat),
                     bin_ivf_flat: None,
+                    sparse_inverted: None,
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
@@ -773,6 +846,7 @@ impl IndexWrapper {
                     ivf_sq8: None,
                     ivf_flat: None,
                     bin_ivf_flat: None,
+                    sparse_inverted: None,
                     dim,
                     sparse_wand: None,
                     sparse_wand_cc: None,
@@ -796,6 +870,7 @@ impl IndexWrapper {
                     ivf_sq8: None,
                     ivf_flat: None,
                     bin_ivf_flat: None,
+                    sparse_inverted: None,
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
@@ -830,8 +905,9 @@ impl IndexWrapper {
                         bin_flat: None,
                         binary_hnsw: Some(hnsw),
                         ivf_sq8: None,
-                    ivf_flat: None,
-                    bin_ivf_flat: None,
+                        ivf_flat: None,
+                        bin_ivf_flat: None,
+                        sparse_inverted: None,
                         sparse_wand: None,
                         sparse_wand_cc: None,
                         minhash_lsh: None,
@@ -866,6 +942,38 @@ impl IndexWrapper {
                     ivf_sq8: None,
                     ivf_flat: None,
                     bin_ivf_flat: Some(bin_ivf_flat),
+                    sparse_inverted: None,
+                    dim,
+                    sparse_wand: None,
+                    sparse_wand_cc: None,
+                    minhash_lsh: None,
+                })
+            }
+            CIndexType::SparseInverted => {
+                use crate::faiss::sparse_inverted::SparseMetricType;
+                if metric != MetricType::Ip {
+                    eprintln!(
+                        "SparseInverted only supports InnerProduct metric; got metric_type={:?}",
+                        metric
+                    );
+                    return None;
+                }
+                let sparse_inverted = crate::faiss::SparseInvertedIndex::new(SparseMetricType::Ip);
+                Some(Self {
+                    flat: None,
+                    hnsw: None,
+                    scann: None,
+                    hnsw_prq: None,
+                    ivf_rabitq: None,
+                    hnsw_sq: None,
+                    hnsw_pq: None,
+                    ivf_pq: None,
+                    bin_flat: None,
+                    binary_hnsw: None,
+                    ivf_sq8: None,
+                    ivf_flat: None,
+                    bin_ivf_flat: None,
+                    sparse_inverted: Some(sparse_inverted),
                     dim,
                     sparse_wand: None,
                     sparse_wand_cc: None,
@@ -898,6 +1006,7 @@ impl IndexWrapper {
                     ivf_sq8: None,
                     ivf_flat: None,
                     bin_ivf_flat: None,
+                    sparse_inverted: None,
                     dim,
                     sparse_wand: Some(sparse_wand),
                     sparse_wand_cc: None,
@@ -935,6 +1044,7 @@ impl IndexWrapper {
                     ivf_sq8: None,
                     ivf_flat: None,
                     bin_ivf_flat: None,
+                    sparse_inverted: None,
                     dim,
                     sparse_wand: None,
                     sparse_wand_cc: Some(sparse_wand_cc),
@@ -958,6 +1068,7 @@ impl IndexWrapper {
                     ivf_sq8: None,
                     ivf_flat: None,
                     bin_ivf_flat: None,
+                    sparse_inverted: None,
                     dim,
                     sparse_wand: None,
                     sparse_wand_cc: None,
@@ -994,6 +1105,32 @@ impl IndexWrapper {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
         } else if let Some(ref mut idx) = self.ivf_pq {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
+        } else if let Some(ref mut idx) = self.sparse_inverted {
+            let dim = self.dim;
+            let n_vectors = vectors.len() / dim;
+            let ids_vec: Vec<i64> = if let Some(ids) = ids {
+                ids.to_vec()
+            } else {
+                (0..n_vectors as i64).collect()
+            };
+
+            for (i, chunk) in vectors.chunks_exact(dim).enumerate() {
+                let elements: Vec<crate::faiss::sparse_inverted::SparseVecElement> = chunk
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, &v)| v != 0.0)
+                    .map(|(j, &v)| crate::faiss::sparse_inverted::SparseVecElement {
+                        dim: j as u32,
+                        val: v,
+                    })
+                    .collect();
+                let sparse_vec = crate::faiss::sparse_inverted::SparseVector { elements };
+                let doc_id = ids_vec.get(i).copied().unwrap_or(i as i64);
+                if idx.add(&sparse_vec, doc_id).is_err() {
+                    return Err(CError::Internal);
+                }
+            }
+            Ok(n_vectors)
         } else if let Some(ref mut idx) = self.sparse_wand {
             // Sparse WAND: interpret vectors as sparse (dim, value) pairs
             // For simplicity, treat each vector as a sparse vector with non-zero elements
@@ -1108,6 +1245,9 @@ impl IndexWrapper {
             Ok(())
         } else if let Some(ref mut idx) = self.ivf_pq {
             idx.train(vectors).map_err(|_| CError::Internal)?;
+            Ok(())
+        } else if self.sparse_inverted.is_some() || self.sparse_wand.is_some() {
+            let _ = vectors;
             Ok(())
         } else {
             Err(CError::InvalidArg)
@@ -1224,26 +1364,14 @@ impl IndexWrapper {
                 results.distances,
                 elapsed_ms,
             ))
+        } else if let Some(ref idx) = self.sparse_inverted {
+            self.search_sparse_queries(query, self.dim, |sparse_query| {
+                idx.search(sparse_query, top_k, None)
+            })
         } else if let Some(ref idx) = self.sparse_wand {
-            // Sparse WAND search: convert query to sparse vector
-            let _dim = self.dim;
-            let elements: Vec<crate::faiss::sparse_inverted::SparseVecElement> = query
-                .iter()
-                .enumerate()
-                .filter(|(_, &v)| v != 0.0)
-                .map(|(j, &v)| crate::faiss::sparse_inverted::SparseVecElement {
-                    dim: j as u32,
-                    val: v,
-                })
-                .collect();
-            let sparse_query = crate::faiss::sparse_inverted::SparseVector { elements };
-
-            let start = std::time::Instant::now();
-            let results = idx.search(&sparse_query, top_k, None);
-            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-
-            let (ids, distances): (Vec<i64>, Vec<f32>) = results.into_iter().unzip();
-            Ok(ApiSearchResult::new(ids, distances, elapsed_ms))
+            self.search_sparse_queries(query, self.dim, |sparse_query| {
+                idx.search(sparse_query, top_k, None)
+            })
         } else {
             Err(CError::InvalidArg)
         }
@@ -1351,6 +1479,8 @@ impl IndexWrapper {
             idx.ntotal()
         } else if let Some(ref idx) = self.ivf_pq {
             idx.ntotal()
+        } else if let Some(ref idx) = self.sparse_inverted {
+            idx.n_rows()
         } else if let Some(ref idx) = self.sparse_wand {
             idx.n_rows()
         } else if let Some(ref idx) = self.sparse_wand_cc {
@@ -1378,6 +1508,8 @@ impl IndexWrapper {
         } else if let Some(ref idx) = self.ivf_sq8 {
             idx.is_trained()
         } else if let Some(ref idx) = self.ivf_flat {
+            idx.is_trained()
+        } else if let Some(ref idx) = self.sparse_inverted {
             idx.is_trained()
         } else if let Some(ref idx) = self.sparse_wand {
             idx.is_trained()
@@ -1416,6 +1548,8 @@ impl IndexWrapper {
             idx.ntotal() * self.dim * std::mem::size_of::<f32>()
         } else if let Some(ref idx) = self.ivf_pq {
             idx.ntotal() * self.dim
+        } else if let Some(ref idx) = self.sparse_inverted {
+            idx.size()
         } else if let Some(ref idx) = self.sparse_wand {
             idx.size()
         } else if let Some(ref idx) = self.sparse_wand_cc {
@@ -1455,6 +1589,8 @@ impl IndexWrapper {
             "IVF_PQ"
         } else if self.bin_ivf_flat.is_some() {
             "BinIVFFlat"
+        } else if self.sparse_inverted.is_some() {
+            "SparseInverted"
         } else if self.sparse_wand.is_some() {
             "SparseWand"
         } else if self.sparse_wand_cc.is_some() {
@@ -1483,6 +1619,11 @@ impl IndexWrapper {
         } else if let Some(ref _idx) = self.scann {
             // ScaNN doesn't expose metric_type directly, assume L2
             "L2"
+        } else if self.sparse_inverted.is_some()
+            || self.sparse_wand.is_some()
+            || self.sparse_wand_cc.is_some()
+        {
+            "IP"
         } else {
             "Unknown"
         }
@@ -1507,6 +1648,8 @@ impl IndexWrapper {
             idx.has_raw_data()
         } else if self.ivf_pq.is_some() {
             false
+        } else if let Some(ref idx) = self.sparse_inverted {
+            idx.has_raw_data()
         } else if let Some(ref idx) = self.sparse_wand {
             idx.has_raw_data()
         } else if let Some(ref idx) = self.minhash_lsh {
@@ -1517,7 +1660,10 @@ impl IndexWrapper {
     }
 
     fn additional_scalar_support_mode(&self) -> &'static str {
-        if self.sparse_wand.is_some() || self.sparse_wand_cc.is_some() {
+        if self.sparse_inverted.is_some()
+            || self.sparse_wand.is_some()
+            || self.sparse_wand_cc.is_some()
+        {
             "partial"
         } else {
             "unsupported"
@@ -1628,6 +1774,16 @@ impl IndexWrapper {
                 ann_iterator: "unsupported",
                 persistence: "supported",
             }
+        } else if self.sparse_inverted.is_some() {
+            IndexCapabilitySummary {
+                get_vector_by_ids: if self.has_raw_data() {
+                    "supported"
+                } else {
+                    "unsupported"
+                },
+                ann_iterator: "supported",
+                persistence: "supported",
+            }
         } else if self.sparse_wand.is_some() {
             IndexCapabilitySummary {
                 get_vector_by_ids: if self.has_raw_data() {
@@ -1636,7 +1792,7 @@ impl IndexWrapper {
                     "unsupported"
                 },
                 ann_iterator: "supported",
-                persistence: "unsupported",
+                persistence: "supported",
             }
         } else if self.sparse_wand_cc.is_some() {
             IndexCapabilitySummary {
@@ -1670,10 +1826,7 @@ impl IndexWrapper {
                 memory_serialize: "supported",
                 deserialize_from_file: "supported",
             }
-        } else if self.scann.is_some()
-            || self.hnsw_prq.is_some()
-            || self.minhash_lsh.is_some()
-        {
+        } else if self.scann.is_some() || self.hnsw_prq.is_some() || self.minhash_lsh.is_some() {
             PersistenceSemantics {
                 file_save_load: "supported",
                 memory_serialize: "unsupported",
@@ -1698,6 +1851,12 @@ impl IndexWrapper {
                 deserialize_from_file: "supported",
             }
         } else if self.ivf_pq.is_some() {
+            PersistenceSemantics {
+                file_save_load: "supported",
+                memory_serialize: "supported",
+                deserialize_from_file: "supported",
+            }
+        } else if self.sparse_inverted.is_some() || self.sparse_wand.is_some() {
             PersistenceSemantics {
                 file_save_load: "supported",
                 memory_serialize: "supported",
@@ -1772,7 +1931,10 @@ impl IndexWrapper {
                 persistence,
                 metadata_granularity: "per-index-capability",
             }
-        } else if self.sparse_wand.is_some() || self.sparse_wand_cc.is_some() {
+        } else if self.sparse_inverted.is_some()
+            || self.sparse_wand.is_some()
+            || self.sparse_wand_cc.is_some()
+        {
             IndexMetaSemantics {
                 family: "sparse",
                 raw_data_gate: if self.has_raw_data() {
@@ -1911,6 +2073,22 @@ impl IndexWrapper {
                 }
                 Err(_) => Err(CError::NotFound),
             }
+        } else if let Some(ref idx) = self.sparse_inverted {
+            let mut vectors = Vec::with_capacity(ids.len() * self.dim);
+            let mut num_found = 0usize;
+            for &id in ids {
+                let sparse = idx.get_vector_by_id(id).ok_or(CError::NotFound)?;
+                let mut dense = vec![0.0f32; self.dim];
+                for elem in sparse.elements {
+                    let dim = elem.dim as usize;
+                    if dim < self.dim {
+                        dense[dim] = elem.val;
+                    }
+                }
+                vectors.extend_from_slice(&dense);
+                num_found += 1;
+            }
+            Ok((vectors, num_found))
         } else if let Some(ref idx) = self.minhash_lsh {
             // MinHashLSH: get vectors by IDs (returns byte data)
             match idx.get_vector_by_ids(ids) {
@@ -1956,6 +2134,12 @@ impl IndexWrapper {
             idx.serialize_to_bytes().map_err(|_| CError::Internal)
         } else if let Some(ref idx) = self.ivf_pq {
             idx.serialize_to_bytes().map_err(|_| CError::Internal)
+        } else if let Some(ref idx) = self.sparse_inverted {
+            let payload = idx.serialize_to_bytes().map_err(|_| CError::Internal)?;
+            self.serialize_sparse_payload(payload)
+        } else if let Some(ref idx) = self.sparse_wand {
+            let payload = idx.serialize_to_bytes().map_err(|_| CError::Internal)?;
+            self.serialize_sparse_payload(payload)
         } else if let Some(ref _idx) = self.scann {
             // ScaNN 暂不支持内存序列化
             Err(CError::NotImplemented)
@@ -1968,6 +2152,7 @@ impl IndexWrapper {
     ///
     /// 从序列化的字节数据恢复索引状态。
     fn deserialize(&mut self, data: &[u8]) -> Result<(), CError> {
+        let sparse_fallback_dim = self.dim.max(1);
         if let Some(ref mut idx) = self.flat {
             idx.deserialize_from_memory(data)
                 .map_err(|_| CError::Internal)
@@ -1991,6 +2176,20 @@ impl IndexWrapper {
                 .map_err(|_| CError::Internal)?;
             *idx = loaded;
             Ok(())
+        } else if let Some(ref mut idx) = self.sparse_inverted {
+            let (dim, payload) = Self::deserialize_sparse_payload(sparse_fallback_dim, data)?;
+            let loaded = crate::faiss::SparseInvertedIndex::deserialize_from_bytes(&payload)
+                .map_err(|_| CError::Internal)?;
+            *idx = loaded;
+            self.dim = dim;
+            Ok(())
+        } else if let Some(ref mut idx) = self.sparse_wand {
+            let (dim, payload) = Self::deserialize_sparse_payload(sparse_fallback_dim, data)?;
+            let loaded = crate::faiss::SparseWandIndex::deserialize_from_bytes(&payload)
+                .map_err(|_| CError::Internal)?;
+            *idx = loaded;
+            self.dim = dim;
+            Ok(())
         } else if let Some(ref _idx) = self.scann {
             Err(CError::NotImplemented)
         } else {
@@ -2008,6 +2207,14 @@ impl IndexWrapper {
             idx.save(path).map_err(|_| CError::Internal)
         } else if let Some(ref idx) = self.hnsw {
             idx.save(path).map_err(|_| CError::Internal)
+        } else if let Some(ref idx) = self.sparse_inverted {
+            let _ = idx;
+            let bytes = self.serialize()?;
+            std::fs::write(path, bytes).map_err(|_| CError::Internal)
+        } else if let Some(ref idx) = self.sparse_wand {
+            let _ = idx;
+            let bytes = self.serialize()?;
+            std::fs::write(path, bytes).map_err(|_| CError::Internal)
         } else if let Some(ref idx) = self.ivf_flat {
             idx.save(path).map_err(|_| CError::Internal)
         } else if let Some(ref idx) = self.scann {
@@ -2035,8 +2242,17 @@ impl IndexWrapper {
             idx.load(path).map_err(|_| CError::Internal)
         } else if let Some(ref mut idx) = self.hnsw {
             idx.load(path).map_err(|_| CError::Internal)
+        } else if let Some(ref mut idx) = self.sparse_inverted {
+            let _ = idx;
+            let bytes = std::fs::read(path).map_err(|_| CError::Internal)?;
+            self.deserialize(&bytes)
+        } else if let Some(ref mut idx) = self.sparse_wand {
+            let _ = idx;
+            let bytes = std::fs::read(path).map_err(|_| CError::Internal)?;
+            self.deserialize(&bytes)
         } else if let Some(ref mut idx) = self.ivf_flat {
-            *idx = crate::faiss::IvfFlatIndex::load(path, idx.dim()).map_err(|_| CError::Internal)?;
+            *idx =
+                crate::faiss::IvfFlatIndex::load(path, idx.dim()).map_err(|_| CError::Internal)?;
             Ok(())
         } else if let Some(ref mut idx) = self.scann {
             idx.load(path.to_str().unwrap())
@@ -2054,6 +2270,27 @@ impl IndexWrapper {
         }
     }
 
+    fn serialize_sparse_payload(&self, payload: Vec<u8>) -> Result<Vec<u8>, CError> {
+        let envelope = SparsePersistenceEnvelope {
+            version: SPARSE_PERSISTENCE_ENVELOPE_VERSION,
+            dim: self.dim.max(1),
+            payload,
+        };
+        bincode::serialize(&envelope).map_err(|_| CError::Internal)
+    }
+
+    fn deserialize_sparse_payload(
+        fallback_dim: usize,
+        data: &[u8],
+    ) -> Result<(usize, Vec<u8>), CError> {
+        match bincode::deserialize::<SparsePersistenceEnvelope>(data) {
+            Ok(envelope) if envelope.version == SPARSE_PERSISTENCE_ENVELOPE_VERSION => {
+                Ok((envelope.dim.max(1), envelope.payload))
+            }
+            Ok(_) | Err(_) => Ok((fallback_dim.max(1), data.to_vec())),
+        }
+    }
+
     /// 创建 ANN 迭代器 (AnnIterator)
     ///
     /// 用于流式返回最近邻结果，支持更灵活的搜索控制。
@@ -2067,6 +2304,9 @@ impl IndexWrapper {
             idx.create_ann_iterator(query, bitset)
                 .map_err(|_| CError::NotImplemented)
         } else if let Some(ref idx) = self.scann {
+            idx.create_ann_iterator(query, bitset)
+                .map_err(|_| CError::NotImplemented)
+        } else if let Some(ref idx) = self.sparse_inverted {
             idx.create_ann_iterator(query, bitset)
                 .map_err(|_| CError::NotImplemented)
         } else if let Some(ref idx) = self.hnsw_pq {
@@ -2178,7 +2418,23 @@ pub extern "C" fn knowhere_search(
 
         let query_slice = std::slice::from_raw_parts(query, count * dim);
 
-        match index.search(query_slice, top_k) {
+        let result = if let Some(ref idx) = index.sparse_inverted {
+            index.search_sparse_queries(query_slice, dim, |sparse_query| {
+                idx.search(sparse_query, top_k, None)
+            })
+        } else if let Some(ref idx) = index.sparse_wand {
+            index.search_sparse_queries(query_slice, dim, |sparse_query| {
+                idx.search(sparse_query, top_k, None)
+            })
+        } else if let Some(ref idx) = index.sparse_wand_cc {
+            index.search_sparse_queries(query_slice, dim, |sparse_query| {
+                idx.search(sparse_query, top_k, None)
+            })
+        } else {
+            index.search(query_slice, top_k)
+        };
+
+        match result {
             Ok(result) => {
                 let mut ids = result.ids;
                 let mut distances = result.distances;
@@ -2273,6 +2529,7 @@ pub extern "C" fn knowhere_search_with_bitset(
             std::slice::from_raw_parts(bitset_wrapper.data, bitset_wrapper.len.div_ceil(64))
                 .to_vec();
         let bitset_view = crate::bitset::BitsetView::from_vec(bitset_data, bitset_wrapper.len);
+        let sparse_bitset = crate::faiss::sparse_inverted::bitset_to_bool_vec(&bitset_view);
 
         // 使用 BitsetPredicate 进行搜索
         let req = SearchRequest {
@@ -2329,6 +2586,72 @@ pub extern "C" fn knowhere_search_with_bitset(
                         elapsed_ms: result.elapsed_ms as f32,
                     };
 
+                    Box::into_raw(Box::new(csr))
+                }
+                Err(_) => std::ptr::null_mut(),
+            }
+        } else if let Some(ref idx) = index.sparse_inverted {
+            match index.search_sparse_queries(query_slice, dim, |sparse_query| {
+                idx.search(sparse_query, top_k, Some(&sparse_bitset))
+            }) {
+                Ok(result) => {
+                    let mut ids = result.ids;
+                    let mut distances = result.distances;
+                    let num_results = ids.len();
+                    let ids_ptr = ids.as_mut_ptr();
+                    let distances_ptr = distances.as_mut_ptr();
+                    std::mem::forget(ids);
+                    std::mem::forget(distances);
+                    let csr = CSearchResult {
+                        ids: ids_ptr,
+                        distances: distances_ptr,
+                        num_results,
+                        elapsed_ms: result.elapsed_ms as f32,
+                    };
+                    Box::into_raw(Box::new(csr))
+                }
+                Err(_) => std::ptr::null_mut(),
+            }
+        } else if let Some(ref idx) = index.sparse_wand {
+            match index.search_sparse_queries(query_slice, dim, |sparse_query| {
+                idx.search(sparse_query, top_k, Some(&sparse_bitset))
+            }) {
+                Ok(result) => {
+                    let mut ids = result.ids;
+                    let mut distances = result.distances;
+                    let num_results = ids.len();
+                    let ids_ptr = ids.as_mut_ptr();
+                    let distances_ptr = distances.as_mut_ptr();
+                    std::mem::forget(ids);
+                    std::mem::forget(distances);
+                    let csr = CSearchResult {
+                        ids: ids_ptr,
+                        distances: distances_ptr,
+                        num_results,
+                        elapsed_ms: result.elapsed_ms as f32,
+                    };
+                    Box::into_raw(Box::new(csr))
+                }
+                Err(_) => std::ptr::null_mut(),
+            }
+        } else if let Some(ref idx) = index.sparse_wand_cc {
+            match index.search_sparse_queries(query_slice, dim, |sparse_query| {
+                idx.search(sparse_query, top_k, Some(&sparse_bitset))
+            }) {
+                Ok(result) => {
+                    let mut ids = result.ids;
+                    let mut distances = result.distances;
+                    let num_results = ids.len();
+                    let ids_ptr = ids.as_mut_ptr();
+                    let distances_ptr = distances.as_mut_ptr();
+                    std::mem::forget(ids);
+                    std::mem::forget(distances);
+                    let csr = CSearchResult {
+                        ids: ids_ptr,
+                        distances: distances_ptr,
+                        num_results,
+                        elapsed_ms: result.elapsed_ms as f32,
+                    };
                     Box::into_raw(Box::new(csr))
                 }
                 Err(_) => std::ptr::null_mut(),
@@ -2702,6 +3025,7 @@ pub extern "C" fn knowhere_get_index_type(
         "BinaryHNSW" => b"BinaryHNSW\0".as_ptr() as *const std::os::raw::c_char,
         "IVF_SQ8" => b"IVF_SQ8\0".as_ptr() as *const std::os::raw::c_char,
         "BinIVFFlat" => b"BinIVFFlat\0".as_ptr() as *const std::os::raw::c_char,
+        "SparseInverted" => b"SparseInverted\0".as_ptr() as *const std::os::raw::c_char,
         "SparseWand" => b"SparseWand\0".as_ptr() as *const std::os::raw::c_char,
         "SparseWandCC" => b"SparseWandCC\0".as_ptr() as *const std::os::raw::c_char,
         "MinHashLSH" => b"MinHashLSH\0".as_ptr() as *const std::os::raw::c_char,
@@ -4527,6 +4851,299 @@ mod tests {
     }
 
     #[test]
+    fn test_index_type_sparse_inverted() {
+        assert_index_type(
+            CIndexConfig {
+                index_type: CIndexType::SparseInverted,
+                metric_type: CMetricType::Ip,
+                dim: 64,
+                data_type: 104, // SparseFloatVector
+                ..Default::default()
+            },
+            "SparseInverted",
+        );
+    }
+
+    #[test]
+    fn test_ffi_sparse_inverted_metadata_contract() {
+        let sparse = knowhere_create_index(CIndexConfig {
+            index_type: CIndexType::SparseInverted,
+            metric_type: CMetricType::Ip,
+            dim: 16,
+            data_type: 104,
+            ..Default::default()
+        });
+        assert!(!sparse.is_null());
+
+        assert_eq!(knowhere_is_additional_scalar_supported(sparse, false), 0);
+        assert_eq!(knowhere_is_additional_scalar_supported(sparse, true), 1);
+
+        let sparse_meta_ptr = knowhere_get_index_meta(sparse);
+        assert!(!sparse_meta_ptr.is_null());
+        let sparse_meta_str = unsafe { std::ffi::CStr::from_ptr(sparse_meta_ptr) }
+            .to_str()
+            .unwrap();
+        let sparse_meta_json: serde_json::Value = serde_json::from_str(sparse_meta_str).unwrap();
+        assert_eq!(sparse_meta_json["index_type"], "SparseInverted");
+        assert_eq!(sparse_meta_json["is_trained"], true);
+        assert_eq!(sparse_meta_json["additional_scalar_supported"], true);
+        assert_eq!(
+            sparse_meta_json["additional_scalar"]["support_mode"],
+            "partial"
+        );
+        assert_eq!(
+            sparse_meta_json["capabilities"]["get_vector_by_ids"],
+            "supported"
+        );
+        assert_eq!(
+            sparse_meta_json["capabilities"]["ann_iterator"],
+            "supported"
+        );
+        assert_eq!(sparse_meta_json["capabilities"]["persistence"], "supported");
+        assert_eq!(sparse_meta_json["semantics"]["family"], "sparse");
+        assert_eq!(
+            sparse_meta_json["semantics"]["persistence_mode"],
+            "file_save_load+memory_serialize"
+        );
+        assert_eq!(
+            sparse_meta_json["semantics"]["persistence"]["file_save_load"],
+            "supported"
+        );
+        assert_eq!(
+            sparse_meta_json["semantics"]["persistence"]["memory_serialize"],
+            "supported"
+        );
+        assert_eq!(
+            sparse_meta_json["semantics"]["persistence"]["deserialize_from_file"],
+            "supported"
+        );
+        assert_eq!(
+            sparse_meta_json["resource_contract"]["mmap_supported"],
+            true
+        );
+
+        knowhere_free_cstring(sparse_meta_ptr);
+        knowhere_free_index(sparse);
+    }
+
+    #[test]
+    fn test_ffi_sparse_inverted_roundtrip_and_iterator() {
+        use std::ffi::CString;
+
+        let config = CIndexConfig {
+            index_type: CIndexType::SparseInverted,
+            metric_type: CMetricType::Ip,
+            dim: 8,
+            data_type: 104,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config.clone());
+        assert!(!index.is_null());
+
+        let vectors: Vec<f32> = vec![
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+        let ids = [10_i64, 11, 12];
+
+        assert_eq!(
+            knowhere_train_index(index, vectors.as_ptr(), 3, 8),
+            CError::Success as i32
+        );
+        assert_eq!(
+            knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 3, 8),
+            CError::Success as i32
+        );
+        assert_eq!(knowhere_get_index_count(index), 3);
+
+        let query_ids = [10_i64, 12];
+        let vector_result = knowhere_get_vectors_by_ids(index, query_ids.as_ptr(), query_ids.len());
+        assert!(!vector_result.is_null());
+        let vector_result = unsafe { &mut *vector_result };
+        assert_eq!(vector_result.num_vectors, 2);
+        assert_eq!(vector_result.dim, 8);
+        let dense = unsafe {
+            std::slice::from_raw_parts(
+                vector_result.vectors,
+                vector_result.num_vectors * vector_result.dim,
+            )
+        };
+        assert_eq!(dense[0], 1.0);
+        assert_eq!(dense[8 + 2], 3.0);
+        knowhere_free_vector_result(vector_result);
+
+        let path = std::env::temp_dir().join(format!(
+            "knowhere_rs_sparse_inverted_{}.bin",
+            std::process::id()
+        ));
+        let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+        assert_eq!(
+            knowhere_save_index(index, path_c.as_ptr()),
+            CError::Success as i32
+        );
+
+        let loaded = knowhere_create_index(CIndexConfig { dim: 1, ..config });
+        assert!(!loaded.is_null());
+        assert_eq!(
+            knowhere_load_index(loaded, path_c.as_ptr()),
+            CError::Success as i32
+        );
+        assert_eq!(knowhere_get_index_count(loaded), 3);
+        assert_eq!(knowhere_get_index_dim(loaded), 8);
+
+        let query = [0.0_f32, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let iter = knowhere_create_ann_iterator(loaded, query.as_ptr(), 1, 8, std::ptr::null());
+        assert!(!iter.is_null());
+        let mut id = -1_i64;
+        let mut dist = -1.0_f32;
+        assert_eq!(knowhere_ann_iterator_next(iter, &mut id, &mut dist), 1);
+        assert_eq!(id, 11);
+        assert!(dist > 0.0);
+        knowhere_free_ann_iterator(iter);
+
+        let _ = std::fs::remove_file(&path);
+        knowhere_free_index(loaded);
+        knowhere_free_index(index);
+    }
+
+    fn sparse_multi_query_config(index_type: CIndexType) -> CIndexConfig {
+        CIndexConfig {
+            index_type,
+            metric_type: CMetricType::Ip,
+            dim: 8,
+            data_type: 104,
+            ..Default::default()
+        }
+    }
+
+    fn sparse_multi_query_vectors() -> (Vec<f32>, [i64; 4]) {
+        (
+            vec![
+                4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //
+                3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //
+                0.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //
+                0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //
+            ],
+            [10_i64, 11, 12, 13],
+        )
+    }
+
+    #[test]
+    fn test_ffi_sparse_inverted_multi_query_search_returns_results_per_query() {
+        let config = sparse_multi_query_config(CIndexType::SparseInverted);
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        let (vectors, ids) = sparse_multi_query_vectors();
+        assert_eq!(
+            knowhere_train_index(index, vectors.as_ptr(), ids.len(), 8),
+            CError::Success as i32
+        );
+        assert_eq!(
+            knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), ids.len(), 8),
+            CError::Success as i32
+        );
+
+        let queries = vec![
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //
+        ];
+        let result = knowhere_search(index, queries.as_ptr(), 2, 2, 8);
+        assert!(!result.is_null());
+
+        unsafe {
+            let result_ref = &*result;
+            assert_eq!(result_ref.num_results, 4);
+            let result_ids = std::slice::from_raw_parts(result_ref.ids, result_ref.num_results);
+            assert_eq!(result_ids, &[10, 11, 12, 13]);
+        }
+
+        knowhere_free_result(result);
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_ffi_sparse_wand_multi_query_search_returns_results_per_query() {
+        let config = sparse_multi_query_config(CIndexType::SparseWand);
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        let (vectors, ids) = sparse_multi_query_vectors();
+        assert_eq!(
+            knowhere_train_index(index, vectors.as_ptr(), ids.len(), 8),
+            CError::Success as i32
+        );
+        assert_eq!(
+            knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), ids.len(), 8),
+            CError::Success as i32
+        );
+
+        let queries = vec![
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //
+        ];
+        let result = knowhere_search(index, queries.as_ptr(), 2, 2, 8);
+        assert!(!result.is_null());
+
+        unsafe {
+            let result_ref = &*result;
+            assert_eq!(result_ref.num_results, 4);
+            let result_ids = std::slice::from_raw_parts(result_ref.ids, result_ref.num_results);
+            assert_eq!(result_ids, &[10, 11, 12, 13]);
+        }
+
+        knowhere_free_result(result);
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_ffi_sparse_inverted_search_accepts_query_dim_larger_than_index_dim() {
+        let config = CIndexConfig {
+            index_type: CIndexType::SparseInverted,
+            metric_type: CMetricType::Ip,
+            dim: 4,
+            data_type: 104,
+            ..Default::default()
+        };
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        let vectors = vec![
+            4.0, 0.0, 0.0, 0.0, //
+            3.0, 0.0, 0.0, 0.0, //
+            0.0, 5.0, 0.0, 0.0, //
+            0.0, 2.0, 0.0, 0.0, //
+        ];
+        let ids = [10_i64, 11, 12, 13];
+        assert_eq!(
+            knowhere_train_index(index, vectors.as_ptr(), ids.len(), 4),
+            CError::Success as i32
+        );
+        assert_eq!(
+            knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), ids.len(), 4),
+            CError::Success as i32
+        );
+
+        let queries = vec![
+            1.0, 0.0, 0.0, 0.0, 0.0, 7.0, //
+            0.0, 1.0, 0.0, 0.0, 0.0, 9.0, //
+        ];
+        let result = knowhere_search(index, queries.as_ptr(), 2, 2, 6);
+        assert!(!result.is_null());
+
+        unsafe {
+            let result_ref = &*result;
+            assert_eq!(result_ref.num_results, 4);
+            let result_ids = std::slice::from_raw_parts(result_ref.ids, result_ref.num_results);
+            assert_eq!(result_ids, &[10, 11, 12, 13]);
+        }
+
+        knowhere_free_result(result);
+        knowhere_free_index(index);
+    }
+
+    #[test]
     fn test_ffi_abi_metadata_contract() {
         let flat = knowhere_create_index(CIndexConfig {
             index_type: CIndexType::Flat,
@@ -4881,26 +5498,23 @@ mod tests {
             sparse_meta_json["capabilities"]["ann_iterator"],
             "supported"
         );
-        assert_eq!(
-            sparse_meta_json["capabilities"]["persistence"],
-            "unsupported"
-        );
+        assert_eq!(sparse_meta_json["capabilities"]["persistence"], "supported");
         assert_eq!(sparse_meta_json["semantics"]["family"], "sparse");
         assert_eq!(
             sparse_meta_json["semantics"]["persistence_mode"],
-            "unsupported"
+            "file_save_load+memory_serialize"
         );
         assert_eq!(
             sparse_meta_json["semantics"]["persistence"]["file_save_load"],
-            "unsupported"
+            "supported"
         );
         assert_eq!(
             sparse_meta_json["semantics"]["persistence"]["memory_serialize"],
-            "unsupported"
+            "supported"
         );
         assert_eq!(
             sparse_meta_json["semantics"]["persistence"]["deserialize_from_file"],
-            "unsupported"
+            "supported"
         );
         assert_eq!(
             sparse_meta_json["observability"]["required_fields"][0],
@@ -5271,6 +5885,104 @@ mod tests {
     }
 
     #[test]
+    fn test_serialize_sparse_inverted_index() {
+        let config = CIndexConfig {
+            index_type: CIndexType::SparseInverted,
+            metric_type: CMetricType::Ip,
+            dim: 8,
+            data_type: 104,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        let vectors: Vec<f32> = vec![
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+        let ids = [10_i64, 11, 12];
+
+        assert_eq!(
+            knowhere_train_index(index, vectors.as_ptr(), 3, 8),
+            CError::Success as i32
+        );
+        assert_eq!(
+            knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 3, 8),
+            CError::Success as i32
+        );
+
+        let binset = knowhere_serialize_index(index);
+        assert!(!binset.is_null());
+
+        unsafe {
+            let binset_ref = &*binset;
+            assert_eq!(binset_ref.count, 1);
+            assert!(!binset_ref.keys.is_null());
+            assert!(!binset_ref.values.is_null());
+
+            let key = std::ffi::CStr::from_ptr(*binset_ref.keys);
+            assert_eq!(key.to_str().unwrap(), "index_data");
+
+            let binary = &*binset_ref.values;
+            assert!(!binary.data.is_null());
+            assert!(binary.size > 0);
+        }
+
+        knowhere_free_binary_set(binset);
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_serialize_sparse_wand_index() {
+        let config = CIndexConfig {
+            index_type: CIndexType::SparseWand,
+            metric_type: CMetricType::Ip,
+            dim: 8,
+            data_type: 104,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        let vectors: Vec<f32> = vec![
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+        let ids = [10_i64, 11, 12];
+
+        assert_eq!(
+            knowhere_train_index(index, vectors.as_ptr(), 3, 8),
+            CError::Success as i32
+        );
+        assert_eq!(
+            knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 3, 8),
+            CError::Success as i32
+        );
+
+        let binset = knowhere_serialize_index(index);
+        assert!(!binset.is_null());
+
+        unsafe {
+            let binset_ref = &*binset;
+            assert_eq!(binset_ref.count, 1);
+            assert!(!binset_ref.keys.is_null());
+            assert!(!binset_ref.values.is_null());
+
+            let key = std::ffi::CStr::from_ptr(*binset_ref.keys);
+            assert_eq!(key.to_str().unwrap(), "index_data");
+
+            let binary = &*binset_ref.values;
+            assert!(!binary.data.is_null());
+            assert!(binary.size > 0);
+        }
+
+        knowhere_free_binary_set(binset);
+        knowhere_free_index(index);
+    }
+
+    #[test]
     fn test_save_load_flat_index() {
         let config = CIndexConfig {
             index_type: CIndexType::Flat,
@@ -5466,6 +6178,128 @@ mod tests {
             assert_eq!(src_ref.num_results, tgt_ref.num_results);
 
             // 验证搜索结果 ID 相同
+            let src_ids = std::slice::from_raw_parts(src_ref.ids, src_ref.num_results);
+            let tgt_ids = std::slice::from_raw_parts(tgt_ref.ids, tgt_ref.num_results);
+            assert_eq!(src_ids, tgt_ids);
+        }
+
+        knowhere_free_result(source_result);
+        knowhere_free_result(target_result);
+        knowhere_free_binary_set(binset);
+        knowhere_free_index(source_index);
+        knowhere_free_index(target_index);
+    }
+
+    #[test]
+    fn test_deserialize_sparse_inverted_index() {
+        let config = CIndexConfig {
+            index_type: CIndexType::SparseInverted,
+            metric_type: CMetricType::Ip,
+            dim: 8,
+            data_type: 104,
+            ..Default::default()
+        };
+
+        let source_index = knowhere_create_index(config.clone());
+        assert!(!source_index.is_null());
+
+        let vectors: Vec<f32> = vec![
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+        let ids = [10_i64, 11, 12];
+
+        assert_eq!(
+            knowhere_train_index(source_index, vectors.as_ptr(), 3, 8),
+            CError::Success as i32
+        );
+        assert_eq!(
+            knowhere_add_index(source_index, vectors.as_ptr(), ids.as_ptr(), 3, 8),
+            CError::Success as i32
+        );
+
+        let binset = knowhere_serialize_index(source_index);
+        assert!(!binset.is_null());
+
+        let target_index = knowhere_create_index(config);
+        assert!(!target_index.is_null());
+        assert_eq!(
+            knowhere_deserialize_index(target_index, binset),
+            CError::Success as i32
+        );
+        assert_eq!(knowhere_get_index_count(target_index), 3);
+
+        let query = [0.0_f32, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let source_result = knowhere_search(source_index, query.as_ptr(), 1, 2, 8);
+        let target_result = knowhere_search(target_index, query.as_ptr(), 1, 2, 8);
+        assert!(!source_result.is_null());
+        assert!(!target_result.is_null());
+
+        unsafe {
+            let src_ref = &*source_result;
+            let tgt_ref = &*target_result;
+            assert_eq!(src_ref.num_results, tgt_ref.num_results);
+            let src_ids = std::slice::from_raw_parts(src_ref.ids, src_ref.num_results);
+            let tgt_ids = std::slice::from_raw_parts(tgt_ref.ids, tgt_ref.num_results);
+            assert_eq!(src_ids, tgt_ids);
+        }
+
+        knowhere_free_result(source_result);
+        knowhere_free_result(target_result);
+        knowhere_free_binary_set(binset);
+        knowhere_free_index(source_index);
+        knowhere_free_index(target_index);
+    }
+
+    #[test]
+    fn test_deserialize_sparse_wand_index() {
+        let config = CIndexConfig {
+            index_type: CIndexType::SparseWand,
+            metric_type: CMetricType::Ip,
+            dim: 8,
+            data_type: 104,
+            ..Default::default()
+        };
+
+        let source_index = knowhere_create_index(config.clone());
+        assert!(!source_index.is_null());
+
+        let vectors: Vec<f32> = vec![
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+        let ids = [10_i64, 11, 12];
+
+        assert_eq!(
+            knowhere_train_index(source_index, vectors.as_ptr(), 3, 8),
+            CError::Success as i32
+        );
+        assert_eq!(
+            knowhere_add_index(source_index, vectors.as_ptr(), ids.as_ptr(), 3, 8),
+            CError::Success as i32
+        );
+
+        let binset = knowhere_serialize_index(source_index);
+        assert!(!binset.is_null());
+
+        let target_index = knowhere_create_index(config);
+        assert!(!target_index.is_null());
+        assert_eq!(
+            knowhere_deserialize_index(target_index, binset),
+            CError::Success as i32
+        );
+        assert_eq!(knowhere_get_index_count(target_index), 3);
+
+        let query = [0.0_f32, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let source_result = knowhere_search(source_index, query.as_ptr(), 1, 2, 8);
+        let target_result = knowhere_search(target_index, query.as_ptr(), 1, 2, 8);
+        assert!(!source_result.is_null());
+        assert!(!target_result.is_null());
+
+        unsafe {
+            let src_ref = &*source_result;
+            let tgt_ref = &*target_result;
+            assert_eq!(src_ref.num_results, tgt_ref.num_results);
             let src_ids = std::slice::from_raw_parts(src_ref.ids, src_ref.num_results);
             let tgt_ids = std::slice::from_raw_parts(tgt_ref.ids, tgt_ref.num_results);
             assert_eq!(src_ids, tgt_ids);
@@ -5955,6 +6789,148 @@ mod tests {
 
         knowhere_free_result(result);
         knowhere_bitset_free(bitset as *mut _);
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_search_with_bitset_sparse_inverted() {
+        let config = CIndexConfig {
+            index_type: CIndexType::SparseInverted,
+            metric_type: CMetricType::Ip,
+            dim: 8,
+            data_type: 104,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        let vectors: Vec<f32> = vec![
+            0.0, 1.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.1, 0.0, 0.0, 0.0, 0.0,
+            1.0, 0.0, 0.8, 0.25, 0.0, 0.0, 0.0,
+        ];
+        let ids = [0_i64, 1, 2];
+
+        assert_eq!(
+            knowhere_train_index(index, vectors.as_ptr(), 3, 8),
+            CError::Success as i32
+        );
+        assert_eq!(
+            knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 3, 8),
+            CError::Success as i32
+        );
+
+        let query = [0.0_f32, 1.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0];
+        let bitset = knowhere_bitset_create(3);
+        unsafe {
+            knowhere_bitset_set(bitset, 0, true);
+        }
+
+        let result = knowhere_search_with_bitset(index, query.as_ptr(), 1, 1, 8, bitset);
+        assert!(!result.is_null());
+
+        unsafe {
+            let result_ref = &*result;
+            assert_eq!(result_ref.num_results, 1);
+            assert_eq!(*result_ref.ids.add(0), 2);
+        }
+
+        knowhere_free_result(result);
+        knowhere_bitset_free(bitset);
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_search_with_bitset_sparse_inverted_multi_query_returns_results_per_query() {
+        let config = sparse_multi_query_config(CIndexType::SparseInverted);
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        let (vectors, ids) = sparse_multi_query_vectors();
+        assert_eq!(
+            knowhere_train_index(index, vectors.as_ptr(), ids.len(), 8),
+            CError::Success as i32
+        );
+        assert_eq!(
+            knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), ids.len(), 8),
+            CError::Success as i32
+        );
+
+        let queries = vec![
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //
+        ];
+        let bitset = knowhere_bitset_create(ids.len());
+        unsafe {
+            knowhere_bitset_set(bitset, 0, true);
+            knowhere_bitset_set(bitset, 2, true);
+        }
+
+        let result = knowhere_search_with_bitset(index, queries.as_ptr(), 2, 1, 8, bitset);
+        assert!(!result.is_null());
+
+        unsafe {
+            let result_ref = &*result;
+            assert_eq!(result_ref.num_results, 2);
+            let result_ids = std::slice::from_raw_parts(result_ref.ids, result_ref.num_results);
+            assert_eq!(result_ids, &[11, 13]);
+        }
+
+        knowhere_free_result(result);
+        knowhere_bitset_free(bitset);
+        knowhere_free_index(index);
+    }
+
+    #[test]
+    fn test_search_with_bitset_sparse_inverted_accepts_query_dim_larger_than_index_dim() {
+        let config = CIndexConfig {
+            index_type: CIndexType::SparseInverted,
+            metric_type: CMetricType::Ip,
+            dim: 4,
+            data_type: 104,
+            ..Default::default()
+        };
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        let vectors = vec![
+            4.0, 0.0, 0.0, 0.0, //
+            3.0, 0.0, 0.0, 0.0, //
+            0.0, 5.0, 0.0, 0.0, //
+            0.0, 2.0, 0.0, 0.0, //
+        ];
+        let ids = [10_i64, 11, 12, 13];
+        assert_eq!(
+            knowhere_train_index(index, vectors.as_ptr(), ids.len(), 4),
+            CError::Success as i32
+        );
+        assert_eq!(
+            knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), ids.len(), 4),
+            CError::Success as i32
+        );
+
+        let queries = vec![
+            1.0, 0.0, 0.0, 0.0, 0.0, 7.0, //
+            0.0, 1.0, 0.0, 0.0, 0.0, 9.0, //
+        ];
+        let bitset = knowhere_bitset_create(ids.len());
+        unsafe {
+            knowhere_bitset_set(bitset, 0, true);
+            knowhere_bitset_set(bitset, 2, true);
+        }
+
+        let result = knowhere_search_with_bitset(index, queries.as_ptr(), 2, 1, 6, bitset);
+        assert!(!result.is_null());
+
+        unsafe {
+            let result_ref = &*result;
+            assert_eq!(result_ref.num_results, 2);
+            let result_ids = std::slice::from_raw_parts(result_ref.ids, result_ref.num_results);
+            assert_eq!(result_ids, &[11, 13]);
+        }
+
+        knowhere_free_result(result);
+        knowhere_bitset_free(bitset);
         knowhere_free_index(index);
     }
 

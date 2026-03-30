@@ -53,6 +53,16 @@ impl SparseWandIndex {
     pub fn size(&self) -> usize {
         self.inner.size()
     }
+
+    pub(crate) fn serialize_to_bytes(&self) -> Result<Vec<u8>, IndexError> {
+        self.inner.serialize_to_bytes()
+    }
+
+    pub(crate) fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, IndexError> {
+        Ok(Self {
+            inner: SparseInvertedIndex::deserialize_from_bytes(bytes)?,
+        })
+    }
 }
 
 impl Index for SparseWandIndex {
