@@ -1,6 +1,4 @@
-use knowhere_rs::quantization::exrabitq::{
-    ip_fxu2, ip_fxu3, ip_fxu4, ip_fxu6, ip_fxu7, ip_fxu8, ExRaBitQConfig, ExRaBitQQuantizer,
-};
+use knowhere_rs::quantization::exrabitq::{ExRaBitQConfig, ExRaBitQQuantizer};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::cmp::Ordering;
@@ -235,23 +233,7 @@ fn test_compacted_long_code_roundtrip_and_ip() {
             .zip(raw_levels.iter())
             .map(|(lhs, rhs)| lhs * *rhs as f32)
             .sum::<f32>();
-        let direct = match cfg.ex_bits() {
-            2 => ip_fxu2(&query, &compact, cfg.padded_dim()),
-            3 => ip_fxu3(&query, &compact, cfg.padded_dim()),
-            4 => ip_fxu4(&query, &compact, cfg.padded_dim()),
-            6 => ip_fxu6(&query, &compact, cfg.padded_dim()),
-            7 => ip_fxu7(&query, &compact, cfg.padded_dim()),
-            8 => ip_fxu8(&query, &compact, cfg.padded_dim()),
-            bits => unreachable!("unsupported ex_bits {bits}"),
-        };
         let via_quantizer = q.long_code_inner_product(&query, &compact);
-
-        assert!(
-            (direct - expected).abs() < 1e-5,
-            "bits_per_dim={bits_per_dim}: direct={} expected={}",
-            direct,
-            expected
-        );
         assert!(
             (via_quantizer - expected).abs() < 1e-5,
             "bits_per_dim={bits_per_dim}: via_quantizer={} expected={}",

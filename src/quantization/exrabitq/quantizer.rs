@@ -280,11 +280,30 @@ impl ExRaBitQQuantizer {
         rabitq_ip: f32,
         encoded: &EncodedVector,
     ) -> f32 {
+        self.rerank_distance_from_parts(
+            residual,
+            half_sum_residual,
+            y2,
+            rabitq_ip,
+            encoded.factor.xipnorm,
+            encoded.x2,
+            &encoded.long_code,
+        )
+    }
+
+    pub(crate) fn rerank_distance_from_parts(
+        &self,
+        residual: &[f32],
+        half_sum_residual: f32,
+        y2: f32,
+        rabitq_ip: f32,
+        xipnorm: f32,
+        x2: f32,
+        long_code: &[u8],
+    ) -> f32 {
         let fac_rescale = (1u32 << self.config.ex_bits()) as f32;
-        let long_ip = self.long_code_inner_product(residual, &encoded.long_code);
-        encoded.x2 + y2
-            - encoded.factor.xipnorm
-                * (fac_rescale * rabitq_ip + long_ip - (fac_rescale - 1.0) * half_sum_residual)
+        let long_ip = self.long_code_inner_product(residual, long_code);
+        x2 + y2 - xipnorm * (fac_rescale * rabitq_ip + long_ip - (fac_rescale - 1.0) * half_sum_residual)
     }
 
     pub fn rerank_distance_high_accuracy(
@@ -296,12 +315,32 @@ impl ExRaBitQQuantizer {
         ip_xb_qprime: f32,
         encoded: &EncodedVector,
     ) -> f32 {
+        self.rerank_distance_high_accuracy_from_parts(
+            unit_query,
+            sumq,
+            y,
+            y2,
+            ip_xb_qprime,
+            encoded.factor.xipnorm,
+            encoded.x2,
+            &encoded.long_code,
+        )
+    }
+
+    pub(crate) fn rerank_distance_high_accuracy_from_parts(
+        &self,
+        unit_query: &[f32],
+        sumq: f32,
+        y: f32,
+        y2: f32,
+        ip_xb_qprime: f32,
+        xipnorm: f32,
+        x2: f32,
+        long_code: &[u8],
+    ) -> f32 {
         let fac_rescale = (1u32 << self.config.ex_bits()) as f32;
-        let long_ip = self.long_code_inner_product(unit_query, &encoded.long_code);
-        encoded.x2 + y2
-            - encoded.factor.xipnorm
-                * y
-                * (fac_rescale * ip_xb_qprime + long_ip - (fac_rescale - 0.5) * sumq)
+        let long_ip = self.long_code_inner_product(unit_query, long_code);
+        x2 + y2 - xipnorm * y * (fac_rescale * ip_xb_qprime + long_ip - (fac_rescale - 0.5) * sumq)
     }
 
     pub fn long_code_inner_product(&self, values: &[f32], long_code: &[u8]) -> f32 {

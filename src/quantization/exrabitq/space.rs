@@ -84,6 +84,7 @@ fn decode_value_fxu7(code: &[u8], idx: usize) -> u8 {
     base | (read_top_bit(top_bits, lane) << 6)
 }
 
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 #[inline]
 fn decode_chunk_with<F>(dim_base: usize, mut decode_value: F) -> [u8; 16]
 where
@@ -168,7 +169,7 @@ where
     sum
 }
 
-pub fn ip_fxu8(query: &[f32], code: &[u8], d: usize) -> f32 {
+pub(crate) fn ip_fxu8(query: &[f32], code: &[u8], d: usize) -> f32 {
     assert!(query.len() >= d);
     assert!(code.len() >= d);
     #[cfg(target_arch = "x86_64")]
@@ -189,7 +190,7 @@ pub fn ip_fxu8(query: &[f32], code: &[u8], d: usize) -> f32 {
     ip_scalar_with_decoder(query, d, |idx| decode_value_fxu8(code, idx))
 }
 
-pub fn ip_fxu4(query: &[f32], code: &[u8], d: usize) -> f32 {
+pub(crate) fn ip_fxu4(query: &[f32], code: &[u8], d: usize) -> f32 {
     assert!(query.len() >= d);
     assert_eq!(d % 32, 0);
     assert!(code.len() >= d / 2);
@@ -206,7 +207,7 @@ pub fn ip_fxu4(query: &[f32], code: &[u8], d: usize) -> f32 {
     ip_scalar_with_decoder(query, d, |idx| decode_value_fxu4(code, idx))
 }
 
-pub fn ip_fxu2(query: &[f32], code: &[u8], d: usize) -> f32 {
+pub(crate) fn ip_fxu2(query: &[f32], code: &[u8], d: usize) -> f32 {
     assert!(query.len() >= d);
     assert_eq!(d % 64, 0);
     assert!(code.len() >= d / 4);
@@ -223,7 +224,7 @@ pub fn ip_fxu2(query: &[f32], code: &[u8], d: usize) -> f32 {
     ip_scalar_with_decoder(query, d, |idx| decode_value_fxu2(code, idx))
 }
 
-pub fn ip_fxu3(query: &[f32], code: &[u8], d: usize) -> f32 {
+pub(crate) fn ip_fxu3(query: &[f32], code: &[u8], d: usize) -> f32 {
     assert!(query.len() >= d);
     assert_eq!(d % 64, 0);
     assert!(code.len() >= (d / 64) * 24);
@@ -240,7 +241,7 @@ pub fn ip_fxu3(query: &[f32], code: &[u8], d: usize) -> f32 {
     ip_scalar_with_decoder(query, d, |idx| decode_value_fxu3(code, idx))
 }
 
-pub fn ip_fxu6(query: &[f32], code: &[u8], d: usize) -> f32 {
+pub(crate) fn ip_fxu6(query: &[f32], code: &[u8], d: usize) -> f32 {
     assert!(query.len() >= d);
     assert_eq!(d % 64, 0);
     assert!(code.len() >= (d / 64) * 48);
@@ -257,7 +258,7 @@ pub fn ip_fxu6(query: &[f32], code: &[u8], d: usize) -> f32 {
     ip_scalar_with_decoder(query, d, |idx| decode_value_fxu6(code, idx))
 }
 
-pub fn ip_fxu7(query: &[f32], code: &[u8], d: usize) -> f32 {
+pub(crate) fn ip_fxu7(query: &[f32], code: &[u8], d: usize) -> f32 {
     assert!(query.len() >= d);
     assert_eq!(d % 64, 0);
     assert!(code.len() >= (d / 64) * 56);

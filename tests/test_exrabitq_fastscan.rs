@@ -1,7 +1,6 @@
 use knowhere_rs::quantization::exrabitq::{
     reference_short_distance, rerank_candidates, scalar_scan_layout, scan_and_rerank,
-    simd_scan_layout, EncodedVector, ExRaBitQConfig, ExRaBitQFastScanState, ExRaBitQLayout,
-    ExRaBitQQuantizer,
+    EncodedVector, ExRaBitQConfig, ExRaBitQFastScanState, ExRaBitQLayout, ExRaBitQQuantizer,
 };
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -134,11 +133,6 @@ fn test_rerank_returns_self_for_identical_query() {
 
 #[test]
 fn test_fastscan_avx512_matches_scalar_for_4bit() {
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        return;
-    }
-
     #[cfg(target_arch = "x86_64")]
     {
         if !(std::arch::is_x86_feature_detected!("avx512bw")
@@ -146,31 +140,27 @@ fn test_fastscan_avx512_matches_scalar_for_4bit() {
         {
             return;
         }
-    }
 
-    let (quantizer, data, centroid, _ids, _encoded, layout) = build_fixture(160, 128, 4);
-    let query = &data[2 * 128..3 * 128];
-    let (q_rot, y2) = quantizer.rotate_query_residual(query, &centroid);
-    let state = ExRaBitQFastScanState::new(&q_rot, y2);
+        let (quantizer, data, centroid, _ids, _encoded, layout) = build_fixture(160, 128, 4);
+        let query = &data[2 * 128..3 * 128];
+        let (q_rot, y2) = quantizer.rotate_query_residual(query, &centroid);
+        let state = ExRaBitQFastScanState::new(&q_rot, y2);
 
-    let scalar = scalar_scan_layout(&layout, &state, layout.len());
-    let simd = simd_scan_layout(&layout, &state, layout.len()).expect("avx512 fast scan");
+        let scalar = scalar_scan_layout(&layout, &state, layout.len());
+        let simd = knowhere_rs::quantization::exrabitq::simd_scan_layout(&layout, &state, layout.len())
+            .expect("avx512 fast scan");
 
-    assert_eq!(scalar.len(), simd.len());
-    for (lhs, rhs) in scalar.iter().zip(simd.iter()) {
-        assert_eq!(lhs.idx, rhs.idx);
-        assert!((lhs.distance - rhs.distance).abs() < 1e-5);
-        assert!((lhs.rabitq_ip - rhs.rabitq_ip).abs() < 1e-5);
+        assert_eq!(scalar.len(), simd.len());
+        for (lhs, rhs) in scalar.iter().zip(simd.iter()) {
+            assert_eq!(lhs.idx, rhs.idx);
+            assert!((lhs.distance - rhs.distance).abs() < 1e-5);
+            assert!((lhs.rabitq_ip - rhs.rabitq_ip).abs() < 1e-5);
+        }
     }
 }
 
 #[test]
 fn test_fastscan_avx512_matches_scalar_for_8bit() {
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        return;
-    }
-
     #[cfg(target_arch = "x86_64")]
     {
         if !(std::arch::is_x86_feature_detected!("avx512bw")
@@ -178,21 +168,22 @@ fn test_fastscan_avx512_matches_scalar_for_8bit() {
         {
             return;
         }
-    }
 
-    let (quantizer, data, centroid, _ids, _encoded, layout) = build_fixture(160, 128, 8);
-    let query = &data[3 * 128..4 * 128];
-    let (q_rot, y2) = quantizer.rotate_query_residual(query, &centroid);
-    let state = ExRaBitQFastScanState::new(&q_rot, y2);
+        let (quantizer, data, centroid, _ids, _encoded, layout) = build_fixture(160, 128, 8);
+        let query = &data[3 * 128..4 * 128];
+        let (q_rot, y2) = quantizer.rotate_query_residual(query, &centroid);
+        let state = ExRaBitQFastScanState::new(&q_rot, y2);
 
-    let scalar = scalar_scan_layout(&layout, &state, layout.len());
-    let simd = simd_scan_layout(&layout, &state, layout.len()).expect("avx512 fast scan");
+        let scalar = scalar_scan_layout(&layout, &state, layout.len());
+        let simd = knowhere_rs::quantization::exrabitq::simd_scan_layout(&layout, &state, layout.len())
+            .expect("avx512 fast scan");
 
-    assert_eq!(scalar.len(), simd.len());
-    for (lhs, rhs) in scalar.iter().zip(simd.iter()) {
-        assert_eq!(lhs.idx, rhs.idx);
-        assert!((lhs.distance - rhs.distance).abs() < 1e-5);
-        assert!((lhs.rabitq_ip - rhs.rabitq_ip).abs() < 1e-5);
+        assert_eq!(scalar.len(), simd.len());
+        for (lhs, rhs) in scalar.iter().zip(simd.iter()) {
+            assert_eq!(lhs.idx, rhs.idx);
+            assert!((lhs.distance - rhs.distance).abs() < 1e-5);
+            assert!((lhs.rabitq_ip - rhs.rabitq_ip).abs() < 1e-5);
+        }
     }
 }
 

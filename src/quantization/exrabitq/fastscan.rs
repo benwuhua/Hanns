@@ -19,9 +19,13 @@ pub struct ExRaBitQFastScanState {
     pub width: f32,
     pub delta: f32,
     pub one_over_sqrt_d: f32,
+    #[allow(dead_code)]
     lut_lower: Vec<u8>,
+    #[allow(dead_code)]
     lut_upper: Vec<u8>,
+    #[allow(dead_code)]
     lut_shift: i32,
+    #[allow(dead_code)]
     packed_high_acc_lut: Vec<u8>,
 }
 
@@ -487,8 +491,6 @@ unsafe fn scan_layout_bitmask_avx512(
     state: &ExRaBitQFastScanState,
     top_k: usize,
 ) -> Vec<(i64, f32)> {
-    use std::arch::x86_64::*;
-
     let fac_rescale = (1u32 << quantizer.config().ex_bits()) as f32;
     let mut heap = BinaryHeap::with_capacity(top_k + 1);
     let mut distk = f32::INFINITY;
@@ -500,46 +502,34 @@ unsafe fn scan_layout_bitmask_avx512(
             break;
         }
 
-        let mut onorm = [0.0f32; FAST_SIZE];
-        for slot in 0..num_points {
-            onorm[slot] = layout.x_norm_at(idx_base + slot);
-        }
-
-        let (mut mask, ip_xb_qprime) = accumulate_one_block_high_acc_avx512(
-            layout.fastscan_block(block_idx),
-            &state.packed_high_acc_lut,
-            &onorm,
-            state.sumq,
-            state.y,
-            state.delta,
-            state.lut_shift,
-            state.one_over_sqrt_d,
-            distk,
-            layout.padded_dim(),
-        );
-
-        if num_points < FAST_SIZE {
-            mask &= (1u32 << num_points) - 1;
-        }
-
-        while mask != 0 {
-            let lb = mask & mask.wrapping_neg();
-            let slot = lb.trailing_zeros() as usize;
-            mask &= mask - 1;
-
+        let block = layout.fastscan_block(block_idx);
+        let selected_sums = fastscan_block_avx512(state, block);
+        for (slot, &raw_selected_sum) in selected_sums.iter().take(num_points).enumerate() {
             let idx = idx_base + slot;
+            let selected_sum = raw_selected_sum as i32 + state.lut_shift;
+            let ip_xb_qprime = selected_sum as f32 * state.delta;
+            let lower_bound = layout.x2_at(idx) + state.y2
+                - 5.0
+                    * state.y
+                    * layout.x_norm_at(idx)
+                    * state.one_over_sqrt_d
+                    * (ip_xb_qprime - 0.5 * state.sumq + HIGH_ACC_CONST_BOUND);
+            if lower_bound >= distk {
+                continue;
+            }
+
             let long_ip =
                 quantizer.long_code_inner_product(&state.unit_query, layout.long_code_at(idx));
             let distance = layout.x2_at(idx) + state.y2
                 - layout.factor_at(idx).xipnorm
                     * state.y
-                    * (fac_rescale * ip_xb_qprime[slot]
+                    * (fac_rescale * ip_xb_qprime
                         + long_ip
                         - (fac_rescale - 0.5) * state.sumq);
             let candidate = ScoredCandidate {
                 idx,
                 distance,
-                rabitq_ip: ip_xb_qprime[slot],
+                rabitq_ip: ip_xb_qprime,
             };
 
             if heap.len() < top_k {
@@ -618,6 +608,7 @@ unsafe fn fastscan_block_avx512(state: &ExRaBitQFastScanState, block: &[u8]) -> 
 }
 
 #[cfg(target_arch = "x86_64")]
+#[allow(dead_code)]
 #[target_feature(enable = "avx512bw,avx512f,avx2,ssse3,fma")]
 unsafe fn accumulate_one_block_high_acc_avx512(
     block: &[u8],
