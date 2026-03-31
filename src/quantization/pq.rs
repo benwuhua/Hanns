@@ -9,6 +9,13 @@ use super::kmeans::KMeans;
 use crate::api::{KnowhereError, Result};
 use rayon::prelude::*;
 
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::{
+    __m128i, __m256, __m256i, _mm256_add_ps, _mm_loadl_epi64, _mm256_add_epi32,
+    _mm256_castsi256_ps, _mm256_cvtepu8_epi32, _mm256_i32gather_ps, _mm256_setr_epi32,
+    _mm256_setzero_ps, _mm256_storeu_ps,
+};
+
 /// Product Quantization configuration
 #[derive(Clone, Debug)]
 pub struct PQConfig {
@@ -370,6 +377,28 @@ impl ProductQuantizer {
         let chunks8 = (m / 8) * 8;
 
         if self.config.nbits == 8 {
+            #[cfg(target_arch = "x86_64")]
+            {
+                if std::is_x86_feature_detected!("avx2") {
+                    unsafe {
+                        let simd_sum = self.compute_distance_with_table_avx2_gather(
+                            table.as_ptr(),
+                            code.as_ptr(),
+                            ksub,
+                            chunks8,
+                        );
+                        sum += simd_sum;
+                    }
+
+                    let mut sub_q = chunks8;
+                    while sub_q < m {
+                        sum += table[sub_q * ksub + code[sub_q] as usize];
+                        sub_q += 1;
+                    }
+                    return sum;
+                }
+            }
+
             let mut sub_q = 0usize;
             while sub_q < chunks8 {
                 sum += table[sub_q * ksub + code[sub_q] as usize];
@@ -406,6 +435,41 @@ impl ProductQuantizer {
             sub_q += 1;
         }
         sum
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2")]
+    unsafe fn compute_distance_with_table_avx2_gather(
+        &self,
+        table_ptr: *const f32,
+        code_ptr: *const u8,
+        ksub: usize,
+        chunks8: usize,
+    ) -> f32 {
+        let mut acc = _mm256_setzero_ps();
+        let mut sub_q = 0usize;
+        while sub_q < chunks8 {
+            let idx_bytes = _mm_loadl_epi64(code_ptr.add(sub_q) as *const __m128i);
+            let idx = _mm256_cvtepu8_epi32(idx_bytes);
+            let offsets = _mm256_setr_epi32(
+                (sub_q * ksub) as i32,
+                ((sub_q + 1) * ksub) as i32,
+                ((sub_q + 2) * ksub) as i32,
+                ((sub_q + 3) * ksub) as i32,
+                ((sub_q + 4) * ksub) as i32,
+                ((sub_q + 5) * ksub) as i32,
+                ((sub_q + 6) * ksub) as i32,
+                ((sub_q + 7) * ksub) as i32,
+            );
+            let gather_idx: __m256i = _mm256_add_epi32(idx, offsets);
+            let vals: __m256 = _mm256_i32gather_ps(table_ptr, gather_idx, 4);
+            acc = _mm256_add_ps(acc, vals);
+            sub_q += 8;
+        }
+
+        let mut lanes = [0.0f32; 8];
+        _mm256_storeu_ps(lanes.as_mut_ptr(), acc);
+        lanes.into_iter().sum()
     }
 
     /// Find nearest centroid for a subvector
