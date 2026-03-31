@@ -49,20 +49,69 @@ impl ExRaBitQRotator {
     pub fn rotate_padded(&self, padded: &[f32]) -> Vec<f32> {
         debug_assert_eq!(padded.len(), self.dim);
         let mut out = vec![0.0f32; self.dim];
-        for (r, out_r) in out.iter_mut().enumerate() {
-            let row = &self.matrix[r * self.dim..(r + 1) * self.dim];
-            *out_r = row.iter().zip(padded.iter()).map(|(a, b)| a * b).sum();
-        }
+        self.rotate_padded_into(padded, &mut out);
         out
+    }
+
+    pub fn rotate_padded_into(&self, padded: &[f32], out: &mut [f32]) {
+        debug_assert_eq!(padded.len(), self.dim);
+        debug_assert_eq!(out.len(), self.dim);
+        self.matvec_into(&self.matrix, padded, out);
     }
 
     pub fn inverse_rotate_padded(&self, padded: &[f32]) -> Vec<f32> {
         debug_assert_eq!(padded.len(), self.dim);
         let mut out = vec![0.0f32; self.dim];
-        for (r, out_r) in out.iter_mut().enumerate() {
-            let row = &self.transpose[r * self.dim..(r + 1) * self.dim];
-            *out_r = row.iter().zip(padded.iter()).map(|(a, b)| a * b).sum();
-        }
+        self.inverse_rotate_padded_into(padded, &mut out);
         out
+    }
+
+    pub fn inverse_rotate_padded_into(&self, padded: &[f32], out: &mut [f32]) {
+        debug_assert_eq!(padded.len(), self.dim);
+        debug_assert_eq!(out.len(), self.dim);
+        self.matvec_into(&self.transpose, padded, out);
+    }
+
+    #[inline(always)]
+    fn matvec_into(&self, matrix: &[f32], vec: &[f32], out: &mut [f32]) {
+        let dim = self.dim;
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::arch::is_x86_feature_detected!("avx512f") {
+                unsafe { self.matvec_avx512(matrix, vec, out) };
+                return;
+            }
+        }
+
+        // Scalar fallback
+        for r in 0..dim {
+            let row = &matrix[r * dim..(r + 1) * dim];
+            out[r] = row.iter().zip(vec.iter()).map(|(a, b)| a * b).sum();
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx512f")]
+    unsafe fn matvec_avx512(&self, matrix: &[f32], vec: &[f32], out: &mut [f32]) {
+        use std::arch::x86_64::*;
+        let dim = self.dim;
+        let vec_ptr = vec.as_ptr();
+        let num16 = dim & !15; // round down to multiple of 16
+
+        for r in 0..dim {
+            let row_ptr = matrix.as_ptr().add(r * dim);
+            let mut sum = _mm512_setzero_ps();
+            for c in (0..num16).step_by(16) {
+                let a = _mm512_loadu_ps(row_ptr.add(c));
+                let b = _mm512_loadu_ps(vec_ptr.add(c));
+                sum = _mm512_fmadd_ps(a, b, sum);
+            }
+            let mut total = _mm512_reduce_add_ps(sum);
+            // Handle remainder
+            for c in num16..dim {
+                total += *row_ptr.add(c) * *vec_ptr.add(c);
+            }
+            *out.get_unchecked_mut(r) = total;
+        }
     }
 }

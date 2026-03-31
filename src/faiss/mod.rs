@@ -18,6 +18,7 @@ pub mod ivf;
 pub mod ivf_exrabitq;
 pub mod ivf_flat;
 pub mod ivf_flat_cc;
+pub mod ivf_hvq;
 pub mod ivf_opq;
 pub mod ivf_rabitq;
 pub mod ivf_sq8;
@@ -39,6 +40,7 @@ pub use bin_flat::BinFlatIndex;
 pub use bin_ivf_flat::BinIvfFlatIndex;
 pub use binary::BinaryIndex;
 pub use binary_hnsw::BinaryHnswIndex;
+#[allow(deprecated)] // Re-exported for compatibility with callers that still name the legacy type.
 pub use diskann::DiskAnnIndex;
 pub use diskann_aisaq::{
     AsyncReadEngine, BeamSearchIO, BeamSearchStats, FileGroup, FlashLayout, PQFlashIndex,
@@ -51,10 +53,12 @@ pub use hnsw_pq::{HnswPqConfig, HnswPqIndex};
 pub use hnsw_prq::{HnswPrqConfig, HnswPrqIndex};
 pub use hnsw_quantized::{HnswQuantizeConfig, HnswSqIndex};
 pub use index::FaissIndex;
+#[allow(deprecated)] // Re-exported for compatibility with callers that still name the legacy IVF scaffold.
 pub use ivf::IvfIndex;
 pub use ivf_exrabitq::{IvfExRaBitqConfig, IvfExRaBitqIndex};
 pub use ivf_flat::IvfFlatIndex;
 pub use ivf_flat_cc::IvfFlatCcIndex;
+pub use ivf_hvq::{IvfHvqConfig, IvfHvqIndex};
 pub use ivf_opq::{IvfOpqConfig, IvfOpqIndex, IvfOpqIndexWrapper};
 pub use ivf_rabitq::{IvfRaBitqConfig, IvfRaBitqIndex};
 pub use ivf_sq8::IvfSq8Index;

@@ -36,7 +36,6 @@ impl ExRaBitQLayout {
         let mut short_err_factors = Vec::with_capacity(encoded.len());
         let mut x_norms = Vec::with_capacity(encoded.len());
         let mut x2 = Vec::with_capacity(encoded.len());
-        let mut raw_short = Vec::with_capacity(encoded.len());
 
         for item in encoded {
             assert_eq!(item.short_code.len(), short_code_bytes);
@@ -49,11 +48,10 @@ impl ExRaBitQLayout {
             short_err_factors.push(item.short_factors.err);
             x_norms.push(item.x_norm);
             x2.push(item.x2);
-            raw_short.push(item.short_code.clone());
         }
 
         let (fastscan_codes, n_blocks, fastscan_block_size) =
-            transpose_short_codes(&raw_short, padded_dim);
+            transpose_short_codes(&short_codes, encoded.len(), padded_dim, short_code_bytes);
 
         Self {
             ids: ids.to_vec(),
@@ -138,8 +136,13 @@ impl ExRaBitQLayout {
     }
 }
 
-fn transpose_short_codes(raw_codes: &[Vec<u8>], dim: usize) -> (Vec<u8>, usize, usize) {
-    let n_blocks = raw_codes.len().div_ceil(FAST_SIZE);
+fn transpose_short_codes(
+    raw_codes: &[u8],
+    count: usize,
+    dim: usize,
+    short_code_bytes: usize,
+) -> (Vec<u8>, usize, usize) {
+    let n_blocks = count.div_ceil(FAST_SIZE);
     let fastscan_block_size = dim.div_ceil(4) * 16;
     let mut fastscan_codes = vec![0u8; n_blocks * fastscan_block_size];
 
@@ -150,13 +153,14 @@ fn transpose_short_codes(raw_codes: &[Vec<u8>], dim: usize) -> (Vec<u8>, usize, 
             for slot in 0..FAST_SIZE {
                 let vid = block_idx * FAST_SIZE + slot;
                 let mut nibble = 0u8;
-                if vid < raw_codes.len() {
+                if vid < count {
+                    let code = &raw_codes[vid * short_code_bytes..(vid + 1) * short_code_bytes];
                     for bit_pos in 0..4usize {
                         let dim_idx = group_idx * 4 + bit_pos;
                         if dim_idx >= dim {
                             break;
                         }
-                        let byte = raw_codes[vid][dim_idx / 8];
+                        let byte = code[dim_idx / 8];
                         let bit = (byte >> (dim_idx % 8)) & 1;
                         nibble |= bit << bit_pos;
                     }

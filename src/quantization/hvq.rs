@@ -37,6 +37,7 @@ pub struct HvqQuantizer {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)] // Kept for the unfinished critical-value quantization path under investigation.
 struct CriticalValue {
     threshold: f32,
     dim: usize,
@@ -302,6 +303,7 @@ impl HvqQuantizer {
         (norm_o, vmax, base_quant_dist, packed)
     }
 
+    #[allow(dead_code)] // Retained for offline quantization analysis helpers.
     fn decode_unit(&self, packed_code: &[u8], vmax: f32) -> Vec<f32> {
         let indices = unpack_codes(packed_code, self.config.dim, self.config.nbits);
         let levels = (1u32 << self.config.nbits) as f32;
@@ -312,6 +314,7 @@ impl HvqQuantizer {
             .collect()
     }
 
+    #[allow(dead_code)] // Retained for offline quantization analysis helpers.
     fn reconstruct_rotated(&self, code: &[u8]) -> Vec<f32> {
         let (norm_o, vmax, base_quant_dist, packed_code) = self.parse_code(code);
         let scale = if base_quant_dist > 1e-12 {
@@ -478,7 +481,7 @@ impl HvqQuantizer {
 
         // t_start: conservative start — only skip obviously-too-small t values
         // ExRaBitQ uses max_code/3, we use 0 to guarantee dominance over greedy
-        let t_start = 0.0f32;
+        let _t_start = 0.0f32;
 
         // Pre-generate ALL critical values with exact levels, sort once, scan linearly
         // Critical value for dim i, level k: t = (k - 0.5) / abs_o[i]
@@ -672,6 +675,7 @@ impl HvqQuantizer {
         }
     }
 
+    #[allow(dead_code)] // Retained to compare the zero-allocation scoring path against an allocating reference.
     fn score_code_alloc(&self, state: &HvqQueryState, code: &[u8]) -> f32 {
         debug_assert_eq!(state.q_rot.len(), self.config.dim);
         let (norm_o, vmax, base_quant_dist, packed_code) = self.parse_code(code);
@@ -727,6 +731,7 @@ impl HvqQuantizer {
         state.centroid_score + norm_o * ip / base_quant_dist
     }
 
+    #[allow(dead_code)] // Retained for optional AVX512-only experimentation.
     fn score_code_1bit_avx512(&self, state: &HvqQueryState, code: &[u8]) -> f32 {
         #[cfg(target_arch = "x86_64")]
         {
@@ -740,6 +745,7 @@ impl HvqQuantizer {
         }
     }
 
+    #[allow(dead_code)] // Retained for optional AVX512VNNI-only experimentation.
     fn score_code_simd(&self, state: &HvqQueryState, code: &[u8]) -> f32 {
         debug_assert_eq!(state.q_rot.len(), self.config.dim);
         debug_assert_eq!(state.q_quantized.len(), self.config.dim);
@@ -810,6 +816,7 @@ pub fn dot_u8_i8_avx512(a: &[u8], b: &[i8]) -> i32 {
 }
 
 #[inline]
+#[allow(dead_code)] // Retained for optional AVX512VNNI-only experimentation.
 fn dot_u8_i8_vnni_assumed(a: &[u8], b: &[i8]) -> i32 {
     debug_assert_eq!(a.len(), b.len());
     #[cfg(target_arch = "x86_64")]
@@ -828,6 +835,7 @@ fn dot_u8_i8_vnni_assumed(a: &[u8], b: &[i8]) -> i32 {
 }
 
 #[inline]
+#[allow(dead_code)] // Retained for optional packed-u4 SIMD experimentation.
 fn unpack_packed_u4_scalar(packed: &[u8], out: &mut [u8]) {
     debug_assert!(out.len() >= packed.len() * 2);
     for (idx, &byte) in packed.iter().enumerate() {
@@ -839,6 +847,7 @@ fn unpack_packed_u4_scalar(packed: &[u8], out: &mut [u8]) {
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
+#[allow(dead_code)] // Retained for optional packed-u4 SIMD experimentation.
 fn unpack_packed_u4_into(packed: &[u8], out: &mut [u8]) {
     use std::arch::x86_64::*;
 
@@ -880,11 +889,13 @@ fn unpack_packed_u4_into(packed: &[u8], out: &mut [u8]) {
 
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
+#[allow(dead_code)] // Retained for optional packed-u4 SIMD experimentation.
 fn unpack_packed_u4_into(packed: &[u8], out: &mut [u8]) {
     unpack_packed_u4_scalar(packed, out);
 }
 
 #[inline]
+#[allow(dead_code)] // Retained for optional packed-u4 SIMD experimentation.
 fn dot_packed_u4_i8_vnni(packed: &[u8], q_quantized: &[i8]) -> i32 {
     debug_assert!(q_quantized.len() <= packed.len() * 2);
 

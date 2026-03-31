@@ -54,27 +54,95 @@ impl PartialOrd for ScoredCandidate {
 
 impl ExRaBitQFastScanState {
     pub fn new(q_rot_residual: &[f32], y2: f32) -> Self {
-        let half_sum_residual = 0.5 * q_rot_residual.iter().sum::<f32>();
-        let y = y2.sqrt();
+        let mut state = Self {
+            use_high_accuracy: false,
+            residual: Vec::new(),
+            unit_query: Vec::new(),
+            y2: 0.0,
+            y: 0.0,
+            lut: Vec::new(),
+            half_sum_residual: 0.0,
+            sumq: 0.0,
+            vl: 0.0,
+            width: 0.0,
+            delta: 0.0,
+            one_over_sqrt_d: 1.0,
+            lut_lower: Vec::new(),
+            lut_upper: Vec::new(),
+            lut_shift: 0,
+            packed_high_acc_lut: Vec::new(),
+        };
+        state.reset(q_rot_residual, y2);
+        state
+    }
+
+    pub fn new_high_accuracy(q_rot_residual: &[f32], y2: f32) -> Self {
+        let mut state = Self {
+            use_high_accuracy: true,
+            residual: Vec::new(),
+            unit_query: Vec::new(),
+            y2: 0.0,
+            y: 0.0,
+            lut: Vec::new(),
+            half_sum_residual: 0.0,
+            sumq: 0.0,
+            vl: 0.0,
+            width: 0.0,
+            delta: 0.0,
+            one_over_sqrt_d: 1.0,
+            lut_lower: Vec::new(),
+            lut_upper: Vec::new(),
+            lut_shift: 0,
+            packed_high_acc_lut: Vec::new(),
+        };
+        state.reset(q_rot_residual, y2);
+        state
+    }
+
+    pub fn reset(&mut self, q_rot_residual: &[f32], y2: f32) {
+        self.residual.clear();
+        self.residual.extend_from_slice(q_rot_residual);
+        self.y2 = y2;
+        self.y = y2.sqrt();
+        self.half_sum_residual = 0.5 * q_rot_residual.iter().sum::<f32>();
+        self.one_over_sqrt_d = 1.0 / (q_rot_residual.len() as f32).sqrt();
+
+        if self.use_high_accuracy {
+            self.reset_high_accuracy(q_rot_residual);
+        } else {
+            self.reset_standard(q_rot_residual);
+        }
+    }
+
+    fn reset_standard(&mut self, q_rot_residual: &[f32]) {
         let (vl, vr) = q_rot_residual.iter().copied().fold(
             (f32::INFINITY, f32::NEG_INFINITY),
             |(min_v, max_v), value| (min_v.min(value), max_v.max(value)),
         );
-        let width = if !vl.is_finite() || !vr.is_finite() || (vr - vl).abs() <= 1e-12 {
+        self.vl = vl;
+        self.width = if !vl.is_finite() || !vr.is_finite() || (vr - vl).abs() <= 1e-12 {
             1.0
         } else {
             (vr - vl) / ((1u32 << 14) as f32 - 1.0)
         };
+        self.sumq = 0.0;
+        self.delta = 0.0;
+        self.lut_shift = 0;
+        self.unit_query.clear();
+        self.packed_high_acc_lut.clear();
+
         let n_groups = q_rot_residual.len().div_ceil(4);
-        let mut lut = vec![0.0f32; n_groups * 16];
-        let mut lut_lower = vec![0u8; n_groups * 16];
-        let mut lut_upper = vec![0u8; n_groups * 16];
+        self.lut.resize(n_groups * 16, 0.0);
+        self.lut_lower.resize(n_groups * 16, 0);
+        self.lut_upper.resize(n_groups * 16, 0);
+
         for group_idx in 0..n_groups {
             let mut group = [0u16; 4];
             for bit_pos in 0..4usize {
                 let dim_idx = group_idx * 4 + bit_pos;
                 if dim_idx < q_rot_residual.len() {
-                    group[bit_pos] = quantize_query_value(q_rot_residual[dim_idx], vl, width);
+                    group[bit_pos] =
+                        quantize_query_value(q_rot_residual[dim_idx], self.vl, self.width);
                 }
             }
             for nibble in 0..16usize {
@@ -84,69 +152,56 @@ impl ExRaBitQFastScanState {
                         value += group[bit_pos] as u32;
                     }
                 }
-                lut[group_idx * 16 + nibble] = value as f32;
-                lut_lower[group_idx * 16 + nibble] = value as u8;
-                lut_upper[group_idx * 16 + nibble] = (value >> 8) as u8;
+                self.lut[group_idx * 16 + nibble] = value as f32;
+                self.lut_lower[group_idx * 16 + nibble] = value as u8;
+                self.lut_upper[group_idx * 16 + nibble] = (value >> 8) as u8;
             }
-        }
-
-        Self {
-            use_high_accuracy: false,
-            residual: q_rot_residual.to_vec(),
-            unit_query: Vec::new(),
-            y2,
-            y,
-            lut,
-            half_sum_residual,
-            sumq: 0.0,
-            vl,
-            width,
-            delta: 0.0,
-            one_over_sqrt_d: 1.0 / (q_rot_residual.len() as f32).sqrt(),
-            lut_lower,
-            lut_upper,
-            lut_shift: 0,
-            packed_high_acc_lut: Vec::new(),
         }
     }
 
-    pub fn new_high_accuracy(q_rot_residual: &[f32], y2: f32) -> Self {
-        let y = y2.sqrt();
+    fn reset_high_accuracy(&mut self, q_rot_residual: &[f32]) {
         let padded_dim = q_rot_residual.len();
-        let one_over_sqrt_d = 1.0 / (padded_dim as f32).sqrt();
-        let (unit_query, sumq) = if y > 1e-5 {
-            let unit: Vec<f32> = q_rot_residual.iter().map(|value| *value / y).collect();
-            let sum = unit.iter().sum::<f32>();
-            (unit, sum)
+        let one_over_sqrt_d = self.one_over_sqrt_d;
+        self.unit_query.resize(padded_dim, 0.0);
+        if self.y > 1e-5 {
+            for (dst, value) in self.unit_query.iter_mut().zip(q_rot_residual.iter()) {
+                *dst = *value / self.y;
+            }
+            self.sumq = self.unit_query.iter().sum::<f32>();
         } else {
             let value = one_over_sqrt_d;
-            (vec![value; padded_dim], padded_dim as f32 * value)
-        };
+            self.unit_query.fill(value);
+            self.sumq = padded_dim as f32 * value;
+        }
 
-        let vmax = unit_query
+        let vmax = self
+            .unit_query
             .iter()
             .copied()
             .map(f32::abs)
             .fold(0.0f32, f32::max);
-        let delta = if vmax <= 1e-12 {
+        self.delta = if vmax <= 1e-12 {
             1.0
         } else {
             vmax / (((1u32 << 13) - 1) as f32)
         };
+        self.vl = 0.0;
+        self.width = 0.0;
 
         let n_groups = padded_dim.div_ceil(4);
-        let mut lut = vec![0.0f32; n_groups * 16];
-        let mut lut_lower = vec![0u8; n_groups * 16];
-        let mut lut_upper = vec![0u8; n_groups * 16];
-        let mut packed_high_acc_lut = vec![0u8; n_groups * 32];
-        let mut lut_shift = 0i32;
+        self.lut.resize(n_groups * 16, 0.0);
+        self.lut_lower.resize(n_groups * 16, 0);
+        self.lut_upper.resize(n_groups * 16, 0);
+        self.packed_high_acc_lut.resize(n_groups * 32, 0);
+        self.lut_shift = 0;
+
         for group_idx in 0..n_groups {
             let mut quant_query = [0i32; 4];
             for bit_pos in 0..4usize {
                 let dim_idx = group_idx * 4 + bit_pos;
                 if dim_idx < padded_dim {
                     quant_query[bit_pos] =
-                        quantize_signed_query_value(unit_query[dim_idx], delta) as i32;
+                        quantize_signed_query_value(self.unit_query[dim_idx], self.delta) as i32;
                 }
             }
             let mut group_lut = [0i32; 16];
@@ -159,40 +214,21 @@ impl ExRaBitQFastScanState {
                     group_min = group_lut[nibble];
                 }
             }
-            lut_shift += group_min;
+            self.lut_shift += group_min;
 
             let fill_lo = (group_idx / 4) * 128 + (group_idx % 4) * 16;
             let fill_hi = fill_lo + 64;
             for nibble in 0..16usize {
                 let value = group_lut[nibble];
-                lut[group_idx * 16 + nibble] = value as f32;
+                self.lut[group_idx * 16 + nibble] = value as f32;
                 let shifted = (value - group_min) as u32;
                 let lo = shifted as u8;
                 let hi = (shifted >> 8) as u8;
-                lut_lower[group_idx * 16 + nibble] = lo;
-                lut_upper[group_idx * 16 + nibble] = hi;
-                packed_high_acc_lut[fill_lo + nibble] = lo;
-                packed_high_acc_lut[fill_hi + nibble] = hi;
+                self.lut_lower[group_idx * 16 + nibble] = lo;
+                self.lut_upper[group_idx * 16 + nibble] = hi;
+                self.packed_high_acc_lut[fill_lo + nibble] = lo;
+                self.packed_high_acc_lut[fill_hi + nibble] = hi;
             }
-        }
-
-        Self {
-            use_high_accuracy: true,
-            residual: q_rot_residual.to_vec(),
-            unit_query,
-            y2,
-            y,
-            lut,
-            half_sum_residual: 0.5 * q_rot_residual.iter().sum::<f32>(),
-            sumq,
-            vl: 0.0,
-            width: 0.0,
-            delta,
-            one_over_sqrt_d,
-            lut_lower,
-            lut_upper,
-            lut_shift,
-            packed_high_acc_lut,
         }
     }
 }

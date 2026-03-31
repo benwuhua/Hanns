@@ -221,3 +221,53 @@ fn test_high_accuracy_bitmask_scan_matches_scalar_rerank() {
         }
     }
 }
+
+#[test]
+fn test_fastscan_state_reset_matches_fresh_build() {
+    let (quantizer, data, centroid, _ids, _encoded, _layout) = build_fixture(64, 32, 4);
+    let query_a = &data[0..32];
+    let (q_rot_a, y2_a) = quantizer.rotate_query_residual(query_a, &centroid);
+    let query_b = &data[32..64];
+    let (q_rot_b, y2_b) = quantizer.rotate_query_residual(query_b, &centroid);
+
+    let mut standard = ExRaBitQFastScanState::new(&q_rot_a, y2_a);
+    standard.reset(&q_rot_b, y2_b);
+    let fresh_standard = ExRaBitQFastScanState::new(&q_rot_b, y2_b);
+    assert_eq!(standard.use_high_accuracy, fresh_standard.use_high_accuracy);
+    assert_eq!(standard.residual, fresh_standard.residual);
+    assert_eq!(standard.unit_query, fresh_standard.unit_query);
+    assert_eq!(standard.y2, fresh_standard.y2);
+    assert_eq!(standard.y, fresh_standard.y);
+    assert_eq!(standard.lut, fresh_standard.lut);
+    assert_eq!(standard.half_sum_residual, fresh_standard.half_sum_residual);
+    assert_eq!(standard.sumq, fresh_standard.sumq);
+    assert_eq!(standard.vl, fresh_standard.vl);
+    assert_eq!(standard.width, fresh_standard.width);
+    assert_eq!(standard.delta, fresh_standard.delta);
+    assert_eq!(standard.one_over_sqrt_d, fresh_standard.one_over_sqrt_d);
+
+    let mut high_accuracy = ExRaBitQFastScanState::new_high_accuracy(&q_rot_a, y2_a);
+    high_accuracy.reset(&q_rot_b, y2_b);
+    let fresh_high_accuracy = ExRaBitQFastScanState::new_high_accuracy(&q_rot_b, y2_b);
+    assert_eq!(
+        high_accuracy.use_high_accuracy,
+        fresh_high_accuracy.use_high_accuracy
+    );
+    assert_eq!(high_accuracy.residual, fresh_high_accuracy.residual);
+    assert_eq!(high_accuracy.unit_query, fresh_high_accuracy.unit_query);
+    assert_eq!(high_accuracy.y2, fresh_high_accuracy.y2);
+    assert_eq!(high_accuracy.y, fresh_high_accuracy.y);
+    assert_eq!(high_accuracy.lut, fresh_high_accuracy.lut);
+    assert_eq!(
+        high_accuracy.half_sum_residual,
+        fresh_high_accuracy.half_sum_residual
+    );
+    assert_eq!(high_accuracy.sumq, fresh_high_accuracy.sumq);
+    assert_eq!(high_accuracy.vl, fresh_high_accuracy.vl);
+    assert_eq!(high_accuracy.width, fresh_high_accuracy.width);
+    assert_eq!(high_accuracy.delta, fresh_high_accuracy.delta);
+    assert_eq!(
+        high_accuracy.one_over_sqrt_d,
+        fresh_high_accuracy.one_over_sqrt_d
+    );
+}

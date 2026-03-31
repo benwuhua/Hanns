@@ -1,29 +1,29 @@
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
 
-use knowhere_rs::quantization::{
-    HvqConfig, HvqIndex, HvqQuantizer, PQConfig, ProductQuantizer, TurboQuantConfig,
-    TurboQuantMse,
+use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use knowhere_rs::faiss::{
+    IvfExRaBitqConfig, IvfExRaBitqIndex, IvfFlatIndex, IvfHvqConfig, IvfHvqIndex, IvfPqIndex,
 };
 use rayon::prelude::*;
 
 const DEFAULT_DATA_DIR: &str = "/data/work/datasets/wikipedia-cohere-1m";
 const EXPECTED_DIM: usize = 768;
+const NLIST: usize = 256;
 const TOP_K: usize = 10;
 const TRAIN_SIZE: usize = 100_000;
-const EVAL_QUERIES: usize = 5_000;
+const EVAL_QUERIES: usize = 1_000;
+const NPROBES: [usize; 3] = [10, 32, 64];
 
 struct Tier {
     label: &'static str,
     pq_m: usize,
     pq_nbits: usize,
-    tq_bits: u8,
     hvq_bits: u8,
+    exrabitq_bits: usize,
 }
 
 const TIERS: [Tier; 3] = [
@@ -31,47 +31,24 @@ const TIERS: [Tier; 3] = [
         label: "32x",
         pq_m: 96,
         pq_nbits: 8,
-        tq_bits: 1,
         hvq_bits: 1,
+        exrabitq_bits: 3,
     },
     Tier {
         label: "8x",
         pq_m: 384,
         pq_nbits: 8,
-        tq_bits: 3,
         hvq_bits: 4,
+        exrabitq_bits: 5,
     },
     Tier {
         label: "4x",
         pq_m: 768,
         pq_nbits: 8,
-        tq_bits: 6,
         hvq_bits: 8,
+        exrabitq_bits: 9,
     },
 ];
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct MinScored {
-    id: i64,
-    score: f32,
-}
-
-impl Eq for MinScored {}
-
-impl Ord for MinScored {
-    fn cmp(&self, other: &Self) -> Ordering {
-        other
-            .score
-            .total_cmp(&self.score)
-            .then_with(|| other.id.cmp(&self.id))
-    }
-}
-
-impl PartialOrd for MinScored {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
 
 fn read_u32_le(file: &mut File) -> Result<u32, Box<dyn Error>> {
     let mut buf = [0u8; 4];
@@ -138,137 +115,71 @@ fn compute_recall(results: &[Vec<i64>], gt: &[Vec<i32>], top_k: usize) -> f32 {
     hits as f32 / (n * top_k) as f32
 }
 
-fn compute_recall_from_tuples(results: &[Vec<(usize, f32)>], gt: &[Vec<i32>], top_k: usize) -> f32 {
-    let n = results.len().min(gt.len());
-    if n == 0 || top_k == 0 {
-        return 0.0;
-    }
-
-    let mut hits = 0usize;
-    for i in 0..n {
-        let r = &results[i];
-        let g = &gt[i];
-        for &gid in g.iter().take(top_k.min(g.len())) {
-            if r.iter().take(top_k.min(r.len())).any(|&(rid, _)| rid == gid as usize) {
-                hits += 1;
+fn normalize_vectors(data: &mut [f32], dim: usize) {
+    for vec in data.chunks_exact_mut(dim) {
+        let norm = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > 1e-12 {
+            for x in vec.iter_mut() {
+                *x /= norm;
             }
         }
     }
-    hits as f32 / (n * top_k) as f32
 }
 
-fn push_topk(heap: &mut BinaryHeap<MinScored>, top_k: usize, candidate: MinScored) {
-    if heap.len() < top_k {
-        heap.push(candidate);
-        return;
-    }
-    if let Some(worst) = heap.peek() {
-        if candidate.score > worst.score
-            || (candidate.score == worst.score && candidate.id < worst.id)
-        {
-            heap.pop();
-            heap.push(candidate);
-        }
-    }
+fn print_row(method: &str, tier: &str, nprobe: usize, build_s: f64, recall: f32, qps: f64) {
+    println!(
+        "{:<10} {:>4} {:>7} {:>8.2} {:>10.4} {:>11.0}",
+        method, tier, nprobe, build_s, recall, qps
+    );
 }
 
-fn finalize_topk(mut heap: BinaryHeap<MinScored>, top_k: usize) -> Vec<i64> {
-    let mut items = Vec::with_capacity(heap.len());
-    while let Some(item) = heap.pop() {
-        items.push(item);
+fn make_pq_config(dim: usize, nlist: usize, nprobe: usize, m: usize, nbits: usize) -> IndexConfig {
+    IndexConfig {
+        index_type: IndexType::IvfPq,
+        metric_type: MetricType::Ip,
+        dim,
+        data_type: knowhere_rs::api::DataType::Float,
+        params: IndexParams {
+            nlist: Some(nlist),
+            nprobe: Some(nprobe),
+            m: Some(m),
+            nbits_per_idx: Some(nbits),
+            ..IndexParams::default()
+        },
     }
-    items.sort_by(|a, b| {
-        b.score
-            .total_cmp(&a.score)
-            .then_with(|| a.id.cmp(&b.id))
-    });
-    items.truncate(top_k);
-    items.into_iter().map(|item| item.id).collect()
-}
-
-fn scan_topk_codes<F>(flat_codes: &[u8], code_size: usize, top_k: usize, score_fn: F) -> Vec<i64>
-where
-    F: Sync + Send + Fn(usize, &[u8]) -> f32,
-{
-    let heap = flat_codes
-        .par_chunks_exact(code_size)
-        .enumerate()
-        .fold(
-            || BinaryHeap::with_capacity(top_k + 1),
-            |mut local_heap, (idx, code)| {
-                let score = score_fn(idx, code);
-                push_topk(
-                    &mut local_heap,
-                    top_k,
-                    MinScored {
-                        id: idx as i64,
-                        score,
-                    },
-                );
-                local_heap
-            },
-        )
-        .reduce(
-            || BinaryHeap::with_capacity(top_k + 1),
-            |mut left, right| {
-                for item in right {
-                    push_topk(&mut left, top_k, item);
-                }
-                left
-            },
-        );
-
-    finalize_topk(heap, top_k)
 }
 
 fn evaluate_queries<F>(
     queries: &[f32],
     dim: usize,
     eval_queries: usize,
-    top_k: usize,
     search_one: F,
 ) -> Vec<Vec<i64>>
 where
     F: Sync + Fn(&[f32]) -> Vec<i64>,
 {
-    let mut results = Vec::with_capacity(eval_queries);
-    for query in queries.chunks_exact(dim).take(eval_queries) {
-        results.push(search_one(query));
-    }
-    if results.len() < top_k {
-        results.shrink_to_fit();
-    }
-    results
-}
-
-fn tq_code_bytes(bits: u8) -> usize {
-    EXPECTED_DIM.next_power_of_two() * bits as usize / 8
-}
-
-fn hvq_code_bytes(bits: u8) -> usize {
-    12 + (EXPECTED_DIM * bits as usize).div_ceil(8)
-}
-
-fn print_row(method: &str, tier: &str, code_bytes: usize, build_s: f64, recall: f32, qps: f64) {
-    println!(
-        "{:<8} {:>4} {:>11} {:>8.2} {:>10.4} {:>10.0}",
-        method, tier, code_bytes, build_s, recall, qps
-    );
+    (0..eval_queries)
+        .into_par_iter()
+        .map(|qi| {
+            let query = &queries[qi * dim..(qi + 1) * dim];
+            search_one(query)
+        })
+        .collect()
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     let data_dir = Path::new(DEFAULT_DATA_DIR);
     let base_path = data_dir.join("base.fbin");
     let query_path = data_dir.join("query.fbin");
-    let gt_path = data_dir.join("gt.ibin");
+    let gt_path = data_dir.join("gt.cosine.ibin");
 
     if !base_path.exists() || !query_path.exists() || !gt_path.exists() {
         println!("missing dataset under {}", data_dir.display());
         return Ok(());
     }
 
-    let (base_n, base_dim, base) = read_fbin(&base_path)?;
-    let (query_n, query_dim, queries) = read_fbin(&query_path)?;
+    let (base_n, base_dim, mut base) = read_fbin(&base_path)?;
+    let (query_n, query_dim, mut queries) = read_fbin(&query_path)?;
     let (gt_n, gt_k, gt_flat) = read_ibin(&gt_path)?;
     let gt = rows_i32(&gt_flat, gt_k);
 
@@ -286,146 +197,174 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err(format!("gt_k={} < top_k={}", gt_k, TOP_K).into());
     }
 
+    normalize_vectors(&mut base, base_dim);
+    normalize_vectors(&mut queries, query_dim);
+
     let train_n = TRAIN_SIZE.min(base_n);
     let train = &base[..train_n * base_dim];
     let eval_queries = EVAL_QUERIES.min(query_n).min(gt.len());
 
-    println!("=== Quantizer Comparison: Cohere 768D, IP metric ===");
-    println!("=== (TQ uses normalized vectors; PQ/HVQ use raw vectors) ===");
+    println!("=== IVF Quantizer Comparison: Cohere 768D ===");
     println!(
-        "{:<8} {:>4} {:>11} {:>8} {:>10} {:>10}",
-        "method", "tier", "code_bytes", "build_s", "recall@10", "scan_qps"
+        "{:<10} {:>4} {:>7} {:>8} {:>10} {:>11}",
+        "method", "tier", "nprobe", "build_s", "recall@10", "search_qps"
     );
 
     let args: Vec<String> = std::env::args().collect();
     let enabled_methods: Vec<&str> = if args.len() > 1 {
         args[1].split(',').collect()
     } else {
-        vec!["PQ", "TQ", "HVQ", "HVQ2"]
+        vec!["FLAT", "PQ", "HVQ", "EXRABITQ"]
+    };
+    let enabled_tiers: Vec<&str> = if args.len() > 2 {
+        args[2].split(',').collect()
+    } else {
+        vec!["8x"]
     };
 
     for tier in &TIERS {
-        if enabled_methods.iter().any(|m| m.eq_ignore_ascii_case("PQ")) {
-        let pq_config = PQConfig::new(EXPECTED_DIM, tier.pq_m, tier.pq_nbits);
-        let mut pq = ProductQuantizer::new(pq_config);
-        let t_build = Instant::now();
-        pq.train(train_n, train)?;
-        let pq_codes = pq.encode_batch(base_n, &base)?;
-        let build_s = t_build.elapsed().as_secs_f64();
-
-        let t_scan = Instant::now();
-        let pq_results = evaluate_queries(&queries, EXPECTED_DIM, eval_queries, TOP_K, |query| {
-            let table = pq.build_distance_table_ip(query);
-            scan_topk_codes(&pq_codes, pq.code_size(), TOP_K, |_idx, code| {
-                pq.compute_distance_with_table(&table, code)
-            })
-        });
-        let scan_qps = eval_queries as f64 / t_scan.elapsed().as_secs_f64().max(f64::EPSILON);
-        let recall = compute_recall(&pq_results, &gt[..eval_queries], TOP_K);
-        print_row(
-            "PQ",
-            tier.label,
-            pq.code_size(),
-            build_s,
-            recall,
-            scan_qps,
-        );
+        if !enabled_tiers.iter().any(|t| t.eq_ignore_ascii_case(tier.label)) {
+            continue;
         }
 
-        if enabled_methods.iter().any(|m| m.eq_ignore_ascii_case("TQ")) {
-        let tq_config = TurboQuantConfig::new(EXPECTED_DIM, tier.tq_bits)
-            .with_hadamard()
-            .with_normalize_for_cosine(true);
-        let tq = TurboQuantMse::new(tq_config.clone());
-        let t_build = Instant::now();
-        let tq_codes = tq.encode_batch(base_n, &base);
-        let build_s = t_build.elapsed().as_secs_f64();
-        let tq_code_size = tq.code_size_bytes();
+        if enabled_methods.iter().any(|m| m.eq_ignore_ascii_case("FLAT")) {
+            let config = IndexConfig {
+                index_type: IndexType::IvfFlat,
+                metric_type: MetricType::Ip,
+                dim: EXPECTED_DIM,
+                data_type: knowhere_rs::api::DataType::Float,
+                params: IndexParams {
+                    nlist: Some(NLIST),
+                    nprobe: Some(NPROBES[0]),
+                    ..IndexParams::default()
+                },
+            };
+            let mut index = IvfFlatIndex::new(&config)?;
+            let t_build = Instant::now();
+            index.train(train)?;
+            index.add(&base, None)?;
+            let build_s = t_build.elapsed().as_secs_f64();
 
-        let t_scan = Instant::now();
-        let tq_results = evaluate_queries(&queries, EXPECTED_DIM, eval_queries, TOP_K, |query| {
-            let q_rot = tq.rotate_query(query);
-            let adc = (tier.tq_bits <= 6).then(|| tq.precompute_adc_table(&q_rot));
-            scan_topk_codes(&tq_codes, tq_code_size, TOP_K, |_idx, code| match &adc {
-                Some(table) => tq.score_ip_adc(table, code),
-                None => tq.score_ip(&q_rot, code),
-            })
-        });
-        let scan_qps = eval_queries as f64 / t_scan.elapsed().as_secs_f64().max(f64::EPSILON);
-        let recall = compute_recall(&tq_results, &gt[..eval_queries], TOP_K);
-        print_row(
-            "TQ",
-            tier.label,
-            tq_code_bytes(tier.tq_bits),
-            build_s,
-            recall,
-            scan_qps,
-        );
+            for &nprobe in &NPROBES {
+                let req = SearchRequest {
+                    top_k: TOP_K,
+                    nprobe,
+                    filter: None,
+                    params: None,
+                    radius: None,
+                };
+                let t_search = Instant::now();
+                let results = evaluate_queries(&queries, EXPECTED_DIM, eval_queries, |query| {
+                    index
+                        .search(query, &req)
+                        .map(|r| r.ids.into_iter().take(TOP_K).collect())
+                        .unwrap_or_default()
+                });
+                let search_qps =
+                    eval_queries as f64 / t_search.elapsed().as_secs_f64().max(f64::EPSILON);
+                let recall = compute_recall(&results, &gt[..eval_queries], TOP_K);
+                print_row("IVF-FLAT", tier.label, nprobe, build_s, recall, search_qps);
+            }
+        }
+
+        if enabled_methods.iter().any(|m| m.eq_ignore_ascii_case("PQ")) {
+            let config = make_pq_config(EXPECTED_DIM, NLIST, NPROBES[0], tier.pq_m, tier.pq_nbits);
+            let mut index = IvfPqIndex::new(&config)?;
+            let t_build = Instant::now();
+            index.train(train)?;
+            index.add(&base, None)?;
+            let build_s = t_build.elapsed().as_secs_f64();
+
+            for &nprobe in &NPROBES {
+                let req = SearchRequest {
+                    top_k: TOP_K,
+                    nprobe,
+                    filter: None,
+                    params: None,
+                    radius: None,
+                };
+                let t_search = Instant::now();
+                let results = evaluate_queries(&queries, EXPECTED_DIM, eval_queries, |query| {
+                    index
+                        .search(query, &req)
+                        .map(|r| r.ids.into_iter().take(TOP_K).collect())
+                        .unwrap_or_default()
+                });
+                let search_qps =
+                    eval_queries as f64 / t_search.elapsed().as_secs_f64().max(f64::EPSILON);
+                let recall = compute_recall(&results, &gt[..eval_queries], TOP_K);
+                print_row("IVF-PQ", tier.label, nprobe, build_s, recall, search_qps);
+            }
         }
 
         if enabled_methods.iter().any(|m| m.eq_ignore_ascii_case("HVQ")) {
-        let mut hvq = HvqQuantizer::new(
-            HvqConfig {
-                dim: EXPECTED_DIM,
-                nbits: tier.hvq_bits,
-            },
-            42,
-        );
-        let t_build = Instant::now();
-        hvq.train(train_n, train);
-        let hvq_codes = hvq.encode_batch(base_n, &base, 4);
-        let build_s = t_build.elapsed().as_secs_f64();
-        let hvq_storage_size = hvq.code_size_bytes();
+            let config = IvfHvqConfig::new(EXPECTED_DIM, NLIST, tier.hvq_bits)
+                .with_metric(MetricType::Ip)
+                .with_seed(42)
+                .with_nprobe(NPROBES[0]);
+            let mut index = IvfHvqIndex::new(config);
+            let t_build = Instant::now();
+            index.train(train)?;
+            index.add(&base, None)?;
+            let build_s = t_build.elapsed().as_secs_f64();
 
-        let t_scan = Instant::now();
-        let hvq_results = evaluate_queries(&queries, EXPECTED_DIM, eval_queries, TOP_K, |query| {
-            let q_rot = hvq.rotate_query(query);
-            let state = hvq.precompute_query_state(&q_rot);
-            scan_topk_codes(&hvq_codes, hvq_storage_size, TOP_K, |_idx, code| {
-                hvq.score_code(&state, code)
-            })
-        });
-        let scan_qps = eval_queries as f64 / t_scan.elapsed().as_secs_f64().max(f64::EPSILON);
-        let recall = compute_recall(&hvq_results, &gt[..eval_queries], TOP_K);
-        print_row(
-            "HVQ",
-            tier.label,
-            hvq_code_bytes(tier.hvq_bits),
-            build_s,
-            recall,
-            scan_qps,
-        );
+            for &nprobe in &NPROBES {
+                let req = SearchRequest {
+                    top_k: TOP_K,
+                    nprobe,
+                    filter: None,
+                    params: None,
+                    radius: None,
+                };
+                let t_search = Instant::now();
+                let results = evaluate_queries(&queries, EXPECTED_DIM, eval_queries, |query| {
+                    index
+                        .search(query, &req)
+                        .map(|r| r.ids.into_iter().take(TOP_K).collect())
+                        .unwrap_or_default()
+                });
+                let search_qps =
+                    eval_queries as f64 / t_search.elapsed().as_secs_f64().max(f64::EPSILON);
+                let recall = compute_recall(&results, &gt[..eval_queries], TOP_K);
+                print_row("IVF-HVQ", tier.label, nprobe, build_s, recall, search_qps);
+            }
         }
 
-        if enabled_methods.iter().any(|m| m.eq_ignore_ascii_case("HVQ2")) {
-        let mut hvq_base = HvqQuantizer::new(
-            HvqConfig {
-                dim: EXPECTED_DIM,
-                nbits: 1,
-            },
-            42,
-        );
-        hvq_base.train(train_n, train);
+        if enabled_methods
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case("EXRABITQ"))
+        {
+            let config = IvfExRaBitqConfig::new(EXPECTED_DIM, NLIST, tier.exrabitq_bits)
+                .with_metric(MetricType::L2)
+                .with_rotation_seed(42)
+                .with_rerank_k(100)
+                .with_nprobe(NPROBES[0]);
+            let mut index = IvfExRaBitqIndex::new(config);
+            let t_build = Instant::now();
+            index.train(train)?;
+            index.add(&base, None)?;
+            let build_s = t_build.elapsed().as_secs_f64();
 
-        let build_start = Instant::now();
-        let hvq_index = HvqIndex::build(&hvq_base, &base, base_n, tier.hvq_bits);
-        let build_s = build_start.elapsed().as_secs_f64();
-        let code_bytes = hvq_index.rerank_quantizer.code_size_bytes() + EXPECTED_DIM.div_ceil(8);
-
-        for &nprobe_factor in &[10usize, 50, 100, 200, 500, 1000, 2000] {
-            let t_scan = Instant::now();
-            let hvq2_results: Vec<Vec<(usize, f32)>> = (0..eval_queries)
-                .into_par_iter()
-                .map(|qi| {
-                    let query = &queries[qi * EXPECTED_DIM..(qi + 1) * EXPECTED_DIM];
-                    hvq_index.search(query, TOP_K, nprobe_factor)
-                })
-                .collect();
-            let scan_qps = eval_queries as f64 / t_scan.elapsed().as_secs_f64().max(f64::EPSILON);
-            let recall = compute_recall_from_tuples(&hvq2_results, &gt[..eval_queries], TOP_K);
-            let label = format!("HVQ2-{}", nprobe_factor);
-            print_row(&label, tier.label, code_bytes, build_s, recall, scan_qps);
-        }
+            for &nprobe in &NPROBES {
+                let req = SearchRequest {
+                    top_k: TOP_K,
+                    nprobe,
+                    filter: None,
+                    params: None,
+                    radius: None,
+                };
+                let t_search = Instant::now();
+                let results = evaluate_queries(&queries, EXPECTED_DIM, eval_queries, |query| {
+                    index
+                        .search(query, &req)
+                        .map(|r| r.ids.into_iter().take(TOP_K).collect())
+                        .unwrap_or_default()
+                });
+                let search_qps =
+                    eval_queries as f64 / t_search.elapsed().as_secs_f64().max(f64::EPSILON);
+                let recall = compute_recall(&results, &gt[..eval_queries], TOP_K);
+                print_row("IVF-EXRQ", tier.label, nprobe, build_s, recall, search_qps);
+            }
         }
     }
 

@@ -1,6 +1,7 @@
 //! **LEGACY/SCAFFOLD MODULE** — simplified IVF container, not native-compatible.
 //! Lacks: metric_type dispatch, standard k-means training, range search, serialization.
 //! For parity with native knowhere, see ivf_sq8.rs / ivfpq.rs / ivf_flat.rs.
+#![allow(deprecated)] // Legacy IVF scaffold remains exported for compatibility tests and wrappers.
 
 use std::io::{Read, Write};
 use std::path::Path;

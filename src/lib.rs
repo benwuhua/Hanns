@@ -64,6 +64,7 @@ pub use metrics::{
 pub use quantization::{pick_refine_index, RefineIndex, RefineType};
 
 // Export all index types
+#[allow(deprecated)] // Preserve public exports for legacy callers while keeping deprecation local.
 pub use faiss::{
     AsyncReadEngine, BeamSearchIO, BeamSearchStats, DiskAnnIndex, FaissIndex, FileGroup,
     FlashLayout, HnswIndex, IvfPqIndex, IvfSq8Index, MemIndex, PQFlashIndex, PageCache,

@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -124,6 +125,7 @@ impl ClusterState {
 pub struct IvfExRaBitqIndex {
     config: IvfExRaBitqConfig,
     centroids: Vec<f32>,
+    rotated_centroids: Vec<f32>,
     clusters: Vec<ClusterState>,
     quantizer: ExRaBitQQuantizer,
     trained: bool,
@@ -170,6 +172,16 @@ struct StoredConfig {
 }
 
 impl IvfExRaBitqIndex {
+    #[inline]
+    fn compare_centroid_score(a: &(usize, f32), b: &(usize, f32)) -> std::cmp::Ordering {
+        a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0))
+    }
+
+    #[inline]
+    fn compare_candidate_score(a: &(i64, f32), b: &(i64, f32)) -> std::cmp::Ordering {
+        a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0))
+    }
+
     pub fn from_index_config(config: &IndexConfig) -> Result<Self> {
         Ok(Self::new(IvfExRaBitqConfig::from_index_config(config)?))
     }
@@ -184,6 +196,7 @@ impl IvfExRaBitqIndex {
 
         Self {
             centroids: Vec::new(),
+            rotated_centroids: Vec::new(),
             clusters: (0..config.nlist).map(|_| ClusterState::new()).collect(),
             quantizer,
             trained: false,
@@ -258,6 +271,7 @@ impl IvfExRaBitqIndex {
         let mut km = KMeans::new(self.config.nlist, self.config.dim);
         km.train(data);
         self.centroids = km.centroids().to_vec();
+        self.rotated_centroids = self.compute_rotated_centroids(&self.centroids);
         self.clusters = (0..self.config.nlist)
             .map(|_| ClusterState::new())
             .collect();
@@ -286,24 +300,64 @@ impl IvfExRaBitqIndex {
             }
         }
 
-        for i in 0..n {
-            let vector = &data[i * self.config.dim..(i + 1) * self.config.dim];
-            let cluster = self.find_best_centroid(vector);
-            let centroid =
-                &self.centroids[cluster * self.config.dim..(cluster + 1) * self.config.dim];
-            let encoded = self.quantizer.encode_with_centroid(vector, centroid);
-            let id = ids
-                .map(|values| values[i])
-                .unwrap_or((self.ntotal + i) as i64);
+        let padded_dim = self.quantizer.config().padded_dim();
+        let encoded_vectors: Vec<(usize, i64, EncodedVector)> = data
+            .par_chunks_exact(self.config.dim)
+            .enumerate()
+            .map_init(
+                || (vec![0.0f32; padded_dim], vec![0.0f32; padded_dim]),
+                |(padded, rotated), (i, vector)| {
+                    let cluster = self.find_best_centroid(vector);
+                    let id = ids
+                        .map(|values| values[i])
+                        .unwrap_or((self.ntotal + i) as i64);
+                    let rotated_centroid = &self.rotated_centroids
+                        [cluster * padded_dim..(cluster + 1) * padded_dim];
+                    let encoded = self.quantizer.encode_with_rotated_centroid_into(
+                        vector,
+                        rotated_centroid,
+                        padded,
+                        rotated,
+                    );
+                    (cluster, id, encoded)
+                },
+            )
+            .collect();
 
-            let state = &mut self.clusters[cluster];
-            state.ids.push(id);
-            state.encoded.push(encoded);
-            state.layout = Some(ExRaBitQLayout::build(
-                self.quantizer.config(),
-                &state.encoded,
-                &state.ids,
-            ));
+        let mut pending: Vec<Vec<(i64, EncodedVector)>> =
+            (0..self.config.nlist).map(|_| Vec::new()).collect();
+        for (cluster, id, encoded) in encoded_vectors {
+            pending[cluster].push((id, encoded));
+        }
+
+        let mut touched_clusters = Vec::new();
+
+        for (cluster_idx, additions) in pending.into_iter().enumerate() {
+            if additions.is_empty() {
+                continue;
+            }
+            touched_clusters.push(cluster_idx);
+            let state = &mut self.clusters[cluster_idx];
+            state.ids.reserve(additions.len());
+            state.encoded.reserve(additions.len());
+            for (id, encoded) in additions {
+                state.ids.push(id);
+                state.encoded.push(encoded);
+            }
+        }
+
+        let rebuilt_layouts: Vec<(usize, ExRaBitQLayout)> = touched_clusters
+            .par_iter()
+            .map(|&cluster_idx| {
+                let state = &self.clusters[cluster_idx];
+                (
+                    cluster_idx,
+                    ExRaBitQLayout::build(self.quantizer.config(), &state.encoded, &state.ids),
+                )
+            })
+            .collect();
+        for (cluster_idx, layout) in rebuilt_layouts {
+            self.clusters[cluster_idx].layout = Some(layout);
         }
 
         self.ntotal += n;
@@ -467,11 +521,13 @@ impl IvfExRaBitqIndex {
         Ok(Self {
             config,
             centroids: snapshot.centroids,
+            rotated_centroids: Vec::new(),
             clusters,
             quantizer,
             trained: snapshot.trained,
             ntotal: snapshot.ntotal,
-        })
+        }
+        .with_rebuilt_rotated_centroids())
     }
 
     fn search_single(
@@ -483,31 +539,51 @@ impl IvfExRaBitqIndex {
     ) -> Vec<(i64, f32)> {
         let probes = self.find_top_centroids(query, nprobe);
         let mut candidates = Vec::new();
+        let q_padded = self.quantizer.pad_vector(query);
+        let q_rotated = self.quantizer.rotate_padded(&q_padded);
+        let padded_dim = self.quantizer.config().padded_dim();
+        let mut residual = vec![0.0f32; padded_dim];
+        let mut state: Option<ExRaBitQFastScanState> = None;
 
         for cluster_idx in probes {
             let Some(layout) = self.clusters[cluster_idx].layout.as_ref() else {
                 continue;
             };
-            let centroid =
-                &self.centroids[cluster_idx * self.config.dim..(cluster_idx + 1) * self.config.dim];
-            let (q_rot, y2) = self.quantizer.rotate_query_residual(query, centroid);
-            let state = if self.config.use_high_accuracy_scan {
-                ExRaBitQFastScanState::new_high_accuracy(&q_rot, y2)
+            let rotated_centroid = &self.rotated_centroids
+                [cluster_idx * padded_dim..(cluster_idx + 1) * padded_dim];
+            let mut y2 = 0.0f32;
+            for ((dst, &q), &c) in residual
+                .iter_mut()
+                .zip(q_rotated.iter())
+                .zip(rotated_centroid.iter())
+            {
+                let value = q - c;
+                *dst = value;
+                y2 += value * value;
+            }
+
+            let scan_state = if let Some(state) = state.as_mut() {
+                state.reset(&residual, y2);
+                state
             } else {
-                ExRaBitQFastScanState::new(&q_rot, y2)
+                state.insert(if self.config.use_high_accuracy_scan {
+                    ExRaBitQFastScanState::new_high_accuracy(&residual, y2)
+                } else {
+                    ExRaBitQFastScanState::new(&residual, y2)
+                })
             };
             let mut reranked = scan_and_rerank(
                 &self.quantizer,
                 layout,
-                &state,
+                scan_state,
                 shortlist.min(layout.len()),
                 shortlist,
             );
             candidates.append(&mut reranked);
         }
 
-        candidates.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-        candidates.truncate(top_k.max(shortlist.min(candidates.len())));
+        let candidate_limit = top_k.max(shortlist.min(candidates.len()));
+        Self::truncate_top_candidates(&mut candidates, candidate_limit);
         candidates
     }
 
@@ -523,8 +599,67 @@ impl IvfExRaBitqIndex {
             let dist = l2_distance(vector, centroid);
             scored.push((cluster_idx, dist));
         }
-        scored.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-        scored.into_iter().take(count).map(|(idx, _)| idx).collect()
+        Self::select_top_centroids(scored, count)
+            .into_iter()
+            .map(|(idx, _)| idx)
+            .collect()
+    }
+
+    fn select_top_centroids(mut scored: Vec<(usize, f32)>, count: usize) -> Vec<(usize, f32)> {
+        if scored.is_empty() || count == 0 {
+            return Vec::new();
+        }
+        if count >= scored.len() {
+            scored.sort_by(Self::compare_centroid_score);
+            return scored;
+        }
+
+        let nth = count - 1;
+        scored.select_nth_unstable_by(nth, Self::compare_centroid_score);
+        scored.truncate(count);
+        scored.sort_by(Self::compare_centroid_score);
+        scored
+    }
+
+    fn truncate_top_candidates(candidates: &mut Vec<(i64, f32)>, count: usize) {
+        if candidates.is_empty() || count == 0 {
+            candidates.clear();
+            return;
+        }
+        if count >= candidates.len() {
+            candidates.sort_by(Self::compare_candidate_score);
+            return;
+        }
+
+        let nth = count - 1;
+        candidates.select_nth_unstable_by(nth, Self::compare_candidate_score);
+        candidates.truncate(count);
+        candidates.sort_by(Self::compare_candidate_score);
+    }
+
+    fn compute_rotated_centroids(&self, centroids: &[f32]) -> Vec<f32> {
+        let padded_dim = self.quantizer.config().padded_dim();
+        let mut rotated = vec![0.0f32; self.config.nlist * padded_dim];
+        rotated
+            .par_chunks_exact_mut(padded_dim)
+            .zip(centroids.par_chunks_exact(self.config.dim))
+            .for_each_init(
+                || vec![0.0f32; padded_dim],
+                |padded, (rotated_centroid, centroid)| {
+                    self.quantizer.pad_vector_into(centroid, padded);
+                    self.quantizer.rotate_padded_into(padded, rotated_centroid);
+                },
+            );
+        rotated
+    }
+
+    fn with_rebuilt_rotated_centroids(mut self) -> Self {
+        if self.centroids.is_empty() {
+            self.rotated_centroids.clear();
+        } else {
+            self.rotated_centroids = self.compute_rotated_centroids(&self.centroids);
+        }
+        self
     }
 }
 
@@ -680,5 +815,27 @@ impl AnnIterator for IvfExRaBitqAnnIterator {
 
     fn buffer_size(&self) -> usize {
         self.results.len().saturating_sub(self.pos)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_select_top_centroids_matches_full_sort_order() {
+        let scored = vec![
+            (0usize, 9.0f32),
+            (1, 1.0),
+            (2, 3.0),
+            (3, 1.0),
+            (4, 0.5),
+        ];
+
+        let top3 = IvfExRaBitqIndex::select_top_centroids(scored.clone(), 3);
+        assert_eq!(top3, vec![(4, 0.5), (1, 1.0), (3, 1.0)]);
+
+        let all = IvfExRaBitqIndex::select_top_centroids(scored, 99);
+        assert_eq!(all, vec![(4, 0.5), (1, 1.0), (3, 1.0), (2, 3.0), (0, 9.0)]);
     }
 }

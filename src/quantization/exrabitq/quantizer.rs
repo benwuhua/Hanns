@@ -4,8 +4,6 @@ use super::{
     space::{decode_compact_levels, ip_fxu2, ip_fxu3, ip_fxu4, ip_fxu6, ip_fxu7, ip_fxu8},
 };
 use crate::quantization::turboquant::packed::{pack_codes, unpack_codes};
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ExFactor {
@@ -42,29 +40,7 @@ pub struct EncodedVector {
 struct ThresholdEvent {
     threshold: f64,
     dim: usize,
-}
-
-impl PartialEq for ThresholdEvent {
-    fn eq(&self, other: &Self) -> bool {
-        self.threshold.to_bits() == other.threshold.to_bits() && self.dim == other.dim
-    }
-}
-
-impl Eq for ThresholdEvent {}
-
-impl PartialOrd for ThresholdEvent {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for ThresholdEvent {
-    fn cmp(&self, other: &Self) -> Ordering {
-        other
-            .threshold
-            .total_cmp(&self.threshold)
-            .then_with(|| other.dim.cmp(&self.dim))
-    }
+    level: u8,
 }
 
 #[derive(Clone)]
@@ -88,14 +64,24 @@ impl ExRaBitQQuantizer {
     }
 
     pub fn pad_vector(&self, vector: &[f32]) -> Vec<f32> {
-        assert_eq!(vector.len(), self.config.dim);
         let mut padded = vec![0.0f32; self.config.padded_dim()];
-        padded[..self.config.dim].copy_from_slice(vector);
+        self.pad_vector_into(vector, &mut padded);
         padded
+    }
+
+    pub fn pad_vector_into(&self, vector: &[f32], padded: &mut [f32]) {
+        assert_eq!(vector.len(), self.config.dim);
+        assert_eq!(padded.len(), self.config.padded_dim());
+        padded.fill(0.0);
+        padded[..self.config.dim].copy_from_slice(vector);
     }
 
     pub fn rotate_padded(&self, vector: &[f32]) -> Vec<f32> {
         self.rotator.rotate_padded(vector)
+    }
+
+    pub fn rotate_padded_into(&self, vector: &[f32], out: &mut [f32]) {
+        self.rotator.rotate_padded_into(vector, out);
     }
 
     pub fn inverse_rotate_padded(&self, vector: &[f32]) -> Vec<f32> {
@@ -124,7 +110,8 @@ impl ExRaBitQQuantizer {
         assert_eq!(query.len(), self.config.dim);
         assert_eq!(centroid.len(), self.config.dim);
 
-        let mut residual = self.pad_vector(query);
+        let mut residual = vec![0.0f32; self.config.padded_dim()];
+        self.pad_vector_into(query, &mut residual);
         for (dst, &c) in residual[..self.config.dim].iter_mut().zip(centroid.iter()) {
             *dst -= c;
         }
@@ -137,11 +124,41 @@ impl ExRaBitQQuantizer {
         assert_eq!(vector.len(), self.config.dim);
         assert_eq!(centroid.len(), self.config.dim);
 
-        let mut residual = self.pad_vector(vector);
+        let mut residual = vec![0.0f32; self.config.padded_dim()];
+        self.pad_vector_into(vector, &mut residual);
         for (dst, &c) in residual[..self.config.dim].iter_mut().zip(centroid.iter()) {
             *dst -= c;
         }
         let rotated = self.rotate_padded(&residual);
+        self.encode_from_rotated(&rotated)
+    }
+
+    pub fn encode_with_rotated_centroid_into(
+        &self,
+        vector: &[f32],
+        rotated_centroid: &[f32],
+        padded: &mut [f32],
+        rotated: &mut [f32],
+    ) -> EncodedVector {
+        assert_eq!(vector.len(), self.config.dim);
+        assert_eq!(rotated_centroid.len(), self.config.padded_dim());
+        assert_eq!(padded.len(), self.config.padded_dim());
+        assert_eq!(rotated.len(), self.config.padded_dim());
+
+        self.pad_vector_into(vector, padded);
+        self.rotate_padded_into(padded, rotated);
+        for (value, centroid_value) in rotated.iter_mut().zip(rotated_centroid.iter()) {
+            *value -= *centroid_value;
+        }
+        self.encode_from_rotated(rotated)
+    }
+
+    pub fn encode_from_rotated(&self, rotated: &[f32]) -> EncodedVector {
+        assert_eq!(rotated.len(), self.config.padded_dim());
+        self.encode_rotated(rotated)
+    }
+
+    fn encode_rotated(&self, rotated: &[f32]) -> EncodedVector {
         let x2 = rotated.iter().map(|x| x * x).sum::<f32>();
         let x_norm = x2.sqrt();
 
@@ -156,7 +173,7 @@ impl ExRaBitQQuantizer {
             };
         }
 
-        let mut unit = rotated.clone();
+        let mut unit = rotated.to_vec();
         for value in &mut unit {
             *value /= x_norm;
         }
@@ -513,48 +530,48 @@ impl ExRaBitQQuantizer {
             numerator += (level + 0.5) * value as f64;
         }
 
-        let mut heap = BinaryHeap::new();
+        let mut events = Vec::new();
         for (dim, &value) in values.iter().enumerate() {
-            let threshold = if value > 0.0 {
-                (f64::from(current[dim]) + 1.0) / value as f64
-            } else {
-                f64::INFINITY
-            };
-            heap.push(ThresholdEvent { threshold, dim });
+            if value <= 0.0 {
+                continue;
+            }
+            for level in current[dim].saturating_add(1)..=max_level {
+                let threshold = f64::from(level) / value as f64;
+                if threshold >= t_end {
+                    break;
+                }
+                events.push(ThresholdEvent {
+                    threshold,
+                    dim,
+                    level,
+                });
+            }
         }
+        events.sort_by(|a, b| {
+            a.threshold
+                .total_cmp(&b.threshold)
+                .then_with(|| a.dim.cmp(&b.dim))
+                .then_with(|| a.level.cmp(&b.level))
+        });
 
         let mut max_ip = 0.0f64;
         let mut best_t = 0.0f64;
-        while let Some(event) = heap.pop() {
+        for event in events {
             let dim = event.dim;
-            if current[dim] >= max_level {
+            if current[dim] >= event.level {
                 continue;
             }
 
-            current[dim] += 1;
-            let update_o_bar = f64::from(current[dim]);
-            sqr_denominator += 2.0 * update_o_bar;
-            numerator += values[dim] as f64;
+            let previous = f64::from(current[dim]);
+            let next = f64::from(event.level);
+            current[dim] = event.level;
+            sqr_denominator += (next * next + next) - (previous * previous + previous);
+            numerator += (next - previous) * values[dim] as f64;
 
             let cur_ip = numerator / sqr_denominator.sqrt();
             if cur_ip > max_ip {
                 max_ip = cur_ip;
                 best_t = event.threshold;
-            }
-
-            if current[dim] < max_level {
-                let value = values[dim];
-                let next_threshold = if value > 0.0 {
-                    (f64::from(current[dim]) + 1.0) / value as f64
-                } else {
-                    f64::INFINITY
-                };
-                if next_threshold < t_end {
-                    heap.push(ThresholdEvent {
-                        threshold: next_threshold,
-                        dim,
-                    });
-                }
             }
         }
 
