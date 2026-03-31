@@ -14,8 +14,8 @@ const DEFAULT_DATA_DIR: &str = "/data/work/datasets/wikipedia-cohere-1m";
 const EXPECTED_DIM: usize = 768;
 const NLIST: usize = 256;
 const TOP_K: usize = 10;
-const TRAIN_SIZE: usize = 100_000;
-const EVAL_QUERIES: usize = 1_000;
+const TRAIN_SIZE: usize = 1_000_000;
+const EVAL_QUERIES: usize = 5_000;
 const NPROBES: [usize; 3] = [10, 32, 64];
 
 struct Tier {
@@ -170,6 +170,13 @@ where
         .collect()
 }
 
+fn collect_batch_ids(ids: Vec<i64>, top_k: usize, eval_queries: usize) -> Vec<Vec<i64>> {
+    ids.chunks(top_k)
+        .take(eval_queries)
+        .map(|row| row.iter().copied().take(top_k).collect())
+        .collect()
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let data_dir = Path::new(DEFAULT_DATA_DIR);
     let base_path = data_dir.join("base.fbin");
@@ -263,12 +270,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                     radius: None,
                 };
                 let t_search = Instant::now();
-                let results = evaluate_queries(&queries, EXPECTED_DIM, eval_queries, |query| {
-                    index
-                        .search(query, &req)
-                        .map(|r| r.ids.into_iter().take(TOP_K).collect())
-                        .unwrap_or_default()
-                });
+                let batch_queries = &queries[..eval_queries * EXPECTED_DIM];
+                let results = index
+                    .search(batch_queries, &req)
+                    .map(|r| collect_batch_ids(r.ids, TOP_K, eval_queries))
+                    .unwrap_or_default();
                 let search_qps =
                     eval_queries as f64 / t_search.elapsed().as_secs_f64().max(f64::EPSILON);
                 let recall = compute_recall(&results, &gt[..eval_queries], TOP_K);
@@ -293,12 +299,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                     radius: None,
                 };
                 let t_search = Instant::now();
-                let results = evaluate_queries(&queries, EXPECTED_DIM, eval_queries, |query| {
-                    index
-                        .search(query, &req)
-                        .map(|r| r.ids.into_iter().take(TOP_K).collect())
-                        .unwrap_or_default()
-                });
+                let batch_queries = &queries[..eval_queries * EXPECTED_DIM];
+                let results = index
+                    .search(batch_queries, &req)
+                    .map(|r| collect_batch_ids(r.ids, TOP_K, eval_queries))
+                    .unwrap_or_default();
                 let search_qps =
                     eval_queries as f64 / t_search.elapsed().as_secs_f64().max(f64::EPSILON);
                 let recall = compute_recall(&results, &gt[..eval_queries], TOP_K);

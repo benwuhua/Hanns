@@ -11,6 +11,7 @@ use crate::api::{
     DataType, IndexConfig, IndexType, MetricType, Result, SearchRequest, SearchResult,
 };
 use crate::bitset::BitsetView;
+use crate::quantization::kmeans::KMeansMetric;
 use crate::quantization::opq::{OPQConfig, OptimizedProductQuantizer};
 use crate::quantization::pq::{PQConfig, ProductQuantizer};
 use crate::quantization::KMeans;
@@ -405,6 +406,9 @@ impl IvfPqIndex {
 
     fn train_ivf_centroids(&mut self, vectors: &[f32], _n: usize) -> Result<()> {
         let mut km = KMeans::new(self.nlist, self.dim);
+        if matches!(self.config.metric_type, MetricType::Ip | MetricType::Cosine) {
+            km = km.with_metric(KMeansMetric::InnerProduct);
+        }
         km.train(vectors);
         self.centroids = km.centroids().to_vec();
         Ok(())
@@ -845,128 +849,69 @@ impl IvfPqIndex {
         let mut all_ids = Vec::new();
         let mut all_dists = Vec::new();
 
+        let code_size = self.active_code_size();
+        let opq_enabled = self.opq_enabled();
+        // For IP/Cosine, the ADC table depends only on the query (not the
+        // centroid residual), so it can be computed once outside the probe loop.
+        let is_ip = matches!(self.config.metric_type, MetricType::Ip | MetricType::Cosine);
+        let avg_cluster_size = (self.ids.len() / self.nlist.max(1)).max(1);
+        let mut query_residual = vec![0.0f32; self.dim];
+
         for q_idx in 0..n_queries {
             let q_start = q_idx * self.dim;
             let query_vec = &query[q_start..q_start + self.dim];
 
-            // Find nearest clusters (coarse quantizer)
             let cluster_dists = self.score_all_centroids(query_vec);
             let cluster_dists = Self::select_top_clusters(cluster_dists, nprobe);
 
-            #[cfg(feature = "parallel")]
-            {
-                // 并行搜索 nprobe 个簇
-                use rayon::prelude::*;
+            let mut candidates: Vec<(i64, f32)> = Vec::with_capacity(avg_cluster_size * nprobe);
 
-                // PQ code size per vector
-                let code_size = self.active_code_size();
-                let opq_enabled = self.opq_enabled();
+            let shared_table = if !opq_enabled && is_ip {
+                Some(self.precompute_distance_table_flat(query_vec))
+            } else {
+                None
+            };
 
-                let candidates: Vec<(i64, f32)> = cluster_dists
-                    .par_iter()
-                    .filter_map(|(cluster, _)| {
-                        let (ids, codes) = self.cluster_scan_slice(*cluster);
-                        if ids.is_empty() {
-                            return None;
-                        }
-                        let centroid =
-                            &self.centroids[*cluster * self.dim..(*cluster + 1) * self.dim];
-                        let coarse_bias = self.coarse_distance_bias(query_vec, centroid);
+            for (cluster, _) in cluster_dists.iter().copied() {
+                let (ids, codes) = self.cluster_scan_slice(cluster);
+                if ids.is_empty() {
+                    continue;
+                }
+                let centroid = &self.centroids[cluster * self.dim..(cluster + 1) * self.dim];
+                let coarse_bias = self.coarse_distance_bias(query_vec, centroid);
 
-                        let mut query_residual = vec![0.0f32; self.dim];
-                        self.fill_query_residual(query_vec, centroid, &mut query_residual);
-
-                        if opq_enabled {
-                            let opq = self.opq.as_ref().unwrap();
-                            let rotated_adc_query =
-                                self.rotated_adc_query(opq, query_vec, &query_residual);
-                            let table =
-                                self.precompute_distance_table_opq_flat(opq, &rotated_adc_query);
-                            Some(
-                                ids.iter()
-                                    .zip(codes.chunks(code_size))
-                                    .map(|(id, code)| {
-                                        (*id, self.adc_distance_flat(&table, code) + coarse_bias)
-                                    })
-                                    .collect::<Vec<_>>(),
-                            )
-                        } else {
-                            let adc_query = self.adc_query_for_metric(query_vec, &query_residual);
-                            let table = self.precompute_distance_table_flat(adc_query);
-                            Some(
-                                ids.iter()
-                                    .zip(codes.chunks(code_size))
-                                    .map(|(id, code)| {
-                                        (*id, self.adc_distance_flat(&table, code) + coarse_bias)
-                                    })
-                                    .collect::<Vec<_>>(),
-                            )
-                        }
-                    })
-                    .flatten()
-                    .collect();
-
-                let mut candidates = candidates;
-                Self::truncate_top_candidates(&mut candidates, k);
-                for i in 0..k {
-                    if i < candidates.len() {
-                        all_ids.push(candidates[i].0);
-                        all_dists.push(candidates[i].1);
-                    } else {
-                        all_ids.push(-1);
-                        all_dists.push(f32::MAX);
+                if opq_enabled {
+                    self.fill_query_residual(query_vec, centroid, &mut query_residual);
+                    let opq = self.opq.as_ref().unwrap();
+                    let rotated_adc_query = self.rotated_adc_query(opq, query_vec, &query_residual);
+                    let table = self.precompute_distance_table_opq_flat(opq, &rotated_adc_query);
+                    for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
+                        let dist = self.adc_distance_flat(&table, code) + coarse_bias;
+                        candidates.push((*id, dist));
+                    }
+                } else if let Some(ref table) = shared_table {
+                    for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
+                        let dist = self.adc_distance_flat(table, code) + coarse_bias;
+                        candidates.push((*id, dist));
+                    }
+                } else {
+                    self.fill_query_residual(query_vec, centroid, &mut query_residual);
+                    let table = self.precompute_distance_table_flat(&query_residual);
+                    for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
+                        let dist = self.adc_distance_flat(&table, code) + coarse_bias;
+                        candidates.push((*id, dist));
                     }
                 }
             }
 
-            #[cfg(not(feature = "parallel"))]
-            {
-                // PQ code size per vector
-                let code_size = self.active_code_size();
-                let opq_enabled = self.opq_enabled();
-                let mut query_residual = vec![0.0f32; self.dim];
-                let mut candidates: Vec<(i64, f32)> = Vec::new();
-
-                for (cluster, _) in cluster_dists.iter().copied() {
-                    let (ids, codes) = self.cluster_scan_slice(cluster);
-                    let centroid = &self.centroids[cluster * self.dim..(cluster + 1) * self.dim];
-                    let coarse_bias = self.coarse_distance_bias(query_vec, centroid);
-
-                    if ids.is_empty() {
-                        continue;
-                    }
-
-                    self.fill_query_residual(query_vec, centroid, &mut query_residual);
-
-                    if opq_enabled {
-                        let opq = self.opq.as_ref().unwrap();
-                        let rotated_adc_query =
-                            self.rotated_adc_query(opq, query_vec, &query_residual);
-                        let table =
-                            self.precompute_distance_table_opq_flat(opq, &rotated_adc_query);
-                        for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
-                            let dist = self.adc_distance_flat(&table, code) + coarse_bias;
-                            candidates.push((*id, dist));
-                        }
-                    } else {
-                        let adc_query = self.adc_query_for_metric(query_vec, &query_residual);
-                        let table = self.precompute_distance_table_flat(adc_query);
-                        for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
-                            let dist = self.adc_distance_flat(&table, code) + coarse_bias;
-                            candidates.push((*id, dist));
-                        }
-                    }
-                }
-
-                Self::truncate_top_candidates(&mut candidates, k);
-                for i in 0..k {
-                    if i < candidates.len() {
-                        all_ids.push(candidates[i].0);
-                        all_dists.push(candidates[i].1);
-                    } else {
-                        all_ids.push(-1);
-                        all_dists.push(f32::MAX);
-                    }
+            Self::truncate_top_candidates(&mut candidates, k);
+            for i in 0..k {
+                if i < candidates.len() {
+                    all_ids.push(candidates[i].0);
+                    all_dists.push(candidates[i].1);
+                } else {
+                    all_ids.push(-1);
+                    all_dists.push(f32::MAX);
                 }
             }
         }
@@ -1138,36 +1083,39 @@ impl IvfPqIndex {
         let nprobe = req.nprobe.max(1).min(self.nlist);
         let k = req.top_k;
         let dim = self.dim;
-        // Parallel search for each query
+        let code_size = self.active_code_size();
+        let opq_enabled = self.opq_enabled();
+        let is_ip = matches!(self.config.metric_type, MetricType::Ip | MetricType::Cosine);
+        let avg_cluster_size = (self.ids.len() / self.nlist.max(1)).max(1);
+
         let results: Vec<(Vec<i64>, Vec<f32>)> = (0..n_queries)
             .into_par_iter()
             .map(|q_idx| {
                 let q_start = q_idx * dim;
                 let query_vec = &query[q_start..q_start + dim];
 
-                // Find nearest clusters
                 let cluster_dists = self.score_all_centroids(query_vec);
                 let cluster_dists = Self::select_top_clusters(cluster_dists, nprobe);
 
-                // Search top nprobe clusters using ADC
-                // PQ code size per vector
-                let code_size = self.active_code_size();
-                let opq_enabled = self.opq_enabled();
                 let mut query_residual = vec![0.0f32; dim];
-                let mut candidates: Vec<(i64, f32)> = Vec::new();
+                let mut candidates: Vec<(i64, f32)> = Vec::with_capacity(avg_cluster_size * nprobe);
+
+                let shared_table = if !opq_enabled && is_ip {
+                    Some(self.precompute_distance_table_flat(query_vec))
+                } else {
+                    None
+                };
 
                 for (cluster, _) in cluster_dists.iter().copied() {
                     let (ids, codes) = self.cluster_scan_slice(cluster);
-                    let centroid = &self.centroids[cluster * dim..(cluster + 1) * dim];
-                    let coarse_bias = self.coarse_distance_bias(query_vec, centroid);
-
                     if ids.is_empty() {
                         continue;
                     }
-
-                    self.fill_query_residual(query_vec, centroid, &mut query_residual);
+                    let centroid = &self.centroids[cluster * dim..(cluster + 1) * dim];
+                    let coarse_bias = self.coarse_distance_bias(query_vec, centroid);
 
                     if opq_enabled {
+                        self.fill_query_residual(query_vec, centroid, &mut query_residual);
                         let opq = self.opq.as_ref().unwrap();
                         let rotated_adc_query =
                             self.rotated_adc_query(opq, query_vec, &query_residual);
@@ -1177,9 +1125,14 @@ impl IvfPqIndex {
                             let dist = self.adc_distance_flat(&table, code) + coarse_bias;
                             candidates.push((*id, dist));
                         }
+                    } else if let Some(ref table) = shared_table {
+                        for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
+                            let dist = self.adc_distance_flat(table, code) + coarse_bias;
+                            candidates.push((*id, dist));
+                        }
                     } else {
-                        let adc_query = self.adc_query_for_metric(query_vec, &query_residual);
-                        let table = self.precompute_distance_table_flat(adc_query);
+                        self.fill_query_residual(query_vec, centroid, &mut query_residual);
+                        let table = self.precompute_distance_table_flat(&query_residual);
                         for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
                             let dist = self.adc_distance_flat(&table, code) + coarse_bias;
                             candidates.push((*id, dist));

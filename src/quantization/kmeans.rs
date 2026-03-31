@@ -4,8 +4,9 @@
 //! 使用 SIMD 优化距离计算
 //! 使用 rayon 并行化训练过程
 
-use crate::simd::{l2_distance, l2_distance_sq};
+use crate::simd::{dot_product_f32, l2_distance, l2_distance_sq};
 use rand::prelude::*;
+use rand::seq::SliceRandom;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
@@ -21,12 +22,19 @@ fn compute_l2_distance_sq(a: &[f32], b: &[f32]) -> f32 {
     l2_distance_sq(a, b)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KMeansMetric {
+    L2,
+    InnerProduct,
+}
+
 pub struct KMeans {
     k: usize,
     max_iter: usize,
     tolerance: f32,
     pub centroids: Vec<f32>,
     dim: usize,
+    metric: KMeansMetric,
     rng: StdRng,
     #[cfg(feature = "parallel")]
     num_threads: usize,
@@ -42,6 +50,7 @@ impl KMeans {
             tolerance: 1e-2,
             centroids: vec![0.0; k * dim],
             dim,
+            metric: KMeansMetric::L2,
             rng: StdRng::from_entropy(),
             #[cfg(feature = "parallel")]
             num_threads: rayon::current_num_threads(),
@@ -58,6 +67,7 @@ impl KMeans {
             tolerance: 1e-3, // 更宽松收敛
             centroids: vec![0.0; k * dim],
             dim,
+            metric: KMeansMetric::L2,
             rng: StdRng::from_entropy(),
             #[cfg(feature = "parallel")]
             num_threads: rayon::current_num_threads(),
@@ -75,6 +85,11 @@ impl KMeans {
         self
     }
 
+    pub fn with_metric(mut self, metric: KMeansMetric) -> Self {
+        self.metric = metric;
+        self
+    }
+
     /// 设置并行线程数
     #[cfg(feature = "parallel")]
     pub fn with_num_threads(mut self, num_threads: usize) -> Self {
@@ -85,6 +100,14 @@ impl KMeans {
     /// 设置最大迭代次数
     pub fn set_max_iter(&mut self, max_iter: usize) {
         self.max_iter = max_iter;
+    }
+
+    #[inline]
+    fn score(&self, a: &[f32], b: &[f32]) -> f32 {
+        match self.metric {
+            KMeansMetric::L2 => compute_l2_distance_sq(a, b),
+            KMeansMetric::InnerProduct => -dot_product_f32(a, b),
+        }
     }
 
     /// 简化初始化 - 直接随机选择 k 个点 (放弃 k-means++ 的质量)
@@ -122,21 +145,21 @@ impl KMeans {
             .copy_from_slice(&vectors[first * self.dim..first * self.dim + self.dim]);
 
         // Step 2: pick subsequent centroids proportional to min_dist^2
+        // For IP metric, score can be negative (similar vectors), so we use
+        // max(0, score) for sampling weights. This ensures the D² weighting
+        // in k-means++ works correctly regardless of metric.
         let mut min_dists = vec![f32::MAX; n];
         for c in 1..self.k {
             let prev_centroid = &self.centroids[(c - 1) * self.dim..c * self.dim];
             for i in 0..n {
-                let d = compute_l2_distance_sq(
-                    &vectors[i * self.dim..(i + 1) * self.dim],
-                    prev_centroid,
-                );
+                let d = self.score(&vectors[i * self.dim..(i + 1) * self.dim], prev_centroid);
                 if d < min_dists[i] {
                     min_dists[i] = d;
                 }
             }
 
-            // Weighted sampling by min_dists
-            let total: f64 = min_dists.iter().map(|&d| d as f64).sum();
+            // Weighted sampling by min_dists (clamp to non-negative for IP metric)
+            let total: f64 = min_dists.iter().map(|&d| d.max(0.0) as f64).sum();
             if total <= 0.0 {
                 let idx = self.rng.gen_range(0..n);
                 self.centroids[c * self.dim..(c + 1) * self.dim]
@@ -148,7 +171,7 @@ impl KMeans {
             let mut cumsum = 0.0f64;
             let mut chosen = n - 1;
             for (i, &d) in min_dists.iter().enumerate().take(n) {
-                cumsum += d as f64;
+                cumsum += d.max(0.0) as f64;
                 if cumsum >= target {
                     chosen = i;
                     break;
@@ -199,10 +222,7 @@ impl KMeans {
                 for c in 0..self.k {
                     let centroid_start = c * self.dim;
                     let centroid_end = centroid_start + self.dim;
-                    let dist = compute_l2_distance_sq(
-                        vector,
-                        &self.centroids[centroid_start..centroid_end],
-                    );
+                    let dist = self.score(vector, &self.centroids[centroid_start..centroid_end]);
                     if dist < min_dist {
                         min_dist = dist;
                         best_k = c;
@@ -235,6 +255,16 @@ impl KMeans {
                         updated[j] = new_centroids[c * self.dim + j] / counts[c] as f32;
                     }
 
+                    // For IP metric: normalize centroids after averaging.
+                    if self.metric == KMeansMetric::InnerProduct {
+                        let norm = updated.iter().map(|x| x * x).sum::<f32>().sqrt();
+                        if norm > 1e-12 {
+                            for x in updated.iter_mut() {
+                                *x /= norm;
+                            }
+                        }
+                    }
+
                     let shift = compute_l2_distance(
                         &self.centroids[centroid_start..centroid_end],
                         &updated,
@@ -242,12 +272,26 @@ impl KMeans {
                     max_shift = max_shift.max(shift);
                     self.centroids[centroid_start..centroid_end].copy_from_slice(&updated);
                 } else {
-                    // 避免空簇长期不更新导致收敛到退化解
-                    let idx = self.rng.gen_range(0..n);
-                    let src_start = idx * self.dim;
-                    let src_end = src_start + self.dim;
-                    self.centroids[centroid_start..centroid_end]
-                        .copy_from_slice(&vectors[src_start..src_end]);
+                    let largest_c = counts
+                        .iter()
+                        .enumerate()
+                        .max_by_key(|(_, cnt)| *cnt)
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    let candidates: Vec<usize> = assignments
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, a)| **a == largest_c)
+                        .map(|(i, _)| i)
+                        .collect();
+                    if let Some(&idx) = candidates.choose(&mut self.rng) {
+                        let src_start = idx * self.dim;
+                        self.centroids[centroid_start..centroid_end]
+                            .copy_from_slice(&vectors[src_start..src_start + self.dim]);
+                        for x in self.centroids[centroid_start..centroid_end].iter_mut() {
+                            *x *= 1.0 + 1e-4 * (self.rng.gen::<f32>() - 0.5);
+                        }
+                    }
                 }
             }
 
@@ -266,7 +310,7 @@ impl KMeans {
         for c in 0..self.k {
             let centroid_start = c * self.dim;
             let centroid_end = centroid_start + self.dim;
-            let dist = compute_l2_distance(vector, &self.centroids[centroid_start..centroid_end]);
+            let dist = self.score(vector, &self.centroids[centroid_start..centroid_end]);
             if dist < min_dist {
                 min_dist = dist;
                 best = c;
@@ -321,10 +365,7 @@ impl KMeans {
                     for c in 0..self.k {
                         let centroid_start = c * self.dim;
                         let centroid_end = centroid_start + self.dim;
-                        let dist = compute_l2_distance_sq(
-                            vec,
-                            &self.centroids[centroid_start..centroid_end],
-                        );
+                        let dist = self.score(vec, &self.centroids[centroid_start..centroid_end]);
                         if dist < min_dist {
                             min_dist = dist;
                             best_k = c;
@@ -358,6 +399,16 @@ impl KMeans {
                         updated[j] = new_centroids[c * self.dim + j] / counts[c] as f32;
                     }
 
+                    // For IP metric: normalize centroids after averaging.
+                    if self.metric == KMeansMetric::InnerProduct {
+                        let norm = updated.iter().map(|x| x * x).sum::<f32>().sqrt();
+                        if norm > 1e-12 {
+                            for x in updated.iter_mut() {
+                                *x /= norm;
+                            }
+                        }
+                    }
+
                     let shift = compute_l2_distance(
                         &self.centroids[centroid_start..centroid_end],
                         &updated,
@@ -365,12 +416,26 @@ impl KMeans {
                     max_shift = max_shift.max(shift);
                     self.centroids[centroid_start..centroid_end].copy_from_slice(&updated);
                 } else {
-                    // 避免空簇长期不更新导致收敛到退化解
-                    let idx = self.rng.gen_range(0..n);
-                    let src_start = idx * self.dim;
-                    let src_end = src_start + self.dim;
-                    self.centroids[centroid_start..centroid_end]
-                        .copy_from_slice(&vectors[src_start..src_end]);
+                    let largest_c = counts
+                        .iter()
+                        .enumerate()
+                        .max_by_key(|(_, cnt)| *cnt)
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    let candidates: Vec<usize> = assignments
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, a)| **a == largest_c)
+                        .map(|(i, _)| i)
+                        .collect();
+                    if let Some(&idx) = candidates.choose(&mut self.rng) {
+                        let src_start = idx * self.dim;
+                        self.centroids[centroid_start..centroid_end]
+                            .copy_from_slice(&vectors[src_start..src_start + self.dim]);
+                        for x in self.centroids[centroid_start..centroid_end].iter_mut() {
+                            *x *= 1.0 + 1e-4 * (self.rng.gen::<f32>() - 0.5);
+                        }
+                    }
                 }
             }
 

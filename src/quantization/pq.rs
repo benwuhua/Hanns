@@ -12,7 +12,8 @@ use rayon::prelude::*;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::{
     __m128i, __m256, __m256i, _mm256_add_epi32, _mm256_add_ps, _mm256_cvtepu8_epi32,
-    _mm256_i32gather_ps, _mm256_setr_epi32, _mm256_setzero_ps, _mm256_storeu_ps, _mm_loadl_epi64,
+    _mm256_i32gather_ps, _mm256_set1_epi32, _mm256_setr_epi32, _mm256_setzero_ps, _mm256_storeu_ps,
+    _mm_loadl_epi64,
 };
 
 /// Product Quantization configuration
@@ -445,24 +446,28 @@ impl ProductQuantizer {
         ksub: usize,
         chunks8: usize,
     ) -> f32 {
+        let ksub_i32 = ksub as i32;
+        let mut offsets = _mm256_setr_epi32(
+            0,
+            ksub_i32,
+            2 * ksub_i32,
+            3 * ksub_i32,
+            4 * ksub_i32,
+            5 * ksub_i32,
+            6 * ksub_i32,
+            7 * ksub_i32,
+        );
+        let step = _mm256_set1_epi32(8 * ksub_i32);
         let mut acc = _mm256_setzero_ps();
+
         let mut sub_q = 0usize;
         while sub_q < chunks8 {
             let idx_bytes = _mm_loadl_epi64(code_ptr.add(sub_q) as *const __m128i);
             let idx = _mm256_cvtepu8_epi32(idx_bytes);
-            let offsets = _mm256_setr_epi32(
-                (sub_q * ksub) as i32,
-                ((sub_q + 1) * ksub) as i32,
-                ((sub_q + 2) * ksub) as i32,
-                ((sub_q + 3) * ksub) as i32,
-                ((sub_q + 4) * ksub) as i32,
-                ((sub_q + 5) * ksub) as i32,
-                ((sub_q + 6) * ksub) as i32,
-                ((sub_q + 7) * ksub) as i32,
-            );
             let gather_idx: __m256i = _mm256_add_epi32(idx, offsets);
             let vals: __m256 = _mm256_i32gather_ps(table_ptr, gather_idx, 4);
             acc = _mm256_add_ps(acc, vals);
+            offsets = _mm256_add_epi32(offsets, step);
             sub_q += 8;
         }
 
