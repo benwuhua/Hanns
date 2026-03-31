@@ -2,20 +2,19 @@
 //!
 //! This index keeps a DiskANN graph on raw vectors while storing an additional
 //! SQ8-compressed representation (optionally after PCA projection).
-#![allow(deprecated)] // Legacy SQ wrapper intentionally composes deprecated DiskANN compatibility types.
 
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
 
-use crate::api::{IndexConfig, IndexParams, IndexType, MetricType, Result, SearchRequest};
-use crate::faiss::diskann::{DiskAnnConfig, DiskAnnIndex};
+use crate::api::{MetricType, Result};
+use crate::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
 use crate::quantization::sq::QuantizerType;
 use crate::quantization::{PcaTransform, Sq8Quantizer};
 
 #[derive(Clone, Debug)]
 pub struct DiskAnnSqConfig {
-    pub base: DiskAnnConfig,
+    pub base: AisaqConfig,
     pub use_pca: bool,
     pub pca_dim: usize,
     pub rerank_k: usize,
@@ -24,7 +23,7 @@ pub struct DiskAnnSqConfig {
 impl Default for DiskAnnSqConfig {
     fn default() -> Self {
         Self {
-            base: DiskAnnConfig::default(),
+            base: AisaqConfig::default(),
             use_pca: false,
             pca_dim: 64,
             rerank_k: 64,
@@ -33,7 +32,7 @@ impl Default for DiskAnnSqConfig {
 }
 
 pub struct DiskAnnSqIndex {
-    inner: DiskAnnIndex,
+    inner: PQFlashIndex,
     metric_type: MetricType,
     sq: Sq8Quantizer,
     sq_codes: Vec<u8>,
@@ -51,9 +50,7 @@ impl DiskAnnSqIndex {
                 "dimension must be > 0".to_string(),
             ));
         }
-        let mut inner_cfg = IndexConfig::new(IndexType::DiskAnn, metric_type, dim);
-        inner_cfg.params = Self::to_index_params(&config.base);
-        let inner = DiskAnnIndex::new(&inner_cfg)?;
+        let inner = PQFlashIndex::new(config.base.clone(), metric_type, dim)?;
         let sq = Sq8Quantizer::new(if config.use_pca { config.pca_dim } else { dim }, 8);
 
         Ok(Self {
@@ -67,17 +64,6 @@ impl DiskAnnSqIndex {
             d_sq: if config.use_pca { config.pca_dim } else { dim },
             config,
         })
-    }
-
-    fn to_index_params(base: &DiskAnnConfig) -> IndexParams {
-        IndexParams {
-            max_degree: Some(base.max_degree),
-            search_list_size: Some(base.search_list_size),
-            construction_l: Some(base.construction_l),
-            beamwidth: Some(base.beamwidth),
-            disk_pq_dims: Some(base.disk_pq_dims),
-            ..IndexParams::default()
-        }
     }
 
     pub fn build(&mut self, data: &[f32], n: usize, d: usize) -> Result<()> {
@@ -115,7 +101,7 @@ impl DiskAnnSqIndex {
             self.sq_codes.extend_from_slice(&code);
         }
 
-        self.inner.train(data)?;
+        self.inner.add_with_ids(data, None)?;
         self.n = n;
         Ok(())
     }
@@ -131,12 +117,7 @@ impl DiskAnnSqIndex {
             query.to_vec()
         };
 
-        let req = SearchRequest {
-            top_k: k,
-            nprobe: self.config.base.search_list_size,
-            ..SearchRequest::default()
-        };
-        let result = self.inner.search(query, &req)?;
+        let result = self.inner.search(query, k)?;
         let mut out = Vec::with_capacity(k);
         for i in 0..k {
             let dist = result.distances.get(i).copied().unwrap_or(f32::MAX);
@@ -152,7 +133,7 @@ impl DiskAnnSqIndex {
             return Ok(Vec::new());
         }
 
-        let candidate_k = self.inner.ntotal().min(100);
+        let candidate_k = self.n.min(100);
         if candidate_k == 0 {
             return Ok(Vec::new());
         }
@@ -228,15 +209,18 @@ impl DiskAnnSqIndex {
             pca_dim,
             rerank_k,
         };
-        let mut index = Self::new(d_in, metric_type, config)?;
-        index.inner.load(&graph_path)?;
-        index.metric_type = metric_type;
-        index.sq = sq;
-        index.sq_codes = sq_codes;
-        index.pca = pca;
-        index.n = n;
-        index.d_sq = d_sq;
-        Ok(index)
+        let inner = PQFlashIndex::load(&graph_path)?;
+        Ok(Self {
+            inner,
+            metric_type,
+            sq,
+            sq_codes,
+            pca,
+            n,
+            d_in,
+            d_sq,
+            config,
+        })
     }
 }
 
@@ -354,66 +338,84 @@ fn quantizer_type_from_u32(tag: u32) -> Result<QuantizerType> {
     }
 }
 
-fn write_diskann_config<W: Write>(w: &mut W, cfg: &DiskAnnConfig) -> Result<()> {
+fn write_diskann_config<W: Write>(w: &mut W, cfg: &AisaqConfig) -> Result<()> {
     write_u64(w, cfg.max_degree as u64)?;
     write_u64(w, cfg.search_list_size as u64)?;
-    write_u64(w, cfg.construction_l as u64)?;
+    write_u64(w, cfg.build_search_list_size as u64)?;
     write_f32(w, cfg.pq_code_budget_gb)?;
     write_f32(w, cfg.build_dram_budget_gb)?;
     write_u64(w, cfg.disk_pq_dims as u64)?;
     write_u64(w, cfg.pq_candidate_expand_pct as u64)?;
     write_u64(w, cfg.rerank_expand_pct as u64)?;
-    write_bool(w, cfg.saturate_after_prune)?;
-    write_u64(w, cfg.intra_batch_candidates as u64)?;
+    write_bool(w, false)?;
+    write_u64(w, cfg.build_batch_size as u64)?;
     write_u64(w, cfg.num_entry_points as u64)?;
     write_u64(w, cfg.build_degree_slack_pct as u64)?;
     write_u64(w, cfg.random_init_edges as u64)?;
-    write_u64(w, cfg.build_parallel_batch_size as u64)?;
+    write_u64(w, cfg.build_batch_size as u64)?;
     write_u64(w, cfg.beamwidth as u64)?;
-    write_f32(w, cfg.cache_dram_budget_gb)?;
-    write_bool(w, cfg.enable_flash_layout)?;
-    write_bool(w, cfg.flash_mmap_mode)?;
-    write_bool(w, cfg.flash_ssd_mode)?;
-    write_u64(w, cfg.flash_prefetch_batch as u64)?;
+    write_f32(w, 0.0)?;
+    write_bool(w, false)?;
+    write_bool(w, false)?;
+    write_bool(w, false)?;
+    write_u64(w, 0)?;
     write_bool(w, cfg.warm_up)?;
     write_f32(w, cfg.filter_threshold)?;
-    write_bool(w, cfg.accelerate_build)?;
-    write_u64(w, cfg.min_k as u64)?;
-    write_u64(w, cfg.max_k as u64)?;
+    write_bool(w, false)?;
+    write_u64(w, 0)?;
+    write_u64(w, 0)?;
     write_bool(w, cfg.io_cutting_enabled)?;
     write_f32(w, cfg.io_cutting_threshold)?;
     Ok(())
 }
 
-fn read_diskann_config<R: Read>(r: &mut R) -> Result<DiskAnnConfig> {
-    Ok(DiskAnnConfig {
-        max_degree: read_u64(r)? as usize,
-        search_list_size: read_u64(r)? as usize,
-        construction_l: read_u64(r)? as usize,
-        pq_code_budget_gb: read_f32(r)?,
-        build_dram_budget_gb: read_f32(r)?,
-        disk_pq_dims: read_u64(r)? as usize,
-        pq_candidate_expand_pct: read_u64(r)? as usize,
-        rerank_expand_pct: read_u64(r)? as usize,
-        saturate_after_prune: read_bool(r)?,
-        intra_batch_candidates: read_u64(r)? as usize,
-        num_entry_points: read_u64(r)? as usize,
-        build_degree_slack_pct: read_u64(r)? as usize,
-        random_init_edges: read_u64(r)? as usize,
-        build_parallel_batch_size: read_u64(r)? as usize,
-        beamwidth: read_u64(r)? as usize,
-        cache_dram_budget_gb: read_f32(r)?,
-        enable_flash_layout: read_bool(r)?,
-        flash_mmap_mode: read_bool(r)?,
-        flash_ssd_mode: read_bool(r)?,
-        flash_prefetch_batch: read_u64(r)? as usize,
-        warm_up: read_bool(r)?,
-        filter_threshold: read_f32(r)?,
-        accelerate_build: read_bool(r)?,
-        min_k: read_u64(r)? as usize,
-        max_k: read_u64(r)? as usize,
-        io_cutting_enabled: read_bool(r)?,
-        io_cutting_threshold: read_f32(r)?,
+fn read_diskann_config<R: Read>(r: &mut R) -> Result<AisaqConfig> {
+    let max_degree = read_u64(r)? as usize;
+    let search_list_size = read_u64(r)? as usize;
+    let construction_l = read_u64(r)? as usize;
+    let pq_code_budget_gb = read_f32(r)?;
+    let build_dram_budget_gb = read_f32(r)?;
+    let disk_pq_dims = read_u64(r)? as usize;
+    let pq_candidate_expand_pct = read_u64(r)? as usize;
+    let rerank_expand_pct = read_u64(r)? as usize;
+    let _saturate_after_prune = read_bool(r)?;
+    let _intra_batch_candidates = read_u64(r)? as usize;
+    let num_entry_points = read_u64(r)? as usize;
+    let build_degree_slack_pct = read_u64(r)? as usize;
+    let random_init_edges = read_u64(r)? as usize;
+    let _build_parallel_batch_size = read_u64(r)? as usize;
+    let beamwidth = read_u64(r)? as usize;
+    let _cache_dram_budget_gb = read_f32(r)?;
+    let _enable_flash_layout = read_bool(r)?;
+    let _flash_mmap_mode = read_bool(r)?;
+    let _flash_ssd_mode = read_bool(r)?;
+    let _flash_prefetch_batch = read_u64(r)? as usize;
+    let warm_up = read_bool(r)?;
+    let filter_threshold = read_f32(r)?;
+    let _accelerate_build = read_bool(r)?;
+    let _min_k = read_u64(r)? as usize;
+    let _max_k = read_u64(r)? as usize;
+    let io_cutting_enabled = read_bool(r)?;
+    let io_cutting_threshold = read_f32(r)?;
+
+    Ok(AisaqConfig {
+        max_degree,
+        search_list_size,
+        beamwidth,
+        pq_code_budget_gb,
+        build_dram_budget_gb,
+        disk_pq_dims,
+        num_entry_points,
+        rerank_expand_pct,
+        pq_candidate_expand_pct,
+        random_init_edges,
+        build_degree_slack_pct,
+        build_search_list_size: construction_l,
+        warm_up,
+        filter_threshold,
+        io_cutting_enabled,
+        io_cutting_threshold,
+        ..AisaqConfig::default()
     })
 }
 

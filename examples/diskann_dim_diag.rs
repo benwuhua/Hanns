@@ -1,11 +1,8 @@
-#![allow(deprecated)]
-
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
 
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::{DiskAnnIndex, MemIndex};
+use knowhere_rs::faiss::{AisaqConfig, MemIndex, PQFlashIndex};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde_json::json;
@@ -74,73 +71,6 @@ fn find_medoid(vectors: &[f32], dim: usize) -> usize {
     best_idx
 }
 
-fn parse_saved_neighbor_degrees(path: &Path) -> Result<(usize, usize, usize, Vec<u32>), String> {
-    let bytes = fs::read(path).map_err(|e| format!("read {} failed: {e}", path.display()))?;
-    if bytes.len() < 36 {
-        return Err("saved index too short".to_string());
-    }
-    if &bytes[0..4] != b"DANN" {
-        return Err("invalid magic".to_string());
-    }
-
-    let read_u32 = |off: usize| -> u32 {
-        u32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]])
-    };
-    let read_u64 = |off: usize| -> u64 {
-        u64::from_le_bytes([
-            bytes[off],
-            bytes[off + 1],
-            bytes[off + 2],
-            bytes[off + 3],
-            bytes[off + 4],
-            bytes[off + 5],
-            bytes[off + 6],
-            bytes[off + 7],
-        ])
-    };
-
-    let dim = read_u32(8) as usize;
-    let count = read_u64(12) as usize;
-    let max_degree = read_u32(20) as usize;
-    let search_list_size = read_u32(24) as usize;
-    let beamwidth = read_u32(28) as usize;
-
-    let vectors_bytes = count
-        .checked_mul(dim)
-        .and_then(|v| v.checked_mul(4))
-        .ok_or_else(|| "overflow vectors_bytes".to_string())?;
-    let ids_bytes = count
-        .checked_mul(8)
-        .ok_or_else(|| "overflow ids_bytes".to_string())?;
-    let degree_off = 32usize
-        .checked_add(vectors_bytes)
-        .and_then(|v| v.checked_add(ids_bytes))
-        .ok_or_else(|| "overflow degree offset".to_string())?;
-    let degree_end = degree_off
-        .checked_add(
-            count
-                .checked_mul(4)
-                .ok_or_else(|| "overflow degrees len".to_string())?,
-        )
-        .ok_or_else(|| "overflow degree_end".to_string())?;
-    if degree_end > bytes.len() {
-        return Err(format!(
-            "degree section out of bounds: degree_end={} total={}",
-            degree_end,
-            bytes.len()
-        ));
-    }
-
-    let mut degrees = Vec::with_capacity(count);
-    for i in 0..count {
-        let off = degree_off + i * 4;
-        degrees.push(read_u32(off));
-    }
-
-    let _ = max_degree;
-    Ok((search_list_size, beamwidth, count, degrees))
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== DiskANN dim diagnostic ===");
     println!(
@@ -150,7 +80,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut result_rows = Vec::new();
     let mut status_rows = Vec::new();
-    let mut root_cause_lines = Vec::new();
 
     for &dim in &DIMS {
         let base = gen_vectors(SEED, N, dim);
@@ -173,18 +102,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             dim,
             params,
         };
-        let mut disk = DiskAnnIndex::new(&disk_cfg)?;
+        let mut disk = PQFlashIndex::new(
+            AisaqConfig::from_index_config(&disk_cfg),
+            disk_cfg.metric_type,
+            disk_cfg.dim,
+        )?;
         disk.train(&base)?;
-        // Keep the same calling pattern as the reported scenario (train + add).
-        let _ = disk.add(&base, None)?;
-
-        let stats = disk.get_stats();
-        let nonzero_degree_nodes = if stats.avg_degree > 0.0 {
-            // More accurate count is parsed from saved file below.
-            None
-        } else {
-            Some(0usize)
-        };
+        disk.add(&base)?;
 
         let req = SearchRequest {
             top_k: TOP_K,
@@ -196,102 +120,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for qi in 0..NQ {
             let q = &queries[qi * dim..(qi + 1) * dim];
             let gt = gt_index.search(q, &req)?;
-            let pred = disk.search(q, &req)?;
+            let pred = disk.search(q, req.top_k)?;
             gt_top10.push(gt.ids.into_iter().take(TOP_K).collect());
             disk_top10.push(pred.ids.into_iter().take(TOP_K).collect());
         }
         let recall = compute_recall_at_10(&gt_top10, &disk_top10);
         println!(
-            "dim={:>3} recall@10={:.4} ntotal={} avg_degree={:.2} min_degree={} max_degree={}",
+            "dim={:>3} recall@10={:.4} ntotal={}",
             dim,
             recall,
-            disk.ntotal(),
-            stats.avg_degree,
-            stats.min_degree,
-            stats.max_degree
+            disk.len()
         );
 
         let mut extra = json!({});
-        let diag_path = format!("/tmp/diskann_dim{}_diag.idx", dim);
-        let save_path = Path::new(&diag_path);
-        disk.save(save_path)?;
-        let (saved_l, saved_bw, saved_count, saved_degrees) =
-            parse_saved_neighbor_degrees(save_path).map_err(std::io::Error::other)?;
-        let saved_nonzero = saved_degrees.iter().filter(|&&d| d > 0).count();
-
         if dim == 64 {
-            let mut full_vectors = Vec::with_capacity(base.len() * 2);
-            full_vectors.extend_from_slice(&base);
-            full_vectors.extend_from_slice(&base);
-            let entry_idx = find_medoid(&full_vectors, dim);
+            let entry_idx = find_medoid(&base, dim);
             let query0 = &queries[0..dim];
-            let entry_vec = &full_vectors[entry_idx * dim..(entry_idx + 1) * dim];
-            let entry_dist_sqr = l2_sqr(query0, entry_vec);
-            let entry_degree = saved_degrees.get(entry_idx).copied().unwrap_or(0) as usize;
-            let first_step_expand = entry_degree.min(saved_bw);
-            let effective_l = req.nprobe.max(saved_l / 2);
-
-            println!();
-            println!("--- dim=64 focused diagnostics ---");
-            println!(
-                "entry_point_inferred_id={} entry_dist={:.6}",
-                entry_idx,
-                entry_dist_sqr.sqrt()
-            );
-            println!(
-                "first_step: entry_degree={} beamwidth={} => first_step_candidates={}",
-                entry_degree, saved_bw, first_step_expand
-            );
-            println!(
-                "search effective L = max(req.nprobe={}, search_list_size/2={}) = {}",
-                req.nprobe,
-                saved_l / 2,
-                effective_l
-            );
-            println!(
-                "graph degree check: nonzero_nodes={} / {}",
-                saved_nonzero, saved_count
-            );
-            println!("----------------------------------");
-            println!();
-
+            let entry_vec = &base[entry_idx * dim..(entry_idx + 1) * dim];
             extra = json!({
                 "entry_point_inferred_id": entry_idx,
-                "entry_distance": entry_dist_sqr.sqrt(),
-                "entry_degree": entry_degree,
-                "first_step_candidates": first_step_expand,
-                "effective_search_l": effective_l,
-                "graph_nonzero_degree_nodes": saved_nonzero,
-                "graph_total_nodes": saved_count
+                "entry_distance": l2_sqr(query0, entry_vec).sqrt(),
+                "effective_search_l": SEARCH_LIST_SIZE,
             });
-
-            if effective_l < SEARCH_LIST_SIZE {
-                root_cause_lines.push(format!(
-                    "dim=64 uses default req.nprobe=0 => effective L={} (search_list_size/2), see src/faiss/diskann.rs:2020",
-                    effective_l
-                ));
-            }
-            if disk.ntotal() > N {
-                root_cause_lines.push(format!(
-                    "train() already builds {} nodes; extra add() increases ntotal to {} and changes id space, likely hurting recall-vs-GT id matching",
-                    N,
-                    disk.ntotal()
-                ));
-            }
         }
 
         result_rows.push(json!({
             "dim": dim,
             "recall": recall,
-            "ntotal": disk.ntotal(),
-            "avg_degree": stats.avg_degree,
-            "min_degree": stats.min_degree,
-            "max_degree": stats.max_degree,
-            "graph_nonzero_degree_nodes": nonzero_degree_nodes.unwrap_or(saved_nonzero),
-            "graph_total_nodes": saved_count,
-            "search_list_size": saved_l,
-            "beamwidth": saved_bw,
-            "search_effective_l_default": req.nprobe.max(saved_l / 2),
+            "ntotal": disk.len(),
+            "search_list_size": SEARCH_LIST_SIZE,
+            "beamwidth": BEAMWIDTH,
             "diag": extra
         }));
         status_rows.push(format!("dim={}: recall@10={:.4}", dim, recall));
@@ -315,10 +173,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut status = String::new();
     status.push_str("DONE: DiskANN dim diagnostic complete. ");
     status.push_str(&status_rows.join("; "));
-    if !root_cause_lines.is_empty() {
-        status.push_str(". root-cause clues: ");
-        status.push_str(&root_cause_lines.join(" | "));
-    }
     status.push('\n');
     fs::write(STATUS_FILE, status)?;
     println!("saved {}", STATUS_FILE);

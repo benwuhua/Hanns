@@ -5,7 +5,6 @@ pub mod bin_flat;
 pub mod bin_ivf_flat;
 pub mod binary;
 pub mod binary_hnsw;
-pub mod diskann;
 pub mod diskann_aisaq;
 pub mod diskann_sq;
 pub mod hnsw;
@@ -40,12 +39,9 @@ pub use bin_flat::BinFlatIndex;
 pub use bin_ivf_flat::BinIvfFlatIndex;
 pub use binary::BinaryIndex;
 pub use binary_hnsw::BinaryHnswIndex;
-#[allow(deprecated)]
-// Re-exported for compatibility with callers that still name the legacy type.
-pub use diskann::DiskAnnIndex;
 pub use diskann_aisaq::{
-    AsyncReadEngine, BeamSearchIO, BeamSearchStats, FileGroup, FlashLayout, PQFlashIndex,
-    PageCache, PageCacheStats,
+    AisaqConfig, AsyncReadEngine, BeamSearchIO, BeamSearchStats, FileGroup, FlashLayout,
+    PQFlashIndex, PageCache, PageCacheStats,
 };
 pub use diskann_sq::{DiskAnnSqConfig, DiskAnnSqIndex};
 pub use hnsw::HnswIndex;

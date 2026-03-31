@@ -32,14 +32,15 @@ use jni::JNIEnv;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Mutex;
-use tempfile::NamedTempFile;
+use tempfile::{tempdir, NamedTempFile};
 
 use crate::api::{
     DataType, IndexConfig, IndexParams, IndexType, KnowhereError, MetricType, SearchRequest,
     SearchResult as ApiSearchResult,
 };
 use crate::faiss::{
-    DiskAnnIndex, HnswIndex, IvfExRaBitqIndex, IvfFlatIndex, IvfPqIndex, IvfSq8Index, MemIndex,
+    AisaqConfig, FileGroup, HnswIndex, IvfExRaBitqIndex, IvfFlatIndex, IvfPqIndex, IvfSq8Index,
+    MemIndex, PQFlashIndex,
 };
 
 enum RegisteredIndex {
@@ -49,7 +50,7 @@ enum RegisteredIndex {
     IvfPq(Box<IvfPqIndex>),
     IvfExRaBitq(Box<IvfExRaBitqIndex>),
     IvfSq8(Box<IvfSq8Index>),
-    DiskAnn(Box<DiskAnnIndex>),
+    DiskAnn(Box<PQFlashIndex>),
 }
 
 impl RegisteredIndex {
@@ -103,14 +104,18 @@ impl RegisteredIndex {
                 }
                 Err(err) => Err(err),
             },
-            RegisteredIndex::DiskAnn(idx) => match idx.add(vectors, ids) {
-                Ok(count) => Ok(count),
-                Err(err) if needs_training(&err) => {
-                    idx.train(vectors)?;
-                    idx.add(vectors, ids)
+            RegisteredIndex::DiskAnn(idx) => {
+                let before = idx.len();
+                match idx.add_with_ids(vectors, ids) {
+                    Ok(()) => Ok(idx.len().saturating_sub(before)),
+                    Err(err) if needs_training(&err) => {
+                        idx.train(vectors)?;
+                        idx.add_with_ids(vectors, ids)?;
+                        Ok(idx.len().saturating_sub(before))
+                    }
+                    Err(err) => Err(err),
                 }
-                Err(err) => Err(err),
-            },
+            }
         }
     }
 
@@ -122,7 +127,7 @@ impl RegisteredIndex {
             RegisteredIndex::IvfPq(idx) => idx.search(query, req),
             RegisteredIndex::IvfExRaBitq(idx) => idx.search(query, req),
             RegisteredIndex::IvfSq8(idx) => idx.search(query, req),
-            RegisteredIndex::DiskAnn(idx) => idx.search(query, req),
+            RegisteredIndex::DiskAnn(idx) => idx.search(query, req.top_k),
         }
     }
 
@@ -134,7 +139,7 @@ impl RegisteredIndex {
             RegisteredIndex::IvfPq(idx) => save_to_temp_bytes(|path| idx.save(path)),
             RegisteredIndex::IvfExRaBitq(idx) => save_to_temp_bytes(|path| idx.save(path)),
             RegisteredIndex::IvfSq8(idx) => idx.serialize_to_bytes(),
-            RegisteredIndex::DiskAnn(idx) => save_to_temp_bytes(|path| idx.save(path)),
+            RegisteredIndex::DiskAnn(idx) => save_diskann_to_bytes(idx),
         }
     }
 }
@@ -233,8 +238,10 @@ fn build_registered_index(config: &IndexConfig) -> crate::api::Result<Registered
             IvfExRaBitqIndex::from_index_config(config)?,
         ))),
         IndexType::IvfSq8 => Ok(RegisteredIndex::IvfSq8(Box::new(IvfSq8Index::new(config)?))),
-        IndexType::DiskAnn => Ok(RegisteredIndex::DiskAnn(Box::new(DiskAnnIndex::new(
-            config,
+        IndexType::DiskAnn => Ok(RegisteredIndex::DiskAnn(Box::new(PQFlashIndex::new(
+            AisaqConfig::from_index_config(config),
+            config.metric_type,
+            config.dim,
         )?))),
         _ => Err(KnowhereError::InvalidArg(format!(
             "unsupported JNI index type: {:?}",
@@ -266,6 +273,71 @@ where
     let file = NamedTempFile::new()?;
     fs::write(file.path(), bytes)?;
     load_fn(file.path())
+}
+
+const JNI_DISKANN_MAGIC: &[u8; 8] = b"DANNDIR1";
+
+fn append_blob(dst: &mut Vec<u8>, src: &[u8]) {
+    dst.extend_from_slice(&(src.len() as u64).to_le_bytes());
+    dst.extend_from_slice(src);
+}
+
+fn read_blob(bytes: &[u8], offset: &mut usize) -> crate::api::Result<Vec<u8>> {
+    let len_bytes = bytes
+        .get(*offset..*offset + 8)
+        .ok_or_else(|| KnowhereError::Codec("diskann blob header too short".to_string()))?;
+    let len = u64::from_le_bytes(len_bytes.try_into().unwrap()) as usize;
+    *offset += 8;
+    let blob = bytes
+        .get(*offset..*offset + len)
+        .ok_or_else(|| KnowhereError::Codec("diskann blob payload too short".to_string()))?;
+    *offset += len;
+    Ok(blob.to_vec())
+}
+
+fn save_diskann_to_bytes(index: &PQFlashIndex) -> crate::api::Result<Vec<u8>> {
+    let dir = tempdir()?;
+    index.save(dir.path())?;
+    let group = FileGroup::new(dir.path());
+    let metadata = fs::read(group.metadata_path())?;
+    let data = fs::read(group.data_path())?;
+    let vectors = fs::read(group.vectors_path()).ok();
+
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(JNI_DISKANN_MAGIC);
+    bytes.push(u8::from(vectors.is_some()));
+    append_blob(&mut bytes, &metadata);
+    append_blob(&mut bytes, &data);
+    if let Some(vectors) = vectors {
+        append_blob(&mut bytes, &vectors);
+    }
+    Ok(bytes)
+}
+
+fn load_diskann_from_bytes(bytes: &[u8]) -> crate::api::Result<PQFlashIndex> {
+    let mut offset = JNI_DISKANN_MAGIC.len();
+    let has_vectors = *bytes
+        .get(offset)
+        .ok_or_else(|| KnowhereError::Codec("diskann payload missing vector flag".to_string()))?
+        != 0;
+    offset += 1;
+
+    let metadata = read_blob(bytes, &mut offset)?;
+    let data = read_blob(bytes, &mut offset)?;
+    let vectors = if has_vectors {
+        Some(read_blob(bytes, &mut offset)?)
+    } else {
+        None
+    };
+
+    let dir = tempdir()?;
+    let group = FileGroup::create(dir.path())?;
+    fs::write(group.metadata_path(), metadata)?;
+    fs::write(group.data_path(), data)?;
+    if let Some(vectors) = vectors {
+        fs::write(group.vectors_path(), vectors)?;
+    }
+    PQFlashIndex::load(group.root())
 }
 
 fn needs_training(err: &KnowhereError) -> bool {
@@ -338,16 +410,8 @@ fn deserialize_registered_index(bytes: &[u8]) -> crate::api::Result<RegisteredIn
         return Ok(RegisteredIndex::Hnsw(Box::new(index)));
     }
 
-    if bytes.starts_with(b"DANN") {
-        let dim = read_u32_at(bytes, 8)? as usize;
-        let config = build_config(
-            IndexType::DiskAnn,
-            dim,
-            MetricType::L2,
-            IndexParams::default(),
-        );
-        let mut index = DiskAnnIndex::new(&config)?;
-        load_from_temp_bytes(bytes, |path| index.load(path))?;
+    if bytes.starts_with(JNI_DISKANN_MAGIC) {
+        let index = load_diskann_from_bytes(bytes)?;
         return Ok(RegisteredIndex::DiskAnn(Box::new(index)));
     }
 

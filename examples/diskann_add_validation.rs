@@ -1,12 +1,10 @@
-#![allow(deprecated)]
-
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::fs;
 use std::hash::{Hash, Hasher};
 
 use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::DiskAnnIndex;
+use knowhere_rs::faiss::{AisaqConfig, PQFlashIndex};
 
 const N: usize = 2000;
 const DIM: usize = 64;
@@ -74,13 +72,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     };
 
-    let mut index = DiskAnnIndex::new(&cfg)?;
+    let mut index = PQFlashIndex::new(
+        AisaqConfig::from_index_config(&cfg),
+        cfg.metric_type,
+        cfg.dim,
+    )?;
 
     let train_data = &base[..1000 * DIM];
     let add_data = &base[1000 * DIM..];
 
     index.train(train_data)?;
-    let added = index.add(add_data, None)?;
+    index.add(train_data)?;
+    index.add(add_data)?;
+    let added = add_data.len() / DIM;
 
     println!("train_count=1000 add_count={}", added);
 
@@ -94,31 +98,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for i in 0..NQ {
         let q = &queries[i * DIM..(i + 1) * DIM];
         let gt = brute_force_top_k(&base, q, DIM, TOP_K);
-        let pred = index.search(q, &req)?;
+        let pred = index.search(q, req.top_k)?;
         let pred_set: HashSet<i64> = pred.ids.into_iter().collect();
         let hit = gt.iter().filter(|&&id| pred_set.contains(&id)).count();
         recall_sum += hit as f64 / TOP_K as f64;
     }
 
     let recall = recall_sum / NQ as f64;
-    let stats = index.get_stats();
 
     println!("recall@10={:.3}", recall);
-    println!("ntotal={}", index.ntotal());
-    println!(
-        "avg_degree={:.2} min_degree={} max_degree={}",
-        stats.avg_degree, stats.min_degree, stats.max_degree
-    );
+    println!("ntotal={}", index.len());
 
     if recall > 0.80 {
         fs::write(
             STATUS_FILE,
-            format!(
-                "DONE: recall={:.3} ntotal={} avg_deg={:.2}\n",
-                recall,
-                index.ntotal(),
-                stats.avg_degree
-            ),
+            format!("DONE: recall={:.3} ntotal={}\n", recall, index.len(),),
         )?;
     } else {
         let msg = format!("ERROR: recall too low: {:.3}\n", recall);

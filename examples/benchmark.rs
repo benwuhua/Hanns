@@ -1,14 +1,12 @@
 //! Benchmark for KnowHere RS
 
-#![allow(deprecated)]
-
 use std::fs::File;
 use std::io::Read;
 use std::time::Instant;
 
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 use knowhere_rs::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
-use knowhere_rs::faiss::{DiskAnnIndex, HnswIndex, IvfPqIndex, IvfSq8Index, MemIndex};
+use knowhere_rs::faiss::{HnswIndex, IvfPqIndex, IvfSq8Index, MemIndex};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -556,13 +554,19 @@ fn benchmark_diskann_index() {
         params: IndexParams::default(),
     };
 
-    let mut index = DiskAnnIndex::new(&config).unwrap();
+    let mut index = PQFlashIndex::new(
+        AisaqConfig::from_index_config(&config),
+        config.metric_type,
+        DIM,
+    )
+    .unwrap();
 
     let vectors = generate_vectors(NUM_VECTORS, DIM);
 
     // Train (build graph)
     let start = Instant::now();
     index.train(&vectors).unwrap();
+    index.add(&vectors).unwrap();
     let train_time = start.elapsed();
     println!("Train (graph build): {:?}", train_time);
 
@@ -579,7 +583,7 @@ fn benchmark_diskann_index() {
 
     let start = Instant::now();
     for q in query.chunks(DIM) {
-        let _ = index.search(q, &req).unwrap();
+        let _ = index.search(q, req.top_k).unwrap();
     }
     let search_time = start.elapsed();
     println!("Search 100 queries: {:?}", search_time);
@@ -661,10 +665,16 @@ fn benchmark_diskann() {
             ..IndexParams::default()
         },
     };
-    let mut index = DiskAnnIndex::new(&config).unwrap();
+    let mut index = PQFlashIndex::new(
+        AisaqConfig::from_index_config(&config),
+        config.metric_type,
+        DIM,
+    )
+    .unwrap();
 
     let start = Instant::now();
     index.train(&vectors).unwrap();
+    index.add(&vectors).unwrap();
     let build_time = start.elapsed().as_secs_f64();
     println!("Build 10000 vectors (dim=128): {:.2}s", build_time);
 
@@ -676,13 +686,13 @@ fn benchmark_diskann() {
         radius: None,
     };
     let start = Instant::now();
-    let qps_result = index.search(&queries_qps, &req).unwrap();
+    let qps_result = index.search_batch(&queries_qps, req.top_k).unwrap();
     let _ = qps_result.ids.len();
     let search_s = start.elapsed().as_secs_f64();
     let qps = NUM_QPS_QUERIES as f64 / search_s.max(f64::EPSILON);
     println!("Search QPS (L=128, R=48): {:.0} queries/sec", qps);
 
-    let recall_result = index.search(&queries_recall, &req).unwrap();
+    let recall_result = index.search_batch(&queries_recall, req.top_k).unwrap();
     let gt = brute_force_top_k(&vectors, &queries_recall, DIM, TOP_K);
     let recall = recall_at_k(&recall_result.ids, &gt, TOP_K);
     println!("Recall@10 (100 queries): {:.3}", recall);
@@ -868,10 +878,16 @@ fn benchmark_diskann_100k() {
             ..IndexParams::default()
         },
     };
-    let mut index = DiskAnnIndex::new(&config).unwrap();
+    let mut index = PQFlashIndex::new(
+        AisaqConfig::from_index_config(&config),
+        config.metric_type,
+        DIM,
+    )
+    .unwrap();
 
     let start = Instant::now();
     index.train(&vectors).unwrap();
+    index.add(&vectors).unwrap();
     println!("Build 100K vectors: {:.1}s", start.elapsed().as_secs_f64());
 
     let req = SearchRequest {
@@ -882,7 +898,7 @@ fn benchmark_diskann_100k() {
         radius: None,
     };
     let start = Instant::now();
-    let _ = index.search(&queries, &req).unwrap();
+    let _ = index.search_batch(&queries, req.top_k).unwrap();
     let qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
     println!("Search QPS: {:.0}", qps);
 }
@@ -915,10 +931,16 @@ fn benchmark_diskann_1m() {
             ..IndexParams::default()
         },
     };
-    let mut index = DiskAnnIndex::new(&config).unwrap();
+    let mut index = PQFlashIndex::new(
+        AisaqConfig::from_index_config(&config),
+        config.metric_type,
+        DIM,
+    )
+    .unwrap();
 
     let start = Instant::now();
     index.train(&vectors).unwrap();
+    index.add(&vectors).unwrap();
     let build_s = start.elapsed().as_secs_f64();
     println!("Build 1M vectors: {:.1}s", build_s);
 
@@ -930,7 +952,7 @@ fn benchmark_diskann_1m() {
         radius: None,
     };
     let start = Instant::now();
-    let _ = index.search(&queries_qps, &req).unwrap();
+    let _ = index.search_batch(&queries_qps, req.top_k).unwrap();
     let qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
     println!("Search QPS: {:.0}", qps);
 
@@ -945,7 +967,7 @@ fn benchmark_diskann_1m() {
         .map(|row| row.iter().map(|&id| id as usize).collect())
         .collect();
 
-    let recall_result = index.search(queries_recall, &req).unwrap();
+    let recall_result = index.search_batch(queries_recall, req.top_k).unwrap();
     let recall = recall_at_k(&recall_result.ids, &gt_indices, TOP_K);
     println!("Recall@10: {:.3}", recall);
 }

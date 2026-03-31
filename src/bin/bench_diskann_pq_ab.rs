@@ -1,10 +1,8 @@
-#![allow(deprecated)]
-
 use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType};
 use knowhere_rs::benchmark::average_recall_at_k;
 use knowhere_rs::bitset::BitsetView;
 use knowhere_rs::dataset::Dataset;
-use knowhere_rs::faiss::DiskAnnIndex;
+use knowhere_rs::faiss::{AisaqConfig, PQFlashIndex};
 use knowhere_rs::index::Index;
 use knowhere_rs::MetricType;
 use rand::rngs::StdRng;
@@ -274,8 +272,6 @@ fn main() {
             },
         };
 
-        let mut index = DiskAnnIndex::new(&config).expect("create DiskAnnIndex");
-
         let build_start = Instant::now();
         let cache_path = build_index_cache_path(
             index_cache_dir.as_deref(),
@@ -289,11 +285,15 @@ fn main() {
             num_entry_points,
             build_degree_slack_pct,
         );
+        let aisaq_config = AisaqConfig::from_index_config(&config);
+        let mut index = if reuse_index && cache_path.as_ref().map(|p| p.exists()).unwrap_or(false) {
+            PQFlashIndex::load(cache_path.as_ref().expect("cache path"))
+                .expect("load diskann index")
+        } else {
+            PQFlashIndex::new(aisaq_config, MetricType::L2, dim).expect("create PQFlashIndex")
+        };
         let build_mode = if reuse_index && cache_path.as_ref().map(|p| p.exists()).unwrap_or(false)
         {
-            index
-                .load(cache_path.as_ref().expect("cache path"))
-                .expect("load diskann index");
             "load".to_string()
         } else {
             Index::train(&mut index, &Dataset::from_vectors(base.clone(), dim))
