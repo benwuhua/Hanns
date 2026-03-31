@@ -727,6 +727,11 @@ impl IvfPqIndex {
             ));
         }
 
+        #[cfg(feature = "parallel")]
+        if n_queries > 1 {
+            return self.search_parallel(query, req, rayon::current_num_threads());
+        }
+
         let nprobe = req.nprobe.max(1).min(self.nlist);
         let k = req.top_k;
 
@@ -1801,6 +1806,61 @@ mod tests {
         assert_eq!(result.ids.len(), 5);
         // The closest result should be vector 0 itself
         assert_eq!(result.ids[0], 0);
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn test_ivfpq_batch_search_matches_single_query_results() {
+        let dim = 16;
+        let n = 256;
+        let config = IndexConfig {
+            index_type: IndexType::IvfPq,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                nlist: Some(8),
+                nprobe: Some(4),
+                m: Some(4),
+                nbits_per_idx: Some(8),
+                ..Default::default()
+            },
+        };
+
+        let mut index = IvfPqIndex::new(&config).unwrap();
+        let mut vectors = Vec::with_capacity(n * dim);
+        for i in 0..n {
+            for j in 0..dim {
+                vectors.push(((i * 11 + j * 17) % 101) as f32 / 50.0);
+            }
+        }
+
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        let req = SearchRequest {
+            top_k: 6,
+            nprobe: 4,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let queries = &vectors[..4 * dim];
+
+        let batch = index.search(queries, &req).unwrap();
+        for q_idx in 0..4 {
+            let single = index
+                .search(&queries[q_idx * dim..(q_idx + 1) * dim], &req)
+                .unwrap();
+            assert_eq!(
+                &batch.ids[q_idx * req.top_k..(q_idx + 1) * req.top_k],
+                single.ids.as_slice()
+            );
+            assert_eq!(
+                &batch.distances[q_idx * req.top_k..(q_idx + 1) * req.top_k],
+                single.distances.as_slice()
+            );
+        }
     }
 
     #[test]

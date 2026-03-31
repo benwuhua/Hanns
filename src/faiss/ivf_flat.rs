@@ -576,14 +576,7 @@ impl IvfFlatIndex {
         acc
     }
 
-    /// Search
-    pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<SearchResult> {
-        if !self.trained {
-            return Err(crate::api::KnowhereError::InvalidArg(
-                "index not trained".to_string(),
-            ));
-        }
-
+    fn search_single(&self, query: &[f32], req: &SearchRequest, parallel_probes: bool) -> Result<SearchResult> {
         let top_k = req.top_k;
         if top_k == 0 {
             return Ok(SearchResult {
@@ -603,7 +596,6 @@ impl IvfFlatIndex {
         .max(1);
 
         let mut cluster_dists = self.score_all_centroids(query);
-
         if nprobe < cluster_dists.len() {
             cluster_dists.select_nth_unstable_by(nprobe - 1, |a, b| a.1.total_cmp(&b.1));
             cluster_dists.truncate(nprobe);
@@ -612,7 +604,7 @@ impl IvfFlatIndex {
         let filter = req.filter.as_deref();
 
         #[cfg(feature = "parallel")]
-        {
+        if parallel_probes {
             let partials: Vec<TopKAccumulator> = cluster_dists
                 .par_iter()
                 .map(|(cluster_id, _)| self.scan_cluster(*cluster_id, query, top_k, filter))
@@ -622,17 +614,66 @@ impl IvfFlatIndex {
             for partial in partials {
                 merged.merge(partial);
             }
-            Ok(merged.into_result())
+            return Ok(merged.into_result());
         }
 
-        #[cfg(not(feature = "parallel"))]
-        {
-            let mut merged = TopKAccumulator::new(top_k);
-            for (cluster_id, _) in cluster_dists {
-                merged.merge(self.scan_cluster(cluster_id, query, top_k, filter));
-            }
-            Ok(merged.into_result())
+        let mut merged = TopKAccumulator::new(top_k);
+        for (cluster_id, _) in cluster_dists {
+            merged.merge(self.scan_cluster(cluster_id, query, top_k, filter));
         }
+        Ok(merged.into_result())
+    }
+
+    /// Search
+    pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<SearchResult> {
+        if !self.trained {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "index not trained".to_string(),
+            ));
+        }
+
+        if !query.len().is_multiple_of(self.dim) {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "query dimension mismatch".to_string(),
+            ));
+        }
+
+        let n_queries = query.len() / self.dim;
+
+        #[cfg(feature = "parallel")]
+        if n_queries > 1 {
+            let results: Result<Vec<SearchResult>> = (0..n_queries)
+                .into_par_iter()
+                .map(|q_idx| {
+                    let start = q_idx * self.dim;
+                    let end = start + self.dim;
+                    self.search_single(&query[start..end], req, false)
+                })
+                .collect();
+
+            let mut ids = Vec::with_capacity(n_queries * req.top_k);
+            let mut distances = Vec::with_capacity(n_queries * req.top_k);
+            for result in results? {
+                ids.extend(result.ids);
+                distances.extend(result.distances);
+            }
+            return Ok(SearchResult::new(ids, distances, 0.0));
+        }
+
+        if n_queries > 1 {
+            let mut ids = Vec::with_capacity(n_queries * req.top_k);
+            let mut distances = Vec::with_capacity(n_queries * req.top_k);
+            for q_idx in 0..n_queries {
+                let start = q_idx * self.dim;
+                let end = start + self.dim;
+                let result = self.search_single(&query[start..end], req, false)?;
+                ids.extend(result.ids);
+                distances.extend(result.distances);
+            }
+            return Ok(SearchResult::new(ids, distances, 0.0));
+        }
+
+        self.search_single(query, req, cfg!(feature = "parallel"))
     }
 
     /// Search multiple queries in parallel (requires rayon)
@@ -667,7 +708,7 @@ impl IvfFlatIndex {
                 let start = q_idx * self.dim;
                 let end = start + self.dim;
                 let query = &queries[start..end];
-                let result = self.search(query, &req)?;
+                let result = self.search_single(query, &req, false)?;
                 Ok(result
                     .ids
                     .into_iter()
@@ -943,6 +984,50 @@ mod tests {
 
         let result = index.search(&query, &req).unwrap();
         assert!(!result.ids.is_empty() && result.ids.len() <= 2); // IVF may return fewer than top_k
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn test_ivf_flat_batch_search_matches_single_query_results() {
+        let config = IndexConfig {
+            index_type: IndexType::IvfFlat,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: IndexParams::ivf(4, 2),
+        };
+
+        let mut index = IvfFlatIndex::new(&config).unwrap();
+        let train_data = vec![
+            0.0, 0.0, 0.0, 0.0, 0.2, 0.2, 0.2, 0.2, 1.0, 1.0, 1.0, 1.0, 1.2, 1.2, 1.2, 1.2,
+            2.0, 2.0, 2.0, 2.0, 2.2, 2.2, 2.2, 2.2, 3.0, 3.0, 3.0, 3.0, 3.2, 3.2, 3.2, 3.2,
+        ];
+        index.train(&train_data).unwrap();
+        index.add(&train_data, None).unwrap();
+
+        let req = SearchRequest {
+            top_k: 2,
+            nprobe: 2,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let queries = vec![0.1, 0.1, 0.1, 0.1, 2.1, 2.1, 2.1, 2.1];
+
+        let batch = index.search(&queries, &req).unwrap();
+        for q_idx in 0..2 {
+            let single = index
+                .search(&queries[q_idx * 4..(q_idx + 1) * 4], &req)
+                .unwrap();
+            assert_eq!(
+                &batch.ids[q_idx * req.top_k..(q_idx + 1) * req.top_k],
+                single.ids.as_slice()
+            );
+            assert_eq!(
+                &batch.distances[q_idx * req.top_k..(q_idx + 1) * req.top_k],
+                single.distances.as_slice()
+            );
+        }
     }
 
     #[test]
