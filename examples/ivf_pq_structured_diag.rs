@@ -6,7 +6,7 @@ use rand::{Rng, SeedableRng};
 
 const N_CLUSTERS: usize = 20;
 const N_PER_CLUSTER: usize = 500;
-const N: usize = N_CLUSTERS * N_PER_CLUSTER;
+const _N: usize = N_CLUSTERS * N_PER_CLUSTER;
 const DIM: usize = 64;
 const NOISE: f32 = 0.1;
 const SEED: u64 = 42;
@@ -160,6 +160,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             full_scan_recall = recall;
         }
     }
+    println!("full_scan_recall@10={:.3}", full_scan_recall);
 
     // Candidate-vs-ranking diagnosis on one query:
     // check whether GT top-10 appears in IVF-PQ top-100 when nprobe=32(full scan).

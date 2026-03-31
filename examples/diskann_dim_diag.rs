@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;

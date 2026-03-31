@@ -2,6 +2,7 @@
 //!
 //! This index keeps a DiskANN graph on raw vectors while storing an additional
 //! SQ8-compressed representation (optionally after PCA projection).
+#![allow(deprecated)] // Legacy SQ wrapper intentionally composes deprecated DiskANN compatibility types.
 
 use std::fs::{self, File};
 use std::io::{Read, Write};

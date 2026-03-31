@@ -1,5 +1,6 @@
 //! 端到端集成测试
 //! 验证完整索引流程
+#![allow(deprecated)] // Integration scaffold still exercises legacy IVF compatibility surfaces.
 
 use crate::faiss::pq_simd::PqDistance;
 use crate::faiss::IvfIndex;

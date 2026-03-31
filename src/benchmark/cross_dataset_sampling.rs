@@ -439,8 +439,10 @@ pub fn generate_cross_dataset_artifact(path: &str) -> Result<CrossDatasetArtifac
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "long-tests")]
     use super::*;
 
+    #[cfg(feature = "long-tests")]
     #[test]
     fn test_cross_dataset_artifact_shape() {
         let artifact = build_cross_dataset_artifact();

@@ -14,6 +14,7 @@
 //! - PQ compression support (simplified)
 //! - Configurable parameters (max_degree, search_list_size, beamwidth, etc.)
 //! - Statistics API for monitoring
+#![allow(deprecated)] // Legacy compatibility module intentionally wraps deprecated DiskANN APIs.
 
 use std::cmp::Ordering;
 use std::borrow::Cow;
@@ -3243,7 +3244,7 @@ mod tests {
     }
 
     #[test]
-    fn test_diskann_recall_improves_with_larger_L() {
+    fn test_diskann_recall_improves_with_larger_l() {
         let dim = 16usize;
         let n = 500usize;
         let nq = 50usize;

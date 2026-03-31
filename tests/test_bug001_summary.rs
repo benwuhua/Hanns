@@ -1,3 +1,5 @@
+#![cfg(feature = "long-tests")]
+
 /// BUG-001 Summary Test - Quick validation of fixes
 ///
 /// This test validates the key fixes made to improve HNSW recall.

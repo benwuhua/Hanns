@@ -1108,11 +1108,6 @@ impl IvfSq8Index {
             r.read_exact(&mut b)?;
             Ok(i32::from_le_bytes(b))
         }
-        fn read_u32<R: Read>(r: &mut R) -> Result<u32> {
-            let mut b = [0u8; 4];
-            r.read_exact(&mut b)?;
-            Ok(u32::from_le_bytes(b))
-        }
         fn read_i64<R: Read>(r: &mut R) -> Result<i64> {
             let mut b = [0u8; 8];
             r.read_exact(&mut b)?;
@@ -1940,9 +1935,6 @@ mod tests {
             buf.push(v);
         }
         fn push_i32(buf: &mut Vec<u8>, v: i32) {
-            buf.extend_from_slice(&v.to_le_bytes());
-        }
-        fn push_u32(buf: &mut Vec<u8>, v: u32) {
             buf.extend_from_slice(&v.to_le_bytes());
         }
         fn push_i64(buf: &mut Vec<u8>, v: i64) {

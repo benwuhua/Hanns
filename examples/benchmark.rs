@@ -1,5 +1,7 @@
 //! Benchmark for KnowHere RS
 
+#![allow(deprecated)]
+
 use std::fs::File;
 use std::io::Read;
 use std::time::Instant;

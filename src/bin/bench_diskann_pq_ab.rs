@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType};
 use knowhere_rs::benchmark::average_recall_at_k;
 use knowhere_rs::bitset::BitsetView;

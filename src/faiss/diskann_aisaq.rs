@@ -152,9 +152,11 @@ fn default_uring_group_size() -> usize {
     8
 }
 
+#[allow(dead_code)] // Retained for the unfinished batch-build path that is not enabled in production yet.
 const GRAPH_SLACK_FACTOR: f32 = 1.3;
 const ROBUST_PRUNE_ALPHA: f32 = 1.2;
 
+#[allow(dead_code)] // Retained for the unfinished batch-build path that is not enabled in production yet.
 fn graph_slack_stride(max_degree: usize) -> usize {
     ((max_degree.max(1) as f32) * GRAPH_SLACK_FACTOR).ceil() as usize
 }
@@ -1468,6 +1470,7 @@ impl PQFlashIndex {
         Ok(())
     }
 
+    #[allow(dead_code)] // Batch-build scaffolding is kept for future bring-up and exercised only in local experiments.
     fn bootstrap_insert_node(
         &mut self,
         vector: &[f32],
@@ -1504,6 +1507,7 @@ impl PQFlashIndex {
         }
     }
 
+    #[allow(dead_code)] // Batch-build scaffolding is kept for future bring-up and exercised only in local experiments.
     fn append_node_placeholder(
         &mut self,
         vector: &[f32],
@@ -1524,6 +1528,7 @@ impl PQFlashIndex {
         }
     }
 
+    #[allow(dead_code)] // Batch-build scaffolding is kept for future bring-up and exercised only in local experiments.
     fn compute_batch_phase1_results(
         &self,
         batch_vectors: &[f32],
@@ -1536,7 +1541,7 @@ impl PQFlashIndex {
         }
 
         let batch_count = batch_vectors.len() / self.dim;
-        let candidate_cap = degree_limit.saturating_mul(3).max(degree_limit).max(1);
+        let _candidate_cap = degree_limit.saturating_mul(3).max(degree_limit).max(1);
 
         #[cfg(feature = "parallel")]
         let results: Vec<(Vec<u32>, Vec<u8>)> = {
@@ -1545,7 +1550,7 @@ impl PQFlashIndex {
                 .into_par_iter()
                 .map(|offset| {
                     let vector = &batch_vectors[offset * self.dim..(offset + 1) * self.dim];
-                    let mut scored = if graph_size_snapshot < 16 {
+                    let scored = if graph_size_snapshot < 16 {
                         self.select_neighbors_scored(vector, graph_size_snapshot)
                     } else {
                         let l = build_l.max(degree_limit * 2).min(graph_size_snapshot);
@@ -1602,6 +1607,7 @@ impl PQFlashIndex {
         results
     }
 
+    #[allow(dead_code)] // Batch-build scaffolding is kept for future bring-up and exercised only in local experiments.
     fn apply_batch_graph_updates(
         &mut self,
         batch_start_node: usize,
@@ -1735,6 +1741,7 @@ impl PQFlashIndex {
         }
     }
 
+    #[allow(dead_code)] // Batch-build scaffolding is kept for future bring-up and exercised only in local experiments.
     fn write_neighbor_row(&mut self, node_idx: usize, neighbors: &[u32], stride: usize) {
         let start = node_idx * stride;
         let count = neighbors.len().min(stride);
@@ -1747,6 +1754,7 @@ impl PQFlashIndex {
         }
     }
 
+    #[allow(dead_code)] // Batch-build scaffolding is kept for future bring-up and exercised only in local experiments.
     fn select_neighbors_scored(&self, vector: &[f32], graph_size: usize) -> Vec<(u32, f32)> {
         let mut scored: Vec<(u32, f32)> = (0..graph_size)
             .map(|node_id| {

@@ -10441,10 +10441,6 @@ mod tests {
         fn push_f64(buf: &mut Vec<u8>, v: f64) {
             buf.extend_from_slice(&v.to_le_bytes());
         }
-        fn push_f32(buf: &mut Vec<u8>, v: f32) {
-            buf.extend_from_slice(&v.to_le_bytes());
-        }
-
         let n = 4usize;
         let dim = 2usize;
         let m = 4usize;
