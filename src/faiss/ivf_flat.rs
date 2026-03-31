@@ -15,7 +15,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use crate::api::{IndexConfig, MetricType, Result, SearchRequest, SearchResult};
-use crate::simd::{dot_product_f32, l2_batch_4_ptr, l2_distance_sq, l2_distance_sq_ptr};
+use crate::simd::{dot_product_f32, ip_batch_4, l2_batch_4_ptr, l2_distance_sq, l2_distance_sq_ptr};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -399,34 +399,60 @@ impl IvfFlatIndex {
 
     /// Find nearest centroid based on configured metric.
     fn find_nearest_centroid(&self, vector: &[f32]) -> usize {
+        self.score_all_centroids(vector)
+            .into_iter()
+            .min_by(|a, b| {
+                a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0))
+            })
+            .map(|(idx, _)| idx)
+            .unwrap_or(0)
+    }
+
+    fn score_all_centroids(&self, query: &[f32]) -> Vec<(usize, f32)> {
+        let mut cluster_dists = Vec::with_capacity(self.nlist);
         match self.metric_type {
-            MetricType::L2 | MetricType::Hamming => {
-                let mut min_dist = f32::MAX;
-                let mut best = 0;
-                for c in 0..self.nlist {
-                    let centroid = &self.centroids[c * self.dim..(c + 1) * self.dim];
-                    let dist = l2_distance_sq(vector, centroid);
-                    if dist < min_dist {
-                        min_dist = dist;
-                        best = c;
-                    }
+            MetricType::L2 | MetricType::Hamming => unsafe {
+                let query_ptr = query.as_ptr();
+                let base_ptr = self.centroids.as_ptr();
+                let mut c = 0usize;
+                while c + 4 <= self.nlist {
+                    let dists = l2_batch_4_ptr(query_ptr, base_ptr.add(c * self.dim), self.dim, self.dim);
+                    cluster_dists.push((c, dists[0]));
+                    cluster_dists.push((c + 1, dists[1]));
+                    cluster_dists.push((c + 2, dists[2]));
+                    cluster_dists.push((c + 3, dists[3]));
+                    c += 4;
                 }
-                best
-            }
+                while c < self.nlist {
+                    let dist = l2_distance_sq(query, &self.centroids[c * self.dim..(c + 1) * self.dim]);
+                    cluster_dists.push((c, dist));
+                    c += 1;
+                }
+            },
             MetricType::Ip | MetricType::Cosine => {
-                let mut best_score = f32::NEG_INFINITY;
-                let mut best = 0;
-                for c in 0..self.nlist {
-                    let centroid = &self.centroids[c * self.dim..(c + 1) * self.dim];
-                    let score = dot_product_f32(vector, centroid);
-                    if score > best_score {
-                        best_score = score;
-                        best = c;
-                    }
+                let mut c = 0usize;
+                while c + 4 <= self.nlist {
+                    let dots = ip_batch_4(
+                        query,
+                        &self.centroids[c * self.dim..(c + 1) * self.dim],
+                        &self.centroids[(c + 1) * self.dim..(c + 2) * self.dim],
+                        &self.centroids[(c + 2) * self.dim..(c + 3) * self.dim],
+                        &self.centroids[(c + 3) * self.dim..(c + 4) * self.dim],
+                    );
+                    cluster_dists.push((c, -dots[0]));
+                    cluster_dists.push((c + 1, -dots[1]));
+                    cluster_dists.push((c + 2, -dots[2]));
+                    cluster_dists.push((c + 3, -dots[3]));
+                    c += 4;
                 }
-                best
+                while c < self.nlist {
+                    let score = -dot_product_f32(query, &self.centroids[c * self.dim..(c + 1) * self.dim]);
+                    cluster_dists.push((c, score));
+                    c += 1;
+                }
             }
         }
+        cluster_dists
     }
 
     #[inline]
@@ -518,12 +544,30 @@ impl IvfFlatIndex {
                     }
                 },
                 MetricType::Ip | MetricType::Cosine => {
-                    for (idx, &id) in ids.iter().enumerate().take(size) {
+                    let mut idx = 0usize;
+                    while idx + 4 <= size {
+                        let start = idx * self.dim;
+                        let dots = ip_batch_4(
+                            query,
+                            &vectors[start..start + self.dim],
+                            &vectors[start + self.dim..start + 2 * self.dim],
+                            &vectors[start + 2 * self.dim..start + 3 * self.dim],
+                            &vectors[start + 3 * self.dim..start + 4 * self.dim],
+                        );
+                        acc.push(ids[idx], -dots[0]);
+                        acc.push(ids[idx + 1], -dots[1]);
+                        acc.push(ids[idx + 2], -dots[2]);
+                        acc.push(ids[idx + 3], -dots[3]);
+                        idx += 4;
+                    }
+
+                    while idx < size {
                         let start = idx * self.dim;
                         let end = start + self.dim;
                         let vec = &vectors[start..end];
                         let dist = -dot_product_f32(query, vec);
-                        acc.push(id, dist);
+                        acc.push(ids[idx], dist);
+                        idx += 1;
                     }
                 }
             },
@@ -558,15 +602,7 @@ impl IvfFlatIndex {
         .min(self.nlist)
         .max(1);
 
-        let mut cluster_dists = Vec::with_capacity(self.nlist);
-        for c in 0..self.nlist {
-            let centroid = &self.centroids[c * self.dim..(c + 1) * self.dim];
-            let score = match self.metric_type {
-                MetricType::L2 | MetricType::Hamming => l2_distance_sq(query, centroid),
-                MetricType::Ip | MetricType::Cosine => -dot_product_f32(query, centroid),
-            };
-            cluster_dists.push((c, score));
-        }
+        let mut cluster_dists = self.score_all_centroids(query);
 
         if nprobe < cluster_dists.len() {
             cluster_dists.select_nth_unstable_by(nprobe - 1, |a, b| a.1.total_cmp(&b.1));

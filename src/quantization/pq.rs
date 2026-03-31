@@ -367,16 +367,20 @@ impl ProductQuantizer {
         }
 
         let mut sum = 0.0f32;
-        let chunks4 = (m / 4) * 4;
+        let chunks8 = (m / 8) * 8;
 
         if self.config.nbits == 8 {
             let mut sub_q = 0usize;
-            while sub_q < chunks4 {
+            while sub_q < chunks8 {
                 sum += table[sub_q * ksub + code[sub_q] as usize];
                 sum += table[(sub_q + 1) * ksub + code[sub_q + 1] as usize];
                 sum += table[(sub_q + 2) * ksub + code[sub_q + 2] as usize];
                 sum += table[(sub_q + 3) * ksub + code[sub_q + 3] as usize];
-                sub_q += 4;
+                sum += table[(sub_q + 4) * ksub + code[sub_q + 4] as usize];
+                sum += table[(sub_q + 5) * ksub + code[sub_q + 5] as usize];
+                sum += table[(sub_q + 6) * ksub + code[sub_q + 6] as usize];
+                sum += table[(sub_q + 7) * ksub + code[sub_q + 7] as usize];
+                sub_q += 8;
             }
             while sub_q < m {
                 sum += table[sub_q * ksub + code[sub_q] as usize];
@@ -386,12 +390,16 @@ impl ProductQuantizer {
         }
 
         let mut sub_q = 0usize;
-        while sub_q < chunks4 {
+        while sub_q < chunks8 {
             sum += table[sub_q * ksub + self.extract_index(code, sub_q)];
             sum += table[(sub_q + 1) * ksub + self.extract_index(code, sub_q + 1)];
             sum += table[(sub_q + 2) * ksub + self.extract_index(code, sub_q + 2)];
             sum += table[(sub_q + 3) * ksub + self.extract_index(code, sub_q + 3)];
-            sub_q += 4;
+            sum += table[(sub_q + 4) * ksub + self.extract_index(code, sub_q + 4)];
+            sum += table[(sub_q + 5) * ksub + self.extract_index(code, sub_q + 5)];
+            sum += table[(sub_q + 6) * ksub + self.extract_index(code, sub_q + 6)];
+            sum += table[(sub_q + 7) * ksub + self.extract_index(code, sub_q + 7)];
+            sub_q += 8;
         }
         while sub_q < m {
             sum += table[sub_q * ksub + self.extract_index(code, sub_q)];
