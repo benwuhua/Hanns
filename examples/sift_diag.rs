@@ -127,7 +127,10 @@ fn compute_recall_at_k(
         let gt_row = &gt[qi * gt_k..(qi + 1) * gt_k];
         for &gt_id in gt_row.iter().take(k) {
             total += 1;
-            if result_row.iter().any(|&rid| rid >= 0 && rid as u32 == gt_id) {
+            if result_row
+                .iter()
+                .any(|&rid| rid >= 0 && rid as u32 == gt_id)
+            {
                 hits += 1;
             }
         }
@@ -141,7 +144,9 @@ fn compute_recall_at_k(
 }
 
 fn sift10k_quick_diag() {
-    if !Path::new(BASE_PATH).exists() || !Path::new(QUERY_PATH).exists() || !Path::new(GT_PATH).exists()
+    if !Path::new(BASE_PATH).exists()
+        || !Path::new(QUERY_PATH).exists()
+        || !Path::new(GT_PATH).exists()
     {
         println!("SKIPPED: SIFT-1M data not found under /data/work/datasets/sift-1m/");
         return;
@@ -213,7 +218,10 @@ fn sift10k_quick_diag() {
             .map(|d| format!("{:.1}", d))
             .collect::<Vec<_>>()
     );
-    println!("query[0] brute-force top-10 IDs over first {} base vectors: {:?}", n_base, q0_gt_ids);
+    println!(
+        "query[0] brute-force top-10 IDs over first {} base vectors: {:?}",
+        n_base, q0_gt_ids
+    );
     println!(
         "query[0] brute-force top-10 dists: {:?}",
         q0_gt_dists
@@ -223,11 +231,16 @@ fn sift10k_quick_diag() {
     );
 
     let file_gt_row = &gt_file[..TOP_K.min(gt_k)];
-    println!("query[0] gt.ibin top-10 IDs (full 1M reference): {:?}", file_gt_row);
+    println!(
+        "query[0] gt.ibin top-10 IDs (full 1M reference): {:?}",
+        file_gt_row
+    );
 }
 
 fn sift1m_quick_recall() {
-    if !Path::new(BASE_PATH).exists() || !Path::new(QUERY_PATH).exists() || !Path::new(GT_PATH).exists()
+    if !Path::new(BASE_PATH).exists()
+        || !Path::new(QUERY_PATH).exists()
+        || !Path::new(GT_PATH).exists()
     {
         println!("SKIPPED: SIFT-1M data not found under /data/work/datasets/sift-1m/");
         return;
@@ -274,7 +287,9 @@ fn sift1m_quick_recall() {
 }
 
 fn sift1m_disk_mode() {
-    if !Path::new(BASE_PATH).exists() || !Path::new(QUERY_PATH).exists() || !Path::new(GT_PATH).exists()
+    if !Path::new(BASE_PATH).exists()
+        || !Path::new(QUERY_PATH).exists()
+        || !Path::new(GT_PATH).exists()
     {
         println!("SKIPPED: SIFT-1M data not found under /data/work/datasets/sift-1m/");
         return;
@@ -324,7 +339,9 @@ fn sift1m_disk_mode() {
     println!("load (disk mode): {:.2}s", load_secs);
 
     let search_start = Instant::now();
-    let result = disk_index.search_batch(&queries, TOP_K).expect("search_batch");
+    let result = disk_index
+        .search_batch(&queries, TOP_K)
+        .expect("search_batch");
     let search_secs = search_start.elapsed().as_secs_f64().max(f64::EPSILON);
     let qps = query_n as f64 / search_secs;
     let recall = compute_recall_at_k(&result.ids, &gt, query_n, TOP_K, gt_k);
@@ -335,7 +352,9 @@ fn sift1m_disk_mode() {
 }
 
 fn sift1m_disk_pq_uring() {
-    if !Path::new(BASE_PATH).exists() || !Path::new(QUERY_PATH).exists() || !Path::new(GT_PATH).exists()
+    if !Path::new(BASE_PATH).exists()
+        || !Path::new(QUERY_PATH).exists()
+        || !Path::new(GT_PATH).exists()
     {
         println!("SKIPPED: SIFT-1M data not found under /data/work/datasets/sift-1m/");
         return;
@@ -389,12 +408,17 @@ fn sift1m_disk_pq_uring() {
         let load_secs = load_start.elapsed().as_secs_f64();
 
         let search_start = Instant::now();
-        let result = disk_index.search_batch(&queries, TOP_K).expect("search_batch");
+        let result = disk_index
+            .search_batch(&queries, TOP_K)
+            .expect("search_batch");
         let search_secs = search_start.elapsed().as_secs_f64().max(f64::EPSILON);
         let qps = query_n as f64 / search_secs;
         let recall = compute_recall_at_k(&result.ids, &gt, query_n, TOP_K, gt_k);
 
-        println!("group_size={} load (disk_pq_uring mode): {:.2}s", group_size, load_secs);
+        println!(
+            "group_size={} load (disk_pq_uring mode): {:.2}s",
+            group_size, load_secs
+        );
         println!("group_size={} disk_pq_uring QPS: {:.0}", group_size, qps);
         println!(
             "group_size={} disk_pq_uring recall@10: {:.4}",
@@ -405,7 +429,9 @@ fn sift1m_disk_pq_uring() {
 }
 
 fn sift1m_warm_disk_mode() {
-    if !Path::new(BASE_PATH).exists() || !Path::new(QUERY_PATH).exists() || !Path::new(GT_PATH).exists()
+    if !Path::new(BASE_PATH).exists()
+        || !Path::new(QUERY_PATH).exists()
+        || !Path::new(GT_PATH).exists()
     {
         println!("SKIPPED: SIFT-1M data not found under /data/work/datasets/sift-1m/");
         return;
@@ -466,7 +492,9 @@ fn sift1m_warm_disk_mode() {
     println!("cache_nodes: {}", cache_nodes);
 
     let search_start = Instant::now();
-    let result = disk_index.search_batch(&queries, TOP_K).expect("search_batch");
+    let result = disk_index
+        .search_batch(&queries, TOP_K)
+        .expect("search_batch");
     let search_secs = search_start.elapsed().as_secs_f64().max(f64::EPSILON);
     let qps = query_n as f64 / search_secs;
     let recall = compute_recall_at_k(&result.ids, &gt, query_n, TOP_K, gt_k);

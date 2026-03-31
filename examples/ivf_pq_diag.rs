@@ -27,7 +27,10 @@ fn overlap_at_k(a: &[i64], b: &[i64]) -> usize {
     b.iter().filter(|&&id| gt_set.contains(&id)).count()
 }
 
-fn compute_gt_top10(base: &[f32], queries: &[f32]) -> Result<Vec<Vec<i64>>, Box<dyn std::error::Error>> {
+fn compute_gt_top10(
+    base: &[f32],
+    queries: &[f32],
+) -> Result<Vec<Vec<i64>>, Box<dyn std::error::Error>> {
     let flat_cfg = IndexConfig::new(IndexType::Flat, MetricType::L2, DIM);
     let mut gt_index = MemIndex::new(&flat_cfg)?;
     gt_index.add(base, None)?;
@@ -45,7 +48,12 @@ fn compute_gt_top10(base: &[f32], queries: &[f32]) -> Result<Vec<Vec<i64>>, Box<
     Ok(gt_top10)
 }
 
-fn recall_for_index(index: &IvfPqIndex, queries: &[f32], gt_top10: &[Vec<i64>], nprobe: usize) -> Result<f64, Box<dyn std::error::Error>> {
+fn recall_for_index(
+    index: &IvfPqIndex,
+    queries: &[f32],
+    gt_top10: &[Vec<i64>],
+    nprobe: usize,
+) -> Result<f64, Box<dyn std::error::Error>> {
     let req = SearchRequest {
         top_k: TOP_K,
         nprobe,

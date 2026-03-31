@@ -251,10 +251,7 @@ impl Layer0OrderedResults {
             .into_iter()
             .map(|(SearchMaxDist(dist), idx)| (idx, dist))
             .collect();
-        pairs.sort_by(|a, b| {
-            a.1.total_cmp(&b.1)
-                .then_with(|| a.0.cmp(&b.0))
-        });
+        pairs.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
         pairs
     }
 }
@@ -1422,10 +1419,7 @@ impl HnswIndex {
 
         // Align with native hnswlib/knowhere: default ml derives from runtime M.
         // ml = 1 / ln(M), while preserving explicit ml overrides from config.
-        let level_multiplier = config
-            .params
-            .ml
-            .unwrap_or_else(|| 1.0 / (m as f32).ln());
+        let level_multiplier = config.params.ml.unwrap_or_else(|| 1.0 / (m as f32).ln());
 
         // OPT-024: Get number of threads from config or use default (num_cpus)
         let num_threads = config.params.num_threads.unwrap_or_else(|| {
@@ -1486,8 +1480,11 @@ impl HnswIndex {
                 let inv_norm = 1.0 / norm;
                 self.vectors.extend(vector.iter().map(|&v| v * inv_norm));
                 if self.use_bf16_storage {
-                    self.bf16_vectors
-                        .extend(vector.iter().map(|&v| Bf16::from_f32(v * inv_norm).to_bits()));
+                    self.bf16_vectors.extend(
+                        vector
+                            .iter()
+                            .map(|&v| Bf16::from_f32(v * inv_norm).to_bits()),
+                    );
                 }
                 return;
             }
@@ -1518,7 +1515,8 @@ impl HnswIndex {
         if self.sq_mode == SqMode::None || self.vectors.is_empty() {
             self.sq_quantizer = None;
             self.sq_codes.clear();
-            self.distance_to_idx_fn = Self::resolve_distance_to_idx_fn(self.metric_type, self.sq_mode);
+            self.distance_to_idx_fn =
+                Self::resolve_distance_to_idx_fn(self.metric_type, self.sq_mode);
             self.config.params.sq_mode = Some(self.sq_mode);
             return;
         }
@@ -1589,7 +1587,11 @@ impl HnswIndex {
                 let stored = &self.vectors[start..start + self.dim];
                 let ip = simd::inner_product(query, stored);
                 let q_norm = simd::inner_product(query, query).sqrt();
-                if q_norm > 0.0 { 1.0 - ip / q_norm } else { 1.0 }
+                if q_norm > 0.0 {
+                    1.0 - ip / q_norm
+                } else {
+                    1.0
+                }
             }
             MetricType::Hamming => f32::INFINITY,
         }
@@ -1720,7 +1722,8 @@ impl HnswIndex {
         if self.sq_mode != SqMode::None {
             self.sq_quantizer = None;
             self.sq_codes.clear();
-            self.distance_to_idx_fn = Self::resolve_distance_to_idx_fn(self.metric_type, SqMode::None);
+            self.distance_to_idx_fn =
+                Self::resolve_distance_to_idx_fn(self.metric_type, SqMode::None);
         }
         self.trained = true;
         Ok(())
@@ -4983,8 +4986,9 @@ impl HnswIndex {
 
                     if batch_len == 4 {
                         let distances = if use_query_bf16 {
-                            let bits =
-                                unsafe { std::slice::from_raw_parts(query_bf16_ptr, query_bf16_len) };
+                            let bits = unsafe {
+                                std::slice::from_raw_parts(query_bf16_ptr, query_bf16_len)
+                            };
                             self.l2_distance_to_4_idxs_bf16_with_query_bits(bits, batch_indices)
                         } else {
                             unsafe {
@@ -5026,8 +5030,9 @@ impl HnswIndex {
 
                     if batch_len == 4 {
                         let distances = if use_query_bf16 {
-                            let bits =
-                                unsafe { std::slice::from_raw_parts(query_bf16_ptr, query_bf16_len) };
+                            let bits = unsafe {
+                                std::slice::from_raw_parts(query_bf16_ptr, query_bf16_len)
+                            };
                             self.l2_distance_to_4_idxs_bf16_with_query_bits(bits, batch_indices)
                         } else {
                             unsafe {
@@ -5057,7 +5062,8 @@ impl HnswIndex {
                         )
                     }
                 } else if use_query_bf16 {
-                    let bits = unsafe { std::slice::from_raw_parts(query_bf16_ptr, query_bf16_len) };
+                    let bits =
+                        unsafe { std::slice::from_raw_parts(query_bf16_ptr, query_bf16_len) };
                     self.l2_distance_to_idx_bf16_with_query_bits(bits, nbr_idx)
                 } else {
                     unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) }
@@ -5607,7 +5613,9 @@ impl HnswIndex {
             return self.brute_force_search(query, k, |id, _idx| filter_fn(id));
         }
 
-        if self.sq_mode == SqMode::None && self.metric_type == MetricType::Cosine && filter.is_none()
+        if self.sq_mode == SqMode::None
+            && self.metric_type == MetricType::Cosine
+            && filter.is_none()
         {
             return self.search_single_cosine_unfiltered(query, ef, k);
         }
@@ -5724,13 +5732,8 @@ impl HnswIndex {
             }
         }
 
-        let results = self.search_layer_idx_l2_ordered_pool_fast(
-            query,
-            best_ep_idx,
-            0,
-            ef,
-            scratch,
-        );
+        let results =
+            self.search_layer_idx_l2_ordered_pool_fast(query, best_ep_idx, 0, ef, scratch);
 
         let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
         for (idx, dist) in results {
@@ -6322,7 +6325,9 @@ impl HnswIndex {
         let data_size = read_u64(&mut cur)? as usize;
         let dim = read_u64(&mut cur)? as usize;
         if dim == 0 {
-            return Err(crate::api::KnowhereError::Codec("invalid dim=0".to_string()));
+            return Err(crate::api::KnowhereError::Codec(
+                "invalid dim=0".to_string(),
+            ));
         }
         if data_size != dim * std::mem::size_of::<f32>() {
             return Err(crate::api::KnowhereError::Codec(format!(
@@ -6360,7 +6365,9 @@ impl HnswIndex {
         // Level-0 block.
         let block_len = cur_element_count
             .checked_mul(size_data_per_element)
-            .ok_or_else(|| crate::api::KnowhereError::Codec("level0 block size overflow".to_string()))?;
+            .ok_or_else(|| {
+                crate::api::KnowhereError::Codec("level0 block size overflow".to_string())
+            })?;
         let mut level0 = vec![0u8; block_len];
         cur.read_exact(&mut level0)?;
 
@@ -6381,8 +6388,12 @@ impl HnswIndex {
             let mut neighs = Vec::with_capacity(degree);
             for i in 0..degree {
                 let off = neigh_base + i * 4;
-                let nbr =
-                    u32::from_le_bytes([level0[off], level0[off + 1], level0[off + 2], level0[off + 3]]);
+                let nbr = u32::from_le_bytes([
+                    level0[off],
+                    level0[off + 1],
+                    level0[off + 2],
+                    level0[off + 3],
+                ]);
                 if (nbr as usize) < cur_element_count && nbr as usize != node {
                     neighs.push(nbr);
                 }
@@ -6421,7 +6432,9 @@ impl HnswIndex {
         let upper_block = max_m
             .checked_mul(4)
             .and_then(|v| v.checked_add(4))
-            .ok_or_else(|| crate::api::KnowhereError::Codec("upper block size overflow".to_string()))?;
+            .ok_or_else(|| {
+                crate::api::KnowhereError::Codec("upper block size overflow".to_string())
+            })?;
         let mut element_levels = vec![0usize; cur_element_count];
         let mut upper_neighbors: Vec<Vec<Vec<u32>>> = vec![Vec::new(); cur_element_count];
 
@@ -6443,14 +6456,22 @@ impl HnswIndex {
             let mut per_level = Vec::with_capacity(levels);
             for lvl in 0..levels {
                 let base = lvl * upper_block;
-                let cnt_padded =
-                    u32::from_le_bytes([blob[base], blob[base + 1], blob[base + 2], blob[base + 3]]);
+                let cnt_padded = u32::from_le_bytes([
+                    blob[base],
+                    blob[base + 1],
+                    blob[base + 2],
+                    blob[base + 3],
+                ]);
                 let degree = ((cnt_padded & 0xFFFF) as usize).min(max_m);
                 let mut neighs = Vec::with_capacity(degree);
                 for i in 0..degree {
                     let off = base + 4 + i * 4;
-                    let nbr =
-                        u32::from_le_bytes([blob[off], blob[off + 1], blob[off + 2], blob[off + 3]]);
+                    let nbr = u32::from_le_bytes([
+                        blob[off],
+                        blob[off + 1],
+                        blob[off + 2],
+                        blob[off + 3],
+                    ]);
                     if (nbr as usize) < cur_element_count && nbr as usize != node {
                         neighs.push(nbr);
                     }
@@ -6502,7 +6523,11 @@ impl HnswIndex {
                 m: Some(m),
                 ef_construction: Some(ef_construction),
                 ef_search: Some(ef_construction.max(1)),
-                ml: Some(if mult > 0.0 { mult } else { 1.0 / (m as f32).ln() }),
+                ml: Some(if mult > 0.0 {
+                    mult
+                } else {
+                    1.0 / (m as f32).ln()
+                }),
                 ..Default::default()
             },
         };
@@ -6526,7 +6551,11 @@ impl HnswIndex {
         index.m_max0 = max_m0;
         index.ef_construction = ef_construction;
         index.ef_search = ef_construction.max(1);
-        index.level_multiplier = if mult > 0.0 { mult } else { 1.0 / (m as f32).ln() };
+        index.level_multiplier = if mult > 0.0 {
+            mult
+        } else {
+            1.0 / (m as f32).ln()
+        };
         index.use_sequential_ids = true;
         index.config.params.sq_mode = Some(index.sq_mode);
         index.rebuild_bf16_storage();
@@ -10512,7 +10541,10 @@ mod tests {
         index.train(&vectors).unwrap();
         index.add(&vectors, None).unwrap();
 
-        assert!(index.sq_quantizer.is_some(), "SQ quantizer should be trained");
+        assert!(
+            index.sq_quantizer.is_some(),
+            "SQ quantizer should be trained"
+        );
         assert_eq!(index.sq_codes.len(), 256 * dim);
 
         let req = SearchRequest {

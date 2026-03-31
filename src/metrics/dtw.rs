@@ -183,4 +183,3 @@ mod tests {
         assert!((d1 - d2).abs() < 1e-6);
     }
 }
-

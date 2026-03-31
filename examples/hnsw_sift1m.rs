@@ -200,7 +200,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         M,
         EF_CONSTRUCTION
     );
-    println!("ef sweep (qps on {} queries, recall on {} queries):", qps_n, recall_n);
+    println!(
+        "ef sweep (qps on {} queries, recall on {} queries):",
+        qps_n, recall_n
+    );
 
     let mut ef60: Option<(u64, f64)> = None;
     let mut ef138: Option<(u64, f64)> = None;
@@ -257,11 +260,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         };
 
         let t = Instant::now();
-        queries
-            .par_chunks(base_dim)
-            .for_each(|q| {
-                let _ = index.search(q, &req);
-            });
+        queries.par_chunks(base_dim).for_each(|q| {
+            let _ = index.search(q, &req);
+        });
         let qps = (query_n as f64 / t.elapsed().as_secs_f64().max(f64::EPSILON)).round() as u64;
         println!("batch ef={:>4} qps={}", ef, qps);
 

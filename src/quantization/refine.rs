@@ -42,8 +42,16 @@ enum RefineStorage {
     },
     Float16Quant(Vec<u16>),
     Bfloat16Quant(Vec<u16>),
-    Sq4Quant { codes: Vec<u8>, min: f32, scale: f32 },
-    Sq6Quant { codes: Vec<u8>, min: f32, scale: f32 },
+    Sq4Quant {
+        codes: Vec<u8>,
+        min: f32,
+        scale: f32,
+    },
+    Sq6Quant {
+        codes: Vec<u8>,
+        min: f32,
+        scale: f32,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -236,13 +244,15 @@ impl RefineIndex {
             RefineStorage::Sq4Quant { codes, min, scale } => {
                 let bytes_per_vec = sq4_bytes_per_vec(self.dim);
                 let base = offset * bytes_per_vec;
-                let decoded = decode_sq4(&codes[base..base + bytes_per_vec], self.dim, *min, *scale);
+                let decoded =
+                    decode_sq4(&codes[base..base + bytes_per_vec], self.dim, *min, *scale);
                 compute_distance(self.metric_type, query, &decoded)
             }
             RefineStorage::Sq6Quant { codes, min, scale } => {
                 let bytes_per_vec = sq6_bytes_per_vec(self.dim);
                 let base = offset * bytes_per_vec;
-                let decoded = decode_sq6(&codes[base..base + bytes_per_vec], self.dim, *min, *scale);
+                let decoded =
+                    decode_sq6(&codes[base..base + bytes_per_vec], self.dim, *min, *scale);
                 compute_distance(self.metric_type, query, &decoded)
             }
         })
@@ -695,7 +705,9 @@ mod tests {
     #[test]
     fn test_sq4_refine_roundtrip() {
         let dim = 7usize;
-        let data: Vec<f32> = (0..(16 * dim)).map(|i| (i % 31) as f32 * 0.3 - 2.0).collect();
+        let data: Vec<f32> = (0..(16 * dim))
+            .map(|i| (i % 31) as f32 * 0.3 - 2.0)
+            .collect();
         let min = data.iter().copied().fold(f32::INFINITY, f32::min);
         let max = data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         let range = max - min;
@@ -714,7 +726,9 @@ mod tests {
     #[test]
     fn test_sq6_refine_roundtrip() {
         let dim = 11usize;
-        let data: Vec<f32> = (0..(16 * dim)).map(|i| (i % 47) as f32 * 0.2 - 3.0).collect();
+        let data: Vec<f32> = (0..(16 * dim))
+            .map(|i| (i % 47) as f32 * 0.2 - 3.0)
+            .collect();
         let min = data.iter().copied().fold(f32::INFINITY, f32::min);
         let max = data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         let range = max - min;

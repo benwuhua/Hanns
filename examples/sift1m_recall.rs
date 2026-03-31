@@ -87,14 +87,7 @@ fn make_cfg(index_type: IndexType, nlist: usize, nprobe: usize, m: Option<usize>
     cfg
 }
 
-fn print_result(
-    name: &str,
-    nlist: usize,
-    nprobe: usize,
-    m: Option<usize>,
-    recall: f32,
-    qps: f64,
-) {
+fn print_result(name: &str, nlist: usize, nprobe: usize, m: Option<usize>, recall: f32, qps: f64) {
     match m {
         Some(m) => println!(
             "{} nlist={} nprobe={} m={}: recall@10={:.3}, QPS={:.0}",

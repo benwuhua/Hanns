@@ -83,9 +83,7 @@ impl FromStr for IndexType {
             "ivf_exrabitq" | "ivf-exrabitq" | "extended-rabitq" | "exrabitq" => {
                 Ok(IndexType::IvfExRaBitq)
             }
-            "ivf_turboquant" | "ivf-turboquant" | "turboquant" => {
-                Ok(IndexType::IvfTurboQuant)
-            }
+            "ivf_turboquant" | "ivf-turboquant" | "turboquant" => Ok(IndexType::IvfTurboQuant),
             "ivf_flat_cc" | "ivf-flat-cc" | "ivfcc" => Ok(IndexType::IvfFlatCc),
             "ivf_sq8" | "ivf-sq8" | "ivfsq8" => Ok(IndexType::IvfSq8),
             "ivf_sq_cc" | "ivf-sq-cc" | "ivfsqcc" => Ok(IndexType::IvfSqCc),
@@ -604,9 +602,7 @@ impl IndexParams {
         } else {
             0
         };
-        base_ef_search
-            .max(requested_override)
-            .max(adaptive_floor)
+        base_ef_search.max(requested_override).max(adaptive_floor)
     }
 }
 

@@ -42,7 +42,8 @@ fn brute_force_topk_filtered(
 }
 
 fn has_deleted(ids: &[i64]) -> bool {
-    ids.iter().any(|&id| (DELETE_START..DELETE_END).contains(&id))
+    ids.iter()
+        .any(|&id| (DELETE_START..DELETE_END).contains(&id))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -81,7 +82,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         removed, node_count
     );
     assert_eq!(removed, 100, "expected to remove 100 nodes");
-    assert_eq!(node_count, 4_900, "expected node_count=4900 after consolidate");
+    assert_eq!(
+        node_count, 4_900,
+        "expected node_count=4900 after consolidate"
+    );
 
     let res_after = index.search(query, TOP_K)?;
     assert!(
@@ -104,14 +108,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let deleted_set: HashSet<i64> = (DELETE_START..DELETE_END).collect();
-    let gt = brute_force_topk_filtered(
-        &vectors,
-        &external_ids,
-        query,
-        DIM,
-        TOP_K,
-        &deleted_set,
-    );
+    let gt = brute_force_topk_filtered(&vectors, &external_ids, query, DIM, TOP_K, &deleted_set);
     let ret: HashSet<i64> = res_loaded.ids.iter().copied().collect();
     let hit = gt.iter().filter(|id| ret.contains(id)).count();
     let recall = hit as f64 / TOP_K as f64;

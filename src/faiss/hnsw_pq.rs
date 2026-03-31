@@ -831,8 +831,7 @@ impl HnswPqIndex {
             metric_type: MetricType::L2,
         };
 
-        let mut pq =
-            ProductQuantizer::new(PQConfig::new(dim, pq_m, pq_k.ilog2() as usize));
+        let mut pq = ProductQuantizer::new(PQConfig::new(dim, pq_m, pq_k.ilog2() as usize));
         pq.set_centroids(codebooks)
             .map_err(|e| crate::api::KnowhereError::Codec(e.to_string()))?;
 
@@ -907,8 +906,8 @@ impl Index for HnswPqIndex {
     }
 
     fn load(&mut self, path: &str) -> Result<(), IndexError> {
-        let loaded =
-            HnswPqIndex::load(Path::new(path)).map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        let loaded = HnswPqIndex::load(Path::new(path))
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
         *self = loaded;
         Ok(())
     }

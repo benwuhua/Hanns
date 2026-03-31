@@ -133,7 +133,9 @@ impl IvfTurboQuantIndex {
         self.centroids = km.centroids().to_vec();
         self.quantizer = TurboQuantMse::new(Self::build_quantizer_config(&self.config));
         self.prod_quantizer = if self.config.encoding == TurboQuantEncoding::Prod {
-            Some(TurboQuantProd::new(Self::build_quantizer_config(&self.config)))
+            Some(TurboQuantProd::new(Self::build_quantizer_config(
+                &self.config,
+            )))
         } else {
             None
         };
@@ -293,23 +295,23 @@ impl IvfTurboQuantIndex {
         for cluster in coarse {
             let centroid =
                 &self.centroids[cluster * self.config.dim..(cluster + 1) * self.config.dim];
-            let centroid_score = if matches!(
-                self.config.encoding,
-                TurboQuantEncoding::Residual | TurboQuantEncoding::NormalizedResidual
-            ) && matches!(self.config.metric_type, MetricType::Ip | MetricType::Cosine)
-            {
-                dot_product(&processed_query, centroid)
-            } else {
-                0.0
-            };
+            let centroid_score =
+                if matches!(
+                    self.config.encoding,
+                    TurboQuantEncoding::Residual | TurboQuantEncoding::NormalizedResidual
+                ) && matches!(self.config.metric_type, MetricType::Ip | MetricType::Cosine)
+                {
+                    dot_product(&processed_query, centroid)
+                } else {
+                    0.0
+                };
 
             // For L2 residual modes, pre-rotate (q-c) per cluster.
             let residual_query_rotated = if self.config.metric_type == MetricType::L2
                 && matches!(
                     self.config.encoding,
                     TurboQuantEncoding::Residual | TurboQuantEncoding::NormalizedResidual
-                )
-            {
+                ) {
                 let rq = subtract_slices(&processed_query, centroid);
                 Some(self.quantizer.rotate_query(&rq))
             } else {
@@ -338,27 +340,23 @@ impl IvfTurboQuantIndex {
                             }
                             TurboQuantEncoding::Residual => {
                                 // ||Π·(q-c) - TQ(Π·(v-c))||² ≈ ||q-v||²
-                                let q_rot =
-                                    residual_query_rotated.as_ref().expect("l2 residual");
+                                let q_rot = residual_query_rotated.as_ref().expect("l2 residual");
                                 self.quantizer.score_l2(q_rot, code)
                             }
                             TurboQuantEncoding::NormalizedResidual => {
                                 // code = TQ(Π·(r/||r||)), need to scale back.
                                 // ||q-v||² = ||q-c||² - 2·(q-c)·r + ||r||²
                                 // ≈ ||q-c||² - 2·||r||·score_ip(Π·(q-c), code) + ||r||²
-                                let q_rot =
-                                    residual_query_rotated.as_ref().expect("l2 residual");
+                                let q_rot = residual_query_rotated.as_ref().expect("l2 residual");
                                 let qc_l2 = l2_distance(&processed_query, centroid);
                                 let ip_approx = self.quantizer.score_ip(q_rot, code);
                                 qc_l2 - 2.0 * r_norm * ip_approx + r_norm * r_norm
                             }
                         },
                         MetricType::Ip => match self.config.encoding {
-                            TurboQuantEncoding::FullVector => {
-                                -self
-                                    .quantizer
-                                    .score_ip(query_rotated.as_ref().expect("full"), code)
-                            }
+                            TurboQuantEncoding::FullVector => -self
+                                .quantizer
+                                .score_ip(query_rotated.as_ref().expect("full"), code),
                             TurboQuantEncoding::Prod => {
                                 let prod = self.prod_quantizer.as_ref().expect("prod");
                                 -prod.score_ip(
@@ -370,48 +368,41 @@ impl IvfTurboQuantIndex {
                             }
                             TurboQuantEncoding::Residual => {
                                 -(centroid_score
-                                    + self.quantizer.score_ip(
-                                        query_rotated.as_ref().expect("residual"),
-                                        code,
-                                    ))
+                                    + self
+                                        .quantizer
+                                        .score_ip(query_rotated.as_ref().expect("residual"), code))
                             }
                             TurboQuantEncoding::NormalizedResidual => {
                                 // q·v = q·c + ||r||·score_ip(Π·q, TQ(Π·r̂)) where r̂=r/||r||
                                 let ip_approx = if let Some(adc) = &normalized_residual_ip_adc {
                                     self.quantizer.score_ip_adc(adc, code)
                                 } else {
-                                    self.quantizer.score_ip(
-                                        query_rotated.as_ref().expect("residual"),
-                                        code,
-                                    )
+                                    self.quantizer
+                                        .score_ip(query_rotated.as_ref().expect("residual"), code)
                                 };
-                                -(centroid_score
-                                    + r_norm * ip_approx)
+                                -(centroid_score + r_norm * ip_approx)
                             }
                         },
                         MetricType::Cosine => match self.config.encoding {
                             TurboQuantEncoding::FullVector => {
-                                1.0
-                                    - self
-                                        .quantizer
-                                        .score_ip(query_rotated.as_ref().expect("full"), code)
+                                1.0 - self
+                                    .quantizer
+                                    .score_ip(query_rotated.as_ref().expect("full"), code)
                             }
                             TurboQuantEncoding::Prod => {
                                 let prod = self.prod_quantizer.as_ref().expect("prod");
-                                1.0
-                                    - prod.score_ip(
-                                        prod_y_rotated.as_ref().expect("prod"),
-                                        prod_s_y.as_ref().expect("prod"),
-                                        code,
-                                        *r_norm,
-                                    )
+                                1.0 - prod.score_ip(
+                                    prod_y_rotated.as_ref().expect("prod"),
+                                    prod_s_y.as_ref().expect("prod"),
+                                    code,
+                                    *r_norm,
+                                )
                             }
                             TurboQuantEncoding::Residual => {
                                 1.0 - (centroid_score
-                                    + self.quantizer.score_ip(
-                                        query_rotated.as_ref().expect("residual"),
-                                        code,
-                                    ))
+                                    + self
+                                        .quantizer
+                                        .score_ip(query_rotated.as_ref().expect("residual"), code))
                             }
                             TurboQuantEncoding::NormalizedResidual => {
                                 1.0 - (centroid_score
@@ -500,7 +491,10 @@ impl IvfTurboQuantIndex {
 }
 
 fn subtract_slices(left: &[f32], right: &[f32]) -> Vec<f32> {
-    left.iter().zip(right.iter()).map(|(&l, &r)| l - r).collect()
+    left.iter()
+        .zip(right.iter())
+        .map(|(&l, &r)| l - r)
+        .collect()
 }
 
 fn dot_product(left: &[f32], right: &[f32]) -> f32 {

@@ -311,8 +311,8 @@ impl IvfExRaBitqIndex {
                     let id = ids
                         .map(|values| values[i])
                         .unwrap_or((self.ntotal + i) as i64);
-                    let rotated_centroid = &self.rotated_centroids
-                        [cluster * padded_dim..(cluster + 1) * padded_dim];
+                    let rotated_centroid =
+                        &self.rotated_centroids[cluster * padded_dim..(cluster + 1) * padded_dim];
                     let encoded = self.quantizer.encode_with_rotated_centroid_into(
                         vector,
                         rotated_centroid,
@@ -549,8 +549,8 @@ impl IvfExRaBitqIndex {
             let Some(layout) = self.clusters[cluster_idx].layout.as_ref() else {
                 continue;
             };
-            let rotated_centroid = &self.rotated_centroids
-                [cluster_idx * padded_dim..(cluster_idx + 1) * padded_dim];
+            let rotated_centroid =
+                &self.rotated_centroids[cluster_idx * padded_dim..(cluster_idx + 1) * padded_dim];
             let mut y2 = 0.0f32;
             for ((dst, &q), &c) in residual
                 .iter_mut()
@@ -824,13 +824,7 @@ mod tests {
 
     #[test]
     fn test_select_top_centroids_matches_full_sort_order() {
-        let scored = vec![
-            (0usize, 9.0f32),
-            (1, 1.0),
-            (2, 3.0),
-            (3, 1.0),
-            (4, 0.5),
-        ];
+        let scored = vec![(0usize, 9.0f32), (1, 1.0), (2, 3.0), (3, 1.0), (4, 0.5)];
 
         let top3 = IvfExRaBitqIndex::select_top_centroids(scored.clone(), 3);
         assert_eq!(top3, vec![(4, 0.5), (1, 1.0), (3, 1.0)]);

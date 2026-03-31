@@ -254,7 +254,9 @@ fn benchmark_ivf_sq8() {
 
     let mut rng = StdRng::seed_from_u64(42);
     let base: Vec<f32> = (0..BASE_SIZE * DIM).map(|_| rng.r#gen::<f32>()).collect();
-    let recall_queries: Vec<f32> = (0..RECALL_QUERIES * DIM).map(|_| rng.r#gen::<f32>()).collect();
+    let recall_queries: Vec<f32> = (0..RECALL_QUERIES * DIM)
+        .map(|_| rng.r#gen::<f32>())
+        .collect();
     let qps_queries: Vec<f32> = (0..QPS_QUERIES * DIM).map(|_| rng.r#gen::<f32>()).collect();
 
     let flat_cfg = IndexConfig::new(IndexType::Flat, MetricType::L2, DIM);
@@ -345,8 +347,8 @@ fn benchmark_ivf_sq8() {
         for (i, gt_ids) in gt_top10.iter().enumerate() {
             let start = i * TOP_K;
             let end = start + TOP_K;
-            recall_sum += overlap_at_k(gt_ids, &batch_recall_res.ids[start..end]) as f64
-                / TOP_K as f64;
+            recall_sum +=
+                overlap_at_k(gt_ids, &batch_recall_res.ids[start..end]) as f64 / TOP_K as f64;
         }
         let batch_recall = recall_sum / RECALL_QUERIES as f64;
 
@@ -360,7 +362,6 @@ fn benchmark_ivf_sq8() {
     {
         println!("batch parallel (nprobe=32): skipped (feature \"parallel\" not enabled)");
     }
-
 }
 
 fn benchmark_ivf_sq8_1m() {
@@ -379,7 +380,9 @@ fn benchmark_ivf_sq8_1m() {
 
     let mut rng = StdRng::seed_from_u64(42);
     let base: Vec<f32> = (0..NUM_VECTORS * DIM).map(|_| rng.r#gen::<f32>()).collect();
-    let recall_queries: Vec<f32> = (0..RECALL_QUERIES * DIM).map(|_| rng.r#gen::<f32>()).collect();
+    let recall_queries: Vec<f32> = (0..RECALL_QUERIES * DIM)
+        .map(|_| rng.r#gen::<f32>())
+        .collect();
     let qps_queries: Vec<f32> = (0..QPS_QUERIES * DIM).map(|_| rng.r#gen::<f32>()).collect();
 
     let flat_cfg = IndexConfig::new(IndexType::Flat, MetricType::L2, DIM);
@@ -470,8 +473,8 @@ fn benchmark_ivf_sq8_1m() {
         for (i, gt_ids) in gt_top10.iter().enumerate() {
             let start = i * TOP_K;
             let end = start + TOP_K;
-            recall_sum += overlap_at_k(gt_ids, &batch_recall_res.ids[start..end]) as f64
-                / TOP_K as f64;
+            recall_sum +=
+                overlap_at_k(gt_ids, &batch_recall_res.ids[start..end]) as f64 / TOP_K as f64;
         }
         let batch_recall = recall_sum / RECALL_QUERIES as f64;
 
@@ -718,7 +721,10 @@ fn benchmark_pqflash() {
         index.train(&vectors).unwrap();
         index.add(&vectors).unwrap();
         let build_time = start.elapsed().as_secs_f64();
-        println!("[{label}] Build 10000 vectors (dim=128): {:.2}s", build_time);
+        println!(
+            "[{label}] Build 10000 vectors (dim=128): {:.2}s",
+            build_time
+        );
 
         let start = Instant::now();
         let qps_result = index.search_batch(&queries_qps, TOP_K).unwrap();
@@ -765,7 +771,10 @@ fn benchmark_pqflash() {
     let start = Instant::now();
     let _ = disk_idx.search_batch(&queries_qps, TOP_K).unwrap();
     let disk_qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
-    println!("[Disk NoPQ] PageCache warm QPS: {:.0} queries/sec", disk_qps);
+    println!(
+        "[Disk NoPQ] PageCache warm QPS: {:.0} queries/sec",
+        disk_qps
+    );
 
     let disk_mmap_idx = PQFlashIndex::load_with_mmap(&tmp_dir).unwrap();
     println!("[Disk NoPQ] Warming up direct mmap...");
@@ -775,7 +784,10 @@ fn benchmark_pqflash() {
     let start = Instant::now();
     let _ = disk_mmap_idx.search_batch(&queries_qps, TOP_K).unwrap();
     let disk_mmap_qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
-    println!("[Disk NoPQ] Direct mmap QPS: {:.0} queries/sec", disk_mmap_qps);
+    println!(
+        "[Disk NoPQ] Direct mmap QPS: {:.0} queries/sec",
+        disk_mmap_qps
+    );
 
     // lock-free HashMap path via enable_node_cache — Arc::clone per node, no Mutex contention
     let mut disk_cached_idx = PQFlashIndex::load(&tmp_dir).unwrap();
@@ -783,14 +795,17 @@ fn benchmark_pqflash() {
     let start = Instant::now();
     let _ = disk_cached_idx.search_batch(&queries_qps, TOP_K).unwrap();
     let disk_cached_qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
-    println!("[Disk NoPQ] Cached (lock-free) QPS: {:.0} queries/sec", disk_cached_qps);
+    println!(
+        "[Disk NoPQ] Cached (lock-free) QPS: {:.0} queries/sec",
+        disk_cached_qps
+    );
 
     let native_prefix = tmp_dir.join("native_roundtrip");
     build_idx
         .export_native_disk_index(native_prefix.to_str().unwrap())
         .unwrap();
-    let native_import_idx = PQFlashIndex::import_native_disk_index(native_prefix.to_str().unwrap())
-        .unwrap();
+    let native_import_idx =
+        PQFlashIndex::import_native_disk_index(native_prefix.to_str().unwrap()).unwrap();
     let start = Instant::now();
     let _ = native_import_idx.search_batch(&queries_qps, TOP_K).unwrap();
     let native_import_qps =
@@ -836,7 +851,9 @@ fn benchmark_diskann_100k() {
     println!("\n=== DiskANN 100K Benchmark ===");
     let mut rng = StdRng::seed_from_u64(123);
     let vectors: Vec<f32> = (0..NUM_VECTORS * DIM).map(|_| rng.r#gen::<f32>()).collect();
-    let queries: Vec<f32> = (0..NUM_QPS_QUERIES * DIM).map(|_| rng.r#gen::<f32>()).collect();
+    let queries: Vec<f32> = (0..NUM_QPS_QUERIES * DIM)
+        .map(|_| rng.r#gen::<f32>())
+        .collect();
 
     let config = IndexConfig {
         index_type: IndexType::DiskAnn,
@@ -880,7 +897,9 @@ fn benchmark_diskann_1m() {
     println!("\n=== DiskANN 1M Benchmark ===");
     let mut rng = StdRng::seed_from_u64(456);
     let vectors: Vec<f32> = (0..NUM_VECTORS * DIM).map(|_| rng.r#gen::<f32>()).collect();
-    let queries_qps: Vec<f32> = (0..NUM_QPS_QUERIES * DIM).map(|_| rng.r#gen::<f32>()).collect();
+    let queries_qps: Vec<f32> = (0..NUM_QPS_QUERIES * DIM)
+        .map(|_| rng.r#gen::<f32>())
+        .collect();
     let queries_recall = &queries_qps[..NUM_RECALL_QUERIES * DIM];
 
     let config = IndexConfig {
@@ -940,7 +959,9 @@ fn benchmark_pqflash_100k() {
     println!("\n=== PQFlash 100K Benchmark ===");
     let mut rng = StdRng::seed_from_u64(123);
     let vectors: Vec<f32> = (0..NUM_VECTORS * DIM).map(|_| rng.r#gen::<f32>()).collect();
-    let queries: Vec<f32> = (0..NUM_QPS_QUERIES * DIM).map(|_| rng.r#gen::<f32>()).collect();
+    let queries: Vec<f32> = (0..NUM_QPS_QUERIES * DIM)
+        .map(|_| rng.r#gen::<f32>())
+        .collect();
 
     // NoPQ 100K
     {
@@ -978,8 +999,12 @@ fn benchmark_pqflash_100k() {
         let t1 = Instant::now();
         index.add(&vectors).unwrap();
         let add_s = t1.elapsed().as_secs_f64();
-        println!("[PQ32] Build 100K vectors: {:.1}s  (train {:.1}s + add {:.1}s)",
-            train_s + add_s, train_s, add_s);
+        println!(
+            "[PQ32] Build 100K vectors: {:.1}s  (train {:.1}s + add {:.1}s)",
+            train_s + add_s,
+            train_s,
+            add_s
+        );
         let start = Instant::now();
         let _ = index.search_batch(&queries, TOP_K).unwrap();
         let qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
@@ -991,12 +1016,14 @@ fn benchmark_pqflash_1m() {
     const NUM_VECTORS: usize = 1_000_000;
     const DIM: usize = 128;
     const TOP_K: usize = 10;
-    const NUM_QPS_QUERIES: usize = 500;  // 1M时查询集小一点
+    const NUM_QPS_QUERIES: usize = 500; // 1M时查询集小一点
 
     println!("\n=== PQFlash 1M Benchmark ===");
     let mut rng = StdRng::seed_from_u64(456);
     let vectors: Vec<f32> = (0..NUM_VECTORS * DIM).map(|_| rng.r#gen::<f32>()).collect();
-    let queries: Vec<f32> = (0..NUM_QPS_QUERIES * DIM).map(|_| rng.r#gen::<f32>()).collect();
+    let queries: Vec<f32> = (0..NUM_QPS_QUERIES * DIM)
+        .map(|_| rng.r#gen::<f32>())
+        .collect();
 
     // NoPQ 1M
     {
@@ -1013,8 +1040,12 @@ fn benchmark_pqflash_1m() {
         let t1 = Instant::now();
         index.add(&vectors).unwrap();
         let add_s = t1.elapsed().as_secs_f64();
-        println!("[NoPQ] Build 1M vectors: {:.1}s  (train {:.1}s + add {:.1}s)",
-            train_s + add_s, train_s, add_s);
+        println!(
+            "[NoPQ] Build 1M vectors: {:.1}s  (train {:.1}s + add {:.1}s)",
+            train_s + add_s,
+            train_s,
+            add_s
+        );
         let start = Instant::now();
         let _ = index.search_batch(&queries, TOP_K).unwrap();
         let qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
@@ -1037,8 +1068,12 @@ fn benchmark_pqflash_1m() {
         let t1 = Instant::now();
         index.add(&vectors).unwrap();
         let add_s = t1.elapsed().as_secs_f64();
-        println!("[PQ32] Build 1M vectors: {:.1}s  (train {:.1}s + add {:.1}s)",
-            train_s + add_s, train_s, add_s);
+        println!(
+            "[PQ32] Build 1M vectors: {:.1}s  (train {:.1}s + add {:.1}s)",
+            train_s + add_s,
+            train_s,
+            add_s
+        );
         let start = Instant::now();
         let _ = index.search_batch(&queries, TOP_K).unwrap();
         let qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
@@ -1085,7 +1120,9 @@ fn benchmark_hnsw_1m() {
 
     let mut rng = StdRng::seed_from_u64(42);
     let vectors: Vec<f32> = (0..NUM_VECTORS * DIM).map(|_| rng.r#gen::<f32>()).collect();
-    let queries: Vec<f32> = (0..NUM_QPS_QUERIES * DIM).map(|_| rng.r#gen::<f32>()).collect();
+    let queries: Vec<f32> = (0..NUM_QPS_QUERIES * DIM)
+        .map(|_| rng.r#gen::<f32>())
+        .collect();
     let recall_queries = &queries[..NUM_RECALL_QUERIES * DIM];
 
     let flat_cfg = IndexConfig::new(IndexType::Flat, MetricType::L2, DIM);
@@ -1144,7 +1181,11 @@ fn benchmark_hnsw_1m() {
         let start = Instant::now();
         let result = index.search(&queries, &req).unwrap();
         let qps = NUM_QPS_QUERIES as f64 / start.elapsed().as_secs_f64().max(f64::EPSILON);
-        let recall = recall_at_k(&result.ids[..NUM_RECALL_QUERIES * TOP_K], &gt_indices, TOP_K);
+        let recall = recall_at_k(
+            &result.ids[..NUM_RECALL_QUERIES * TOP_K],
+            &gt_indices,
+            TOP_K,
+        );
         println!("M=16 ef={ef}: recall@10={recall:.4} QPS={qps:.0} (batch)");
     }
 }
@@ -1272,7 +1313,10 @@ fn compute_recall_at_k(
         let gt_row = &gt[qi * gt_k..(qi + 1) * gt_k];
         for &gt_id in gt_row.iter().take(k) {
             total += 1;
-            if result_row.iter().any(|&rid| rid >= 0 && rid as u32 == gt_id) {
+            if result_row
+                .iter()
+                .any(|&rid| rid >= 0 && rid as u32 == gt_id)
+            {
                 hits += 1;
             }
         }
@@ -1326,13 +1370,7 @@ fn benchmark_pqflash_sift1m() {
             last_result = Some(result);
         }
         let qps = qps_samples.iter().sum::<f64>() / qps_samples.len() as f64;
-        let recall = compute_recall_at_k(
-            &last_result.unwrap().ids,
-            &gt,
-            query_n,
-            TOP_K,
-            gt_k,
-        );
+        let recall = compute_recall_at_k(&last_result.unwrap().ids, &gt, query_n, TOP_K, gt_k);
 
         println!(
             "[{label}] Build: {:.1}s + {:.1}s = {:.1}s",

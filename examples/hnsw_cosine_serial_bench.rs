@@ -4,9 +4,7 @@
 //! Measures p50/p95/p99 single-query latency for cosine HNSW,
 //! matching HannsDB's serial search use-case.
 
-use knowhere_rs::api::{
-    DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest,
-};
+use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 use knowhere_rs::faiss::HnswIndex;
 use std::time::Instant;
 

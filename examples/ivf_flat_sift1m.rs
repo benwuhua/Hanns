@@ -237,7 +237,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let mut recall_sum = 0.0;
         for i in 0..recall_queries {
-            let ids: Vec<i64> = batch[i].iter().take(TOP_K).map(|(id, _)| *id as i64).collect();
+            let ids: Vec<i64> = batch[i]
+                .iter()
+                .take(TOP_K)
+                .map(|(id, _)| *id as i64)
+                .collect();
             recall_sum += recall_at_k(&gt[i], &ids, TOP_K);
         }
         let recall = recall_sum / recall_queries as f64;

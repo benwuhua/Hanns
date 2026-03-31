@@ -9,7 +9,9 @@ use std::path::Path;
 use crate::api::{MetricType, Result};
 use crate::bitset::BitsetView;
 use crate::dataset::Dataset;
-use crate::index::{AnnIterator, Index as IndexTrait, IndexError, SearchResult as IndexSearchResult};
+use crate::index::{
+    AnnIterator, Index as IndexTrait, IndexError, SearchResult as IndexSearchResult,
+};
 use crate::quantization::KMeans;
 use crate::simd::{dot_product_f32, l2_distance_sq};
 
@@ -21,12 +23,12 @@ pub struct IvfIndex {
     pub dim: usize,
     pub nlist: usize,
     pub nprobe: usize,
-    pub centroids: Vec<f32>,     // [nlist * dim]
-    pub lists: Vec<Vec<usize>>,  // row-id lists per centroid
-    pub vectors: Vec<f32>,       // [N * dim]
+    pub centroids: Vec<f32>,    // [nlist * dim]
+    pub lists: Vec<Vec<usize>>, // row-id lists per centroid
+    pub vectors: Vec<f32>,      // [N * dim]
     pub metric_type: MetricType,
     pub trained: bool,
-    pub ids: Vec<i64>,           // external ids by row-id
+    pub ids: Vec<i64>, // external ids by row-id
 }
 
 impl IvfIndex {
@@ -402,8 +404,8 @@ impl IndexTrait for IvfIndex {
     }
 
     fn load(&mut self, path: &str) -> std::result::Result<(), IndexError> {
-        let loaded = IvfIndex::load(Path::new(path))
-            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        let loaded =
+            IvfIndex::load(Path::new(path)).map_err(|e| IndexError::Unsupported(e.to_string()))?;
         *self = loaded;
         Ok(())
     }

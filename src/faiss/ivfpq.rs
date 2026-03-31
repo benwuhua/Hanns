@@ -7,13 +7,22 @@
 //! OPT-003: 内存布局优化 - 使用 Vec 替代 HashMap
 #![allow(dead_code)] // Some hot-path helpers are only reached from tests/feature-gated search lanes.
 
-use crate::api::{DataType, IndexConfig, IndexType, MetricType, Result, SearchRequest, SearchResult};
+use crate::api::{
+    DataType, IndexConfig, IndexType, MetricType, Result, SearchRequest, SearchResult,
+};
 use crate::bitset::BitsetView;
-use crate::quantization::KMeans;
 use crate::quantization::opq::{OPQConfig, OptimizedProductQuantizer};
 use crate::quantization::pq::{PQConfig, ProductQuantizer};
+use crate::quantization::KMeans;
 use crate::simd::{dot_product_f32, ip_batch_4, l2_batch_4_ptr, l2_distance_sq};
 use std::io::{Read, Seek, SeekFrom};
+
+#[derive(Debug, Clone, Default, PartialEq)]
+struct CompactInvertedLists {
+    all_codes: Vec<u8>,
+    all_ids: Vec<i64>,
+    offsets: Vec<(usize, usize)>,
+}
 
 /// IVF-PQ Index
 ///
@@ -44,6 +53,8 @@ pub struct IvfPqIndex {
     /// Inverted lists (Vec 替代 HashMap - 性能优化)
     invlist_ids: Vec<Vec<i64>>, // [nlist] 个 ID 列表
     invlist_codes: Vec<Vec<u8>>, // [nlist] 个 PQ code 列表 (连续存储)
+    /// Search-time compact storage for sequential scan.
+    compact_invlists: CompactInvertedLists,
     /// All vectors (kept for save/load reconstruction)
     vectors: Vec<f32>,
     ids: Vec<i64>,
@@ -90,7 +101,8 @@ impl IvfPqIndex {
                 let base_ptr = self.centroids.as_ptr();
                 let mut c = 0usize;
                 while c + 4 <= self.nlist {
-                    let dists = l2_batch_4_ptr(query_ptr, base_ptr.add(c * self.dim), self.dim, self.dim);
+                    let dists =
+                        l2_batch_4_ptr(query_ptr, base_ptr.add(c * self.dim), self.dim, self.dim);
                     cluster_dists.push((c, dists[0]));
                     cluster_dists.push((c + 1, dists[1]));
                     cluster_dists.push((c + 2, dists[2]));
@@ -98,10 +110,8 @@ impl IvfPqIndex {
                     c += 4;
                 }
                 while c < self.nlist {
-                    let dist = l2_distance_sq(
-                        query,
-                        &self.centroids[c * self.dim..(c + 1) * self.dim],
-                    );
+                    let dist =
+                        l2_distance_sq(query, &self.centroids[c * self.dim..(c + 1) * self.dim]);
                     cluster_dists.push((c, dist));
                     c += 1;
                 }
@@ -123,10 +133,8 @@ impl IvfPqIndex {
                     c += 4;
                 }
                 while c < self.nlist {
-                    let dist = -dot_product_f32(
-                        query,
-                        &self.centroids[c * self.dim..(c + 1) * self.dim],
-                    );
+                    let dist =
+                        -dot_product_f32(query, &self.centroids[c * self.dim..(c + 1) * self.dim]);
                     cluster_dists.push((c, dist));
                     c += 1;
                 }
@@ -145,19 +153,33 @@ impl IvfPqIndex {
 
     #[inline]
     fn subspace_score(&self, a: &[f32], b: &[f32]) -> f32 {
+        if a.len() == 2 && b.len() == 2 {
+            return self.subspace_score_dim2(a, b);
+        }
         match self.config.metric_type {
-            MetricType::L2 | MetricType::Hamming => {
-                a.iter()
-                    .zip(b.iter())
-                    .map(|(&x, &y)| {
-                        let d = x - y;
-                        d * d
-                    })
-                    .sum()
-            }
+            MetricType::L2 | MetricType::Hamming => a
+                .iter()
+                .zip(b.iter())
+                .map(|(&x, &y)| {
+                    let d = x - y;
+                    d * d
+                })
+                .sum(),
             MetricType::Ip | MetricType::Cosine => {
                 -a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum::<f32>()
             }
+        }
+    }
+
+    #[inline]
+    fn subspace_score_dim2(&self, a: &[f32], b: &[f32]) -> f32 {
+        match self.config.metric_type {
+            MetricType::L2 | MetricType::Hamming => {
+                let d0 = a[0] - b[0];
+                let d1 = a[1] - b[1];
+                d0 * d0 + d1 * d1
+            }
+            MetricType::Ip | MetricType::Cosine => -(a[0] * b[0] + a[1] * b[1]),
         }
     }
 
@@ -231,6 +253,10 @@ impl IvfPqIndex {
             use_opq,
             invlist_ids,
             invlist_codes,
+            compact_invlists: CompactInvertedLists {
+                offsets: vec![(0, 0); nlist],
+                ..Default::default()
+            },
             vectors: Vec::new(),
             ids: Vec::new(),
             next_id: 0,
@@ -303,10 +329,60 @@ impl IvfPqIndex {
     #[inline]
     fn active_code_size(&self) -> usize {
         if self.opq_enabled() {
-            self.opq.as_ref().map(|opq| opq.code_size()).unwrap_or(self.pq.code_size())
+            self.opq
+                .as_ref()
+                .map(|opq| opq.code_size())
+                .unwrap_or(self.pq.code_size())
         } else {
             self.pq.code_size()
         }
+    }
+
+    fn rebuild_compact_invlists(&mut self) {
+        let code_size = self.active_code_size();
+        let total_codes = self.invlist_ids.iter().map(Vec::len).sum::<usize>();
+        let total_code_bytes = self.invlist_codes.iter().map(Vec::len).sum::<usize>();
+
+        let mut offsets = Vec::with_capacity(self.nlist);
+        let mut all_ids = Vec::with_capacity(total_codes);
+        let mut all_codes = Vec::with_capacity(total_code_bytes);
+
+        let mut start = 0usize;
+        for cluster in 0..self.nlist {
+            let ids = &self.invlist_ids[cluster];
+            let codes = &self.invlist_codes[cluster];
+            debug_assert_eq!(codes.len(), ids.len() * code_size);
+            offsets.push((start, ids.len()));
+            all_ids.extend_from_slice(ids);
+            all_codes.extend_from_slice(codes);
+            start += ids.len();
+        }
+
+        self.compact_invlists = CompactInvertedLists {
+            all_codes,
+            all_ids,
+            offsets,
+        };
+    }
+
+    #[inline]
+    fn cluster_scan_slice(&self, cluster: usize) -> (&[i64], &[u8]) {
+        if let Some(&(offset, count)) = self.compact_invlists.offsets.get(cluster) {
+            let code_size = self.active_code_size();
+            let code_start = offset * code_size;
+            let code_end = (offset + count) * code_size;
+            if count == self.invlist_ids[cluster].len()
+                && code_end.saturating_sub(code_start) == self.invlist_codes[cluster].len()
+                && offset + count <= self.compact_invlists.all_ids.len()
+                && code_end <= self.compact_invlists.all_codes.len()
+            {
+                let ids = &self.compact_invlists.all_ids[offset..offset + count];
+                let codes = &self.compact_invlists.all_codes[code_start..code_end];
+                return (ids, codes);
+            }
+        }
+
+        (&self.invlist_ids[cluster], &self.invlist_codes[cluster])
     }
 
     fn train_fine_quantizer(&mut self, n: usize, residuals: &[f32]) -> Result<()> {
@@ -386,6 +462,7 @@ impl IvfPqIndex {
                 self.vectors.extend_from_slice(vector);
             }
 
+            self.rebuild_compact_invlists();
             tracing::debug!("Added {} vectors to IVF-PQ", n);
             return Ok(n);
         }
@@ -474,6 +551,7 @@ impl IvfPqIndex {
         }
         self.next_id = n as i64;
 
+        self.rebuild_compact_invlists();
         tracing::debug!("Added {} vectors to IVF-PQ (parallel)", n);
         Ok(n)
     }
@@ -585,6 +663,22 @@ impl IvfPqIndex {
         let m = self.m;
 
         let mut table = vec![0.0f32; m * ksub];
+        if sub_dim == 2 {
+            for sub_q in 0..m {
+                let q_sub_offset = sub_q * 2;
+                let query_sub = &adc_query[q_sub_offset..q_sub_offset + 2];
+
+                let centroids = self
+                    .pq_subquantizer_centroids(sub_q)
+                    .expect("pq centroids unavailable for subquantizer");
+                for c in 0..ksub {
+                    let centroid = &centroids[c * 2..c * 2 + 2];
+                    table[sub_q * ksub + c] = self.subspace_score_dim2(query_sub, centroid);
+                }
+            }
+            return table;
+        }
+
         for sub_q in 0..m {
             let q_sub_offset = sub_q * sub_dim;
             let query_sub = &adc_query[q_sub_offset..q_sub_offset + sub_dim];
@@ -652,6 +746,19 @@ impl IvfPqIndex {
         let centroids = opq.centroids();
 
         let mut table = vec![0.0f32; m * ksub];
+        if sub_dim == 2 {
+            for sub_q in 0..m {
+                let q_sub_offset = sub_q * 2;
+                let query_sub = &rotated_adc_query[q_sub_offset..q_sub_offset + 2];
+                for c in 0..ksub {
+                    let centroid_offset = sub_q * ksub * 2 + c * 2;
+                    let centroid = &centroids[centroid_offset..centroid_offset + 2];
+                    table[sub_q * ksub + c] = self.subspace_score_dim2(query_sub, centroid);
+                }
+            }
+            return table;
+        }
+
         for sub_q in 0..m {
             let q_sub_offset = sub_q * sub_dim;
             let query_sub = &rotated_adc_query[q_sub_offset..q_sub_offset + sub_dim];
@@ -758,8 +865,7 @@ impl IvfPqIndex {
                 let candidates: Vec<(i64, f32)> = cluster_dists
                     .par_iter()
                     .filter_map(|(cluster, _)| {
-                        let ids = &self.invlist_ids[*cluster];
-                        let codes = &self.invlist_codes[*cluster];
+                        let (ids, codes) = self.cluster_scan_slice(*cluster);
                         if ids.is_empty() {
                             return None;
                         }
@@ -785,8 +891,7 @@ impl IvfPqIndex {
                                     .collect::<Vec<_>>(),
                             )
                         } else {
-                            let adc_query =
-                                self.adc_query_for_metric(query_vec, &query_residual);
+                            let adc_query = self.adc_query_for_metric(query_vec, &query_residual);
                             let table = self.precompute_distance_table_flat(adc_query);
                             Some(
                                 ids.iter()
@@ -823,8 +928,7 @@ impl IvfPqIndex {
                 let mut candidates: Vec<(i64, f32)> = Vec::new();
 
                 for (cluster, _) in cluster_dists.iter().copied() {
-                    let ids = &self.invlist_ids[cluster];
-                    let codes = &self.invlist_codes[cluster];
+                    let (ids, codes) = self.cluster_scan_slice(cluster);
                     let centroid = &self.centroids[cluster * self.dim..(cluster + 1) * self.dim];
                     let coarse_bias = self.coarse_distance_bias(query_vec, centroid);
 
@@ -915,8 +1019,7 @@ impl IvfPqIndex {
             let mut candidates: Vec<(i64, f32)> = Vec::new();
             let mut query_residual = vec![0.0f32; self.dim];
             for (cluster, _) in cluster_dists.iter().copied() {
-                let ids = &self.invlist_ids[cluster];
-                let codes = &self.invlist_codes[cluster];
+                let (ids, codes) = self.cluster_scan_slice(cluster);
                 if ids.is_empty() {
                     continue;
                 }
@@ -927,15 +1030,12 @@ impl IvfPqIndex {
 
                 let table = if opq_enabled {
                     let opq = self.opq.as_ref().expect("OPQ must be present when enabled");
-                    let rotated_adc_query =
-                        self.rotated_adc_query(opq, query_vec, &query_residual);
+                    let rotated_adc_query = self.rotated_adc_query(opq, query_vec, &query_residual);
                     Some(self.precompute_distance_table_opq_flat(opq, &rotated_adc_query))
                 } else {
-                    Some(
-                        self.precompute_distance_table_flat(
-                            self.adc_query_for_metric(query_vec, &query_residual),
-                        ),
-                    )
+                    Some(self.precompute_distance_table_flat(
+                        self.adc_query_for_metric(query_vec, &query_residual),
+                    ))
                 };
 
                 for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
@@ -977,8 +1077,7 @@ impl IvfPqIndex {
         let mut query_residual = vec![0.0f32; self.dim];
 
         for cluster in 0..self.nlist {
-            let ids = &self.invlist_ids[cluster];
-            let codes = &self.invlist_codes[cluster];
+            let (ids, codes) = self.cluster_scan_slice(cluster);
             if ids.is_empty() {
                 continue;
             }
@@ -1058,8 +1157,7 @@ impl IvfPqIndex {
                 let mut candidates: Vec<(i64, f32)> = Vec::new();
 
                 for (cluster, _) in cluster_dists.iter().copied() {
-                    let ids = &self.invlist_ids[cluster];
-                    let codes = &self.invlist_codes[cluster];
+                    let (ids, codes) = self.cluster_scan_slice(cluster);
                     let centroid = &self.centroids[cluster * dim..(cluster + 1) * dim];
                     let coarse_bias = self.coarse_distance_bias(query_vec, centroid);
 
@@ -1469,6 +1567,7 @@ impl IvfPqIndex {
         index.imported_pq_centroids = Some(pq_centroids);
         index.use_opq = false;
         index.opq = None;
+        index.rebuild_compact_invlists();
         Ok(index)
     }
 
@@ -1492,21 +1591,30 @@ impl IvfPqIndex {
             ));
         }
 
-        let version = u32::from_le_bytes(bytes[5..9].try_into().map_err(|_| {
-            crate::api::KnowhereError::Codec("invalid version bytes".to_string())
-        })?);
-        let dim = u32::from_le_bytes(bytes[9..13].try_into().map_err(|_| {
-            crate::api::KnowhereError::Codec("invalid dim bytes".to_string())
-        })?) as usize;
-        let nlist = u32::from_le_bytes(bytes[13..17].try_into().map_err(|_| {
-            crate::api::KnowhereError::Codec("invalid nlist bytes".to_string())
-        })?) as usize;
-        let m = u32::from_le_bytes(bytes[17..21].try_into().map_err(|_| {
-            crate::api::KnowhereError::Codec("invalid m bytes".to_string())
-        })?) as usize;
-        let nbits_per_idx = u32::from_le_bytes(bytes[21..25].try_into().map_err(|_| {
-            crate::api::KnowhereError::Codec("invalid nbits bytes".to_string())
-        })?) as usize;
+        let version =
+            u32::from_le_bytes(bytes[5..9].try_into().map_err(|_| {
+                crate::api::KnowhereError::Codec("invalid version bytes".to_string())
+            })?);
+        let dim = u32::from_le_bytes(
+            bytes[9..13]
+                .try_into()
+                .map_err(|_| crate::api::KnowhereError::Codec("invalid dim bytes".to_string()))?,
+        ) as usize;
+        let nlist = u32::from_le_bytes(
+            bytes[13..17]
+                .try_into()
+                .map_err(|_| crate::api::KnowhereError::Codec("invalid nlist bytes".to_string()))?,
+        ) as usize;
+        let m = u32::from_le_bytes(
+            bytes[17..21]
+                .try_into()
+                .map_err(|_| crate::api::KnowhereError::Codec("invalid m bytes".to_string()))?,
+        ) as usize;
+        let nbits_per_idx = u32::from_le_bytes(
+            bytes[21..25]
+                .try_into()
+                .map_err(|_| crate::api::KnowhereError::Codec("invalid nbits bytes".to_string()))?,
+        ) as usize;
         let (nprobe, metric_type) = if version >= 3 {
             if bytes.len() < HEADER_V2_LEN + 4 + 1 {
                 return Err(crate::api::KnowhereError::Codec(
@@ -1613,6 +1721,10 @@ impl IvfPqIndex {
         self.imported_pq_centroids = None;
         self.invlist_ids = (0..self.nlist).map(|_| Vec::new()).collect();
         self.invlist_codes = (0..self.nlist).map(|_| Vec::new()).collect();
+        self.compact_invlists = CompactInvertedLists {
+            offsets: vec![(0, 0); self.nlist],
+            ..Default::default()
+        };
 
         // Load centroids
         let mut centroid_bytes = vec![0u8; nlist * dim * 4];
@@ -1685,6 +1797,7 @@ impl IvfPqIndex {
 
             self.trained = true;
             self.next_id = self.ids.iter().copied().max().map(|id| id + 1).unwrap_or(0);
+            self.rebuild_compact_invlists();
             return Ok(());
         }
 
@@ -1733,6 +1846,7 @@ impl IvfPqIndex {
 
         self.trained = true;
         self.next_id = self.ids.iter().copied().max().map(|id| id + 1).unwrap_or(0);
+        self.rebuild_compact_invlists();
         Ok(())
     }
 
@@ -2050,8 +2164,7 @@ mod tests {
                 })
                 .collect();
             gt.sort_by(|a, b| a.1.total_cmp(&b.1));
-            let gt_ids: std::collections::HashSet<i64> =
-                gt.iter().take(k).map(|x| x.0).collect();
+            let gt_ids: std::collections::HashSet<i64> = gt.iter().take(k).map(|x| x.0).collect();
 
             let req = SearchRequest {
                 top_k: k,
@@ -2065,7 +2178,8 @@ mod tests {
             // q==0: searching for exact self — must be rank 1
             if q == 0 {
                 assert_eq!(
-                    result.ids[0], 0,
+                    result.ids[0],
+                    0,
                     "Exact-match query must return itself at rank 1. Got ids={:?}, dists={:?}",
                     &result.ids[..k.min(result.ids.len())],
                     &result.distances[..k.min(result.distances.len())]
@@ -2313,14 +2427,102 @@ mod tests {
     }
 
     #[test]
+    fn test_ivfpq_compact_invlists_match_per_cluster_storage() {
+        let config = IndexConfig {
+            index_type: IndexType::IvfPq,
+            metric_type: MetricType::L2,
+            dim: 16,
+            data_type: DataType::Float,
+            params: crate::api::IndexParams {
+                nlist: Some(4),
+                nprobe: Some(2),
+                m: Some(4),
+                nbits_per_idx: Some(8),
+                ..Default::default()
+            },
+        };
+
+        let mut index = IvfPqIndex::new(&config).unwrap();
+        let n = 128usize;
+        let dim = 16usize;
+        let mut vectors = Vec::with_capacity(n * dim);
+        for i in 0..n {
+            for j in 0..dim {
+                vectors.push(((i * 23 + j * 9) % 113) as f32 / 31.0);
+            }
+        }
+
+        let ids: Vec<i64> = (0..n as i64).map(|id| id * 7 + 3).collect();
+        index.train(&vectors).unwrap();
+        index.add(&vectors, Some(&ids)).unwrap();
+
+        for cluster in 0..index.nlist {
+            let (compact_ids, compact_codes) = index.cluster_scan_slice(cluster);
+            assert_eq!(compact_ids, index.invlist_ids[cluster].as_slice());
+            assert_eq!(compact_codes, index.invlist_codes[cluster].as_slice());
+        }
+
+        assert_eq!(
+            index.compact_invlists.all_ids.len(),
+            index.invlist_ids.iter().map(Vec::len).sum::<usize>()
+        );
+        assert_eq!(
+            index.compact_invlists.all_codes.len(),
+            index.invlist_codes.iter().map(Vec::len).sum::<usize>()
+        );
+    }
+
+    #[test]
+    fn test_ivfpq_dim2_flat_distance_table_matches_scalar_path() {
+        let config = IndexConfig {
+            index_type: IndexType::IvfPq,
+            metric_type: MetricType::L2,
+            dim: 8,
+            data_type: DataType::Float,
+            params: crate::api::IndexParams {
+                nlist: Some(2),
+                nprobe: Some(1),
+                m: Some(4),
+                nbits_per_idx: Some(1),
+                ..Default::default()
+            },
+        };
+
+        let mut index = IvfPqIndex::new(&config).unwrap();
+        index
+            .pq
+            .set_centroids(vec![
+                0.0, 0.0, 1.0, 1.0, //
+                0.0, 1.0, 1.0, 2.0, //
+                1.0, 0.0, 2.0, 1.0, //
+                1.0, 1.0, 2.0, 2.0,
+            ])
+            .unwrap();
+
+        let adc_query = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6];
+        let table = index.precompute_distance_table_flat(&adc_query);
+        let sub_dim = index.dim / index.m;
+        let ksub = 1usize << index.nbits_per_idx;
+        let mut expected = vec![0.0f32; index.m * ksub];
+
+        for sub_q in 0..index.m {
+            let query_sub = &adc_query[sub_q * sub_dim..(sub_q + 1) * sub_dim];
+            let centroids = index.pq_subquantizer_centroids(sub_q).unwrap();
+            for c in 0..ksub {
+                let centroid = &centroids[c * sub_dim..(c + 1) * sub_dim];
+                expected[sub_q * ksub + c] = index.subspace_score(query_sub, centroid);
+            }
+        }
+
+        assert_eq!(table.len(), expected.len());
+        for (actual, expected) in table.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-6);
+        }
+    }
+
+    #[test]
     fn test_ivfpq_select_top_clusters_matches_full_sort_order() {
-        let scored = vec![
-            (0usize, 3.0f32),
-            (1, 1.0),
-            (2, 2.0),
-            (3, 0.5),
-            (4, 1.0),
-        ];
+        let scored = vec![(0usize, 3.0f32), (1, 1.0), (2, 2.0), (3, 0.5), (4, 1.0)];
 
         let top3 = IvfPqIndex::select_top_clusters(scored.clone(), 3);
         assert_eq!(top3, vec![(3, 0.5), (1, 1.0), (4, 1.0)]);
@@ -2425,6 +2627,9 @@ mod tests {
         assert_eq!(imported.invlist_ids[1], vec![13]);
         assert_eq!(imported.invlist_codes[0], vec![1, 2, 3, 4]);
         assert_eq!(imported.invlist_codes[1], vec![5, 6]);
-        assert_eq!(imported.imported_pq_centroids.as_ref().unwrap().len(), pq_nf);
+        assert_eq!(
+            imported.imported_pq_centroids.as_ref().unwrap().len(),
+            pq_nf
+        );
     }
 }

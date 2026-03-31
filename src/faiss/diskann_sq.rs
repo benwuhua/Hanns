@@ -10,8 +10,8 @@ use std::path::Path;
 
 use crate::api::{IndexConfig, IndexParams, IndexType, MetricType, Result, SearchRequest};
 use crate::faiss::diskann::{DiskAnnConfig, DiskAnnIndex};
-use crate::quantization::{PcaTransform, Sq8Quantizer};
 use crate::quantization::sq::QuantizerType;
+use crate::quantization::{PcaTransform, Sq8Quantizer};
 
 #[derive(Clone, Debug)]
 pub struct DiskAnnSqConfig {

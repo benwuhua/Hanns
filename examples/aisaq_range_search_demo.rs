@@ -65,10 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let avg_recall = recalls.iter().sum::<f64>() / recalls.len() as f64;
-    let min_recall = recalls
-        .iter()
-        .copied()
-        .fold(f64::INFINITY, f64::min);
+    let min_recall = recalls.iter().copied().fold(f64::INFINITY, f64::min);
     let total_results_avg = total_results as f64 / NUM_QUERIES as f64;
 
     println!(

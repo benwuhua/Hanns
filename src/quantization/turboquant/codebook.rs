@@ -15,8 +15,7 @@ fn erf_approx(x: f64) -> f64 {
     let sign = if x < 0.0 { -1.0 } else { 1.0 };
     let x = x.abs();
     let t = 1.0 / (1.0 + 0.327_591_1 * x);
-    let poly = (((((1.061_405_429 * t - 1.453_152_027) * t) + 1.421_413_741) * t
-        - 0.284_496_736)
+    let poly = (((((1.061_405_429 * t - 1.453_152_027) * t) + 1.421_413_741) * t - 0.284_496_736)
         * t
         + 0.254_829_592)
         * t;
@@ -26,7 +25,11 @@ fn erf_approx(x: f64) -> f64 {
 #[inline]
 fn normal_cdf(x: f64) -> f64 {
     if x.is_infinite() {
-        if x.is_sign_negative() { 0.0 } else { 1.0 }
+        if x.is_sign_negative() {
+            0.0
+        } else {
+            1.0
+        }
     } else {
         0.5 * (1.0 + erf_approx(x / SQRT_2))
     }

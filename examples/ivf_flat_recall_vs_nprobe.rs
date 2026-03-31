@@ -2,9 +2,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::time::Instant;
 
-use knowhere_rs::api::{
-    DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest,
-};
+use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 use knowhere_rs::faiss::{IvfFlatIndex, MemIndex};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};

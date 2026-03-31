@@ -223,7 +223,11 @@ fn test_compacted_long_code_roundtrip_and_ip() {
             .collect();
 
         let compact = q.compact_long_code_for_test(&raw_levels);
-        assert_eq!(compact.len(), cfg.long_code_bytes(), "bits_per_dim={bits_per_dim}");
+        assert_eq!(
+            compact.len(),
+            cfg.long_code_bytes(),
+            "bits_per_dim={bits_per_dim}"
+        );
 
         let decoded = q.decode_long_code_levels_for_test(&compact);
         assert_eq!(decoded, raw_levels, "bits_per_dim={bits_per_dim}");

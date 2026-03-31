@@ -1,7 +1,7 @@
+use super::fastscan::scan_layout_bitmask;
 use super::{
     scan_layout, ExRaBitQFastScanState, ExRaBitQLayout, ExRaBitQQuantizer, ScoredCandidate,
 };
-use super::fastscan::scan_layout_bitmask;
 
 pub fn rerank_candidates(
     quantizer: &ExRaBitQQuantizer,

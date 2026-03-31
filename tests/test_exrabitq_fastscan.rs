@@ -147,8 +147,9 @@ fn test_fastscan_avx512_matches_scalar_for_4bit() {
         let state = ExRaBitQFastScanState::new(&q_rot, y2);
 
         let scalar = scalar_scan_layout(&layout, &state, layout.len());
-        let simd = knowhere_rs::quantization::exrabitq::simd_scan_layout(&layout, &state, layout.len())
-            .expect("avx512 fast scan");
+        let simd =
+            knowhere_rs::quantization::exrabitq::simd_scan_layout(&layout, &state, layout.len())
+                .expect("avx512 fast scan");
 
         assert_eq!(scalar.len(), simd.len());
         for (lhs, rhs) in scalar.iter().zip(simd.iter()) {
@@ -175,8 +176,9 @@ fn test_fastscan_avx512_matches_scalar_for_8bit() {
         let state = ExRaBitQFastScanState::new(&q_rot, y2);
 
         let scalar = scalar_scan_layout(&layout, &state, layout.len());
-        let simd = knowhere_rs::quantization::exrabitq::simd_scan_layout(&layout, &state, layout.len())
-            .expect("avx512 fast scan");
+        let simd =
+            knowhere_rs::quantization::exrabitq::simd_scan_layout(&layout, &state, layout.len())
+                .expect("avx512 fast scan");
 
         assert_eq!(scalar.len(), simd.len());
         for (lhs, rhs) in scalar.iter().zip(simd.iter()) {
@@ -198,7 +200,8 @@ fn test_high_accuracy_bitmask_scan_matches_scalar_rerank() {
         let state = ExRaBitQFastScanState::new_high_accuracy(&q_rot, y2);
 
         let scalar_candidates = scalar_scan_layout(&layout, &state, layout.len());
-        let exact_scalar = rerank_candidates(&quantizer, &layout, &state, &scalar_candidates, top_k);
+        let exact_scalar =
+            rerank_candidates(&quantizer, &layout, &state, &scalar_candidates, top_k);
         let bitmask = scan_and_rerank(&quantizer, &layout, &state, 32, top_k);
 
         let hits = exact_scalar
@@ -217,7 +220,10 @@ fn test_high_accuracy_bitmask_scan_matches_scalar_rerank() {
         assert_eq!(exact_scalar.len(), bitmask.len());
         for (lhs, rhs) in exact_scalar.iter().zip(bitmask.iter()) {
             assert_eq!(lhs.0, rhs.0, "query_idx={query_idx}");
-            assert!((lhs.1 - rhs.1).abs() < 1e-4, "query_idx={query_idx}: lhs={lhs:?} rhs={rhs:?}");
+            assert!(
+                (lhs.1 - rhs.1).abs() < 1e-4,
+                "query_idx={query_idx}: lhs={lhs:?} rhs={rhs:?}"
+            );
         }
     }
 }

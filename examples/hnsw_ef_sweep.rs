@@ -40,7 +40,13 @@ fn recall_at_k(results: &[Vec<i64>], gt: &[Vec<i32>], k: usize) -> f64 {
     }
 }
 
-fn run_sweep(index: &HnswIndex, queries: &[f32], dim: usize, gt: &[Vec<i32>], ef: usize) -> SweepRow {
+fn run_sweep(
+    index: &HnswIndex,
+    queries: &[f32],
+    dim: usize,
+    gt: &[Vec<i32>],
+    ef: usize,
+) -> SweepRow {
     let req = SearchRequest {
         top_k: TOP_K,
         nprobe: ef,

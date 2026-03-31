@@ -16,18 +16,18 @@
 //! - Statistics API for monitoring
 #![allow(deprecated)] // Legacy compatibility module intentionally wraps deprecated DiskANN APIs.
 
-use std::cmp::Ordering;
-use std::borrow::Cow;
-use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use parking_lot::Mutex;
+use std::borrow::Cow;
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
 #[cfg(feature = "parallel")]
 use parking_lot::RwLock;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 
 use crate::api::search::Predicate;
 use crate::api::{IndexConfig, KnowhereError, MetricType, Result, SearchRequest, SearchResult};
@@ -167,7 +167,10 @@ impl DiskAnnConfig {
             flash_ssd_mode: params.disk_flash_ssd_mode.unwrap_or(false),
             flash_prefetch_batch: params.disk_flash_prefetch_batch.unwrap_or(0).min(256),
             warm_up: params.disk_warm_up.unwrap_or(false),
-            filter_threshold: params.disk_filter_threshold.unwrap_or(-1.0).clamp(-1.0, 1.0),
+            filter_threshold: params
+                .disk_filter_threshold
+                .unwrap_or(-1.0)
+                .clamp(-1.0, 1.0),
             accelerate_build: false,
             min_k: 100,
             max_k: usize::MAX,
@@ -993,7 +996,8 @@ impl DiskAnnIndex {
             self.flash_cached_vectors = None;
             return;
         }
-        let Some(budget) = DiskAnnConfig::budget_bytes(self.dann_config.cache_dram_budget_gb) else {
+        let Some(budget) = DiskAnnConfig::budget_bytes(self.dann_config.cache_dram_budget_gb)
+        else {
             self.flash_cached_neighbors = None;
             self.flash_cached_vectors = None;
             return;
@@ -1203,7 +1207,8 @@ impl DiskAnnIndex {
         let n = self.ids.len();
         let mut out = Vec::with_capacity(n);
         for node in 0..n {
-            let mut nbrs = Vec::with_capacity(self.neighbor_degrees.get(node).copied().unwrap_or(0) as usize);
+            let mut nbrs =
+                Vec::with_capacity(self.neighbor_degrees.get(node).copied().unwrap_or(0) as usize);
             for (slot, &id) in self.graph_neighbors(node).iter().enumerate() {
                 nbrs.push((id, self.graph_neighbor_dist(node, slot)));
             }
@@ -1376,21 +1381,25 @@ impl DiskAnnIndex {
                     *node_slot = node_neighbors;
                 }
 
-                batch_results.par_iter().for_each(|(node_idx, merged_neighbors)| {
-                    for &(idx, dist) in merged_neighbors {
-                        if idx < snapshot_len {
-                            let mut neighbors = current_graph[idx].write();
-                            neighbors.push((*node_idx as u32, dist));
-                            let pruned = self.prune_neighbors(idx, &neighbors, build_r);
-                            *neighbors = pruned;
+                batch_results
+                    .par_iter()
+                    .for_each(|(node_idx, merged_neighbors)| {
+                        for &(idx, dist) in merged_neighbors {
+                            if idx < snapshot_len {
+                                let mut neighbors = current_graph[idx].write();
+                                neighbors.push((*node_idx as u32, dist));
+                                let pruned = self.prune_neighbors(idx, &neighbors, build_r);
+                                *neighbors = pruned;
+                            }
                         }
-                    }
-                });
+                    });
                 batch_start = batch_end;
             }
 
-            let current_graph: Vec<Vec<(u32, f32)>> =
-                current_graph.into_iter().map(|node| node.into_inner()).collect();
+            let current_graph: Vec<Vec<(u32, f32)>> = current_graph
+                .into_iter()
+                .map(|node| node.into_inner())
+                .collect();
             self.replace_flat_graph_from_local(&current_graph);
             if !self.dann_config.accelerate_build {
                 self.refine_graph();
@@ -1451,16 +1460,12 @@ impl DiskAnnIndex {
             .map(|(idx, dist)| (idx as usize, dist))
             .collect();
         if self.dann_config.intra_batch_candidates > 0 {
-            merged_neighbors.extend(self.collect_intra_batch_candidates_with_upper(
-                node_idx,
-                upper_bound,
-            ));
+            merged_neighbors
+                .extend(self.collect_intra_batch_candidates_with_upper(node_idx, upper_bound));
         }
         if self.dann_config.random_init_edges > 0 {
-            merged_neighbors.extend(self.collect_random_initial_candidates_with_upper(
-                node_idx,
-                upper_bound,
-            ));
+            merged_neighbors
+                .extend(self.collect_random_initial_candidates_with_upper(node_idx, upper_bound));
         }
         merged_neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
         merged_neighbors.dedup_by(|a, b| a.0 == b.0);
@@ -1483,16 +1488,12 @@ impl DiskAnnIndex {
             .map(|(idx, dist)| (idx as usize, dist))
             .collect();
         if self.dann_config.intra_batch_candidates > 0 {
-            merged_neighbors.extend(self.collect_intra_batch_candidates_with_upper(
-                node_idx,
-                upper_bound,
-            ));
+            merged_neighbors
+                .extend(self.collect_intra_batch_candidates_with_upper(node_idx, upper_bound));
         }
         if self.dann_config.random_init_edges > 0 {
-            merged_neighbors.extend(self.collect_random_initial_candidates_with_upper(
-                node_idx,
-                upper_bound,
-            ));
+            merged_neighbors
+                .extend(self.collect_random_initial_candidates_with_upper(node_idx, upper_bound));
         }
         merged_neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
         merged_neighbors.dedup_by(|a, b| a.0 == b.0);
@@ -1719,7 +1720,10 @@ impl DiskAnnIndex {
         }
 
         results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        results.into_iter().map(|(d, idx)| (idx as u32, d)).collect()
+        results
+            .into_iter()
+            .map(|(d, idx)| (idx as u32, d))
+            .collect()
     }
 
     #[cfg(feature = "parallel")]
@@ -1771,7 +1775,10 @@ impl DiskAnnIndex {
         }
 
         results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-        results.into_iter().map(|(d, idx)| (idx as u32, d)).collect()
+        results
+            .into_iter()
+            .map(|(d, idx)| (idx as u32, d))
+            .collect()
     }
 
     /// Prune neighbors using Vamana pruning strategy
@@ -1870,8 +1877,12 @@ impl DiskAnnIndex {
             .into_par_iter()
             .map(|i| {
                 let query = &self.vectors[i * self.dim..(i + 1) * self.dim];
-                let neighbors =
-                    self.vamana_search(query, self.dann_config.construction_l, build_r, &current_graph);
+                let neighbors = self.vamana_search(
+                    query,
+                    self.dann_config.construction_l,
+                    build_r,
+                    &current_graph,
+                );
                 let new_neighbors: Vec<(u32, f32)> = neighbors
                     .iter()
                     .filter(|&&(idx, _)| idx as usize != i)
@@ -1889,8 +1900,12 @@ impl DiskAnnIndex {
         let new_edges: Vec<Vec<(u32, f32)>> = (0..n)
             .map(|i| {
                 let query = &self.vectors[i * self.dim..(i + 1) * self.dim];
-                let neighbors =
-                    self.vamana_search(query, self.dann_config.construction_l, build_r, &current_graph);
+                let neighbors = self.vamana_search(
+                    query,
+                    self.dann_config.construction_l,
+                    build_r,
+                    &current_graph,
+                );
                 let new_neighbors: Vec<(u32, f32)> = neighbors
                     .iter()
                     .filter(|&&(idx, _)| idx as usize != i)
@@ -1915,7 +1930,8 @@ impl DiskAnnIndex {
 
     #[inline]
     fn l2_sqr(&self, a: &[f32], b_idx: usize) -> f32 {
-        if (self.flash_sidecar_mmap.is_some() || self.is_ssd_mode()) && self.flash_vectors.is_none() {
+        if (self.flash_sidecar_mmap.is_some() || self.is_ssd_mode()) && self.flash_vectors.is_none()
+        {
             let mut acc = 0.0f32;
             for (d, &av) in a.iter().enumerate().take(self.dim) {
                 let bv = self.flash_vector_component(b_idx, d).unwrap_or(0.0);
@@ -1944,7 +1960,8 @@ impl DiskAnnIndex {
     fn ip_distance(&self, a: &[f32], b_idx: usize) -> f32 {
         // For IP, higher is better, so we return negative (for consistent sorting)
         let mut sum = 0.0f32;
-        if (self.flash_sidecar_mmap.is_some() || self.is_ssd_mode()) && self.flash_vectors.is_none() {
+        if (self.flash_sidecar_mmap.is_some() || self.is_ssd_mode()) && self.flash_vectors.is_none()
+        {
             for (d, &av) in a.iter().enumerate().take(self.dim) {
                 let bv = self.flash_vector_component(b_idx, d).unwrap_or(0.0);
                 sum += av * bv;
@@ -2079,8 +2096,8 @@ impl DiskAnnIndex {
                 }
                 let nb_degree = self.neighbor_degrees[nb_idx] as usize;
                 let nb_start = nb_idx * r;
-                let already_has = self.neighbor_ids[nb_start..nb_start + nb_degree]
-                    .contains(&(new_idx as u32));
+                let already_has =
+                    self.neighbor_ids[nb_start..nb_start + nb_degree].contains(&(new_idx as u32));
                 if already_has {
                     continue;
                 }
@@ -2090,7 +2107,12 @@ impl DiskAnnIndex {
                     self.neighbor_degrees[nb_idx] += 1;
                 } else {
                     let mut existing: Vec<(u32, f32)> = (0..nb_degree)
-                        .map(|k| (self.neighbor_ids[nb_start + k], self.neighbor_dists[nb_start + k]))
+                        .map(|k| {
+                            (
+                                self.neighbor_ids[nb_start + k],
+                                self.neighbor_dists[nb_start + k],
+                            )
+                        })
                         .collect();
                     existing.push((new_idx as u32, dist));
                     let pruned_nb = self.prune_neighbors(nb_idx, &existing, r);
@@ -2327,9 +2349,7 @@ impl DiskAnnIndex {
         let mut io_state = IoCuttingState::new(effective_l, self.dann_config.io_cutting_threshold);
 
         for (start, dist) in &starts {
-            scratch
-                .candidates
-                .push(ReverseOrderedFloat(*dist, *start));
+            scratch.candidates.push(ReverseOrderedFloat(*dist, *start));
             scratch.visited.mark(*start as u32);
         }
 
@@ -2446,9 +2466,7 @@ impl DiskAnnIndex {
                     };
 
                     scratch.visited.mark(n_idx as u32);
-                    scratch
-                        .candidates
-                        .push(ReverseOrderedFloat(exact_d, n_idx));
+                    scratch.candidates.push(ReverseOrderedFloat(exact_d, n_idx));
 
                     if self.dann_config.io_cutting_enabled {
                         io_state.record(is_valid, insert_pos);
@@ -3290,7 +3308,10 @@ mod tests {
             recall_l200 >= recall_l50,
             "expected recall(L=200) >= recall(L=50), got {recall_l200:.4} < {recall_l50:.4}"
         );
-        assert!(recall_l200 >= 0.90, "recall@10 with L=200 too low: {recall_l200:.4}");
+        assert!(
+            recall_l200 >= 0.90,
+            "recall@10 with L=200 too low: {recall_l200:.4}"
+        );
     }
 
     #[test]
@@ -3604,7 +3625,10 @@ mod tests {
         loaded.load(&temp_path).unwrap();
 
         assert!(loaded.has_flash_layout, "flash layout should be set");
-        assert!(loaded.flash_ssd_file.is_some(), "flash_ssd_file should be open");
+        assert!(
+            loaded.flash_ssd_file.is_some(),
+            "flash_ssd_file should be open"
+        );
         assert!(
             loaded.flash_sidecar_mmap.is_none(),
             "mmap should not be used in ssd mode"
@@ -4242,7 +4266,10 @@ mod tests {
         for _cluster in 0..5usize {
             let center: Vec<f32> = (0..dim).map(|_| rng.gen_range(0.0..10.0)).collect();
             for _ in 0..100 {
-                let v: Vec<f32> = center.iter().map(|&c| c + rng.gen_range(0.0..1.0)).collect();
+                let v: Vec<f32> = center
+                    .iter()
+                    .map(|&c| c + rng.gen_range(0.0..1.0))
+                    .collect();
                 vectors.extend_from_slice(&v);
             }
         }
@@ -4490,7 +4517,9 @@ mod tests {
         let req = SearchRequest {
             top_k: 3,
             nprobe: 8,
-            filter: Some(Arc::new(crate::api::search::IdsPredicate { ids: vec![2, 3] })),
+            filter: Some(Arc::new(crate::api::search::IdsPredicate {
+                ids: vec![2, 3],
+            })),
             params: None,
             radius: None,
         };
@@ -4995,7 +5024,12 @@ impl Index for DiskAnnIndex {
             for (idx, &id) in self.ids.iter().enumerate() {
                 self.id_to_idx.insert(id, idx);
             }
-            self.next_id = ids.iter().copied().max().map(|m| m.saturating_add(1)).unwrap_or(0);
+            self.next_id = ids
+                .iter()
+                .copied()
+                .max()
+                .map(|m| m.saturating_add(1))
+                .unwrap_or(0);
         }
         Ok(())
     }

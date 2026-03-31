@@ -116,7 +116,10 @@ fn run() -> Result<(f64, u64), Box<dyn std::error::Error>> {
 fn main() {
     match run() {
         Ok((recall, qps)) => {
-            let status = format!("DONE: recall@10={:.3}, QPS={} (reorder_k=1600)\n", recall, qps);
+            let status = format!(
+                "DONE: recall@10={:.3}, QPS={} (reorder_k=1600)\n",
+                recall, qps
+            );
             if let Err(err) = fs::write(STATUS_FILE, status) {
                 eprintln!("failed to write status file: {}", err);
             }

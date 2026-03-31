@@ -176,7 +176,7 @@ fn prefetch_sq_code(codes: &[u8], i: usize, n: usize, dim: usize) {
     {
         if i + 2 < n {
             let base = (i + 2) * dim;
-            use std::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
+            use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
             // SAFETY: base is in-bounds because i + 2 < n and n <= codes.len() / dim.
             unsafe {
                 let ptr = codes.as_ptr().add(base) as *const i8;
@@ -507,10 +507,7 @@ impl IvfSq8Index {
     }
 
     #[inline]
-    fn row_allowed_by_bitset(
-        internal_row: Option<usize>,
-        bitset: Option<&BitsetView>,
-    ) -> bool {
+    fn row_allowed_by_bitset(internal_row: Option<usize>, bitset: Option<&BitsetView>) -> bool {
         let Some(bitset) = bitset else {
             return true;
         };
@@ -668,8 +665,7 @@ impl IvfSq8Index {
                     MetricType::Ip | MetricType::Cosine => {
                         let mut best_score = f32::NEG_INFINITY;
                         for c in 0..nlist {
-                            let score =
-                                dot_product_f32(vector, &centroids[c * dim..(c + 1) * dim]);
+                            let score = dot_product_f32(vector, &centroids[c * dim..(c + 1) * dim]);
                             if score > best_score {
                                 best_score = score;
                                 cluster = c;
@@ -1200,17 +1196,17 @@ impl IvfSq8Index {
             0 => {}
             1 => {
                 // Array direct-map payload (i64[])
-                let skip = dm_arr_len
-                    .checked_mul(8)
-                    .ok_or_else(|| crate::api::KnowhereError::Codec("direct_map overflow".to_string()))?;
+                let skip = dm_arr_len.checked_mul(8).ok_or_else(|| {
+                    crate::api::KnowhereError::Codec("direct_map overflow".to_string())
+                })?;
                 file.seek(SeekFrom::Current(skip as i64))?;
             }
             2 | 3 => {
                 // Hashtable payload
                 let hash_len = read_i64(&mut file)? as usize;
-                let skip = hash_len
-                    .checked_mul(16)
-                    .ok_or_else(|| crate::api::KnowhereError::Codec("direct_map hash overflow".to_string()))?;
+                let skip = hash_len.checked_mul(16).ok_or_else(|| {
+                    crate::api::KnowhereError::Codec("direct_map hash overflow".to_string())
+                })?;
                 file.seek(SeekFrom::Current(skip as i64))?;
             }
             _ => {
@@ -1293,8 +1289,7 @@ impl IvfSq8Index {
             }
         }
 
-        let mut inverted_lists: HashMap<usize, (Vec<i64>, Vec<u8>)> =
-            HashMap::with_capacity(nlist);
+        let mut inverted_lists: HashMap<usize, (Vec<i64>, Vec<u8>)> = HashMap::with_capacity(nlist);
         let mut total_ids = 0usize;
         for (list_id, &sz) in list_sizes.iter().enumerate() {
             if sz == 0 {
@@ -1460,7 +1455,9 @@ impl IndexTrait for IvfSq8Index {
 
         let n_queries = vectors.len() / self.dim;
         if n_queries * self.dim != vectors.len() {
-            return Err(IndexError::Unsupported("query dimension mismatch".to_string()));
+            return Err(IndexError::Unsupported(
+                "query dimension mismatch".to_string(),
+            ));
         }
         if top_k == 0 {
             return Ok(IndexSearchResult::new(vec![], vec![], 0.0));
@@ -1479,15 +1476,19 @@ impl IndexTrait for IvfSq8Index {
             let mut merged = TopKAccumulator::new(top_k);
 
             for cluster_id in clusters {
-                merged.merge(self.scan_cluster_with_buf(
-                    cluster_id,
-                    query_vec,
-                    top_k,
-                    &mut q_residual_buf,
-                    &mut q_precomputed_buf,
-                    Some(bitset),
-                    self.inverted_list_rows.get(&cluster_id).map(|rows| rows.as_slice()),
-                ));
+                merged.merge(
+                    self.scan_cluster_with_buf(
+                        cluster_id,
+                        query_vec,
+                        top_k,
+                        &mut q_residual_buf,
+                        &mut q_precomputed_buf,
+                        Some(bitset),
+                        self.inverted_list_rows
+                            .get(&cluster_id)
+                            .map(|rows| rows.as_slice()),
+                    ),
+                );
             }
 
             let hits = merged.into_hits();
@@ -1498,11 +1499,7 @@ impl IndexTrait for IvfSq8Index {
             }
         }
 
-        Ok(IndexSearchResult::new(
-            all_ids,
-            all_dists,
-            0.0,
-        ))
+        Ok(IndexSearchResult::new(all_ids, all_dists, 0.0))
     }
 
     fn range_search(
@@ -1520,7 +1517,9 @@ impl IndexTrait for IvfSq8Index {
 
         let n_queries = vectors.len() / self.dim;
         if n_queries * self.dim != vectors.len() {
-            return Err(IndexError::Unsupported("query dimension mismatch".to_string()));
+            return Err(IndexError::Unsupported(
+                "query dimension mismatch".to_string(),
+            ));
         }
 
         let nprobe = self.nprobe.min(self.nlist);
@@ -1873,8 +1872,7 @@ mod tests {
         let mut bitset = BitsetView::new(4);
         bitset.set(0, true);
 
-        let result =
-            crate::index::Index::search_with_bitset(&index, &query, 4, &bitset).unwrap();
+        let result = crate::index::Index::search_with_bitset(&index, &query, 4, &bitset).unwrap();
         assert!(
             !result.ids.contains(&100),
             "bitset row 0 should filter the first internal row even when external id is 100"
@@ -2019,8 +2017,7 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(tmp.path(), &blob).unwrap();
 
-        let imported =
-            IvfSq8Index::import_from_faiss_file(tmp.path().to_str().unwrap()).unwrap();
+        let imported = IvfSq8Index::import_from_faiss_file(tmp.path().to_str().unwrap()).unwrap();
         assert_eq!(imported.dim, 4);
         assert_eq!(imported.nlist, 2);
         assert_eq!(imported.nprobe, 2);

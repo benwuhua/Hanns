@@ -54,11 +54,7 @@ impl TurboQuantProd {
 
         let mse_code = self.mse.encode(x);
         let x_mse = self.mse.decode(&mse_code);
-        let residual: Vec<f32> = x
-            .iter()
-            .zip(x_mse.iter())
-            .map(|(&a, &b)| a - b)
-            .collect();
+        let residual: Vec<f32> = x.iter().zip(x_mse.iter()).map(|(&a, &b)| a - b).collect();
         let gamma = residual.iter().map(|&v| v * v).sum::<f32>().sqrt();
 
         let mut packed = Vec::with_capacity(self.code_bytes());
@@ -68,11 +64,7 @@ impl TurboQuantProd {
         if gamma > 1e-12 {
             for row_idx in 0..self.dim {
                 let row = &self.qjl_matrix[row_idx * self.dim..(row_idx + 1) * self.dim];
-                let projection: f32 = row
-                    .iter()
-                    .zip(residual.iter())
-                    .map(|(&a, &b)| a * b)
-                    .sum();
+                let projection: f32 = row.iter().zip(residual.iter()).map(|(&a, &b)| a * b).sum();
                 if projection >= 0.0 {
                     qjl_bits[row_idx / 8] |= 1 << (row_idx % 8);
                 }

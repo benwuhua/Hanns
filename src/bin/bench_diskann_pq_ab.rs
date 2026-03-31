@@ -277,19 +277,18 @@ fn main() {
         let mut index = DiskAnnIndex::new(&config).expect("create DiskAnnIndex");
 
         let build_start = Instant::now();
-        let cache_path =
-            build_index_cache_path(
-                index_cache_dir.as_deref(),
-                pq_dims,
-                base_size,
-                dim,
-                max_degree,
-                construction_l,
-                saturate_after_prune,
-                intra_batch_candidates,
-                num_entry_points,
-                build_degree_slack_pct,
-            );
+        let cache_path = build_index_cache_path(
+            index_cache_dir.as_deref(),
+            pq_dims,
+            base_size,
+            dim,
+            max_degree,
+            construction_l,
+            saturate_after_prune,
+            intra_batch_candidates,
+            num_entry_points,
+            build_degree_slack_pct,
+        );
         let build_mode = if reuse_index && cache_path.as_ref().map(|p| p.exists()).unwrap_or(false)
         {
             index

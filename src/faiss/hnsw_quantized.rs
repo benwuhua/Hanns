@@ -311,7 +311,10 @@ impl HnswSqIndex {
         if stored_dim != dim {
             return Err(Box::new(Error::new(
                 ErrorKind::InvalidData,
-                format!("dim mismatch: load dim {} vs stored dim {}", dim, stored_dim),
+                format!(
+                    "dim mismatch: load dim {} vs stored dim {}",
+                    dim, stored_dim
+                ),
             )));
         }
 
@@ -434,10 +437,7 @@ impl Index for HnswSqIndex {
             .map_err(|e| IndexError::Unsupported(e.to_string()))
     }
 
-    fn add(
-        &mut self,
-        dataset: &crate::dataset::Dataset,
-    ) -> std::result::Result<usize, IndexError> {
+    fn add(&mut self, dataset: &crate::dataset::Dataset) -> std::result::Result<usize, IndexError> {
         self.add(dataset.vectors(), dataset.ids())
             .map_err(|e| IndexError::Unsupported(e.to_string()))
     }

@@ -27,8 +27,8 @@ impl IoCuttingState {
 
     #[inline]
     pub fn should_stop(&self) -> bool {
-        let remaining = (self.search_list_size.saturating_sub(1))
-            .saturating_sub(self.change_point_index);
+        let remaining =
+            (self.search_list_size.saturating_sub(1)).saturating_sub(self.change_point_index);
         if remaining == 0 {
             return true;
         }

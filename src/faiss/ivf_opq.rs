@@ -629,7 +629,11 @@ impl IvfOpqIndex {
 
         file.write_all(&(self.inverted_lists.len() as u64).to_le_bytes())?;
         for cluster_id in 0..self.config.nlist {
-            let list = self.inverted_lists.get(&cluster_id).map(Vec::as_slice).unwrap_or(&[]);
+            let list = self
+                .inverted_lists
+                .get(&cluster_id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
             file.write_all(&(cluster_id as u64).to_le_bytes())?;
             file.write_all(&(list.len() as u64).to_le_bytes())?;
             for (vec_id, code) in list {

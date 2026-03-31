@@ -495,10 +495,12 @@ mod tests {
 
     #[test]
     fn test_validate_index_config_ivf_exrabitq_l2_only() {
-        assert!(validate_index_config(IndexType::IvfExRaBitq, DataType::Float, MetricType::L2)
-            .is_ok());
-        assert!(validate_index_config(IndexType::IvfExRaBitq, DataType::Float, MetricType::Ip)
-            .is_err());
+        assert!(
+            validate_index_config(IndexType::IvfExRaBitq, DataType::Float, MetricType::L2).is_ok()
+        );
+        assert!(
+            validate_index_config(IndexType::IvfExRaBitq, DataType::Float, MetricType::Ip).is_err()
+        );
         assert!(validate_index_config(
             IndexType::IvfExRaBitq,
             DataType::Binary,

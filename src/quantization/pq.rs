@@ -11,9 +11,8 @@ use rayon::prelude::*;
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::{
-    __m128i, __m256, __m256i, _mm256_add_ps, _mm_loadl_epi64, _mm256_add_epi32,
-    _mm256_castsi256_ps, _mm256_cvtepu8_epi32, _mm256_i32gather_ps, _mm256_setr_epi32,
-    _mm256_setzero_ps, _mm256_storeu_ps,
+    __m128i, __m256, __m256i, _mm256_add_epi32, _mm256_add_ps, _mm256_cvtepu8_epi32,
+    _mm256_i32gather_ps, _mm256_setr_epi32, _mm256_setzero_ps, _mm256_storeu_ps, _mm_loadl_epi64,
 };
 
 /// Product Quantization configuration
@@ -907,5 +906,4 @@ mod tests {
         println!("PQ-only recall@10 (small): {:.3}", recall);
         assert!(recall > 0.5, "recall@10 too low: {}", recall);
     }
-
 }

@@ -110,8 +110,8 @@ impl DualPca {
 #[cfg(test)]
 mod tests {
     use super::DualPca;
-    use rand::{Rng, SeedableRng};
     use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
 
     fn l2(a: &[f32], b: &[f32]) -> f32 {
         a.iter()
@@ -190,8 +190,8 @@ mod tests {
             queries.extend_from_slice(&make_vec(&mut rng));
         }
 
-        let dual = DualPca::train(&docs, n_docs, dim, out_dim, &docs, n_docs, dim, out_dim)
-            .unwrap();
+        let dual =
+            DualPca::train(&docs, n_docs, dim, out_dim, &docs, n_docs, dim, out_dim).unwrap();
         let doc_proj = dual.project_doc_batch(&docs, n_docs);
 
         let mut hits = 0usize;
@@ -208,10 +208,6 @@ mod tests {
         }
 
         let recall = hits as f32 / (n_queries * top_k) as f32;
-        assert!(
-            recall >= 0.7,
-            "dual-pca recall@10 too low: {:.3}",
-            recall
-        );
+        assert!(recall >= 0.7, "dual-pca recall@10 too low: {:.3}", recall);
     }
 }

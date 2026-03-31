@@ -130,7 +130,12 @@ impl EmbeddingList {
                 }
                 let s = start * self.dim;
                 let e = end * self.dim;
-                crate::search::max_sim::max_sim(&self.metric, query_vecs, &self.vectors[s..e], self.dim)
+                crate::search::max_sim::max_sim(
+                    &self.metric,
+                    query_vecs,
+                    &self.vectors[s..e],
+                    self.dim,
+                )
             })
             .collect()
     }

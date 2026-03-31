@@ -107,7 +107,10 @@ fn compute_recall(results: &[Vec<i64>], gt: &[Vec<i32>], top_k: usize) -> f32 {
         let r = &results[i];
         let g = &gt[i];
         for &gid in g.iter().take(top_k.min(g.len())) {
-            if r.iter().take(top_k.min(r.len())).any(|&rid| rid == gid as i64) {
+            if r.iter()
+                .take(top_k.min(r.len()))
+                .any(|&rid| rid == gid as i64)
+            {
                 hits += 1;
             }
         }
@@ -223,11 +226,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     for tier in &TIERS {
-        if !enabled_tiers.iter().any(|t| t.eq_ignore_ascii_case(tier.label)) {
+        if !enabled_tiers
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case(tier.label))
+        {
             continue;
         }
 
-        if enabled_methods.iter().any(|m| m.eq_ignore_ascii_case("FLAT")) {
+        if enabled_methods
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case("FLAT"))
+        {
             let config = IndexConfig {
                 index_type: IndexType::IvfFlat,
                 metric_type: MetricType::Ip,
@@ -297,7 +306,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        if enabled_methods.iter().any(|m| m.eq_ignore_ascii_case("HVQ")) {
+        if enabled_methods
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case("HVQ"))
+        {
             let config = IvfHvqConfig::new(EXPECTED_DIM, NLIST, tier.hvq_bits)
                 .with_metric(MetricType::Ip)
                 .with_seed(42)

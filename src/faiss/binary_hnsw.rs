@@ -509,10 +509,7 @@ impl BinaryHnswIndex {
         Ok(())
     }
 
-    pub fn load(
-        path: &Path,
-        dim: usize,
-    ) -> std::result::Result<Self, Box<dyn std::error::Error>> {
+    pub fn load(path: &Path, dim: usize) -> std::result::Result<Self, Box<dyn std::error::Error>> {
         let mut file = File::open(path)?;
 
         let mut magic = [0u8; 6];

@@ -209,10 +209,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("checksum={}", checksum);
     println!("Phase              | Total (ms) | Per-query (us) | % of total");
     println!("-------------------|------------|----------------|----------");
-    print_row("search_clusters", timing.search_clusters_ns, timing.total_ns);
-    print_row("precompute_query", timing.precompute_query_ns, timing.total_ns);
-    print_row("distance_compute", timing.distance_compute_ns, timing.total_ns);
-    print_row("topk_accumulate", timing.topk_accumulate_ns, timing.total_ns);
+    print_row(
+        "search_clusters",
+        timing.search_clusters_ns,
+        timing.total_ns,
+    );
+    print_row(
+        "precompute_query",
+        timing.precompute_query_ns,
+        timing.total_ns,
+    );
+    print_row(
+        "distance_compute",
+        timing.distance_compute_ns,
+        timing.total_ns,
+    );
+    print_row(
+        "topk_accumulate",
+        timing.topk_accumulate_ns,
+        timing.total_ns,
+    );
     print_row("merge", timing.merge_ns, timing.total_ns);
     print_row("overhead", overhead_ns, timing.total_ns);
     print_row("total", timing.total_ns, timing.total_ns);

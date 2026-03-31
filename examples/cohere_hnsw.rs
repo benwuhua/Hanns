@@ -180,7 +180,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         "\n--- HNSW (IP, M={}, ef_construction={}) ---",
         hnsw_m, HNSW_EF_CONSTRUCTION
     );
-    let mut hnsw_params = IndexParams::hnsw(HNSW_EF_CONSTRUCTION, EF_SWEEP[0], HNSW_LEVEL_MULTIPLIER);
+    let mut hnsw_params =
+        IndexParams::hnsw(HNSW_EF_CONSTRUCTION, EF_SWEEP[0], HNSW_LEVEL_MULTIPLIER);
     hnsw_params.m = Some(hnsw_m);
     let hnsw_cfg = IndexConfig {
         index_type: IndexType::Hnsw,

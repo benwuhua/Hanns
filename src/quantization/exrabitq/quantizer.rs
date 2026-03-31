@@ -200,8 +200,10 @@ impl ExRaBitQQuantizer {
                 }
             })
             .collect();
-        let signed_long_levels_u8: Vec<u8> =
-            signed_long_levels.iter().map(|&value| value as u8).collect();
+        let signed_long_levels_u8: Vec<u8> = signed_long_levels
+            .iter()
+            .map(|&value| value as u8)
+            .collect();
         let long_code = self.store_compacted_code(&signed_long_levels_u8);
 
         let factor = ExFactor {
@@ -320,7 +322,9 @@ impl ExRaBitQQuantizer {
     ) -> f32 {
         let fac_rescale = (1u32 << self.config.ex_bits()) as f32;
         let long_ip = self.long_code_inner_product(residual, long_code);
-        x2 + y2 - xipnorm * (fac_rescale * rabitq_ip + long_ip - (fac_rescale - 1.0) * half_sum_residual)
+        x2 + y2
+            - xipnorm
+                * (fac_rescale * rabitq_ip + long_ip - (fac_rescale - 1.0) * half_sum_residual)
     }
 
     pub fn rerank_distance_high_accuracy(
@@ -474,12 +478,10 @@ impl ExRaBitQQuantizer {
                     .zip(compact.chunks_exact_mut(48))
                 {
                     for lane in 0..16 {
-                        dst[lane] =
-                            (src[lane] & 0x3F) | (((src[32 + lane] >> 4) & 0x03) << 6);
-                        dst[16 + lane] = (src[16 + lane] & 0x3F)
-                            | (((src[48 + lane] >> 4) & 0x03) << 6);
-                        dst[32 + lane] =
-                            (src[32 + lane] & 0x0F) | ((src[48 + lane] & 0x0F) << 4);
+                        dst[lane] = (src[lane] & 0x3F) | (((src[32 + lane] >> 4) & 0x03) << 6);
+                        dst[16 + lane] =
+                            (src[16 + lane] & 0x3F) | (((src[48 + lane] >> 4) & 0x03) << 6);
+                        dst[32 + lane] = (src[32 + lane] & 0x0F) | ((src[48 + lane] & 0x0F) << 4);
                     }
                 }
             }
@@ -489,12 +491,10 @@ impl ExRaBitQQuantizer {
                     .zip(compact.chunks_exact_mut(56))
                 {
                     for lane in 0..16 {
-                        dst[lane] =
-                            (src[lane] & 0x3F) | (((src[32 + lane] >> 4) & 0x03) << 6);
-                        dst[16 + lane] = (src[16 + lane] & 0x3F)
-                            | (((src[48 + lane] >> 4) & 0x03) << 6);
-                        dst[32 + lane] =
-                            (src[32 + lane] & 0x0F) | ((src[48 + lane] & 0x0F) << 4);
+                        dst[lane] = (src[lane] & 0x3F) | (((src[32 + lane] >> 4) & 0x03) << 6);
+                        dst[16 + lane] =
+                            (src[16 + lane] & 0x3F) | (((src[48 + lane] >> 4) & 0x03) << 6);
+                        dst[32 + lane] = (src[32 + lane] & 0x0F) | ((src[48 + lane] & 0x0F) << 4);
                     }
 
                     let mut top_bits = 0u64;

@@ -814,8 +814,8 @@ impl Index for HnswPrqIndex {
     }
 
     fn load(&mut self, path: &str) -> Result<(), IndexError> {
-        let loaded =
-            HnswPrqIndex::load(Path::new(path)).map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        let loaded = HnswPrqIndex::load(Path::new(path))
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
         *self = loaded;
         Ok(())
     }

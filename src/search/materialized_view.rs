@@ -82,9 +82,7 @@ impl MaterializedView {
                 .par_iter()
                 .enumerate()
                 .filter_map(|(doc_id, row)| {
-                    row.as_ref()
-                        .filter(|r| eval_expr(expr, r))
-                        .map(|_| doc_id)
+                    row.as_ref().filter(|r| eval_expr(expr, r)).map(|_| doc_id)
                 })
                 .collect();
         }
@@ -94,9 +92,7 @@ impl MaterializedView {
                 .iter()
                 .enumerate()
                 .filter_map(|(doc_id, row)| {
-                    row.as_ref()
-                        .filter(|r| eval_expr(expr, r))
-                        .map(|_| doc_id)
+                    row.as_ref().filter(|r| eval_expr(expr, r)).map(|_| doc_id)
                 })
                 .collect()
         }
@@ -105,24 +101,12 @@ impl MaterializedView {
 
 fn eval_expr(expr: &FilterExpr, row: &ScalarRow) -> bool {
     match expr {
-        FilterExpr::Eq(field, rhs) => row
-            .get(field)
-            .is_some_and(|lhs| cmp_eq(lhs, rhs)),
-        FilterExpr::Ne(field, rhs) => row
-            .get(field)
-            .is_some_and(|lhs| !cmp_eq(lhs, rhs)),
-        FilterExpr::Lt(field, rhs) => row
-            .get(field)
-            .is_some_and(|lhs| cmp_lt(lhs, rhs)),
-        FilterExpr::Le(field, rhs) => row
-            .get(field)
-            .is_some_and(|lhs| cmp_le(lhs, rhs)),
-        FilterExpr::Gt(field, rhs) => row
-            .get(field)
-            .is_some_and(|lhs| cmp_gt(lhs, rhs)),
-        FilterExpr::Ge(field, rhs) => row
-            .get(field)
-            .is_some_and(|lhs| cmp_ge(lhs, rhs)),
+        FilterExpr::Eq(field, rhs) => row.get(field).is_some_and(|lhs| cmp_eq(lhs, rhs)),
+        FilterExpr::Ne(field, rhs) => row.get(field).is_some_and(|lhs| !cmp_eq(lhs, rhs)),
+        FilterExpr::Lt(field, rhs) => row.get(field).is_some_and(|lhs| cmp_lt(lhs, rhs)),
+        FilterExpr::Le(field, rhs) => row.get(field).is_some_and(|lhs| cmp_le(lhs, rhs)),
+        FilterExpr::Gt(field, rhs) => row.get(field).is_some_and(|lhs| cmp_gt(lhs, rhs)),
+        FilterExpr::Ge(field, rhs) => row.get(field).is_some_and(|lhs| cmp_ge(lhs, rhs)),
         FilterExpr::And(a, b) => eval_expr(a, row) && eval_expr(b, row),
         FilterExpr::Or(a, b) => eval_expr(a, row) || eval_expr(b, row),
         FilterExpr::Not(inner) => !eval_expr(inner, row),

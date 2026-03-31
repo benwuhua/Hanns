@@ -7,9 +7,7 @@
 use std::str::FromStr;
 
 pub mod dtw;
-pub use dtw::{
-    dtw, dtw_cosine, dtw_dispatch, dtw_ip, dtw_itakura, dtw_l2, dtw_sakoe_chiba,
-};
+pub use dtw::{dtw, dtw_cosine, dtw_dispatch, dtw_ip, dtw_itakura, dtw_l2, dtw_sakoe_chiba};
 
 /// 距离度量类型
 ///

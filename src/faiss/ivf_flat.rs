@@ -15,7 +15,9 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use crate::api::{IndexConfig, MetricType, Result, SearchRequest, SearchResult};
-use crate::simd::{dot_product_f32, ip_batch_4, l2_batch_4_ptr, l2_distance_sq, l2_distance_sq_ptr};
+use crate::simd::{
+    dot_product_f32, ip_batch_4, l2_batch_4_ptr, l2_distance_sq, l2_distance_sq_ptr,
+};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -401,9 +403,7 @@ impl IvfFlatIndex {
     fn find_nearest_centroid(&self, vector: &[f32]) -> usize {
         self.score_all_centroids(vector)
             .into_iter()
-            .min_by(|a, b| {
-                a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0))
-            })
+            .min_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)))
             .map(|(idx, _)| idx)
             .unwrap_or(0)
     }
@@ -416,7 +416,8 @@ impl IvfFlatIndex {
                 let base_ptr = self.centroids.as_ptr();
                 let mut c = 0usize;
                 while c + 4 <= self.nlist {
-                    let dists = l2_batch_4_ptr(query_ptr, base_ptr.add(c * self.dim), self.dim, self.dim);
+                    let dists =
+                        l2_batch_4_ptr(query_ptr, base_ptr.add(c * self.dim), self.dim, self.dim);
                     cluster_dists.push((c, dists[0]));
                     cluster_dists.push((c + 1, dists[1]));
                     cluster_dists.push((c + 2, dists[2]));
@@ -424,7 +425,8 @@ impl IvfFlatIndex {
                     c += 4;
                 }
                 while c < self.nlist {
-                    let dist = l2_distance_sq(query, &self.centroids[c * self.dim..(c + 1) * self.dim]);
+                    let dist =
+                        l2_distance_sq(query, &self.centroids[c * self.dim..(c + 1) * self.dim]);
                     cluster_dists.push((c, dist));
                     c += 1;
                 }
@@ -446,7 +448,8 @@ impl IvfFlatIndex {
                     c += 4;
                 }
                 while c < self.nlist {
-                    let score = -dot_product_f32(query, &self.centroids[c * self.dim..(c + 1) * self.dim]);
+                    let score =
+                        -dot_product_f32(query, &self.centroids[c * self.dim..(c + 1) * self.dim]);
                     cluster_dists.push((c, score));
                     c += 1;
                 }
@@ -576,7 +579,12 @@ impl IvfFlatIndex {
         acc
     }
 
-    fn search_single(&self, query: &[f32], req: &SearchRequest, parallel_probes: bool) -> Result<SearchResult> {
+    fn search_single(
+        &self,
+        query: &[f32],
+        req: &SearchRequest,
+        parallel_probes: bool,
+    ) -> Result<SearchResult> {
         let top_k = req.top_k;
         if top_k == 0 {
             return Ok(SearchResult {
@@ -999,8 +1007,8 @@ mod tests {
 
         let mut index = IvfFlatIndex::new(&config).unwrap();
         let train_data = vec![
-            0.0, 0.0, 0.0, 0.0, 0.2, 0.2, 0.2, 0.2, 1.0, 1.0, 1.0, 1.0, 1.2, 1.2, 1.2, 1.2,
-            2.0, 2.0, 2.0, 2.0, 2.2, 2.2, 2.2, 2.2, 3.0, 3.0, 3.0, 3.0, 3.2, 3.2, 3.2, 3.2,
+            0.0, 0.0, 0.0, 0.0, 0.2, 0.2, 0.2, 0.2, 1.0, 1.0, 1.0, 1.0, 1.2, 1.2, 1.2, 1.2, 2.0,
+            2.0, 2.0, 2.0, 2.2, 2.2, 2.2, 2.2, 3.0, 3.0, 3.0, 3.0, 3.2, 3.2, 3.2, 3.2,
         ];
         index.train(&train_data).unwrap();
         index.add(&train_data, None).unwrap();

@@ -1,7 +1,7 @@
 pub mod emb_list;
 pub mod io_cutting;
-pub mod max_sim;
 pub mod materialized_view;
+pub mod max_sim;
 pub mod visited_pool;
 
 pub use visited_pool::{

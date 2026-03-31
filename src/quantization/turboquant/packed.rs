@@ -1,5 +1,8 @@
 pub fn pack_codes(codes: &[u16], bits_per_dim: u8, out: &mut Vec<u8>) {
-    assert!((1..=8).contains(&bits_per_dim), "bits_per_dim must be in 1..=8");
+    assert!(
+        (1..=8).contains(&bits_per_dim),
+        "bits_per_dim must be in 1..=8"
+    );
     let total_bits = codes.len() * bits_per_dim as usize;
     out.clear();
     out.resize(total_bits.div_ceil(8), 0);
@@ -25,7 +28,10 @@ pub fn pack_codes(codes: &[u16], bits_per_dim: u8, out: &mut Vec<u8>) {
 }
 
 pub fn unpack_codes(bytes: &[u8], n: usize, bits_per_dim: u8) -> Vec<u16> {
-    assert!((1..=8).contains(&bits_per_dim), "bits_per_dim must be in 1..=8");
+    assert!(
+        (1..=8).contains(&bits_per_dim),
+        "bits_per_dim must be in 1..=8"
+    );
 
     let mut codes = Vec::with_capacity(n);
     let mut bit_offset = 0usize;

@@ -208,8 +208,7 @@ impl ExRaBitQFastScanState {
             let mut group_min = 0i32;
             for nibble in 1..16usize {
                 let lowbit = nibble & nibble.wrapping_neg();
-                group_lut[nibble] =
-                    group_lut[nibble - lowbit] + quant_query[HIGH_ACC_POS[nibble]];
+                group_lut[nibble] = group_lut[nibble - lowbit] + quant_query[HIGH_ACC_POS[nibble]];
                 if group_lut[nibble] < group_min {
                     group_min = group_lut[nibble];
                 }
@@ -401,19 +400,19 @@ pub fn scan_layout_bitmask(
     for candidate in candidates {
         let idx = candidate.idx;
         let distance = if state.use_high_accuracy {
-            let long_ip = quantizer.long_code_inner_product(&state.unit_query, layout.long_code_at(idx));
+            let long_ip =
+                quantizer.long_code_inner_product(&state.unit_query, layout.long_code_at(idx));
             layout.x2_at(idx) + state.y2
                 - layout.factor_at(idx).xipnorm
                     * state.y
-                    * (fac_rescale * candidate.rabitq_ip
-                        + long_ip
+                    * (fac_rescale * candidate.rabitq_ip + long_ip
                         - (fac_rescale - 0.5) * state.sumq)
         } else {
-            let long_ip = quantizer.long_code_inner_product(&state.residual, layout.long_code_at(idx));
+            let long_ip =
+                quantizer.long_code_inner_product(&state.residual, layout.long_code_at(idx));
             layout.x2_at(idx) + state.y2
                 - layout.factor_at(idx).xipnorm
-                    * (fac_rescale * candidate.rabitq_ip
-                        + long_ip
+                    * (fac_rescale * candidate.rabitq_ip + long_ip
                         - (fac_rescale - 1.0) * state.half_sum_residual)
         };
         exact.push((layout.id_at(idx), distance));
@@ -559,9 +558,7 @@ unsafe fn scan_layout_bitmask_avx512(
             let distance = layout.x2_at(idx) + state.y2
                 - layout.factor_at(idx).xipnorm
                     * state.y
-                    * (fac_rescale * ip_xb_qprime
-                        + long_ip
-                        - (fac_rescale - 0.5) * state.sumq);
+                    * (fac_rescale * ip_xb_qprime + long_ip - (fac_rescale - 0.5) * state.sumq);
             let candidate = ScoredCandidate {
                 idx,
                 distance,

@@ -88,7 +88,10 @@ fn compute_recall(results: &[Vec<i64>], gt: &[Vec<i32>], top_k: usize) -> f32 {
         let r = &results[i];
         let g = &gt[i];
         for &gid in g.iter().take(top_k.min(g.len())) {
-            if r.iter().take(top_k.min(r.len())).any(|&rid| rid == gid as i64) {
+            if r.iter()
+                .take(top_k.min(r.len()))
+                .any(|&rid| rid == gid as i64)
+            {
                 hits += 1;
             }
         }

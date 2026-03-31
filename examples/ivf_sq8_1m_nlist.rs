@@ -43,14 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== IVF-SQ8 1M nlist sweep ===");
     println!(
         "base={} dim={} metric=L2 seed={} top_k={} recall_q={} qps_q={} nlist={:?} nprobe={:?}",
-        BASE_SIZE,
-        DIM,
-        SEED,
-        TOP_K,
-        RECALL_QUERIES,
-        QPS_QUERIES,
-        NLIST_SWEEP,
-        NPROBE_SWEEP
+        BASE_SIZE, DIM, SEED, TOP_K, RECALL_QUERIES, QPS_QUERIES, NLIST_SWEEP, NPROBE_SWEEP
     );
 
     let mut rng = StdRng::seed_from_u64(SEED);

@@ -262,7 +262,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (gt_q, gt_width, gt) = read_ibin(&format!("{root}/gt.ibin"))?;
 
     if base_dim != DIM || query_dim != DIM {
-        return Err(format!("unexpected dim: base={}, query={}, expected={DIM}", base_dim, query_dim).into());
+        return Err(format!(
+            "unexpected dim: base={}, query={}, expected={DIM}",
+            base_dim, query_dim
+        )
+        .into());
     }
     if gt_q != query_n {
         return Err(format!("gt queries {} != query count {}", gt_q, query_n).into());

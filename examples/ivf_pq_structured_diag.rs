@@ -112,7 +112,8 @@ fn recall_at_k(results: &[Vec<i64>], gt: &[Vec<i64>], k: usize) -> f64 {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (base, centers, labels) = gen_clustered_vectors(N_CLUSTERS, N_PER_CLUSTER, DIM, NOISE, SEED);
+    let (base, centers, labels) =
+        gen_clustered_vectors(N_CLUSTERS, N_PER_CLUSTER, DIM, NOISE, SEED);
     let (queries, _, _) = gen_clustered_vectors(N_CLUSTERS, 10, DIM, NOISE, SEED + 1);
     let queries = &queries[..NUM_QUERIES * DIM];
 
@@ -191,8 +192,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("gt_in_top100: {}/10 found", gt_in_top100);
     println!("gt_in_top10: {}/10 found", gt_in_top10);
     println!("IVF-PQ top-5 (id, adc_dist):");
-    for i in 0..5.min(ivfpq_top100.ids.len()).min(ivfpq_top100.distances.len()) {
-        println!("  ({}, {:.4})", ivfpq_top100.ids[i], ivfpq_top100.distances[i]);
+    for i in 0..5
+        .min(ivfpq_top100.ids.len())
+        .min(ivfpq_top100.distances.len())
+    {
+        println!(
+            "  ({}, {:.4})",
+            ivfpq_top100.ids[i], ivfpq_top100.distances[i]
+        );
     }
     println!("GT top-5 (id, exact_dist):");
     for (id, dist) in gt_top10_with_dist.iter().take(5) {

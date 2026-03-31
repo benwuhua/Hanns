@@ -110,24 +110,24 @@ impl ScalarQuantizer {
     pub fn decode_dot_f32(&self, codes: &[u8], query: &[f32]) -> f32 {
         debug_assert_eq!(codes.len(), query.len());
 
-    #[cfg(target_arch = "x86_64")]
-    {
-        if std::arch::is_x86_feature_detected!("avx512f") && codes.len() >= 16 {
-            // SAFETY: AVX-512F path is guarded by runtime feature detection.
-            return unsafe {
-                decode_dot_avx512(
-                    codes,
-                    query,
-                    self.scale,
-                    self.offset,
-                    self.min_val,
-                    self.max_val,
-                )
-            };
-        }
-        if std::arch::is_x86_feature_detected!("avx2")
-            && std::arch::is_x86_feature_detected!("fma")
-            && codes.len() >= 8
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::arch::is_x86_feature_detected!("avx512f") && codes.len() >= 16 {
+                // SAFETY: AVX-512F path is guarded by runtime feature detection.
+                return unsafe {
+                    decode_dot_avx512(
+                        codes,
+                        query,
+                        self.scale,
+                        self.offset,
+                        self.min_val,
+                        self.max_val,
+                    )
+                };
+            }
+            if std::arch::is_x86_feature_detected!("avx2")
+                && std::arch::is_x86_feature_detected!("fma")
+                && codes.len() >= 8
             {
                 // SAFETY: AVX2+FMA path is guarded by runtime feature detection.
                 return unsafe {
@@ -254,8 +254,7 @@ impl ScalarQuantizer {
                 if std::arch::is_x86_feature_detected!("avx512bw") && q_i16.len() >= 32 {
                     // SAFETY: AVX-512 path is guarded by runtime feature detection.
                     unsafe { sq_l2_precomputed_avx512(q_i16, db_code) }
-                } else
-                if std::arch::is_x86_feature_detected!("avx2") && q_i16.len() >= 16 {
+                } else if std::arch::is_x86_feature_detected!("avx2") && q_i16.len() >= 16 {
                     // SAFETY: AVX2 path is guarded by runtime feature detection.
                     unsafe { sq_l2_precomputed_avx2(q_i16, db_code) }
                 } else {
