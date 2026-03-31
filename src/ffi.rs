@@ -1377,6 +1377,15 @@ impl IndexWrapper {
         }
     }
 
+    fn set_ef_search(&mut self, ef_search: usize) -> Result<(), CError> {
+        if let Some(ref mut idx) = self.hnsw {
+            idx.set_ef_search(ef_search);
+            Ok(())
+        } else {
+            Err(CError::InvalidArg)
+        }
+    }
+
     /// Search binary vectors (for BinFlat, BinaryHnsw, BinIvfFlat, and MinHashLSH)
     /// Returns distances as f32 (converted from usize Hamming distance)
     fn search_binary(&self, query: &[u8], top_k: usize) -> Result<ApiSearchResult, CError> {
@@ -2457,6 +2466,22 @@ pub extern "C" fn knowhere_search(
                 Box::into_raw(Box::new(csr))
             }
             Err(_) => std::ptr::null_mut(),
+        }
+    }
+}
+
+/// Override HNSW search-time ef on an existing index handle.
+#[no_mangle]
+pub extern "C" fn knowhere_set_ef_search(index: *mut std::ffi::c_void, ef_search: usize) -> i32 {
+    if index.is_null() || ef_search == 0 {
+        return CError::InvalidArg as i32;
+    }
+
+    unsafe {
+        let wrapper = &mut *(index as *mut IndexWrapper);
+        match wrapper.set_ef_search(ef_search) {
+            Ok(()) => CError::Success as i32,
+            Err(err) => err as i32,
         }
     }
 }
@@ -5979,6 +6004,57 @@ mod tests {
         }
 
         knowhere_free_binary_set(binset);
+        knowhere_free_index(index);
+    }
+
+    fn read_hnsw_ef_search_from_binset(binset: *mut CBinarySet) -> u32 {
+        unsafe {
+            let binset_ref = &*binset;
+            assert!(binset_ref.count >= 1);
+            let binary = &*binset_ref.values;
+            let data = std::slice::from_raw_parts(binary.data, binary.size as usize);
+            assert!(data.len() >= 24);
+            assert_eq!(&data[0..4], b"HNSW");
+            u32::from_le_bytes(data[20..24].try_into().unwrap())
+        }
+    }
+
+    #[test]
+    fn test_hnsw_set_ef_search_updates_serialized_state() {
+        let config = CIndexConfig {
+            index_type: CIndexType::Hnsw,
+            metric_type: CMetricType::L2,
+            dim: 16,
+            ef_construction: 200,
+            ef_search: 16,
+            ..Default::default()
+        };
+
+        let index = knowhere_create_index(config);
+        assert!(!index.is_null());
+
+        let vectors: Vec<f32> = (0..20 * 16).map(|i| i as f32).collect();
+        let ids: Vec<i64> = (0..20).collect();
+
+        let train_result = knowhere_train_index(index, vectors.as_ptr(), 20, 16);
+        assert_eq!(train_result, CError::Success as i32);
+
+        let add_result = knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), 20, 16);
+        assert_eq!(add_result, CError::Success as i32);
+
+        let before = knowhere_serialize_index(index);
+        assert!(!before.is_null());
+        assert_eq!(read_hnsw_ef_search_from_binset(before), 16);
+        knowhere_free_binary_set(before);
+
+        let update_result = knowhere_set_ef_search(index, 77);
+        assert_eq!(update_result, CError::Success as i32);
+
+        let after = knowhere_serialize_index(index);
+        assert!(!after.is_null());
+        assert_eq!(read_hnsw_ef_search_from_binset(after), 77);
+
+        knowhere_free_binary_set(after);
         knowhere_free_index(index);
     }
 
