@@ -30,9 +30,7 @@ pub enum IndexType {
     HnswPrq,
     /// HNSW-PQ (HNSW with Product Quantization)
     HnswPq,
-    /// IVF-RaBitQ (Rotated Adaptive Bit Quantization)
-    IvfRabitq,
-    /// IVF-Extended-RaBitQ (two-stage fast-scan + rerank Euclidean quantization)
+    /// IVF-RaBitQ (Rotated Adaptive Bit Quantization with FastScan)
     IvfExRaBitq,
     /// IVF-TurboQuant (Dense-rotation data-oblivious scalar quantization)
     IvfTurboQuant,
@@ -79,10 +77,8 @@ impl FromStr for IndexType {
             "scann" => Ok(IndexType::Scann),
             "hnsw_prq" | "hnsw-prq" => Ok(IndexType::HnswPrq),
             "hnsw_pq" | "hnsw-pq" => Ok(IndexType::HnswPq),
-            "ivf_rabitq" | "ivf-rabitq" | "rabitq" => Ok(IndexType::IvfRabitq),
-            "ivf_exrabitq" | "ivf-exrabitq" | "extended-rabitq" | "exrabitq" => {
-                Ok(IndexType::IvfExRaBitq)
-            }
+            "ivf_rabitq" | "ivf-rabitq" | "rabitq" | "ivf_exrabitq" | "ivf-exrabitq"
+            | "extended-rabitq" | "exrabitq" => Ok(IndexType::IvfExRaBitq),
             "ivf_turboquant" | "ivf-turboquant" | "turboquant" => Ok(IndexType::IvfTurboQuant),
             "ivf_flat_cc" | "ivf-flat-cc" | "ivfcc" => Ok(IndexType::IvfFlatCc),
             "ivf_sq8" | "ivf-sq8" | "ivfsq8" => Ok(IndexType::IvfSq8),
@@ -332,10 +328,7 @@ pub struct IndexParams {
     /// For PRQ: number of bits per subquantizer (nbits)
     #[serde(default)]
     pub prq_nbits: Option<usize>,
-    /// For RaBitQ: number of bits for query
-    #[serde(default)]
-    pub rabitq_bits_query: Option<usize>,
-    /// For Extended-RaBitQ: total bits per rotated residual dimension
+    /// For RaBitQ: total bits per rotated residual dimension (1=binary, 4=compact, 8=quality)
     #[serde(default)]
     pub exrabitq_bits_per_dim: Option<usize>,
     /// For Extended-RaBitQ: use the higher-accuracy short-code scan mode

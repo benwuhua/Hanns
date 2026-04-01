@@ -153,7 +153,16 @@ fn test_exrabitq_config_pads_dim_to_multiple_of_64() {
 
 #[test]
 fn test_exrabitq_config_rejects_unsupported_bits() {
+    assert!(ExRaBitQConfig::new(768, 2).is_err());
+    assert!(ExRaBitQConfig::new(768, 3).is_err());
+    assert!(ExRaBitQConfig::new(768, 5).is_err());
     assert!(ExRaBitQConfig::new(768, 6).is_err());
+    assert!(ExRaBitQConfig::new(768, 7).is_err());
+    assert!(ExRaBitQConfig::new(768, 9).is_err());
+    // Valid values
+    assert!(ExRaBitQConfig::new(768, 1).is_ok());
+    assert!(ExRaBitQConfig::new(768, 4).is_ok());
+    assert!(ExRaBitQConfig::new(768, 8).is_ok());
 }
 
 #[test]
@@ -176,7 +185,7 @@ fn test_fast_quantize_is_not_worse_than_reference_greedy() {
 
 #[test]
 fn test_fast_quantize_matches_reference_scan() {
-    for &bits_per_dim in &[3usize, 4, 5, 7, 8, 9] {
+    for &bits_per_dim in &[4usize, 8] {
         let cfg = ExRaBitQConfig::new(64, bits_per_dim)
             .unwrap()
             .with_rotation_seed(19 + bits_per_dim as u64);
@@ -213,7 +222,7 @@ fn test_compacted_long_code_roundtrip_and_ip() {
     let dim = 64usize;
     let query = random_unit_vector(dim, 20260329);
 
-    for &bits_per_dim in &[3usize, 4, 5, 7, 8, 9] {
+    for &bits_per_dim in &[4usize, 8] {
         let cfg = ExRaBitQConfig::new(dim, bits_per_dim).unwrap();
         let q = ExRaBitQQuantizer::new(cfg.clone()).unwrap();
         let max_level = ((1usize << cfg.ex_bits()) - 1) as u8;

@@ -11,7 +11,7 @@ use crate::index::{
     AnnIterator, Index as IndexTrait, IndexError, SearchResult as IndexSearchResult,
 };
 use crate::quantization::exrabitq::{
-    scan_and_rerank, EncodedVector, ExFactor, ExRaBitQConfig, ExRaBitQFastScanState,
+    scan_and_rerank, scan_layout, EncodedVector, ExFactor, ExRaBitQConfig, ExRaBitQFastScanState,
     ExRaBitQLayout, ExRaBitQQuantizer, ExShortFactors,
 };
 use crate::quantization::KMeans;
@@ -572,14 +572,26 @@ impl IvfExRaBitqIndex {
                     ExRaBitQFastScanState::new(&residual, y2)
                 })
             };
-            let mut reranked = scan_and_rerank(
-                &self.quantizer,
-                layout,
-                scan_state,
-                shortlist.min(layout.len()),
-                shortlist,
-            );
-            candidates.append(&mut reranked);
+            let mut results = if self.config.bits_per_dim == 1 {
+                // 1-bit mode: no long code, rerank provides no extra information
+                // and uses an uncalibrated xipnorm=1.0 that makes results worse.
+                // Trust fastscan distances directly.
+                let shortlist_k = shortlist.min(layout.len());
+                let scanned = scan_layout(layout, scan_state, shortlist_k);
+                scanned
+                    .into_iter()
+                    .map(|c| (layout.id_at(c.idx), c.distance))
+                    .collect::<Vec<_>>()
+            } else {
+                scan_and_rerank(
+                    &self.quantizer,
+                    layout,
+                    scan_state,
+                    shortlist.min(layout.len()),
+                    shortlist,
+                )
+            };
+            candidates.append(&mut results);
         }
 
         let candidate_limit = top_k.max(shortlist.min(candidates.len()));

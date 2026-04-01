@@ -129,17 +129,6 @@ impl LegalMatrix {
             add_legal(
                 &mut legal_index_datatype,
                 &mut legal_combinations,
-                IndexType::IvfRabitq,
-                *dt,
-                vec![MetricType::L2, MetricType::Ip, MetricType::Cosine],
-            );
-        }
-
-        // === IVF-Extended-RaBitQ ===
-        for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16] {
-            add_legal(
-                &mut legal_index_datatype,
-                &mut legal_combinations,
                 IndexType::IvfExRaBitq,
                 *dt,
                 vec![MetricType::L2],
@@ -310,7 +299,7 @@ impl LegalMatrix {
             IndexType::Scann,
             IndexType::IvfSq8,
             IndexType::IvfSqCc,
-            IndexType::IvfRabitq,
+            IndexType::IvfExRaBitq,
             IndexType::Hnsw,
             IndexType::HnswSq,
             IndexType::HnswPq,

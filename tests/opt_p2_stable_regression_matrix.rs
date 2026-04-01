@@ -74,12 +74,6 @@ legal_case!(
     MetricType::Ip
 );
 legal_case!(
-    legal_ivf_rabitq_float_l2,
-    IndexType::IvfRabitq,
-    DataType::Float,
-    MetricType::L2
-);
-legal_case!(
     legal_diskann_float16_l2,
     IndexType::DiskAnn,
     DataType::Float16,

@@ -32,21 +32,21 @@ const TIERS: [Tier; 3] = [
         pq_m: 96,
         pq_nbits: 8,
         hvq_bits: 1,
-        exrabitq_bits: 3,
+        exrabitq_bits: 1,
     },
     Tier {
         label: "8x",
         pq_m: 384,
         pq_nbits: 8,
         hvq_bits: 4,
-        exrabitq_bits: 5,
+        exrabitq_bits: 4,
     },
     Tier {
         label: "4x",
         pq_m: 768,
         pq_nbits: 8,
         hvq_bits: 8,
-        exrabitq_bits: 9,
+        exrabitq_bits: 8,
     },
 ];
 

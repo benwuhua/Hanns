@@ -19,7 +19,7 @@ pub mod ivf_flat;
 pub mod ivf_flat_cc;
 pub mod ivf_hvq;
 pub mod ivf_opq;
-pub mod ivf_rabitq;
+
 pub mod ivf_sq8;
 pub mod ivf_sq_cc;
 pub mod ivf_turboquant;
@@ -58,7 +58,7 @@ pub use ivf_flat::IvfFlatIndex;
 pub use ivf_flat_cc::IvfFlatCcIndex;
 pub use ivf_hvq::{IvfHvqConfig, IvfHvqIndex};
 pub use ivf_opq::{IvfOpqConfig, IvfOpqIndex, IvfOpqIndexWrapper};
-pub use ivf_rabitq::{IvfRaBitqConfig, IvfRaBitqIndex};
+
 pub use ivf_sq8::IvfSq8Index;
 pub use ivf_sq_cc::IvfSqCcIndex;
 pub use ivf_turboquant::{IvfTurboQuantConfig, IvfTurboQuantIndex};
@@ -76,5 +76,3 @@ pub use sparse_wand_cc::SparseWandIndexCC;
 
 #[cfg(feature = "ffi")]
 pub mod exrabitq_ffi;
-#[cfg(feature = "ffi")]
-pub mod rabitq_ffi;

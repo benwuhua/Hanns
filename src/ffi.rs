@@ -297,7 +297,6 @@ struct IndexWrapper {
     hnsw: Option<HnswIndex>,
     scann: Option<ScaNNIndex>,
     hnsw_prq: Option<crate::faiss::HnswPrqIndex>,
-    ivf_rabitq: Option<crate::faiss::IvfRaBitqIndex>,
     hnsw_sq: Option<crate::faiss::HnswSqIndex>,
     hnsw_pq: Option<crate::faiss::HnswPqIndex>,
     ivf_pq: Option<crate::faiss::IvfPqIndex>,
@@ -390,7 +389,7 @@ impl IndexWrapper {
                 return None;
             }
             CIndexType::HnswPrq => IndexType::HnswPrq,
-            CIndexType::IvfRabitq => IndexType::IvfRabitq,
+            CIndexType::IvfRabitq => IndexType::IvfExRaBitq,
             CIndexType::HnswSq => IndexType::HnswSq,
             CIndexType::HnswPq => IndexType::HnswPq,
             CIndexType::IvfPq => IndexType::IvfPq,
@@ -433,7 +432,7 @@ impl IndexWrapper {
                     hnsw: None,
                     scann: None,
                     hnsw_prq: None,
-                    ivf_rabitq: None,
+
                     hnsw_sq: None,
                     hnsw_pq: None,
                     ivf_pq: None,
@@ -469,7 +468,7 @@ impl IndexWrapper {
                     hnsw: Some(hnsw),
                     scann: None,
                     hnsw_prq: None,
-                    ivf_rabitq: None,
+
                     hnsw_sq: None,
                     hnsw_pq: None,
                     ivf_pq: None,
@@ -520,7 +519,7 @@ impl IndexWrapper {
                     hnsw: None,
                     scann: Some(scann),
                     hnsw_prq: None,
-                    ivf_rabitq: None,
+
                     hnsw_sq: None,
                     hnsw_pq: None,
                     ivf_pq: None,
@@ -602,7 +601,7 @@ impl IndexWrapper {
                     hnsw: None,
                     scann: None,
                     hnsw_prq: Some(hnsw_prq),
-                    ivf_rabitq: None,
+
                     hnsw_sq: None,
                     hnsw_pq: None,
                     ivf_pq: None,
@@ -619,38 +618,8 @@ impl IndexWrapper {
                 })
             }
             CIndexType::IvfRabitq => {
-                let nlist = if config.num_clusters > 0 {
-                    config.num_clusters
-                } else {
-                    256
-                };
-                let nprobe = if config.nprobe > 0 { config.nprobe } else { 8 };
-
-                let ivf_rabitq_config = crate::faiss::IvfRaBitqConfig::new(dim, nlist)
-                    .with_nprobe(nprobe)
-                    .with_metric(metric);
-
-                let ivf_rabitq = crate::faiss::IvfRaBitqIndex::new(ivf_rabitq_config);
-                Some(Self {
-                    flat: None,
-                    hnsw: None,
-                    scann: None,
-                    hnsw_prq: None,
-                    ivf_rabitq: Some(ivf_rabitq),
-                    hnsw_sq: None,
-                    hnsw_pq: None,
-                    ivf_pq: None,
-                    bin_flat: None,
-                    binary_hnsw: None,
-                    ivf_sq8: None,
-                    ivf_flat: None,
-                    bin_ivf_flat: None,
-                    sparse_inverted: None,
-                    sparse_wand: None,
-                    sparse_wand_cc: None,
-                    minhash_lsh: None,
-                    dim,
-                })
+                eprintln!("IvfRabitq merged into IvfExRaBitq; use exrabitq_ffi API");
+                return None;
             }
             CIndexType::HnswSq => {
                 let ef_construction = if config.ef_construction > 0 {
@@ -685,7 +654,7 @@ impl IndexWrapper {
                     hnsw: None,
                     scann: None,
                     hnsw_prq: None,
-                    ivf_rabitq: None,
+
                     hnsw_sq: Some(hnsw_sq),
                     hnsw_pq: None,
                     ivf_pq: None,
@@ -726,7 +695,7 @@ impl IndexWrapper {
                     hnsw: None,
                     scann: None,
                     hnsw_prq: None,
-                    ivf_rabitq: None,
+
                     hnsw_sq: None,
                     hnsw_pq: Some(hnsw_pq),
                     ivf_pq: None,
@@ -765,7 +734,7 @@ impl IndexWrapper {
                     hnsw: None,
                     scann: None,
                     hnsw_prq: None,
-                    ivf_rabitq: None,
+
                     hnsw_sq: None,
                     hnsw_pq: None,
                     ivf_pq: None,
@@ -803,7 +772,7 @@ impl IndexWrapper {
                     hnsw: None,
                     scann: None,
                     hnsw_prq: None,
-                    ivf_rabitq: None,
+
                     hnsw_sq: None,
                     hnsw_pq: None,
                     ivf_pq: None,
@@ -837,7 +806,7 @@ impl IndexWrapper {
                     hnsw: None,
                     scann: None,
                     hnsw_prq: None,
-                    ivf_rabitq: None,
+
                     hnsw_sq: None,
                     hnsw_pq: None,
                     ivf_pq: Some(ivf_pq),
@@ -861,7 +830,7 @@ impl IndexWrapper {
                     hnsw: None,
                     scann: None,
                     hnsw_prq: None,
-                    ivf_rabitq: None,
+
                     hnsw_sq: None,
                     hnsw_pq: None,
                     ivf_pq: None,
@@ -898,7 +867,7 @@ impl IndexWrapper {
                         hnsw: None,
                         scann: None,
                         hnsw_prq: None,
-                        ivf_rabitq: None,
+    
                         hnsw_sq: None,
                         hnsw_pq: None,
                         ivf_pq: None,
@@ -933,7 +902,7 @@ impl IndexWrapper {
                     hnsw: None,
                     scann: None,
                     hnsw_prq: None,
-                    ivf_rabitq: None,
+
                     hnsw_sq: None,
                     hnsw_pq: None,
                     ivf_pq: None,
@@ -964,7 +933,7 @@ impl IndexWrapper {
                     hnsw: None,
                     scann: None,
                     hnsw_prq: None,
-                    ivf_rabitq: None,
+
                     hnsw_sq: None,
                     hnsw_pq: None,
                     ivf_pq: None,
@@ -997,7 +966,7 @@ impl IndexWrapper {
                     hnsw: None,
                     scann: None,
                     hnsw_prq: None,
-                    ivf_rabitq: None,
+
                     hnsw_sq: None,
                     hnsw_pq: None,
                     ivf_pq: None,
@@ -1035,7 +1004,7 @@ impl IndexWrapper {
                     hnsw: None,
                     scann: None,
                     hnsw_prq: None,
-                    ivf_rabitq: None,
+
                     hnsw_sq: None,
                     hnsw_pq: None,
                     ivf_pq: None,
@@ -1059,7 +1028,7 @@ impl IndexWrapper {
                     hnsw: None,
                     scann: None,
                     hnsw_prq: None,
-                    ivf_rabitq: None,
+
                     hnsw_sq: None,
                     hnsw_pq: None,
                     ivf_pq: None,
@@ -1099,8 +1068,6 @@ impl IndexWrapper {
             // ScaNN uses interior mutability (RwLock)
             Ok(idx.add(vectors, ids))
         } else if let Some(ref mut idx) = self.hnsw_prq {
-            idx.add(vectors, ids).map_err(|_| CError::Internal)
-        } else if let Some(ref mut idx) = self.ivf_rabitq {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
         } else if let Some(ref mut idx) = self.hnsw_sq {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
@@ -1235,9 +1202,6 @@ impl IndexWrapper {
         } else if let Some(ref mut idx) = self.hnsw_prq {
             idx.train(vectors).map_err(|_| CError::Internal)?;
             Ok(())
-        } else if let Some(ref mut idx) = self.ivf_rabitq {
-            idx.train(vectors).map_err(|_| CError::Internal)?;
-            Ok(())
         } else if let Some(ref mut idx) = self.hnsw_sq {
             idx.train(vectors).map_err(|_| CError::Internal)?;
             Ok(())
@@ -1288,15 +1252,6 @@ impl IndexWrapper {
             let results = idx
                 .search(query, top_k, None)
                 .map_err(|_| CError::Internal)?;
-            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-            Ok(ApiSearchResult::new(
-                results.ids,
-                results.distances,
-                elapsed_ms,
-            ))
-        } else if let Some(ref idx) = self.ivf_rabitq {
-            let start = std::time::Instant::now();
-            let results = idx.search(query, &req).map_err(|_| CError::Internal)?;
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
             Ok(ApiSearchResult::new(
                 results.ids,
@@ -1483,8 +1438,6 @@ impl IndexWrapper {
             idx.count()
         } else if let Some(ref idx) = self.hnsw_prq {
             idx.count()
-        } else if let Some(ref idx) = self.ivf_rabitq {
-            idx.count()
         } else if let Some(ref idx) = self.hnsw_sq {
             idx.count()
         } else if let Some(ref idx) = self.hnsw_pq {
@@ -1514,8 +1467,6 @@ impl IndexWrapper {
         } else if let Some(ref idx) = self.scann {
             idx.is_trained()
         } else if let Some(ref idx) = self.hnsw_prq {
-            idx.is_trained()
-        } else if let Some(ref idx) = self.ivf_rabitq {
             idx.is_trained()
         } else if let Some(ref idx) = self.ivf_pq {
             idx.is_trained()
@@ -1549,8 +1500,6 @@ impl IndexWrapper {
         } else if let Some(ref idx) = self.scann {
             idx.size()
         } else if let Some(ref idx) = self.hnsw_prq {
-            idx.size()
-        } else if let Some(ref idx) = self.ivf_rabitq {
             idx.size()
         } else if let Some(ref idx) = self.hnsw_sq {
             idx.size()
@@ -1587,8 +1536,6 @@ impl IndexWrapper {
             "ScaNN"
         } else if self.hnsw_prq.is_some() {
             "HNSW_PRQ"
-        } else if self.ivf_rabitq.is_some() {
-            "IVF_RABITQ"
         } else if self.hnsw_sq.is_some() {
             "HNSW_SQ"
         } else if self.hnsw_pq.is_some() {
@@ -1654,8 +1601,6 @@ impl IndexWrapper {
             idx.has_raw_data()
         } else if let Some(ref idx) = self.hnsw_prq {
             idx.has_raw_data()
-        } else if let Some(ref idx) = self.ivf_rabitq {
-            idx.has_raw_data()
         } else if let Some(ref idx) = self.hnsw_pq {
             idx.has_raw_data()
         } else if let Some(ref idx) = self.ivf_sq8 {
@@ -1693,7 +1638,6 @@ impl IndexWrapper {
             _ if self.hnsw.is_some() => "HNSW does not expose additional-scalar filtering through the current Rust FFI",
             _ if self.ivf_sq8.is_some()
                 || self.ivf_flat.is_some()
-                || self.ivf_rabitq.is_some()
                 || self.ivf_pq.is_some() =>
             {
                 "IVF variants do not expose additional-scalar filtering through the current Rust FFI"
@@ -1736,12 +1680,6 @@ impl IndexWrapper {
                 },
                 ann_iterator: "unsupported",
                 persistence: "supported",
-            }
-        } else if self.ivf_rabitq.is_some() {
-            IndexCapabilitySummary {
-                get_vector_by_ids: "unsupported",
-                ann_iterator: "unsupported",
-                persistence: "unsupported",
             }
         } else if self.ivf_pq.is_some() {
             IndexCapabilitySummary {
@@ -1921,7 +1859,6 @@ impl IndexWrapper {
             }
         } else if self.ivf_sq8.is_some()
             || self.ivf_flat.is_some()
-            || self.ivf_rabitq.is_some()
             || self.ivf_pq.is_some()
         {
             IndexMetaSemantics {

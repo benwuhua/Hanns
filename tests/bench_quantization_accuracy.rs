@@ -10,9 +10,7 @@
 
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 use knowhere_rs::benchmark::recall::recall_at_k;
-use knowhere_rs::faiss::{
-    IvfPqIndex, IvfRaBitqConfig, IvfRaBitqIndex, IvfSq8Index, MemIndex as FlatIndex,
-};
+use knowhere_rs::faiss::{IvfPqIndex, IvfSq8Index, MemIndex as FlatIndex};
 use rand::Rng;
 use std::time::Instant;
 
@@ -252,83 +250,6 @@ fn run_pq_bench(
     }
 }
 
-/// 运行 RaBitQ benchmark
-#[allow(clippy::too_many_arguments)]
-fn run_rabitq_bench(
-    train_data: &[f32],
-    base_data: &[f32],
-    query_data: &[f32],
-    ground_truth: &[Vec<i32>],
-    dim: usize,
-    top_k: usize,
-    nlist: usize,
-    nprobe: usize,
-    nbits: usize,
-) -> BenchmarkResult {
-    let compression_ratio = 32.0 / nbits as f32; // 相对于 float32
-    println!(
-        "\n  测试 RaBitQ {}bits ({:.0}x 压缩，nlist={}, nprobe={})...",
-        nbits, compression_ratio, nlist, nprobe
-    );
-
-    let rabitq_config = IvfRaBitqConfig::new(dim, nlist);
-    let mut index = IvfRaBitqIndex::new(rabitq_config);
-
-    // 训练
-    let train_start = Instant::now();
-    index.train(train_data).expect("RaBitQ train failed");
-    let train_time = train_start.elapsed().as_secs_f64() * 1000.0;
-
-    // 添加向量
-    let build_start = Instant::now();
-    index.add(base_data, None).expect("RaBitQ add failed");
-    let build_time = train_time + build_start.elapsed().as_secs_f64() * 1000.0;
-
-    // 搜索
-    let num_queries = query_data.len() / dim;
-    let mut all_results: Vec<Vec<i64>> = Vec::with_capacity(num_queries);
-
-    let search_start = Instant::now();
-    for i in 0..num_queries {
-        let query = &query_data[i * dim..(i + 1) * dim];
-        let req = SearchRequest {
-            top_k,
-            nprobe,
-            ..Default::default()
-        };
-        match index.search(query, &req) {
-            Ok(result) => all_results.push(result.ids),
-            Err(e) => {
-                return BenchmarkResult {
-                    name: "RaBitQ (error)",
-                    compression_ratio,
-                    build_time_ms: build_time,
-                    search_time_ms: 0.0,
-                    recall_at_1: 0.0,
-                    recall_at_10: 0.0,
-                    recall_at_100: 0.0,
-                    error: Some(format!("搜索失败：{}", e)),
-                };
-            }
-        }
-    }
-    let search_time = search_start.elapsed().as_secs_f64() * 1000.0;
-
-    // 计算召回率
-    let (r1, r10, r100) = calculate_recall(&all_results, ground_truth, top_k);
-
-    BenchmarkResult {
-        name: if nbits == 8 { "RaBitQ 8b" } else { "RaBitQ 4b" },
-        compression_ratio,
-        build_time_ms: build_time,
-        search_time_ms: search_time / num_queries as f64,
-        recall_at_1: r1,
-        recall_at_10: r10,
-        recall_at_100: r100,
-        error: None,
-    }
-}
-
 /// 计算召回率
 fn calculate_recall(
     results: &[Vec<i64>],
@@ -465,22 +386,6 @@ fn bench_quantization_accuracy() {
             );
             results.push(pq_result);
         }
-    }
-
-    // RaBitQ with different nbits
-    for nbits in [8, 4] {
-        let rabitq_result = run_rabitq_bench(
-            &train_data,
-            &base_data,
-            &query_data,
-            &ground_truth,
-            dim,
-            top_k,
-            nlist,
-            nprobe,
-            nbits,
-        );
-        results.push(rabitq_result);
     }
 
     // 打印汇总报告

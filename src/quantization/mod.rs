@@ -6,7 +6,7 @@ pub mod opq;
 pub mod pca;
 pub mod pq;
 pub mod prq;
-pub mod rabitq;
+
 pub mod refine;
 pub mod residual_pq;
 pub mod rq;
@@ -21,7 +21,7 @@ pub use opq::{OPQConfig, OptimizedProductQuantizer};
 pub use pca::PcaTransform;
 pub use pq::{PQConfig, ProductQuantizer};
 pub use prq::{PRQConfig, ProductResidualQuantizer};
-pub use rabitq::{QueryQuantization, RaBitQEncoder};
+
 pub use refine::{pick_refine_index, RefineIndex, RefineType};
 pub use residual_pq::{
     OptimizedResidualProductQuantizer, ResidualPQConfig, ResidualProductQuantizer,

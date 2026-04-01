@@ -25,7 +25,7 @@ use knowhere_rs::faiss::{
     ScaNNIndex,
 };
 use knowhere_rs::MetricType;
-use knowhere_rs::{IvfRaBitqConfig, IvfRaBitqIndex};
+
 use std::env;
 use std::time::Instant;
 
@@ -545,91 +545,6 @@ fn benchmark_ivf_sq8(dataset: &SiftDataset, num_queries: usize) -> BenchmarkResu
     }
 }
 
-/// Benchmark RaBitQ index
-fn benchmark_rabitq(dataset: &SiftDataset, num_queries: usize) -> BenchmarkResult {
-    println!("\nBenchmarking RaBitQ index...");
-
-    let base_vectors = dataset.base.vectors();
-    let query_vectors = dataset.query.vectors();
-    let ground_truth = &dataset.ground_truth;
-
-    let nlist = ((dataset.num_base() as f64).sqrt() as i32).max(1) as usize;
-    let nprobe = 32;
-
-    let tracker = MemoryTracker::new();
-    let base_mem = estimate_vector_memory(dataset.num_base(), dataset.dim());
-    tracker.record_base_memory(base_mem);
-
-    let config = IvfRaBitqConfig::new(dataset.dim(), nlist);
-    let mut index = IvfRaBitqIndex::new(config);
-
-    let build_start = Instant::now();
-    index.train(base_vectors).unwrap();
-    index.add(base_vectors, None).unwrap();
-    let build_time = build_start.elapsed().as_secs_f64() * 1000.0;
-
-    let overhead = estimate_ivf_overhead(dataset.num_base(), dataset.dim(), nlist);
-    tracker.record_index_overhead(overhead);
-
-    println!("  Build time: {:.2} ms", build_time);
-    println!("  nlist: {}, nprobe: {}", nlist, nprobe);
-    println!("{}", tracker.report());
-
-    let search_start = Instant::now();
-    let mut all_results: Vec<Vec<i64>> = Vec::with_capacity(num_queries);
-    let mut all_distances: Vec<f32> = Vec::with_capacity(num_queries * 100);
-
-    for i in 0..num_queries {
-        let query = &query_vectors[i * dataset.dim()..(i + 1) * dataset.dim()];
-        let req = SearchRequest {
-            top_k: 100,
-            nprobe,
-            ..Default::default()
-        };
-        let result = index.search(query, &req).unwrap();
-        all_results.push(result.ids.clone());
-        all_distances.extend(&result.distances);
-    }
-
-    let search_time = search_start.elapsed().as_secs_f64() * 1000.0;
-    let qps = num_queries as f64 / (search_time / 1000.0);
-    println!(
-        "  Search time: {:.2} ms ({} queries)",
-        search_time, num_queries
-    );
-    println!("  QPS: {:.0}", qps);
-
-    let report = DistanceValidationReport::validate_knn(
-        &all_distances,
-        num_queries,
-        100,
-        true,
-        0.0,
-        f32::MAX,
-    );
-    report.print();
-    assert!(report.all_passed(), "Distance validation failed");
-
-    let gt_subset: Vec<_> = ground_truth.iter().take(num_queries).cloned().collect();
-    let recall_at_1 = average_recall_at_k(&all_results, &gt_subset, 1);
-    let recall_at_10 = average_recall_at_k(&all_results, &gt_subset, 10);
-    let recall_at_100 = average_recall_at_k(&all_results, &gt_subset, 100);
-    println!("  Recall@1: {:.3}", recall_at_1);
-    println!("  Recall@10: {:.3}", recall_at_10);
-    println!("  Recall@100: {:.3}", recall_at_100);
-
-    BenchmarkResult {
-        index_name: "RaBitQ".to_string(),
-        build_time_ms: build_time,
-        search_time_ms: search_time,
-        num_queries,
-        qps,
-        recall_at_1,
-        recall_at_10,
-        recall_at_100,
-    }
-}
-
 /// Benchmark ScaNN index
 fn benchmark_scann(dataset: &SiftDataset, num_queries: usize) -> BenchmarkResult {
     println!("\nBenchmarking ScaNN index...");
@@ -745,7 +660,6 @@ fn test_sift1m_benchmark() {
         benchmark_ivf_flat(&dataset, num_queries),
         benchmark_ivf_pq(&dataset, num_queries),
         benchmark_ivf_sq8(&dataset, num_queries),
-        benchmark_rabitq(&dataset, num_queries),
         benchmark_scann(&dataset, num_queries),
     ];
 

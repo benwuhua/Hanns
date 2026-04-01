@@ -5,8 +5,8 @@ use crate::benchmark::{
 use crate::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
 use crate::faiss::sparse_inverted::SparseVector;
 use crate::faiss::{
-    HnswIndex, IvfFlatIndex, IvfPqIndex, IvfRaBitqConfig, IvfRaBitqIndex, MemIndex as FlatIndex,
-    ScaNNConfig, ScaNNIndex, SparseMetricType, SparseWandIndex,
+    HnswIndex, IvfFlatIndex, IvfPqIndex, MemIndex as FlatIndex, ScaNNConfig, ScaNNIndex,
+    SparseMetricType, SparseWandIndex,
 };
 use rand::Rng;
 use std::error::Error;
@@ -266,34 +266,6 @@ fn bench_ivfpq(base: &[f32], queries: &[f32], gt: &[Vec<i32>]) -> BenchmarkRepor
     make_row("IVF-PQ", qps, recall_at_10, "flat_exact_l2_bruteforce")
 }
 
-fn bench_rabitq(base: &[f32], queries: &[f32], gt: &[Vec<i32>]) -> BenchmarkReportRow {
-    let mut index = IvfRaBitqIndex::new(IvfRaBitqConfig::new(DIM, 128).with_nprobe(16));
-    index.train(base).expect("train rabitq");
-    index.add(base, None).expect("add rabitq");
-
-    let mut all_results = Vec::with_capacity(QUERY_SIZE);
-    let start = Instant::now();
-    for i in 0..QUERY_SIZE {
-        let q = &queries[i * DIM..(i + 1) * DIM];
-        let result = index
-            .search(
-                q,
-                &SearchRequest {
-                    top_k: TOP_K,
-                    nprobe: 16,
-                    ..Default::default()
-                },
-            )
-            .expect("search rabitq");
-        all_results.push(result.ids);
-    }
-    let elapsed = start.elapsed().as_secs_f64();
-    let qps = QUERY_SIZE as f64 / elapsed;
-    let recall_at_10 = average_recall_at_k(&all_results, gt, TOP_K);
-
-    make_row("RaBitQ", qps, recall_at_10, "flat_exact_l2_bruteforce")
-}
-
 fn generate_sparse_vectors(n: usize, dim: usize) -> Vec<SparseVector> {
     let mut rng = rand::thread_rng();
     let mut out = Vec::with_capacity(n);
@@ -388,7 +360,6 @@ pub fn build_recall_gated_baseline_report() -> BenchmarkReport {
         bench_ivfpq(&base, &queries, &gt),
         bench_diskann(&base, &queries, &gt),
         bench_scann(&base, &queries, &gt),
-        bench_rabitq(&base, &queries, &gt),
         bench_sparse_wand(),
     ];
 

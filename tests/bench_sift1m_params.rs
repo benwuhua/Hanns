@@ -17,7 +17,7 @@ use knowhere_rs::benchmark::{
 use knowhere_rs::dataset::{load_sift1m_complete, SiftDataset};
 use knowhere_rs::faiss::{HnswIndex, IvfFlatIndex, IvfPqIndex, IvfSq8Index, MemIndex as FlatIndex};
 use knowhere_rs::MetricType;
-use knowhere_rs::{IvfRaBitqConfig, IvfRaBitqIndex};
+
 use std::env;
 use std::fs::File;
 use std::io::Write;
@@ -442,75 +442,6 @@ fn bench_ivf_sq8(dataset: &SiftDataset, nq: usize) -> Vec<ParamResult> {
     results
 }
 
-/// RaBitQ 索引基准测试（不同 nprobe）
-fn bench_rabitq(dataset: &SiftDataset, nq: usize) -> Vec<ParamResult> {
-    println!("\n=== RaBitQ 索引 ===");
-
-    let base = dataset.base.vectors();
-    let queries = dataset.query.vectors();
-    let gt: Vec<Vec<i32>> = dataset.ground_truth.iter().take(nq).cloned().collect();
-
-    let nlist = ((dataset.num_base() as f64).sqrt() as i32).max(1) as usize;
-    let nprobe_values = [1, 5, 10, 50, 100];
-    let mut results = Vec::new();
-
-    for &nprobe in &nprobe_values {
-        println!("  nprobe = {}...", nprobe);
-
-        let tracker = MemoryTracker::new();
-        tracker.record_base_memory(estimate_vector_memory(dataset.num_base(), dataset.dim()));
-
-        let config = IvfRaBitqConfig::new(dataset.dim(), nlist);
-        let mut idx = IvfRaBitqIndex::new(config);
-
-        let t0 = Instant::now();
-        idx.train(base).unwrap();
-        idx.add(base, None).unwrap();
-        let build_ms = t0.elapsed().as_secs_f64() * 1000.0;
-
-        let overhead = estimate_ivf_overhead(dataset.num_base(), dataset.dim(), nlist);
-        tracker.record_index_overhead(overhead);
-        let mem_mb = tracker.total_memory_mb() / 1024.0;
-
-        let t0 = Instant::now();
-        let mut all_res: Vec<Vec<i64>> = Vec::with_capacity(nq);
-        for i in 0..nq {
-            let q = &queries[i * dataset.dim()..(i + 1) * dataset.dim()];
-            let req = SearchRequest {
-                top_k: 100,
-                nprobe,
-                ..Default::default()
-            };
-            let res = idx.search(q, &req).unwrap();
-            all_res.push(res.ids);
-        }
-        let search_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        let qps = nq as f64 / (search_ms / 1000.0);
-
-        let r1 = compute_recall(&all_res, &gt, 1);
-        let r10 = compute_recall(&all_res, &gt, 10);
-        let r100 = compute_recall(&all_res, &gt, 100);
-
-        println!(
-            "    Build: {:.2}ms, QPS: {:.0}, R@10: {:.4}",
-            build_ms, qps, r10
-        );
-
-        results.push(ParamResult {
-            index_type: "RaBitQ".into(),
-            params: format!("nlist={},nprobe={}", nlist, nprobe),
-            build_time_ms: build_ms,
-            qps,
-            r1,
-            r10,
-            r100,
-            memory_mb: mem_mb,
-        });
-    }
-
-    results
-}
-
 fn generate_report(results: &[ParamResult], nq: usize, dataset: &SiftDataset) {
     let mut report = String::new();
 
@@ -681,7 +612,6 @@ fn test_sift1m_param_scan() {
     all_results.extend(bench_ivf_flat(&dataset, nq));
     all_results.extend(bench_ivf_pq(&dataset, nq));
     all_results.extend(bench_ivf_sq8(&dataset, nq));
-    all_results.extend(bench_rabitq(&dataset, nq));
 
     // 生成报告
     generate_report(&all_results, nq, &dataset);
