@@ -789,6 +789,130 @@ impl HvqQuantizer {
         self.score_code_scalar(state, code)
     }
 
+    /// Score using pre-extracted metadata — skips `parse_code` overhead.
+    pub fn score_code_with_meta(
+        &self,
+        state: &HvqQueryState,
+        norm_o: f32,
+        vmax: f32,
+        base_quant_dist: f32,
+        packed_bits: &[u8],
+    ) -> f32 {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::arch::is_x86_feature_detected!("avx512f") {
+                if self.config.nbits == 1 {
+                    return self.score_code_1bit_with_meta(state, norm_o, vmax, base_quant_dist, packed_bits);
+                }
+                if matches!(self.config.nbits, 4 | 8)
+                    && std::arch::is_x86_feature_detected!("avx512vnni")
+                {
+                    return self.score_code_simd_with_meta(state, norm_o, vmax, base_quant_dist, packed_bits);
+                }
+            }
+        }
+
+        self.score_code_scalar_with_meta(state, norm_o, vmax, base_quant_dist, packed_bits)
+    }
+
+    fn score_code_scalar_with_meta(
+        &self,
+        state: &HvqQueryState,
+        norm_o: f32,
+        vmax: f32,
+        base_quant_dist: f32,
+        packed_code: &[u8],
+    ) -> f32 {
+        if base_quant_dist <= 1e-12 {
+            return state.centroid_score;
+        }
+
+        let nbits = self.config.nbits as usize;
+        let levels = (1u32 << self.config.nbits) as f32;
+        let scale = (2.0 * vmax) / levels.max(1.0);
+        let offset = -vmax;
+        let mask = (1u32 << nbits) - 1;
+
+        let mut bit_buffer = 0u32;
+        let mut bits_in_buffer = 0usize;
+        let mut byte_idx = 0usize;
+        let mut ip = 0.0f32;
+
+        for &q in &state.q_rot {
+            while bits_in_buffer < nbits {
+                let next = packed_code.get(byte_idx).copied().unwrap_or(0) as u32;
+                bit_buffer |= next << bits_in_buffer;
+                bits_in_buffer += 8;
+                byte_idx += 1;
+            }
+
+            let raw = (bit_buffer & mask) as u8;
+            bit_buffer >>= nbits;
+            bits_in_buffer -= nbits;
+
+            let decoded = Self::dequantize_scalar(raw, scale, offset);
+            ip += q * decoded;
+        }
+
+        state.centroid_score + norm_o * ip / base_quant_dist
+    }
+
+    #[allow(dead_code)] // Precomputed variant for IVF hot path.
+    fn score_code_simd_with_meta(
+        &self,
+        state: &HvqQueryState,
+        norm_o: f32,
+        vmax: f32,
+        base_quant_dist: f32,
+        packed_code: &[u8],
+    ) -> f32 {
+        if base_quant_dist <= 1e-12 {
+            return state.centroid_score;
+        }
+
+        let levels = (1u32 << self.config.nbits) as f32;
+        let code_scale = (2.0 * vmax) / levels.max(1.0);
+        let offset = -vmax;
+
+        let int_ip = match self.config.nbits {
+            8 => dot_u8_i8_vnni_assumed(packed_code, &state.q_quantized),
+            4 => dot_packed_u4_i8_vnni(packed_code, &state.q_quantized),
+            _ => return self.score_code_scalar_with_meta(state, norm_o, vmax, base_quant_dist, packed_code),
+        };
+
+        let float_ip =
+            state.q_scale * (code_scale * int_ip as f32 + offset * state.q_quantized_sum as f32);
+        state.centroid_score + norm_o * float_ip / base_quant_dist
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn score_code_1bit_with_meta(
+        &self,
+        state: &HvqQueryState,
+        norm_o: f32,
+        vmax: f32,
+        base_quant_dist: f32,
+        packed_code: &[u8],
+    ) -> f32 {
+        if std::arch::is_x86_feature_detected!("avx512f") {
+            unsafe { self.score_code_1bit_with_meta_avx512_impl(state, norm_o, vmax, base_quant_dist, packed_code) }
+        } else {
+            self.score_code_scalar_with_meta(state, norm_o, vmax, base_quant_dist, packed_code)
+        }
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    fn score_code_1bit_with_meta(
+        &self,
+        state: &HvqQueryState,
+        norm_o: f32,
+        vmax: f32,
+        base_quant_dist: f32,
+        packed_code: &[u8],
+    ) -> f32 {
+        self.score_code_scalar_with_meta(state, norm_o, vmax, base_quant_dist, packed_code)
+    }
+
     pub fn adc_distance_prerotated(&self, q_rot: &[f32], code: &[u8], _base_dist: f32) -> f32 {
         let state = self.precompute_query_state(q_rot);
         self.score_code(&state, code)
@@ -957,6 +1081,50 @@ impl HvqQuantizer {
         }
 
         // Preserve current scalar semantics for 1-bit codes: {-vmax, 0}.
+        let ip = float_sum - state.q_sum;
+        state.centroid_score + norm_o * vmax * ip / base_quant_dist
+    }
+
+    #[target_feature(enable = "avx512f")]
+    unsafe fn score_code_1bit_with_meta_avx512_impl(
+        &self,
+        state: &HvqQueryState,
+        norm_o: f32,
+        vmax: f32,
+        base_quant_dist: f32,
+        packed_code: &[u8],
+    ) -> f32 {
+        use std::arch::x86_64::*;
+
+        if base_quant_dist <= 1e-12 {
+            return state.centroid_score;
+        }
+
+        let vector_dims = self.config.dim / 16 * 16;
+        let mut acc = _mm512_setzero_ps();
+
+        for chunk_idx in 0..(vector_dims / 16) {
+            let q_offset = chunk_idx * 16;
+            let bit_offset = chunk_idx * 2;
+            let mask_bits =
+                u16::from_le_bytes([packed_code[bit_offset], packed_code[bit_offset + 1]]);
+            let mask = mask_bits as __mmask16;
+
+            let q_vec = _mm512_loadu_ps(state.q_rot.as_ptr().add(q_offset));
+            let selected = _mm512_maskz_mov_ps(mask, q_vec);
+            acc = _mm512_add_ps(acc, selected);
+        }
+
+        let mut float_sum = _mm512_reduce_add_ps(acc);
+        for idx in vector_dims..self.config.dim {
+            let byte_idx = idx / 8;
+            let bit_idx = idx % 8;
+            let bit = (packed_code[byte_idx] >> bit_idx) & 1;
+            if bit != 0 {
+                float_sum += state.q_rot[idx];
+            }
+        }
+
         let ip = float_sum - state.q_sum;
         state.centroid_score + norm_o * vmax * ip / base_quant_dist
     }
@@ -2257,6 +2425,57 @@ mod tests {
                     lhs,
                     rhs
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn test_score_code_with_meta_matches_score_code() {
+        let dim = 96usize;
+        let n = 64usize;
+        let nq = 4usize;
+        let nrefine = 4usize;
+        let mut rng = StdRng::seed_from_u64(20260401);
+
+        for &nbits in &[1u8, 4, 8] {
+            let data = normalize_rows(
+                &(0..n * dim)
+                    .map(|_| rng.gen_range(-1.0f32..1.0))
+                    .collect::<Vec<_>>(),
+                dim,
+            );
+            let queries = normalize_rows(
+                &(0..nq * dim)
+                    .map(|_| rng.gen_range(-1.0f32..1.0))
+                    .collect::<Vec<_>>(),
+                dim,
+            );
+
+            let mut hvq = HvqQuantizer::new(HvqConfig { dim, nbits }, 42 + nbits as u64);
+            hvq.train(n, &data);
+            let codes = hvq.encode_batch(n, &data, nrefine);
+            let code_size = hvq.code_size_bytes();
+
+            for query in queries.chunks_exact(dim) {
+                let q_rot = hvq.rotate_query(query);
+                let state = hvq.precompute_query_state(&q_rot);
+
+                for code in codes.chunks_exact(code_size) {
+                    let original = hvq.score_code(&state, code);
+                    let norm_o = f32::from_le_bytes(code[0..4].try_into().unwrap());
+                    let vmax = f32::from_le_bytes(code[4..8].try_into().unwrap());
+                    let base_quant_dist = f32::from_le_bytes(code[8..12].try_into().unwrap());
+                    let packed_bits = &code[12..];
+                    let with_meta = hvq.score_code_with_meta(
+                        &state, norm_o, vmax, base_quant_dist, packed_bits,
+                    );
+                    let diff = (original - with_meta).abs();
+                    assert!(
+                        diff < 1e-5,
+                        "score_code_with_meta mismatch for nbits={}: original={} with_meta={} diff={}",
+                        nbits, original, with_meta, diff,
+                    );
+                }
             }
         }
     }

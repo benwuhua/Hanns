@@ -44,7 +44,14 @@ impl IvfHvqConfig {
     }
 }
 
-pub type IvfHvqEntry = (i64, Vec<u8>);
+pub struct IvfHvqEntry {
+    pub id: i64,
+    pub packed_bits: Vec<u8>,
+    pub norm_o: f32,
+    pub vmax: f32,
+    pub base_quant_dist: f32,
+    pub base_norm_sq: f32,
+}
 
 pub struct IvfHvqIndex {
     config: IvfHvqConfig,
@@ -135,10 +142,22 @@ impl IvfHvqIndex {
         for (i, vector) in data.chunks_exact(self.config.dim).enumerate() {
             let cluster = self.find_best_centroid(vector);
             let code = self.quantizer.encode(vector, HVQ_ENCODE_REFINE);
+            let norm_o = f32::from_le_bytes(code[0..4].try_into().unwrap());
+            let vmax = f32::from_le_bytes(code[4..8].try_into().unwrap());
+            let base_quant_dist = f32::from_le_bytes(code[8..12].try_into().unwrap());
+            let packed_bits = code[12..].to_vec();
+            let base_norm_sq = vector.iter().map(|x| x * x).sum::<f32>();
             let id = ids
                 .map(|values| values[i])
                 .unwrap_or((self.ntotal + i) as i64);
-            lists.entry(cluster).or_default().push((id, code));
+            lists.entry(cluster).or_default().push(IvfHvqEntry {
+                id,
+                packed_bits,
+                norm_o,
+                vmax,
+                base_quant_dist,
+                base_norm_sq,
+            });
         }
 
         self.ntotal += n;
@@ -194,19 +213,34 @@ impl IvfHvqIndex {
         let q_rot = self.quantizer.rotate_query(query);
         let state = self.quantizer.precompute_query_state(&q_rot);
 
+        let q_norm_sq: f32 = query.iter().map(|x| x * x).sum();
+        let use_l2 = matches!(self.config.metric_type, MetricType::L2);
+
         let mut candidates = Vec::new();
         let lists = self.inverted_lists.read();
         for cluster in coarse {
             if let Some(list) = lists.get(&cluster) {
-                for (id, code) in list {
+                for entry in list {
                     if let Some(predicate) = filter {
-                        if !predicate.evaluate(*id) {
+                        if !predicate.evaluate(entry.id) {
                             continue;
                         }
                     }
 
-                    let score = self.quantizer.score_code(&state, code);
-                    candidates.push((*id, -score));
+                    let ip_score = self.quantizer.score_code_with_meta(
+                        &state,
+                        entry.norm_o,
+                        entry.vmax,
+                        entry.base_quant_dist,
+                        &entry.packed_bits,
+                    );
+
+                    let distance = if use_l2 {
+                        q_norm_sq + entry.base_norm_sq - 2.0 * ip_score
+                    } else {
+                        -ip_score
+                    };
+                    candidates.push((entry.id, distance));
                 }
             }
         }
