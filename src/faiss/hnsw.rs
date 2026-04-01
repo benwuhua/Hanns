@@ -1729,6 +1729,10 @@ impl HnswIndex {
         Ok(())
     }
 
+    fn should_use_parallel_add(&self, n: usize) -> bool {
+        self.num_threads > 1 && n >= 1000
+    }
+
     /// Add vectors to the index with proper multi-layer construction
     ///
     /// OPT-022: Two-phase build optimization:
@@ -7444,8 +7448,14 @@ impl IndexTrait for HnswIndex {
     fn add(&mut self, dataset: &Dataset) -> std::result::Result<usize, IndexError> {
         let vectors = dataset.vectors();
         let ids = dataset.ids();
-        self.add(vectors, ids)
-            .map_err(|e| IndexError::Unsupported(e.to_string()))
+        let vector_count = vectors.len() / self.dim;
+        let result = if self.should_use_parallel_add(vector_count) {
+            self.add_parallel(vectors, ids, Some(true))
+                .or_else(|_| self.add(vectors, ids))
+        } else {
+            self.add(vectors, ids)
+        };
+        result.map_err(|e| IndexError::Unsupported(e.to_string()))
     }
 
     fn search(
@@ -10174,6 +10184,46 @@ mod tests {
             assert!(batch_size <= 5000, "Batch size should be <= 5000");
         }
         println!("✅ All batch size calculations are within bounds\n");
+    }
+
+    #[test]
+    fn test_hnsw_trait_add_prefers_parallel_for_large_builds() {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 128,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                num_threads: Some(4),
+                ..Default::default()
+            },
+        };
+
+        let index = HnswIndex::new(&config).unwrap();
+        assert!(
+            index.should_use_parallel_add(1000),
+            "large builds with multiple threads should prefer parallel add"
+        );
+    }
+
+    #[test]
+    fn test_hnsw_trait_add_keeps_small_builds_serial() {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 128,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                num_threads: Some(4),
+                ..Default::default()
+            },
+        };
+
+        let index = HnswIndex::new(&config).unwrap();
+        assert!(
+            !index.should_use_parallel_add(999),
+            "small builds should remain on the serial path"
+        );
     }
 
     /// OPT-031: Test API compatibility between add() and add_parallel()
