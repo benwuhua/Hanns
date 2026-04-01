@@ -195,13 +195,6 @@ impl Layer0OrderedFrontier {
             .pop()
             .map(|(SearchMinDist(dist), idx)| Layer0PoolEntry { idx, dist })
     }
-
-    fn count_below(&self, thresh: f32) -> usize {
-        self.entries
-            .iter()
-            .filter(|(SearchMinDist(dist), _)| *dist < thresh)
-            .count()
-    }
 }
 
 #[derive(Default)]
@@ -412,6 +405,7 @@ pub struct HnswBuildProfileStats {
     neighbor_selection_calls: u64,
     connection_update_calls: u64,
     repair_calls: u64,
+    candidate_search_internal: HnswCandidateSearchProfileStats,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -444,6 +438,7 @@ pub struct HnswBuildProfileHotspot {
 pub struct HnswBuildProfileReport {
     pub timing_buckets: HnswBuildProfileTimingBuckets,
     pub call_counts: HnswBuildProfileCallCounts,
+    pub candidate_search_internal: HnswCandidateSearchProfileReport,
     pub hotspot_ranking: Vec<HnswBuildProfileHotspot>,
     pub recommended_first_rework_target: String,
     pub total_profiled_ms: f64,
@@ -473,6 +468,7 @@ pub struct HnswParallelBuildGraphQualityCallCounts {
 pub struct HnswParallelBuildProfileReport {
     pub timing_buckets: HnswBuildProfileTimingBuckets,
     pub call_counts: HnswBuildProfileCallCounts,
+    pub candidate_search_internal: HnswCandidateSearchProfileReport,
     pub hotspot_ranking: Vec<HnswBuildProfileHotspot>,
     pub recommended_first_rework_target: String,
     pub total_profiled_ms: f64,
@@ -674,6 +670,8 @@ impl HnswBuildProfileStats {
         self.neighbor_selection_calls += other.neighbor_selection_calls;
         self.connection_update_calls += other.connection_update_calls;
         self.repair_calls += other.repair_calls;
+        self.candidate_search_internal
+            .absorb(other.candidate_search_internal);
     }
 
     fn timing_buckets(&self) -> HnswBuildProfileTimingBuckets {
@@ -767,12 +765,21 @@ impl HnswBuildProfileStats {
     }
 
     fn into_report(self, vectors_added: usize, repair_operations: usize) -> HnswBuildProfileReport {
+        let timing_buckets = self.timing_buckets();
+        let call_counts = self.call_counts();
+        let hotspot_ranking = self.hotspot_ranking();
+        let recommended_first_rework_target = self.recommended_first_rework_target();
+        let total_profiled_ms = self.total_profiled_ms();
+        let candidate_search_internal = self
+            .candidate_search_internal
+            .into_report(self.candidate_search_calls as usize);
         HnswBuildProfileReport {
-            timing_buckets: self.timing_buckets(),
-            call_counts: self.call_counts(),
-            hotspot_ranking: self.hotspot_ranking(),
-            recommended_first_rework_target: self.recommended_first_rework_target(),
-            total_profiled_ms: self.total_profiled_ms(),
+            timing_buckets,
+            call_counts,
+            candidate_search_internal,
+            hotspot_ranking,
+            recommended_first_rework_target,
+            total_profiled_ms,
             repair_operations,
             vectors_added,
         }
@@ -786,12 +793,21 @@ impl HnswBuildProfileStats {
         upper_layer_overflow_shrink_mode: &str,
         graph_quality_stats: &HnswParallelBuildGraphQualityStats,
     ) -> HnswParallelBuildProfileReport {
+        let timing_buckets = self.timing_buckets();
+        let call_counts = self.call_counts();
+        let hotspot_ranking = self.hotspot_ranking();
+        let recommended_first_rework_target = self.recommended_first_rework_target();
+        let total_profiled_ms = self.total_profiled_ms();
+        let candidate_search_internal = self
+            .candidate_search_internal
+            .into_report(self.candidate_search_calls as usize);
         HnswParallelBuildProfileReport {
-            timing_buckets: self.timing_buckets(),
-            call_counts: self.call_counts(),
-            hotspot_ranking: self.hotspot_ranking(),
-            recommended_first_rework_target: self.recommended_first_rework_target(),
-            total_profiled_ms: self.total_profiled_ms(),
+            timing_buckets,
+            call_counts,
+            candidate_search_internal,
+            hotspot_ranking,
+            recommended_first_rework_target,
+            total_profiled_ms,
             repair_operations,
             vectors_added,
             parallel_insert_entry_descent_mode: parallel_insert_entry_descent_mode.to_string(),
@@ -831,6 +847,32 @@ impl HnswParallelBuildGraphQualityStats {
 }
 
 impl HnswCandidateSearchProfileStats {
+    fn absorb(&mut self, other: Self) {
+        self.entry_descent += other.entry_descent;
+        self.frontier_ops += other.frontier_ops;
+        self.visited_ops += other.visited_ops;
+        self.distance_compute += other.distance_compute;
+        self.upper_layer_query_distance += other.upper_layer_query_distance;
+        self.layer0_query_distance += other.layer0_query_distance;
+        self.node_node_distance += other.node_node_distance;
+        self.candidate_pruning += other.candidate_pruning;
+        self.entry_descent_calls += other.entry_descent_calls;
+        self.layer0_candidate_search_calls += other.layer0_candidate_search_calls;
+        self.frontier_pushes += other.frontier_pushes;
+        self.frontier_pops += other.frontier_pops;
+        self.visited_marks += other.visited_marks;
+        self.distance_calls += other.distance_calls;
+        self.upper_layer_query_distance_calls += other.upper_layer_query_distance_calls;
+        self.layer0_query_distance_calls += other.layer0_query_distance_calls;
+        self.node_node_distance_calls += other.node_node_distance_calls;
+        self.pruned_candidates += other.pruned_candidates;
+        self.layer0_batch4_calls += other.layer0_batch4_calls;
+        self.layer0_vector_prefetches += other.layer0_vector_prefetches;
+        self.layer0_flat_graph_neighbor_reads += other.layer0_flat_graph_neighbor_reads;
+        self.layer0_ordered_pool_enabled |= other.layer0_ordered_pool_enabled;
+        self.layer0_flat_graph_enabled |= other.layer0_flat_graph_enabled;
+    }
+
     fn record_entry_descent(&mut self, elapsed: Duration) {
         self.entry_descent += elapsed;
         self.entry_descent_calls += 1;
@@ -1309,6 +1351,57 @@ impl HnswIndex {
     }
 
     #[inline(always)]
+    fn distance_to_4_idxs_dispatch(
+        index: &HnswIndex,
+        query: &[f32],
+        idxs: [usize; 4],
+        query_ptr: *const f32,
+        base_ptr: *const f32,
+    ) -> Option<[f32; 4]> {
+        match index.metric_type {
+            MetricType::L2 => {
+                Some(unsafe { index.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, idxs) })
+            }
+            MetricType::Ip | MetricType::Cosine => {
+                let (Some(start0), Some(start1), Some(start2), Some(start3)) = (
+                    index.vector_start_offset(index.vectors.len(), idxs[0]),
+                    index.vector_start_offset(index.vectors.len(), idxs[1]),
+                    index.vector_start_offset(index.vectors.len(), idxs[2]),
+                    index.vector_start_offset(index.vectors.len(), idxs[3]),
+                ) else {
+                    return None;
+                };
+                let db0 = &index.vectors[start0..start0 + index.dim];
+                let db1 = &index.vectors[start1..start1 + index.dim];
+                let db2 = &index.vectors[start2..start2 + index.dim];
+                let db3 = &index.vectors[start3..start3 + index.dim];
+                let mut ips = simd::ip_batch_4(query, db0, db1, db2, db3);
+                if index.metric_type == MetricType::Ip {
+                    for ip in &mut ips {
+                        *ip = -*ip;
+                    }
+                } else {
+                    let q_norm = HNSW_COSINE_QUERY_NORM_TLS.with(|c| c.get());
+                    let q_norm = if q_norm > 0.0 {
+                        q_norm
+                    } else {
+                        simd::inner_product(query, query).sqrt()
+                    };
+                    if q_norm > 0.0 {
+                        for ip in &mut ips {
+                            *ip = 1.0 - *ip / q_norm;
+                        }
+                    } else {
+                        ips.fill(1.0);
+                    }
+                }
+                Some(ips)
+            }
+            MetricType::Hamming => None,
+        }
+    }
+
+    #[inline(always)]
     fn distance_to_idx_sq_l2_dispatch(index: &HnswIndex, query: &[f32], idx: usize) -> f32 {
         let Some(sq) = index.sq_quantizer.as_ref() else {
             return Self::distance_to_idx_l2_dispatch(index, query, idx);
@@ -1629,9 +1722,8 @@ impl HnswIndex {
         }
     }
 
-    fn refresh_layer0_flat_graph(&mut self) {
+    fn rebuild_layer0_flat_graph(&mut self) {
         self.layer0_flat_graph.clear();
-        self.layer0_slab.clear();
 
         let node_count = self.node_info.len();
         if node_count == 0 || self.m_max0 == 0 || node_count > (u32::MAX as usize) {
@@ -1667,6 +1759,11 @@ impl HnswIndex {
         }
 
         self.layer0_flat_graph.enabled = true;
+    }
+
+    fn refresh_layer0_flat_graph(&mut self) {
+        self.layer0_slab.clear();
+        self.rebuild_layer0_flat_graph();
         self.refresh_layer0_slab();
     }
 
@@ -2515,8 +2612,13 @@ impl HnswIndex {
 
         if node_level < self.max_level {
             for level in ((node_level + 1)..=self.max_level).rev() {
-                let nearest =
-                    self.search_layer_idx_with_scratch(vec, curr_ep_idx, level, 1, scratch);
+                let nearest = self.search_layer_idx_for_build_with_scratch(
+                    vec,
+                    curr_ep_idx,
+                    level,
+                    1,
+                    scratch,
+                );
                 if !nearest.is_empty() {
                     curr_ep_idx = nearest[0].0;
                 }
@@ -2524,12 +2626,13 @@ impl HnswIndex {
         }
 
         for level in (0..=node_level).rev() {
-            let nearest = self.search_layer_idx_with_scratch(vec, curr_ep_idx, level, 1, scratch);
+            let nearest =
+                self.search_layer_idx_for_build_with_scratch(vec, curr_ep_idx, level, 1, scratch);
             if !nearest.is_empty() {
                 curr_ep_idx = nearest[0].0;
             }
 
-            let candidates = self.search_layer_idx_with_scratch(
+            let candidates = self.search_layer_idx_for_build_with_scratch(
                 vec,
                 curr_ep_idx,
                 level,
@@ -2571,12 +2674,19 @@ impl HnswIndex {
         let mut neighbors_per_layer = vec![Vec::new(); node_level + 1];
         let entry_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
         let mut curr_ep_idx = entry_idx;
+        let mut search_stats = HnswCandidateSearchProfileStats::default();
 
         if node_level < self.max_level {
             for level in ((node_level + 1)..=self.max_level).rev() {
                 let stage_start = Instant::now();
-                let nearest =
-                    self.search_layer_idx_with_scratch(vec, curr_ep_idx, level, 1, scratch);
+                let nearest = self.search_layer_idx_for_build_with_scratch_profiled(
+                    vec,
+                    curr_ep_idx,
+                    level,
+                    1,
+                    scratch,
+                    &mut search_stats,
+                );
                 stats.record(HnswBuildProfileStage::LayerDescent, stage_start.elapsed());
                 if !nearest.is_empty() {
                     curr_ep_idx = nearest[0].0;
@@ -2586,19 +2696,27 @@ impl HnswIndex {
 
         for level in (0..=node_level).rev() {
             let stage_start = Instant::now();
-            let nearest = self.search_layer_idx_with_scratch(vec, curr_ep_idx, level, 1, scratch);
+            let nearest = self.search_layer_idx_for_build_with_scratch_profiled(
+                vec,
+                curr_ep_idx,
+                level,
+                1,
+                scratch,
+                &mut search_stats,
+            );
             stats.record(HnswBuildProfileStage::LayerDescent, stage_start.elapsed());
             if !nearest.is_empty() {
                 curr_ep_idx = nearest[0].0;
             }
 
             let stage_start = Instant::now();
-            let candidates = self.search_layer_idx_with_scratch(
+            let candidates = self.search_layer_idx_for_build_with_scratch_profiled(
                 vec,
                 curr_ep_idx,
                 level,
                 self.ef_construction,
                 scratch,
+                &mut search_stats,
             );
             stats.record(
                 HnswBuildProfileStage::CandidateSearch,
@@ -2614,6 +2732,8 @@ impl HnswIndex {
                 stage_start.elapsed(),
             );
         }
+
+        stats.candidate_search_internal.absorb(search_stats);
 
         neighbors_per_layer
     }
@@ -3662,6 +3782,22 @@ impl HnswIndex {
     }
 
     #[inline(always)]
+    unsafe fn l2_distance_to_idx_ptr_unchecked(
+        &self,
+        query_ptr: *const f32,
+        base_ptr: *const f32,
+        idx: usize,
+    ) -> f32 {
+        debug_assert!(idx < self.node_info.len());
+        debug_assert!(idx.checked_mul(self.dim).is_some());
+        if self.use_bf16_storage {
+            return unsafe { self.l2_distance_to_idx_bf16_ptr(query_ptr, idx) };
+        }
+        let start = idx * self.dim;
+        (self.l2_distance_sq_ptr_kernel)(query_ptr, base_ptr.add(start), self.dim)
+    }
+
+    #[inline(always)]
     unsafe fn l2_distance_to_idx_bf16_ptr(&self, query_ptr: *const f32, idx: usize) -> f32 {
         let Some(start) = self.vector_start_offset(self.bf16_vectors.len(), idx) else {
             return f32::INFINITY;
@@ -3766,6 +3902,38 @@ impl HnswIndex {
             starts[1].unwrap_or(0),
             starts[2].unwrap_or(0),
             starts[3].unwrap_or(0),
+        ];
+        simd::l2_batch_4_ptrs(
+            query_ptr,
+            base_ptr.add(starts[0]),
+            base_ptr.add(starts[1]),
+            base_ptr.add(starts[2]),
+            base_ptr.add(starts[3]),
+            self.dim,
+        )
+    }
+
+    #[inline(always)]
+    unsafe fn l2_distance_to_4_idxs_ptr_unchecked(
+        &self,
+        query_ptr: *const f32,
+        base_ptr: *const f32,
+        idxs: [usize; 4],
+    ) -> [f32; 4] {
+        debug_assert!(idxs.iter().all(|&idx| idx < self.node_info.len()));
+        if self.use_bf16_storage {
+            return [
+                unsafe { self.l2_distance_to_idx_bf16_ptr(query_ptr, idxs[0]) },
+                unsafe { self.l2_distance_to_idx_bf16_ptr(query_ptr, idxs[1]) },
+                unsafe { self.l2_distance_to_idx_bf16_ptr(query_ptr, idxs[2]) },
+                unsafe { self.l2_distance_to_idx_bf16_ptr(query_ptr, idxs[3]) },
+            ];
+        }
+        let starts = [
+            idxs[0] * self.dim,
+            idxs[1] * self.dim,
+            idxs[2] * self.dim,
+            idxs[3] * self.dim,
         ];
         simd::l2_batch_4_ptrs(
             query_ptr,
@@ -4229,6 +4397,68 @@ impl HnswIndex {
         self.search_layer_idx_with_optional_profile(query, entry_idx, level, ef, scratch, None)
     }
 
+    fn search_layer_idx_for_build_with_scratch(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+        ef: usize,
+        scratch: &mut SearchScratch,
+    ) -> Vec<(usize, f32)> {
+        if self.metric_type == MetricType::L2 {
+            if level == 0 {
+                self.search_layer_idx_l2_ordered_pool_fast(query, entry_idx, level, ef, scratch)
+            } else {
+                self.search_layer_idx_l2_heap_with_optional_profile(
+                    query, entry_idx, level, ef, scratch, None,
+                )
+            }
+        } else {
+            self.search_layer_idx_with_scratch(query, entry_idx, level, ef, scratch)
+        }
+    }
+
+    fn search_layer_idx_for_build_with_scratch_profiled(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        level: usize,
+        ef: usize,
+        scratch: &mut SearchScratch,
+        profile: &mut HnswCandidateSearchProfileStats,
+    ) -> Vec<(usize, f32)> {
+        if self.metric_type == MetricType::L2 {
+            if level == 0 {
+                self.search_layer_idx_l2_ordered_pool_with_optional_profile(
+                    query,
+                    entry_idx,
+                    level,
+                    ef,
+                    scratch,
+                    Some(profile),
+                )
+            } else {
+                self.search_layer_idx_l2_heap_with_optional_profile(
+                    query,
+                    entry_idx,
+                    level,
+                    ef,
+                    scratch,
+                    Some(profile),
+                )
+            }
+        } else {
+            self.search_layer_idx_with_optional_profile(
+                query,
+                entry_idx,
+                level,
+                ef,
+                scratch,
+                Some(profile),
+            )
+        }
+    }
+
     fn search_layer_idx_l2_with_scratch(
         &self,
         query: &[f32],
@@ -4283,6 +4513,14 @@ impl HnswIndex {
 
     pub fn production_layer0_avoids_profile_timing_for_audit(&self) -> bool {
         true
+    }
+
+    pub fn build_candidate_search_mode_for_audit(&self) -> &'static str {
+        if self.metric_type == MetricType::L2 {
+            "l2_fast_path"
+        } else {
+            "shared_generic"
+        }
     }
 
     #[cfg(any(test, feature = "long-tests"))]
@@ -4475,7 +4713,6 @@ impl HnswIndex {
             }
 
             if use_layer0_flat_graph {
-                let use_grouped_bitset_batch4 = bitset.is_some();
                 let mut grouped_nbrs = [0usize; 4];
                 let mut grouped_count = 0usize;
                 for &nbr_u32 in self.layer0_flat_graph.neighbors_for(cand_idx) {
@@ -4495,14 +4732,17 @@ impl HnswIndex {
                         continue;
                     }
 
-                    if use_grouped_bitset_batch4 {
-                        grouped_nbrs[grouped_count] = nbr_idx;
-                        grouped_count += 1;
-                        if grouped_count == 4 {
-                            let distance_start = profile_enabled.then(Instant::now);
-                            let nbr_dists = unsafe {
-                                self.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, grouped_nbrs)
-                            };
+                    grouped_nbrs[grouped_count] = nbr_idx;
+                    grouped_count += 1;
+                    if grouped_count == 4 {
+                        let distance_start = profile_enabled.then(Instant::now);
+                        if let Some(nbr_dists) = Self::distance_to_4_idxs_dispatch(
+                            self,
+                            query,
+                            grouped_nbrs,
+                            query_ptr,
+                            base_ptr,
+                        ) {
                             if let Some(stats) = profile.as_mut() {
                                 if let Some(start) = distance_start {
                                     stats.record_layer0_query_distance_batch4(start.elapsed());
@@ -4512,23 +4752,32 @@ impl HnswIndex {
                                 accept_shared_neighbor(scratch, ef, idx, dist, &mut profile);
                             }
                             grouped_count = 0;
-                        }
-                    } else {
-                        let distance_start = profile_enabled.then(Instant::now);
-                        let nbr_dist =
-                            unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) };
-                        if let Some(stats) = profile.as_mut() {
-                            if let Some(start) = distance_start {
-                                stats.record_layer0_query_distance(start.elapsed(), 1);
+                        } else {
+                            for &idx in &grouped_nbrs[..grouped_count] {
+                                let distance_start = profile_enabled.then(Instant::now);
+                                let nbr_dist = if use_l2_ptr_dispatch {
+                                    unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, idx) }
+                                } else {
+                                    self.distance(query, idx)
+                                };
+                                if let Some(stats) = profile.as_mut() {
+                                    if let Some(start) = distance_start {
+                                        stats.record_layer0_query_distance(start.elapsed(), 1);
+                                    }
+                                }
+                                accept_shared_neighbor(scratch, ef, idx, nbr_dist, &mut profile);
                             }
+                            grouped_count = 0;
                         }
-                        accept_shared_neighbor(scratch, ef, nbr_idx, nbr_dist, &mut profile);
                     }
                 }
                 for &nbr_idx in &grouped_nbrs[..grouped_count] {
                     let distance_start = profile_enabled.then(Instant::now);
-                    let nbr_dist =
-                        unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) };
+                    let nbr_dist = if use_l2_ptr_dispatch {
+                        unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) }
+                    } else {
+                        self.distance(query, nbr_idx)
+                    };
                     if let Some(stats) = profile.as_mut() {
                         if let Some(start) = distance_start {
                             stats.record_layer0_query_distance(start.elapsed(), 1);
@@ -4911,9 +5160,6 @@ impl HnswIndex {
                 break;
             };
 
-            if scratch.layer0_frontier.count_below(candidate.dist) >= ef {
-                break;
-            }
             if scratch.layer0_results.len() >= ef
                 && scratch
                     .layer0_results
@@ -4996,7 +5242,11 @@ impl HnswIndex {
                             self.l2_distance_to_4_idxs_bf16_with_query_bits(bits, batch_indices)
                         } else {
                             unsafe {
-                                self.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, batch_indices)
+                                self.l2_distance_to_4_idxs_ptr_unchecked(
+                                    query_ptr,
+                                    base_ptr,
+                                    batch_indices,
+                                )
                             }
                         };
                         for (offset, nbr_dist) in distances.into_iter().enumerate() {
@@ -5012,46 +5262,98 @@ impl HnswIndex {
                 }
             } else {
                 let neighbors = &node_info.layer_neighbors[level].ids;
-                for (neighbor_offset, &nbr_id) in neighbors.iter().enumerate() {
-                    if neighbor_offset + 1 < neighbors.len() {
-                        let next_nbr_idx =
-                            self.get_idx_from_id_fast(neighbors[neighbor_offset + 1]);
-                        if next_nbr_idx < num_nodes {
-                            unsafe { self.prefetch_l2_vector_idx(base_ptr, next_nbr_idx) };
-                        }
-                    }
-
-                    let nbr_idx = self.get_idx_from_id_fast(nbr_id);
-                    if nbr_idx >= num_nodes {
-                        continue;
-                    }
-                    if !unsafe { scratch.mark_visited_unchecked(nbr_idx) } {
-                        continue;
-                    }
-
-                    batch_indices[batch_len] = nbr_idx;
-                    batch_len += 1;
-
-                    if batch_len == 4 {
-                        let distances = if use_query_bf16 {
-                            let bits = unsafe {
-                                std::slice::from_raw_parts(query_bf16_ptr, query_bf16_len)
-                            };
-                            self.l2_distance_to_4_idxs_bf16_with_query_bits(bits, batch_indices)
-                        } else {
-                            unsafe {
-                                self.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, batch_indices)
+                if self.use_sequential_ids {
+                    for (neighbor_offset, &nbr_id) in neighbors.iter().enumerate() {
+                        if neighbor_offset + 1 < neighbors.len() {
+                            let next_nbr_id = neighbors[neighbor_offset + 1];
+                            if next_nbr_id >= 0 {
+                                let next_nbr_idx = next_nbr_id as usize;
+                                if next_nbr_idx < num_nodes {
+                                    unsafe { self.prefetch_l2_vector_idx(base_ptr, next_nbr_idx) };
+                                }
                             }
-                        };
-                        for (offset, nbr_dist) in distances.into_iter().enumerate() {
-                            self.process_layer0_l2_candidate_fast(
-                                batch_indices[offset],
-                                nbr_dist,
-                                ef,
-                                scratch,
-                            );
                         }
-                        batch_len = 0;
+
+                        if nbr_id < 0 {
+                            continue;
+                        }
+                        let nbr_idx = nbr_id as usize;
+                        if nbr_idx >= num_nodes {
+                            continue;
+                        }
+
+                        batch_indices[batch_len] = nbr_idx;
+                        batch_len += 1;
+
+                        if batch_len == 4 {
+                            let distances = if use_query_bf16 {
+                                let bits = unsafe {
+                                    std::slice::from_raw_parts(query_bf16_ptr, query_bf16_len)
+                                };
+                                self.l2_distance_to_4_idxs_bf16_with_query_bits(bits, batch_indices)
+                            } else {
+                                unsafe {
+                                    self.l2_distance_to_4_idxs_ptr_unchecked(
+                                        query_ptr,
+                                        base_ptr,
+                                        batch_indices,
+                                    )
+                                }
+                            };
+                            for (offset, nbr_dist) in distances.into_iter().enumerate() {
+                                self.process_layer0_l2_candidate_fast(
+                                    batch_indices[offset],
+                                    nbr_dist,
+                                    ef,
+                                    scratch,
+                                );
+                            }
+                            batch_len = 0;
+                        }
+                    }
+                } else {
+                    for (neighbor_offset, &nbr_id) in neighbors.iter().enumerate() {
+                        if neighbor_offset + 1 < neighbors.len() {
+                            let next_nbr_idx =
+                                self.get_idx_from_id_fast(neighbors[neighbor_offset + 1]);
+                            if next_nbr_idx < num_nodes {
+                                unsafe { self.prefetch_l2_vector_idx(base_ptr, next_nbr_idx) };
+                            }
+                        }
+
+                        let nbr_idx = self.get_idx_from_id_fast(nbr_id);
+                        if nbr_idx >= num_nodes {
+                            continue;
+                        }
+
+                        batch_indices[batch_len] = nbr_idx;
+                        batch_len += 1;
+
+                        if batch_len == 4 {
+                            let distances = if use_query_bf16 {
+                                let bits = unsafe {
+                                    std::slice::from_raw_parts(query_bf16_ptr, query_bf16_len)
+                                };
+                                self.l2_distance_to_4_idxs_bf16_with_query_bits(bits, batch_indices)
+                            } else {
+                                unsafe {
+                                    self.l2_distance_to_4_idxs_ptr_unchecked(
+                                        query_ptr,
+                                        base_ptr,
+                                        batch_indices,
+                                    )
+                                }
+                            };
+                            for (offset, nbr_dist) in distances.into_iter().enumerate() {
+                                self.process_layer0_l2_candidate_fast(
+                                    batch_indices[offset],
+                                    nbr_dist,
+                                    ef,
+                                    scratch,
+                                );
+                            }
+                            batch_len = 0;
+                        }
                     }
                 }
             }
@@ -5070,7 +5372,7 @@ impl HnswIndex {
                         unsafe { std::slice::from_raw_parts(query_bf16_ptr, query_bf16_len) };
                     self.l2_distance_to_idx_bf16_with_query_bits(bits, nbr_idx)
                 } else {
-                    unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) }
+                    unsafe { self.l2_distance_to_idx_ptr_unchecked(query_ptr, base_ptr, nbr_idx) }
                 };
                 self.process_layer0_l2_candidate_fast(nbr_idx, nbr_dist, ef, scratch);
             }
@@ -5154,14 +5456,6 @@ impl HnswIndex {
             }
 
             let pruning_start = profile_enabled.then(Instant::now);
-            if scratch.layer0_frontier.count_below(candidate.dist) >= ef {
-                if let Some(stats) = profile.as_mut() {
-                    if let Some(start) = pruning_start {
-                        stats.record_candidate_pruning(start.elapsed(), 1);
-                    }
-                }
-                break;
-            }
             if scratch.layer0_results.len() >= ef {
                 if let Some(worst_dist) = scratch.layer0_results.worst_dist() {
                     if candidate.dist >= worst_dist {
@@ -5229,7 +5523,11 @@ impl HnswIndex {
                     if batch_len == 4 {
                         let distance_start = profile_enabled.then(Instant::now);
                         let distances = unsafe {
-                            self.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, batch_indices)
+                            self.l2_distance_to_4_idxs_ptr_unchecked(
+                                query_ptr,
+                                base_ptr,
+                                batch_indices,
+                            )
                         };
                         if let Some(stats) = profile.as_mut() {
                             if let Some(start) = distance_start {
@@ -5250,67 +5548,141 @@ impl HnswIndex {
                 }
             } else {
                 let neighbors = &node_info.layer_neighbors[level].ids;
-                for (neighbor_offset, &nbr_id) in neighbors.iter().enumerate() {
-                    if neighbor_offset + 1 < neighbors.len() {
-                        let next_nbr_idx =
-                            self.get_idx_from_id_fast(neighbors[neighbor_offset + 1]);
-                        if next_nbr_idx < num_nodes {
-                            let prefetched =
-                                unsafe { self.prefetch_l2_vector_idx(base_ptr, next_nbr_idx) };
-                            if prefetched {
-                                if let Some(stats) = profile.as_mut() {
-                                    stats.record_layer0_vector_prefetch();
+                if self.use_sequential_ids {
+                    for (neighbor_offset, &nbr_id) in neighbors.iter().enumerate() {
+                        if neighbor_offset + 1 < neighbors.len() {
+                            let next_nbr_id = neighbors[neighbor_offset + 1];
+                            if next_nbr_id >= 0 {
+                                let next_nbr_idx = next_nbr_id as usize;
+                                if next_nbr_idx < num_nodes {
+                                    let prefetched = unsafe {
+                                        self.prefetch_l2_vector_idx(base_ptr, next_nbr_idx)
+                                    };
+                                    if prefetched {
+                                        if let Some(stats) = profile.as_mut() {
+                                            stats.record_layer0_vector_prefetch();
+                                        }
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    let nbr_idx = self.get_idx_from_id_fast(nbr_id);
-                    if nbr_idx >= num_nodes {
-                        continue;
-                    }
-
-                    let visited_start = profile_enabled.then(Instant::now);
-                    let marked = unsafe { scratch.mark_visited_unchecked(nbr_idx) };
-                    if let Some(stats) = profile.as_mut() {
-                        if let Some(start) = visited_start {
-                            stats.record_visited_ops(start.elapsed(), u64::from(marked));
+                        if nbr_id < 0 {
+                            continue;
                         }
-                    }
-                    if !marked {
-                        continue;
-                    }
+                        let nbr_idx = nbr_id as usize;
+                        if nbr_idx >= num_nodes {
+                            continue;
+                        }
 
-                    batch_indices[batch_len] = nbr_idx;
-                    batch_len += 1;
-
-                    if batch_len == 4 {
-                        let distance_start = profile_enabled.then(Instant::now);
-                        let distances = unsafe {
-                            self.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, batch_indices)
-                        };
+                        let visited_start = profile_enabled.then(Instant::now);
+                        let marked = unsafe { scratch.mark_visited_unchecked(nbr_idx) };
                         if let Some(stats) = profile.as_mut() {
-                            if let Some(start) = distance_start {
-                                stats.record_layer0_query_distance_batch4(start.elapsed());
+                            if let Some(start) = visited_start {
+                                stats.record_visited_ops(start.elapsed(), u64::from(marked));
                             }
                         }
-                        for (offset, nbr_dist) in distances.into_iter().enumerate() {
-                            self.process_layer0_l2_candidate(
-                                batch_indices[offset],
-                                nbr_dist,
-                                ef,
-                                scratch,
-                                &mut profile,
-                            );
+                        if !marked {
+                            continue;
                         }
-                        batch_len = 0;
+
+                        batch_indices[batch_len] = nbr_idx;
+                        batch_len += 1;
+
+                        if batch_len == 4 {
+                            let distance_start = profile_enabled.then(Instant::now);
+                            let distances = unsafe {
+                                self.l2_distance_to_4_idxs_ptr_unchecked(
+                                    query_ptr,
+                                    base_ptr,
+                                    batch_indices,
+                                )
+                            };
+                            if let Some(stats) = profile.as_mut() {
+                                if let Some(start) = distance_start {
+                                    stats.record_layer0_query_distance_batch4(start.elapsed());
+                                }
+                            }
+                            for (offset, nbr_dist) in distances.into_iter().enumerate() {
+                                self.process_layer0_l2_candidate(
+                                    batch_indices[offset],
+                                    nbr_dist,
+                                    ef,
+                                    scratch,
+                                    &mut profile,
+                                );
+                            }
+                            batch_len = 0;
+                        }
+                    }
+                } else {
+                    for (neighbor_offset, &nbr_id) in neighbors.iter().enumerate() {
+                        if neighbor_offset + 1 < neighbors.len() {
+                            let next_nbr_idx =
+                                self.get_idx_from_id_fast(neighbors[neighbor_offset + 1]);
+                            if next_nbr_idx < num_nodes {
+                                let prefetched =
+                                    unsafe { self.prefetch_l2_vector_idx(base_ptr, next_nbr_idx) };
+                                if prefetched {
+                                    if let Some(stats) = profile.as_mut() {
+                                        stats.record_layer0_vector_prefetch();
+                                    }
+                                }
+                            }
+                        }
+
+                        let nbr_idx = self.get_idx_from_id_fast(nbr_id);
+                        if nbr_idx >= num_nodes {
+                            continue;
+                        }
+
+                        let visited_start = profile_enabled.then(Instant::now);
+                        let marked = unsafe { scratch.mark_visited_unchecked(nbr_idx) };
+                        if let Some(stats) = profile.as_mut() {
+                            if let Some(start) = visited_start {
+                                stats.record_visited_ops(start.elapsed(), u64::from(marked));
+                            }
+                        }
+                        if !marked {
+                            continue;
+                        }
+
+                        batch_indices[batch_len] = nbr_idx;
+                        batch_len += 1;
+
+                        if batch_len == 4 {
+                            let distance_start = profile_enabled.then(Instant::now);
+                            let distances = unsafe {
+                                self.l2_distance_to_4_idxs_ptr_unchecked(
+                                    query_ptr,
+                                    base_ptr,
+                                    batch_indices,
+                                )
+                            };
+                            if let Some(stats) = profile.as_mut() {
+                                if let Some(start) = distance_start {
+                                    stats.record_layer0_query_distance_batch4(start.elapsed());
+                                }
+                            }
+                            for (offset, nbr_dist) in distances.into_iter().enumerate() {
+                                self.process_layer0_l2_candidate(
+                                    batch_indices[offset],
+                                    nbr_dist,
+                                    ef,
+                                    scratch,
+                                    &mut profile,
+                                );
+                            }
+                            batch_len = 0;
+                        }
                     }
                 }
             }
 
             for &nbr_idx in &batch_indices[..batch_len] {
                 let distance_start = profile_enabled.then(Instant::now);
-                let nbr_dist = unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) };
+                let nbr_dist =
+                    unsafe { self.l2_distance_to_idx_ptr_unchecked(query_ptr, base_ptr, nbr_idx) };
                 if let Some(stats) = profile.as_mut() {
                     if let Some(start) = distance_start {
                         stats.record_layer0_query_distance(start.elapsed(), 1);
@@ -7911,6 +8283,60 @@ mod tests {
         index
     }
 
+    fn deterministic_layer0_batch4_cosine_index() -> HnswIndex {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::Cosine,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(16),
+                ef_construction: Some(200),
+                ef_search: Some(200),
+                ..Default::default()
+            },
+        };
+        let vectors = vec![
+            1.0, 0.0, // node 0
+            0.8, 0.2, // node 1
+            0.2, 0.8, // node 2
+            -0.2, 0.8, // node 3
+            -1.0, 0.0, // node 4
+        ];
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        index.train(&vectors).unwrap();
+        for id in 0..5 {
+            let vector = &vectors[id * 2..(id + 1) * 2];
+            index
+                .add_vector(vector, Some(id as i64), Some(&[0]))
+                .unwrap();
+        }
+
+        index.entry_point = Some(0);
+        index.max_level = 0;
+
+        for node_info in &mut index.node_info {
+            for layer in &mut node_info.layer_neighbors {
+                layer.ids.clear();
+                layer.dists.clear();
+            }
+        }
+
+        for left in 0..5 {
+            for right in 0..5 {
+                if left == right {
+                    continue;
+                }
+                let dist = index.distance_between_nodes_idx(left, right);
+                index.node_info[left].layer_neighbors[0].push(right as i64, dist);
+            }
+        }
+
+        index.refresh_layer0_flat_graph();
+        index
+    }
+
     fn deterministic_filtered_screen_index(num_vectors: usize, dim: usize) -> HnswIndex {
         let config = IndexConfig {
             index_type: IndexType::Hnsw,
@@ -8248,6 +8674,22 @@ mod tests {
             0,
             "reworked bulk build should stop recording truncate-to-best upper-layer overflows"
         );
+        assert!(
+            report
+                .candidate_search_internal
+                .candidate_search_breakdown
+                .distance_compute_ms
+                > 0.0,
+            "parallel build profile should expose non-zero internal candidate-search distance time"
+        );
+        assert_eq!(
+            report
+                .candidate_search_internal
+                .search_core_shape
+                .rust_layer0_candidate_container,
+            "ordered_pool",
+            "parallel build profile should expose the layer-0 ordered-pool search core shape"
+        );
     }
 
     #[test]
@@ -8344,23 +8786,6 @@ mod tests {
     }
 
     #[test]
-    fn test_layer0_ordered_frontier_count_below_matches_faiss_strict_threshold() {
-        let mut frontier = Layer0OrderedFrontier::default();
-        frontier.prepare(4);
-        frontier.push(Layer0PoolEntry { idx: 10, dist: 1.0 });
-        frontier.push(Layer0PoolEntry { idx: 11, dist: 2.0 });
-        frontier.push(Layer0PoolEntry { idx: 12, dist: 2.0 });
-        frontier.push(Layer0PoolEntry { idx: 13, dist: 3.0 });
-
-        assert_eq!(
-            frontier.count_below(2.0),
-            1,
-            "FAISS count_below uses a strict less-than threshold"
-        );
-        assert_eq!(frontier.count_below(3.0), 3);
-    }
-
-    #[test]
     fn test_search_layer_idx_l2_ordered_pool_matches_heap_layer0_results() {
         let index = deterministic_upper_layer_index();
         let query = [11.8, 0.0];
@@ -8425,6 +8850,36 @@ mod tests {
             batched, scalar,
             "batch-4 layer-0 query distance helper must match scalar pointer distances"
         );
+    }
+
+    #[test]
+    fn test_l2_distance_to_idx_ptr_unchecked_matches_checked() {
+        let index = deterministic_upper_layer_index();
+        let query = [1.5, 0.0];
+        let query_ptr = query.as_ptr();
+        let base_ptr = index.vectors.as_ptr();
+
+        for idx in 0..index.node_info.len() {
+            let checked = unsafe { index.l2_distance_to_idx_ptr(query_ptr, base_ptr, idx) };
+            let unchecked =
+                unsafe { index.l2_distance_to_idx_ptr_unchecked(query_ptr, base_ptr, idx) };
+            assert_eq!(unchecked, checked);
+        }
+    }
+
+    #[test]
+    fn test_l2_distance_to_4_idxs_ptr_unchecked_matches_checked() {
+        let index = deterministic_upper_layer_index();
+        let query = [1.5, 0.0];
+        let query_ptr = query.as_ptr();
+        let base_ptr = index.vectors.as_ptr();
+        let idxs = [0, 1, 2, 3];
+
+        let checked = unsafe { index.l2_distance_to_4_idxs_ptr(query_ptr, base_ptr, idxs) };
+        let unchecked =
+            unsafe { index.l2_distance_to_4_idxs_ptr_unchecked(query_ptr, base_ptr, idxs) };
+
+        assert_eq!(unchecked, checked);
     }
 
     #[test]
@@ -8948,6 +9403,48 @@ mod tests {
     }
 
     #[test]
+    fn test_search_layer_idx_shared_uses_batch4_distance_without_bitset() {
+        let index = deterministic_layer0_batch4_index();
+        let query = [1.5, 0.0];
+        let mut scratch = SearchScratch::new();
+        let mut stats = HnswCandidateSearchProfileStats::default();
+
+        let results =
+            index.search_layer_idx_shared(&query, 0, 0, 4, None, &mut scratch, Some(&mut stats));
+
+        assert_eq!(
+            results.len(),
+            4,
+            "shared layer-0 search should still return the expected bounded result set without bitset filtering"
+        );
+        assert!(
+            stats.layer0_batch4_calls > 0,
+            "shared unfiltered layer-0 search should use the grouped batch-4 distance path on the main build/search lane"
+        );
+    }
+
+    #[test]
+    fn test_search_layer_idx_shared_uses_batch4_distance_for_cosine() {
+        let index = deterministic_layer0_batch4_cosine_index();
+        let query = [1.0, 0.1];
+        let mut scratch = SearchScratch::new();
+        let mut stats = HnswCandidateSearchProfileStats::default();
+
+        let results =
+            index.search_layer_idx_shared(&query, 0, 0, 4, None, &mut scratch, Some(&mut stats));
+
+        assert_eq!(
+            results.len(),
+            4,
+            "shared cosine layer-0 search should still return the expected bounded result set"
+        );
+        assert!(
+            stats.layer0_batch4_calls > 0,
+            "shared cosine layer-0 search should use grouped batch-4 distance on flat-graph scans"
+        );
+    }
+
+    #[test]
     fn test_search_layer_idx_l2_heap_reuses_generic_heap_capacity_across_calls() {
         let index = deterministic_upper_layer_index();
         let query = [11.8, 0.0];
@@ -9103,6 +9600,23 @@ mod tests {
         assert!(
             index.production_layer0_avoids_profile_timing_for_audit(),
             "round-9 production layer-0 fast path should avoid profiling timing calls"
+        );
+    }
+
+    #[test]
+    fn test_build_candidate_search_mode_uses_l2_specialized_path() {
+        let l2_index = deterministic_upper_layer_index();
+        let cosine_index = deterministic_layer0_batch4_cosine_index();
+
+        assert_eq!(
+            l2_index.build_candidate_search_mode_for_audit(),
+            "l2_fast_path",
+            "build-time candidate search should reuse the dedicated L2 fast path"
+        );
+        assert_eq!(
+            cosine_index.build_candidate_search_mode_for_audit(),
+            "shared_generic",
+            "non-L2 build-time candidate search should stay on the generic shared search path"
         );
     }
 

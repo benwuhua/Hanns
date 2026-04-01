@@ -607,4 +607,3 @@ impl ProductQuantizer {
         Some(&self.centroids[offset..offset + ksub * sub_dim])
     }
 }
-

@@ -107,8 +107,8 @@ impl IvfSqCcIndex {
 
     /// Train IVF (clustering)
     fn train_ivf(&self, vectors: &[f32]) -> Result<()> {
-        use crate::quantization::KMeans;
         use crate::quantization::kmeans::KMeansMetric;
+        use crate::quantization::KMeans;
 
         let mut km = KMeans::new(self.nlist, self.dim);
         if matches!(self.config.metric_type, MetricType::Ip | MetricType::Cosine) {

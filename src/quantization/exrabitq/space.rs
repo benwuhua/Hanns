@@ -120,6 +120,7 @@ where
 pub(crate) fn decode_compact_levels(code: &[u8], d: usize, ex_bits: usize) -> Vec<u8> {
     let mut decoded = vec![0u8; d];
     match ex_bits {
+        0 => {}
         8 => {
             decoded.copy_from_slice(&code[..d]);
         }

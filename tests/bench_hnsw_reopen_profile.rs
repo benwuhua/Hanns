@@ -1,7 +1,7 @@
 #[cfg(feature = "long-tests")]
 use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, SearchRequest};
 #[cfg(feature = "long-tests")]
-use knowhere_rs::faiss::{hnsw::HnswBuildProfileReport, HnswIndex};
+use knowhere_rs::faiss::{hnsw::HnswParallelBuildProfileReport, HnswIndex};
 #[cfg(feature = "long-tests")]
 use knowhere_rs::MetricType;
 #[cfg(feature = "long-tests")]
@@ -76,7 +76,7 @@ fn run_sample_search(index: &HnswIndex, queries: &[f32], dim: usize, ef_search: 
 
 #[cfg(feature = "long-tests")]
 fn build_profile_artifact(
-    report: HnswBuildProfileReport,
+    report: HnswParallelBuildProfileReport,
     build_wall_clock_ms: f64,
     sample_search_ms: f64,
 ) -> serde_json::Value {
@@ -107,6 +107,10 @@ fn build_profile_artifact(
         },
         "timing_buckets": report.timing_buckets,
         "call_counts": report.call_counts,
+        "candidate_search_internal": report.candidate_search_internal,
+        "graph_quality_call_counts": report.graph_quality_call_counts,
+        "parallel_insert_entry_descent_mode": report.parallel_insert_entry_descent_mode,
+        "upper_layer_overflow_shrink_mode": report.upper_layer_overflow_shrink_mode,
         "hotspot_ranking": report.hotspot_ranking,
         "recommended_first_rework_target": report.recommended_first_rework_target,
         "total_profiled_ms": report.total_profiled_ms,
@@ -146,6 +150,7 @@ fn test_generate_hnsw_reopen_profile_round1() {
             m: Some(16),
             ef_construction: Some(200),
             ef_search: Some(64),
+            num_threads: Some(4),
             ..Default::default()
         },
     };
@@ -153,7 +158,7 @@ fn test_generate_hnsw_reopen_profile_round1() {
     let mut index = HnswIndex::new(&config).expect("create HNSW reopen profiler index");
     let build_start = Instant::now();
     let report = index
-        .build_profile_report(&base, None)
+        .parallel_build_profile_report(&base, None)
         .expect("build HNSW reopen profile report");
     let build_wall_clock_ms = build_start.elapsed().as_secs_f64() * 1000.0;
     let sample_search_ms = run_sample_search(&index, &queries, dim, 64);

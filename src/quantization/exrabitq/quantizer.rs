@@ -185,33 +185,38 @@ impl ExRaBitQQuantizer {
         let mut short_code = Vec::with_capacity(self.config.short_code_bytes());
         pack_codes(&short_levels, 1, &mut short_code);
 
-        let abs_unit: Vec<f32> = unit.iter().map(|value| value.abs()).collect();
-        let quantized = self.fast_quantize_abs(&abs_unit);
-        let max_level = self.max_level();
-        let signed_long_levels: Vec<u16> = quantized
-            .codes
-            .iter()
-            .zip(unit.iter())
-            .map(|(&code, &value)| {
-                if value >= 0.0 {
-                    code as u16
+        // 1-bit mode: no long code, factor derived from short code only
+        let (long_code, factor) = if self.config.ex_bits() == 0 {
+            (Vec::new(), ExFactor { xipnorm: 1.0 })
+        } else {
+            let abs_unit: Vec<f32> = unit.iter().map(|value| value.abs()).collect();
+            let quantized = self.fast_quantize_abs(&abs_unit);
+            let max_level = self.max_level();
+            let signed_long_levels: Vec<u16> = quantized
+                .codes
+                .iter()
+                .zip(unit.iter())
+                .map(|(&code, &value)| {
+                    if value >= 0.0 {
+                        code as u16
+                    } else {
+                        (max_level - code) as u16
+                    }
+                })
+                .collect();
+            let signed_long_levels_u8: Vec<u8> = signed_long_levels
+                .iter()
+                .map(|&value| value as u8)
+                .collect();
+            let lc = self.store_compacted_code(&signed_long_levels_u8);
+            let f = ExFactor {
+                xipnorm: if quantized.numerator > 1e-12 {
+                    2.0 * x_norm / quantized.numerator
                 } else {
-                    (max_level - code) as u16
-                }
-            })
-            .collect();
-        let signed_long_levels_u8: Vec<u8> = signed_long_levels
-            .iter()
-            .map(|&value| value as u8)
-            .collect();
-        let long_code = self.store_compacted_code(&signed_long_levels_u8);
-
-        let factor = ExFactor {
-            xipnorm: if quantized.numerator > 1e-12 {
-                2.0 * x_norm / quantized.numerator
-            } else {
-                1.0
-            },
+                    1.0
+                },
+            };
+            (lc, f)
         };
 
         let sum_abs = unit.iter().map(|value| value.abs()).sum::<f32>();
@@ -367,6 +372,7 @@ impl ExRaBitQQuantizer {
     pub fn long_code_inner_product(&self, values: &[f32], long_code: &[u8]) -> f32 {
         debug_assert_eq!(values.len(), self.config.padded_dim());
         match self.config.ex_bits() {
+            0 => 0.0,
             2 => ip_fxu2(values, long_code, self.config.padded_dim()),
             3 => ip_fxu3(values, long_code, self.config.padded_dim()),
             4 => ip_fxu4(values, long_code, self.config.padded_dim()),
@@ -425,6 +431,7 @@ impl ExRaBitQQuantizer {
         let ex_bits = self.config.ex_bits();
 
         match ex_bits {
+            0 => {}
             8 => {
                 compact.copy_from_slice(raw_levels);
             }

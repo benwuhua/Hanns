@@ -38,7 +38,10 @@ fn test_ffi_abi_metadata_contract() {
         "unsupported"
     );
     assert_eq!(flat_meta_json["additional_scalar"]["mv_only_query"], true);
-    assert_eq!(flat_meta_json["additional_scalar"]["unsupported_reason"], "additional-scalar filtering is unsupported for this index type in the current Rust FFI");
+    assert_eq!(
+        flat_meta_json["additional_scalar"]["unsupported_reason"],
+        "additional-scalar filtering is unsupported for this index type in the current Rust FFI"
+    );
     assert_eq!(
         flat_meta_json["capabilities"]["get_vector_by_ids"],
         "supported"
@@ -357,7 +360,10 @@ fn test_ffi_abi_metadata_contract() {
         sparse_meta_json["additional_scalar"]["support_mode"],
         "partial"
     );
-    assert_eq!(sparse_meta_json["additional_scalar"]["unsupported_reason"], "only sparse indexes expose MV-only additional-scalar filtering via the current Rust FFI");
+    assert_eq!(
+        sparse_meta_json["additional_scalar"]["unsupported_reason"],
+        "only sparse indexes expose MV-only additional-scalar filtering via the current Rust FFI"
+    );
     assert_eq!(
         sparse_meta_json["capabilities"]["ann_iterator"],
         "supported"

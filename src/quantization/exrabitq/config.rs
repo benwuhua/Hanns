@@ -10,9 +10,9 @@ impl ExRaBitQConfig {
         if dim == 0 {
             return Err("dim must be > 0".to_string());
         }
-        if !matches!(bits_per_dim, 3 | 4 | 5 | 7 | 8 | 9) {
+        if !matches!(bits_per_dim, 1 | 4 | 8) {
             return Err(format!(
-                "unsupported bits_per_dim {}; expected one of 3, 4, 5, 7, 8, 9",
+                "unsupported bits_per_dim {}; expected one of 1 (binary), 4 (compact), 8 (quality)",
                 bits_per_dim
             ));
         }
@@ -47,6 +47,7 @@ impl ExRaBitQConfig {
 
     pub fn long_code_bytes(&self) -> usize {
         match self.ex_bits() {
+            0 => 0,
             2 => self.padded_dim() / 4,
             3 => (self.padded_dim() / 64) * (16 + 8),
             4 => self.padded_dim() / 2,
