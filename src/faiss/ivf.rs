@@ -88,6 +88,9 @@ impl IvfIndex {
 
         // Keep KMeans centroid training aligned with existing IVF implementations.
         let mut km = KMeans::new(self.nlist, self.dim);
+        if matches!(self.metric_type, MetricType::Ip | MetricType::Cosine) {
+            km = km.with_metric(crate::quantization::kmeans::KMeansMetric::InnerProduct);
+        }
         km.train(data);
         self.centroids = km.centroids().to_vec();
         self.lists = (0..self.nlist).map(|_| Vec::new()).collect();

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
 
-use crate::api::{IndexConfig, KnowhereError, Result, SearchRequest, SearchResult};
+use crate::api::{IndexConfig, KnowhereError, MetricType, Result, SearchRequest, SearchResult};
 use crate::quantization::pq::{PQConfig, ProductQuantizer};
 use crate::quantization::{
     OPQConfig, OptimizedProductQuantizer, ResidualPQConfig, ResidualProductQuantizer,
@@ -30,6 +30,8 @@ pub struct IvfOpqConfig {
     pub use_residual: bool,
     /// Number of OPQ training iterations
     pub opq_niter: usize,
+    /// Distance metric type
+    pub metric_type: MetricType,
 }
 
 impl Default for IvfOpqConfig {
@@ -42,6 +44,7 @@ impl Default for IvfOpqConfig {
             nbits: 8,
             use_residual: true,
             opq_niter: 20,
+            metric_type: MetricType::L2,
         }
     }
 }
@@ -56,6 +59,7 @@ impl IvfOpqConfig {
             nbits,
             use_residual: true,
             opq_niter: 20,
+            metric_type: MetricType::L2,
         }
     }
 }
@@ -193,6 +197,9 @@ impl IvfOpqIndex {
 
         // Use k-means from quantization module
         let mut kmeans = crate::quantization::KMeans::new(k, dim);
+        if matches!(self.config.metric_type, MetricType::Ip | MetricType::Cosine) {
+            kmeans = kmeans.with_metric(crate::quantization::kmeans::KMeansMetric::InnerProduct);
+        }
         kmeans.train(x);
 
         self.coarse_centroids.copy_from_slice(kmeans.centroids());

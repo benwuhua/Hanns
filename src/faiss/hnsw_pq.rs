@@ -254,8 +254,16 @@ impl HnswPqIndex {
     /// Compute distance between a query and a stored PQ code using lookup table
     #[allow(dead_code)]
     fn compute_distance_to_code(&self, query: &[f32], code: &[u8]) -> f32 {
-        let table = self.pq.build_distance_table_l2(query);
+        let table = self.build_distance_table(query);
         self.compute_distance_to_code_with_table(&table, code)
+    }
+
+    /// Build metric-aware distance table
+    fn build_distance_table(&self, query: &[f32]) -> Vec<f32> {
+        match self.config.metric_type {
+            MetricType::Ip | MetricType::Cosine => self.pq.build_distance_table_ip(query),
+            _ => self.pq.build_distance_table_l2(query),
+        }
     }
 
     #[inline]
@@ -449,7 +457,7 @@ impl HnswPqIndex {
         let mut visited = HashSet::new();
         let mut candidates: BinaryHeap<(OrderedDist, usize)> = BinaryHeap::new();
         let mut results: Vec<(usize, f32)> = Vec::new();
-        let table = self.pq.build_distance_table_l2(query);
+        let table = self.build_distance_table(query);
 
         // Initialize with entry point
         let entry_dist =
@@ -588,7 +596,7 @@ impl HnswPqIndex {
         let mut visited = HashSet::new();
         let mut candidates: BinaryHeap<(OrderedDist, usize)> = BinaryHeap::new();
         let mut results: BinaryHeap<(OrderedDist, usize)> = BinaryHeap::new();
-        let table = self.pq.build_distance_table_l2(query);
+        let table = self.build_distance_table(query);
 
         // Initialize with entry point
         let entry_dist =

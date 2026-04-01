@@ -2857,7 +2857,7 @@ impl PQFlashIndex {
         let pq_table = self
             .pq_encoder
             .as_ref()
-            .map(|encoder| encoder.build_distance_table_l2(query));
+            .map(|encoder| self.build_pq_table(encoder, query));
         let pq_table_slice = pq_table.as_ref().map(|v| v.as_slice());
         let hvq_state = self.hvq_state_for_query(query);
         let sq8_query = if self.config.use_sq8_prefilter && self.metric_type == MetricType::L2 {
@@ -3193,7 +3193,7 @@ impl PQFlashIndex {
         let pq_table = self
             .pq_encoder
             .as_ref()
-            .map(|encoder| encoder.build_distance_table_l2(query));
+            .map(|encoder| self.build_pq_table(encoder, query));
         let pq_table_slice = pq_table.as_ref().map(|v| v.as_slice());
         let hvq_state = self.hvq_state_for_query(query);
         let sq8_q = if self.config.use_sq8_prefilter && self.metric_type == MetricType::L2 {
@@ -3554,7 +3554,7 @@ impl PQFlashIndex {
         let pq_table = self
             .pq_encoder
             .as_ref()
-            .map(|encoder| encoder.build_distance_table_l2(query));
+            .map(|encoder| self.build_pq_table(encoder, query));
         let hvq_state = self.hvq_state_for_query(query);
 
         let mut frontier = BinaryHeap::new();
@@ -4342,6 +4342,14 @@ impl PQFlashIndex {
         }
     }
 
+    /// Build PQ distance table with metric-aware dispatch
+    fn build_pq_table(&self, encoder: &ProductQuantizer, query: &[f32]) -> Vec<f32> {
+        match self.metric_type {
+            MetricType::Ip | MetricType::Cosine => encoder.build_distance_table_ip(query),
+            _ => encoder.build_distance_table_l2(query),
+        }
+    }
+
     fn separated_vectors_mmap(&self) -> Option<&Mmap> {
         self.storage
             .as_ref()
@@ -4410,7 +4418,7 @@ impl PQFlashIndex {
         {
             self.pq_encoder
                 .as_ref()
-                .map(|pq| pq.build_distance_table_l2(query))
+                .map(|pq| self.build_pq_table(pq, query))
         } else {
             None
         };

@@ -1087,7 +1087,14 @@ impl IndexWrapper {
         if let Some(ref mut idx) = self.flat {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
         } else if let Some(ref mut idx) = self.hnsw {
-            idx.add(vectors, ids).map_err(|_| CError::Internal)
+            let count = vectors.len() / idx.dim();
+            let result = if idx.should_use_parallel_add(count) {
+                idx.add_parallel(vectors, ids, Some(true))
+                    .or_else(|_| idx.add(vectors, ids))
+            } else {
+                idx.add(vectors, ids)
+            };
+            result.map_err(|_| CError::Internal)
         } else if let Some(ref idx) = self.scann {
             // ScaNN uses interior mutability (RwLock)
             Ok(idx.add(vectors, ids))

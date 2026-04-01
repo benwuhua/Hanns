@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use crate::api::{IndexConfig, KnowhereError, Result, SearchRequest, SearchResult};
+use crate::api::{IndexConfig, KnowhereError, MetricType, Result, SearchRequest, SearchResult};
 use crate::executor::l2_distance;
 use crate::quantization::ScalarQuantizer;
 
@@ -108,8 +108,12 @@ impl IvfSqCcIndex {
     /// Train IVF (clustering)
     fn train_ivf(&self, vectors: &[f32]) -> Result<()> {
         use crate::quantization::KMeans;
+        use crate::quantization::kmeans::KMeansMetric;
 
         let mut km = KMeans::new(self.nlist, self.dim);
+        if matches!(self.config.metric_type, MetricType::Ip | MetricType::Cosine) {
+            km = km.with_metric(KMeansMetric::InnerProduct);
+        }
         km.train(vectors);
 
         let mut centroids = self.centroids.write().map_err(|_| {

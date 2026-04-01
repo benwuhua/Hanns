@@ -1729,7 +1729,7 @@ impl HnswIndex {
         Ok(())
     }
 
-    fn should_use_parallel_add(&self, n: usize) -> bool {
+    pub(crate) fn should_use_parallel_add(&self, n: usize) -> bool {
         self.num_threads > 1 && n >= 1000
     }
 

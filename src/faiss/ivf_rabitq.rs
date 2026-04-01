@@ -104,6 +104,9 @@ impl IvfRaBitqIndex {
 
         // K-means 训练质心
         let mut km = KMeans::new(self.config.nlist, self.config.dim);
+        if matches!(self.config.metric_type, MetricType::Ip | MetricType::Cosine) {
+            km = km.with_metric(crate::quantization::kmeans::KMeansMetric::InnerProduct);
+        }
         km.train(data);
         self.centroids = km.centroids().to_vec();
 

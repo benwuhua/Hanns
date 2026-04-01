@@ -7,9 +7,9 @@
 //!
 //! This approach significantly improves accuracy over standard PQ.
 
-use super::kmeans::KMeans;
+use super::kmeans::{KMeans, KMeansMetric};
 use super::pq::{PQConfig, ProductQuantizer};
-use crate::api::{KnowhereError, Result};
+use crate::api::{KnowhereError, MetricType, Result};
 
 /// Residual PQ configuration
 #[derive(Clone, Debug)]
@@ -112,6 +112,8 @@ pub struct ResidualProductQuantizer {
     residual_pq: ProductQuantizer,
     /// Whether the quantizer is trained
     is_trained: bool,
+    /// Distance metric for coarse clustering
+    metric: KMeansMetric,
 }
 
 impl ResidualProductQuantizer {
@@ -127,7 +129,18 @@ impl ResidualProductQuantizer {
             coarse_centroids: Vec::new(),
             residual_pq,
             is_trained: false,
+            metric: KMeansMetric::L2,
         })
+    }
+
+    /// Set distance metric for coarse clustering
+    pub fn with_metric(mut self, metric_type: MetricType) -> Self {
+        self.metric = if matches!(metric_type, MetricType::Ip | MetricType::Cosine) {
+            KMeansMetric::InnerProduct
+        } else {
+            KMeansMetric::L2
+        };
+        self
     }
 
     /// Get the configuration
@@ -188,6 +201,7 @@ impl ResidualProductQuantizer {
 
         // Use k-means to find coarse centroids
         let mut kmeans = KMeans::new(k, dim);
+        kmeans = kmeans.with_metric(self.metric);
         kmeans.train(x);
 
         self.coarse_centroids.copy_from_slice(kmeans.centroids());
@@ -421,6 +435,8 @@ pub struct OptimizedResidualProductQuantizer {
     residual_opq: super::opq::OptimizedProductQuantizer,
     /// Whether the quantizer is trained
     is_trained: bool,
+    /// Distance metric for coarse clustering
+    metric: KMeansMetric,
 }
 
 impl OptimizedResidualProductQuantizer {
@@ -436,7 +452,18 @@ impl OptimizedResidualProductQuantizer {
             coarse_centroids: Vec::new(),
             residual_opq,
             is_trained: false,
+            metric: KMeansMetric::L2,
         })
+    }
+
+    /// Set distance metric for coarse clustering
+    pub fn with_metric(mut self, metric_type: MetricType) -> Self {
+        self.metric = if matches!(metric_type, MetricType::Ip | MetricType::Cosine) {
+            KMeansMetric::InnerProduct
+        } else {
+            KMeansMetric::L2
+        };
+        self
     }
 
     /// Get the configuration
@@ -497,6 +524,7 @@ impl OptimizedResidualProductQuantizer {
 
         // Use k-means to find coarse centroids
         let mut kmeans = KMeans::new(k, dim);
+        kmeans = kmeans.with_metric(self.metric);
         kmeans.train(x);
 
         self.coarse_centroids.copy_from_slice(kmeans.centroids());
