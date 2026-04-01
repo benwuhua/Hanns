@@ -481,7 +481,7 @@ impl IvfHvqIndex {
 
         // Stage 1: fastscan coarse ranking per cluster
         let fs_state = self.quantizer.precompute_fastscan_state(&q_rot);
-        let n_candidates_per_cluster = (top_k * 3).max(10);
+        let n_candidates_per_cluster = (top_k * 10).max(100);
 
         let layouts = self.cluster_layouts.read();
         let mut all_local_candidates = Vec::new();
