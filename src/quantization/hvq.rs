@@ -917,6 +917,87 @@ impl HvqQuantizer {
         let state = self.precompute_query_state(q_rot);
         self.score_code(&state, code)
     }
+
+    /// Compute 1-bit sign codes from a raw vector (center + rotate + normalize + threshold).
+    /// Used by IvfHvqIndex for fastscan transposition.
+    pub fn compute_sign_bits(&self, v: &[f32]) -> Vec<u8> {
+        let v_centered: Vec<f32> = v
+            .iter()
+            .zip(self.centroid.iter())
+            .map(|(a, b)| a - b)
+            .collect();
+        let o = self.rotate(&v_centered);
+        let norm_o = o.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let o_hat: Vec<f32> = if norm_o > 1e-12 {
+            o.iter().map(|x| x / norm_o).collect()
+        } else {
+            o
+        };
+        let sign_codes: Vec<u16> = o_hat
+            .iter()
+            .map(|&v| if v >= 0.0 { 1u16 } else { 0u16 })
+            .collect();
+        let mut packed = Vec::with_capacity(self.config.dim.div_ceil(8));
+        pack_codes(&sign_codes, 1, &mut packed);
+        packed
+    }
+
+    /// Precompute fastscan LUT from an already-rotated query.
+    /// Reuses the same LUT construction logic as HvqIndex::precompute_fastscan_state.
+    pub fn precompute_fastscan_state(&self, q_rot: &[f32]) -> HvqFastScanState {
+        assert_eq!(q_rot.len(), self.config.dim);
+        let q_sum: f32 = q_rot.iter().sum();
+        let centroid_score = q_rot
+            .iter()
+            .zip(self.rotated_centroid.iter())
+            .map(|(a, b)| a * b)
+            .sum();
+
+        let n_groups = self.config.dim.div_ceil(4);
+        let mut lut_f32 = vec![0.0f32; n_groups * 16];
+        for group_idx in 0..n_groups {
+            let mut group = [0.0f32; 4];
+            for bit_pos in 0..4usize {
+                let dim_idx = group_idx * 4 + bit_pos;
+                if dim_idx < self.config.dim {
+                    group[bit_pos] = q_rot[dim_idx];
+                }
+            }
+
+            for nibble in 0..16usize {
+                let mut value = 0.0f32;
+                for bit_pos in 0..4usize {
+                    let sign = if ((nibble >> bit_pos) & 1) != 0 {
+                        1.0f32
+                    } else {
+                        -1.0f32
+                    };
+                    value += group[bit_pos] * sign;
+                }
+                lut_f32[group_idx * 16 + nibble] = value;
+            }
+        }
+
+        let max_abs = lut_f32
+            .iter()
+            .copied()
+            .map(f32::abs)
+            .fold(0.0f32, f32::max)
+            .max(1e-6);
+        let lut_scale = (max_abs / 127.0).max(1e-6);
+        let lut = lut_f32
+            .into_iter()
+            .map(|value| (value / lut_scale).round().clamp(-127.0, 127.0) as i8)
+            .collect();
+
+        HvqFastScanState {
+            q_rot: q_rot.to_vec(),
+            q_sum,
+            centroid_score,
+            lut,
+            lut_scale,
+        }
+    }
 }
 
 /// dot product of u8 query codes × i8 database codes.
