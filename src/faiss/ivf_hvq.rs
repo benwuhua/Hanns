@@ -61,7 +61,8 @@ struct HvqClusterLayout {
     norms_o: Vec<f32>,
     vmaxs: Vec<f32>,
     base_quant_dists: Vec<f32>,
-    packed_bits: Vec<Vec<u8>>,
+    packed_bits: Vec<u8>,      // flat buffer, stride = code_size
+    code_size: usize,
     base_norm_sqs: Vec<f32>,
 
     /// 1-bit fastscan transposed buffer
@@ -82,7 +83,8 @@ impl HvqClusterLayout {
         let norms_o = entries.iter().map(|e| e.norm_o).collect();
         let vmaxs = entries.iter().map(|e| e.vmax).collect();
         let base_quant_dists = entries.iter().map(|e| e.base_quant_dist).collect();
-        let packed_bits = entries.iter().map(|e| e.packed_bits.clone()).collect();
+        let code_size = entries.first().map_or(0, |e| e.packed_bits.len());
+        let packed_bits: Vec<u8> = entries.iter().flat_map(|e| e.packed_bits.iter().copied()).collect();
         let base_norm_sqs = entries.iter().map(|e| e.base_norm_sq).collect();
 
         let _ = n_blocks;
@@ -92,6 +94,7 @@ impl HvqClusterLayout {
             vmaxs,
             base_quant_dists,
             packed_bits,
+            code_size,
             base_norm_sqs,
             fastscan_codes,
             fastscan_block_size,
@@ -384,28 +387,60 @@ impl IvfHvqIndex {
             }
         }
 
+        // Parallel encode all vectors (centroid assignment + encode_with_sign_bits)
+        let entries: Vec<(usize, IvfHvqEntry)> = {
+            #[cfg(feature = "parallel")]
+            {
+                use rayon::prelude::*;
+                let base_id = self.ntotal as i64;
+                data
+                    .par_chunks_exact(self.config.dim)
+                    .enumerate()
+                    .map(|(i, vector)| {
+                        let cluster = self.find_best_centroid(vector);
+                        let (code, sign_bits) = self.quantizer.encode_with_sign_bits(vector, HVQ_ENCODE_REFINE);
+                        let norm_o = f32::from_le_bytes(code[0..4].try_into().unwrap());
+                        let vmax = f32::from_le_bytes(code[4..8].try_into().unwrap());
+                        let base_quant_dist = f32::from_le_bytes(code[8..12].try_into().unwrap());
+                        let packed_bits = code[12..].to_vec();
+                        let base_norm_sq = vector.iter().map(|x| x * x).sum();
+                        let id = ids.map(|v| v[i]).unwrap_or(base_id + i as i64);
+                        (
+                            cluster,
+                            IvfHvqEntry { id, packed_bits, norm_o, vmax, base_quant_dist, base_norm_sq, sign_bits },
+                        )
+                    })
+                    .collect()
+            }
+            #[cfg(not(feature = "parallel"))]
+            {
+                let base_id = self.ntotal as i64;
+                data
+                    .chunks_exact(self.config.dim)
+                    .enumerate()
+                    .map(|(i, vector)| {
+                        let cluster = self.find_best_centroid(vector);
+                        let (code, sign_bits) = self.quantizer.encode_with_sign_bits(vector, HVQ_ENCODE_REFINE);
+                        let norm_o = f32::from_le_bytes(code[0..4].try_into().unwrap());
+                        let vmax = f32::from_le_bytes(code[4..8].try_into().unwrap());
+                        let base_quant_dist = f32::from_le_bytes(code[8..12].try_into().unwrap());
+                        let packed_bits = code[12..].to_vec();
+                        let base_norm_sq = vector.iter().map(|x| x * x).sum();
+                        let id = ids.map(|v| v[i]).unwrap_or(base_id + i as i64);
+                        (
+                            cluster,
+                            IvfHvqEntry { id, packed_bits, norm_o, vmax, base_quant_dist, base_norm_sq, sign_bits },
+                        )
+                    })
+                    .collect()
+            }
+        };
+
+        // Sequential cluster insertion
         let mut modified_clusters = std::collections::HashSet::new();
         let mut lists = self.inverted_lists.write();
-        for (i, vector) in data.chunks_exact(self.config.dim).enumerate() {
-            let cluster = self.find_best_centroid(vector);
-            let (code, sign_bits) = self.quantizer.encode_with_sign_bits(vector, HVQ_ENCODE_REFINE);
-            let norm_o = f32::from_le_bytes(code[0..4].try_into().unwrap());
-            let vmax = f32::from_le_bytes(code[4..8].try_into().unwrap());
-            let base_quant_dist = f32::from_le_bytes(code[8..12].try_into().unwrap());
-            let packed_bits = code[12..].to_vec();
-            let base_norm_sq = vector.iter().map(|x| x * x).sum::<f32>();
-            let id = ids
-                .map(|values| values[i])
-                .unwrap_or((self.ntotal + i) as i64);
-            lists.entry(cluster).or_default().push(IvfHvqEntry {
-                id,
-                packed_bits,
-                norm_o,
-                vmax,
-                base_quant_dist,
-                base_norm_sq,
-                sign_bits,
-            });
+        for (cluster, entry) in entries {
+            lists.entry(cluster).or_default().push(entry);
             modified_clusters.insert(cluster);
         }
 
@@ -525,7 +560,7 @@ impl IvfHvqIndex {
                 layout.norms_o[local_id],
                 layout.vmaxs[local_id],
                 layout.base_quant_dists[local_id],
-                &layout.packed_bits[local_id],
+                &layout.packed_bits[local_id * layout.code_size..(local_id + 1) * layout.code_size],
             );
 
             let distance = if use_l2 {
