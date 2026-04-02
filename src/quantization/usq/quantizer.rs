@@ -256,6 +256,7 @@ impl UsqQuantizer {
     /// Greedy refinement quantizer for `nbits >= 4`.
     /// Returns `(codes, ip, qed_length)`.
     fn greedy_quantize(&self, o_hat: &[f32], nrefine: usize) -> (Vec<u16>, f32, f32) {
+        debug_assert!(o_hat.len() % 64 == 0, "o_hat must be padded to multiple of 64");
         let dim = o_hat.len();
         let nbits = self.config.nbits;
         let vmax = Self::unit_vmax(o_hat);
@@ -331,7 +332,6 @@ impl UsqQuantizer {
                         best_ip = new_ip;
                         best_qed = new_qed;
                         best_objective = new_objective;
-                        improved = true;
                     }
                 }
 
@@ -340,6 +340,7 @@ impl UsqQuantizer {
                     ip = best_ip;
                     qed_length = best_qed;
                     objective = best_objective;
+                    improved = true;
                 }
             }
 
@@ -355,6 +356,7 @@ impl UsqQuantizer {
     /// Threshold-sweep quantizer for `nbits < 4` (ExRaBitQ style).
     /// Returns `(codes, ip, qed_length)`.
     fn fast_quantize(&self, o_hat: &[f32]) -> (Vec<u16>, f32, f32) {
+        debug_assert!(o_hat.len() % 64 == 0, "o_hat must be padded to multiple of 64");
         let dim = o_hat.len();
         let levels = 1u16 << self.config.nbits;
         let half_levels = levels / 2;
