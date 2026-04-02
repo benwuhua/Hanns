@@ -15,12 +15,127 @@
 - Current focus: `none`
 - Next feature: `none`
 - Strategic state: `final_rollup_closed_leadership_met` (see `docs/performance-program.md`)
-- Last updated: 2026-03-30
+- Last updated: 2026-04-02
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 - Workflow policy: capability-closure first for DiskANN/IVF-PQ (align to native/official feature set before further benchmark tuning); narrow performance hypotheses should start with `screen`, promote to tracked work only after `screen_result=promote`, and update durable docs only after authority verdicts
 - Progress: 66/66 features passing (100%)
 
+## Authority Runbook
+
+### Milvus + VectorDBBench Single-Host Benchmark Memory
+
+- Authority integration host for Milvus replacement checks: `hannsdb-x86`
+- Milvus integration repo on host: `/data/work/milvus-rs-integ/milvus-src`
+- knowhere-rs integration checkout on host: `/data/work/milvus-rs-integ/knowhere-rs`
+- VectorDBBench repo on host: `/data/work/VectorDBBench`
+- Milvus runtime root on host: `/data/work/milvus-rs-integ/milvus-var`
+
+#### Never re-discover the startup path
+
+- Do not hand-roll `nohup ... milvus run standalone` unless debugging the startup
+  script itself.
+- Use the checked-in remote wrapper:
+  - `/data/work/milvus-rs-integ/milvus-src/scripts/knowhere-rs-shim/start_standalone_remote.sh`
+- That wrapper sources:
+  - `/data/work/milvus-rs-integ/milvus-src/scripts/knowhere-rs-shim/remote_env.sh`
+- The wrapper is the canonical way to restore the standalone environment because it:
+  - sets the remote toolchain and library paths
+  - enables embed etcd by default (`ETCD_USE_EMBED=true`)
+  - points writable runtime state at `/data/work/milvus-rs-integ/milvus-var`
+  - waits for `http://127.0.0.1:9091/healthz`
+
+#### Canonical rs library rebuild on authority host
+
+- Rebuild the Milvus-consumed Rust library in the integration checkout:
+  - `cd /data/work/milvus-rs-integ/knowhere-rs`
+  - `source $HOME/.cargo/env >/dev/null 2>&1 || true`
+  - `CARGO_TARGET_DIR=/data/work/milvus-rs-integ/knowhere-rs-target cargo build --release --lib`
+- Expected artifact:
+  - `/data/work/milvus-rs-integ/knowhere-rs-target/release/libknowhere_rs.so`
+- This is the `.so` resolved by the Milvus integration build on `hannsdb-x86`.
+
+#### Canonical standalone restart on authority host
+
+- Restart Milvus only through:
+  - `cd /data/work/milvus-rs-integ/milvus-src`
+  - `scripts/knowhere-rs-shim/start_standalone_remote.sh`
+- A good run prints:
+  - `PID=...`
+  - `LOG=/data/work/milvus-rs-integ/milvus-var/logs/standalone-stage1.log`
+  - `HEALTHY`
+
+#### Canonical VectorDBBench entrypoints
+
+- VectorDBBench Python environment on host:
+  - `/data/work/VectorDBBench/.venv`
+- Cohere 1M HNSW native lane:
+  - `/data/work/VectorDBBench/run_milvus_hnsw_1m_cohere_native.py`
+- Cohere 1M HNSW rs lane:
+  - `/data/work/VectorDBBench/run_milvus_hnsw_1m_cohere_rs.py`
+- Additional small lanes already present for quick spot checks:
+  - `/data/work/VectorDBBench/run_milvus_hnsw_500k_native.py`
+  - `/data/work/VectorDBBench/run_milvus_hnsw_500k_rs.py`
+  - `/data/work/VectorDBBench/run_milvus_hnsw_50k_native.py`
+  - `/data/work/VectorDBBench/run_milvus_hnsw_50k.py`
+
+#### Canonical result locations
+
+- VectorDBBench logs:
+  - `/data/work/VectorDBBench/logs/`
+- VectorDBBench Milvus results:
+  - `/data/work/VectorDBBench/vectordb_bench/results/Milvus/`
+- Native Cohere 1M reference result:
+  - `/data/work/VectorDBBench/vectordb_bench/results/Milvus/result_20260330_milvus-native-knowhere-hnsw-cohere1m-20260330_milvus.json`
+- Current rs buffered-io reference result:
+  - `/data/work/VectorDBBench/vectordb_bench/results/Milvus/result_20260401_milvus-knowhere-rs-hnsw-cohere1m-20260330_milvus.json`
+
+#### Session-order checklist for future Codex runs
+
+1. `bash init.sh`
+2. Sync or edit the integration checkout used by Milvus:
+   - `/data/work/milvus-rs-integ/knowhere-rs`
+3. Rebuild:
+   - `CARGO_TARGET_DIR=/data/work/milvus-rs-integ/knowhere-rs-target cargo build --release --lib`
+4. Restart standalone only via:
+   - `scripts/knowhere-rs-shim/start_standalone_remote.sh`
+5. Run the required native/rs VectorDBBench lane by its checked-in script.
+6. Read only the authoritative evidence from:
+   - `milvus-var/logs/standalone-stage1.log`
+   - `VectorDBBench/logs/*.log`
+   - `VectorDBBench/vectordb_bench/results/Milvus/*.json`
+
 ## Session Log
+
+### Session 234 - 2026-04-02
+- Focus: `milvus-hnsw-build-hotspot-screen`
+- Mode:
+  - `screen`
+- Completed:
+  - fixed a recurring environment-memory gap by recording the canonical
+    `hannsdb-x86` Milvus + VectorDBBench single-host authority runbook in this
+    file.
+  - confirmed the canonical remote standalone wrapper is:
+    - `/data/work/milvus-rs-integ/milvus-src/scripts/knowhere-rs-shim/start_standalone_remote.sh`
+  - confirmed the wrapper sources:
+    - `/data/work/milvus-rs-integ/milvus-src/scripts/knowhere-rs-shim/remote_env.sh`
+  - confirmed the wrapper is required because it carries:
+    - embed etcd (`ETCD_USE_EMBED=true`)
+    - library paths
+    - remote toolchain paths
+    - runtime-state directories under `/data/work/milvus-rs-integ/milvus-var`
+  - confirmed the canonical VectorDBBench Cohere 1M entrypoints on the host:
+    - `run_milvus_hnsw_1m_cohere_native.py`
+    - `run_milvus_hnsw_1m_cohere_rs.py`
+- Verification:
+  - authority:
+    - `ssh hannsdb-x86 'bash -lc "cd /data/work/milvus-rs-integ/milvus-src && scripts/knowhere-rs-shim/start_standalone_remote.sh"'` -> `HEALTHY`
+    - `ssh hannsdb-x86 'bash -lc "ls -1 /data/work/VectorDBBench/run_milvus_hnsw_*"'` -> `ok`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - future sessions should use this runbook first instead of re-deriving
+    Milvus startup, etcd mode, library paths, and VectorDBBench entrypoints
+    from scratch.
 
 ### Session 233 - 2026-03-30
 - Focus: `sparse-ffi-milvus-closure`

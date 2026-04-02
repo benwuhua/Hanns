@@ -47,6 +47,7 @@ const HNSW_SEARCH_BF_TOPK_THRESHOLD: f32 = 0.5;
 
 thread_local! {
     static HNSW_SEARCH_SCRATCH_TLS: RefCell<SearchScratch> = RefCell::new(SearchScratch::new());
+    static HNSW_BUILD_SEARCH_SCRATCH_TLS: RefCell<SearchScratch> = RefCell::new(SearchScratch::new());
     static HNSW_COSINE_QUERY_NORM_TLS: std::cell::Cell<f32> = std::cell::Cell::new(0.0);
     static HNSW_SQ_PRECOMPUTED_TLS: RefCell<Vec<i16>> = RefCell::new(Vec::new());
 }
@@ -2596,8 +2597,28 @@ impl HnswIndex {
         vec: &[f32],
         node_level: usize,
     ) -> Vec<Vec<(usize, f32)>> {
-        let mut scratch = SearchScratch::new();
-        self.find_neighbors_for_insertion_with_scratch(vec, node_level, &mut scratch)
+        HNSW_BUILD_SEARCH_SCRATCH_TLS.with(|scratch_cell| {
+            let mut scratch = scratch_cell.borrow_mut();
+            self.find_neighbors_for_insertion_with_scratch(vec, node_level, &mut scratch)
+        })
+    }
+
+    #[cfg(test)]
+    fn find_neighbors_for_insertion_tls_for_test(
+        &self,
+        vec: &[f32],
+        node_level: usize,
+    ) -> (Vec<Vec<(usize, f32)>>, usize, usize, usize) {
+        HNSW_BUILD_SEARCH_SCRATCH_TLS.with(|scratch_cell| {
+            let mut scratch = scratch_cell.borrow_mut();
+            let results = self.find_neighbors_for_insertion_with_scratch(vec, node_level, &mut scratch);
+            (
+                results,
+                scratch.visited_epoch.capacity(),
+                scratch.layer0_frontier.entries.capacity(),
+                scratch.layer0_results.entries.capacity(),
+            )
+        })
     }
 
     fn find_neighbors_for_insertion_with_scratch(
@@ -8573,6 +8594,45 @@ mod tests {
             neighbors[0].first().map(|(idx, _)| *idx),
             Some(3),
             "bulk build should descend through upper layers before searching layer 0"
+        );
+    }
+
+    #[test]
+    fn test_parallel_bulk_neighbor_search_tls_scratch_reuses_capacity_across_calls() {
+        let index = deterministic_parallel_build_entry_descent_fixture();
+        let query = [102.1, 0.0];
+
+        let mut fresh_scratch = SearchScratch::new();
+        let expected = index.find_neighbors_for_insertion_with_scratch(&query, 0, &mut fresh_scratch);
+
+        let (first, first_visited_cap, first_frontier_cap, first_result_cap) =
+            index.find_neighbors_for_insertion_tls_for_test(&query, 0);
+        let (second, second_visited_cap, second_frontier_cap, second_result_cap) =
+            index.find_neighbors_for_insertion_tls_for_test(&query, 0);
+
+        assert_eq!(
+            first, expected,
+            "TLS-backed build scratch must preserve the existing neighbor search results"
+        );
+        assert_eq!(
+            second, expected,
+            "reusing TLS-backed build scratch must not change bulk-build neighbor search results"
+        );
+        assert!(
+            first_visited_cap >= index.ntotal(),
+            "first build-scratch call should size visited tracking for the current graph"
+        );
+        assert_eq!(
+            second_visited_cap, first_visited_cap,
+            "build TLS scratch should retain visited buffer capacity across calls"
+        );
+        assert_eq!(
+            second_frontier_cap, first_frontier_cap,
+            "build TLS scratch should retain frontier heap capacity across calls"
+        );
+        assert_eq!(
+            second_result_cap, first_result_cap,
+            "build TLS scratch should retain result heap capacity across calls"
         );
     }
 

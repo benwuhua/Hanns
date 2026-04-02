@@ -36,12 +36,14 @@ impl UsqConfig {
         (self.padded_dim() * self.nbits as usize).div_ceil(8)
     }
 
-    /// Per-vector metadata size: norm + norm_sq + vmax + quant_quality = 16 bytes.
+    /// Per-vector metadata size: norm + norm_sq + vmax + quant_quality (4 x f32 = 16 bytes).
     pub fn meta_bytes(&self) -> usize {
-        16
+        4 * std::mem::size_of::<f32>()
     }
 
-    /// Sign bits size in bytes (1 bit per padded_dim).
+    /// Size of the 1-bit sign code in bytes (1 bit per padded dimension).
+    /// Note: when `nbits == 1`, sign_bytes() == code_bytes() because sign bits ARE the codes.
+    /// For `nbits > 1`, sign_bytes() is the size of the fastscan approximation code (separate from packed_bits).
     pub fn sign_bytes(&self) -> usize {
         self.padded_dim() / 8
     }
