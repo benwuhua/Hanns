@@ -1,4 +1,4 @@
-use knowhere_rs::quantization::usq::{UsqConfig, UsqQuantizer, UsqRotator};
+use knowhere_rs::quantization::usq::{UsqConfig, UsqLayout, UsqQuantizer, UsqRotator};
 
 #[test]
 fn test_config_padded_dim() {
@@ -202,4 +202,67 @@ fn test_encode_rotated_matches_encode() {
     assert_eq!(encoded_direct.packed_bits, encoded_via_rotated.packed_bits);
     assert!((encoded_direct.norm - encoded_via_rotated.norm).abs() < 1e-5);
     assert!((encoded_direct.vmax - encoded_via_rotated.vmax).abs() < 1e-5);
+}
+
+// ---- Task 3: UsqLayout tests ----
+
+#[test]
+fn test_layout_build_basic() {
+    let dim = 128;
+    let config = UsqConfig::new(dim, 4).unwrap();
+    let mut quantizer = UsqQuantizer::new(config.clone());
+    quantizer.set_centroid(&vec![0.0f32; dim]);
+
+    let n = 100;
+    let data: Vec<f32> = (0..n * dim).map(|i| (i as f32 * 0.13).sin()).collect();
+    let encoded: Vec<_> = (0..n).map(|i| quantizer.encode(&data[i*dim..(i+1)*dim])).collect();
+    let ids: Vec<i64> = (0..n as i64).collect();
+    let layout = UsqLayout::build(&config, &encoded, &ids);
+
+    assert_eq!(layout.len(), n);
+    assert!(!layout.is_empty());
+    assert_eq!(layout.padded_dim(), 128);
+    assert_eq!(layout.n_blocks(), n.div_ceil(32)); // ceil(100/32) = 4
+}
+
+#[test]
+fn test_layout_metadata_access() {
+    let dim = 128;
+    let config = UsqConfig::new(dim, 4).unwrap();
+    let mut quantizer = UsqQuantizer::new(config.clone());
+    quantizer.set_centroid(&vec![0.0f32; dim]);
+
+    let v: Vec<f32> = (0..dim).map(|i| (i as f32 * 0.37).sin()).collect();
+    let encoded = quantizer.encode(&v);
+    let ids = vec![42i64];
+    let layout = UsqLayout::build(&config, &[encoded.clone()], &ids);
+
+    assert_eq!(layout.id_at(0), 42);
+    assert!((layout.norm_at(0) - encoded.norm).abs() < 1e-6);
+    assert!((layout.norm_sq_at(0) - encoded.norm_sq).abs() < 1e-6);
+    assert!((layout.vmax_at(0) - encoded.vmax).abs() < 1e-6);
+    assert!((layout.quant_quality_at(0) - encoded.quant_quality).abs() < 1e-6);
+    assert_eq!(layout.packed_bits_at(0), &encoded.packed_bits[..]);
+}
+
+#[test]
+fn test_layout_fastscan_block_size() {
+    let config = UsqConfig::new(128, 4).unwrap();
+    let mut quantizer = UsqQuantizer::new(config.clone());
+    quantizer.set_centroid(&vec![0.0f32; 128]);
+
+    let n = 64; // exactly 2 full blocks
+    let data: Vec<f32> = (0..n * 128).map(|i| (i as f32 * 0.13).sin()).collect();
+    let encoded: Vec<_> = (0..n).map(|i| quantizer.encode(&data[i*128..(i+1)*128])).collect();
+    let ids: Vec<i64> = (0..n as i64).collect();
+    let layout = UsqLayout::build(&config, &encoded, &ids);
+
+    // n_groups = 128/4 = 32, block_size = 32*16 = 512 bytes
+    let expected_block_size = (128 / 4) * 16;
+    assert_eq!(layout.fastscan_block_size(), expected_block_size);
+    assert_eq!(layout.n_blocks(), 2);
+    // Can access both blocks
+    let _b0 = layout.fastscan_block(0);
+    let _b1 = layout.fastscan_block(1);
+    assert_eq!(_b0.len(), expected_block_size);
 }
