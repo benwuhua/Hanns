@@ -603,6 +603,51 @@ impl HvqQuantizer {
         packed
     }
 
+    /// Encode a vector and compute 1-bit sign bits in one pass, avoiding duplicate
+    /// center + rotate + normalize overhead.
+    pub fn encode_with_sign_bits(&self, v: &[f32], nrefine: usize) -> (Vec<u8>, Vec<u8>) {
+        assert_eq!(v.len(), self.config.dim);
+        let v_centered: Vec<f32> = v
+            .iter()
+            .zip(self.centroid.iter())
+            .map(|(a, b)| a - b)
+            .collect();
+        let o = self.rotate(&v_centered);
+        let nbits = self.config.nbits;
+        let norm_o = o.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let o_hat: Vec<f32> = if norm_o > 1e-12 {
+            o.iter().map(|x| x / norm_o).collect()
+        } else {
+            o.clone()
+        };
+
+        let vmax = Self::unit_vmax(&o_hat);
+        let (codes, ip, qed_length) = if nbits >= 4 {
+            self.greedy_quantize(&o_hat, 6)
+        } else {
+            self.fast_quantize(&o_hat)
+        };
+        let _ = (nrefine, ip);
+
+        let base_quant_dist = qed_length.sqrt();
+
+        let mut packed_bits = Vec::with_capacity((self.config.dim * nbits as usize).div_ceil(8));
+        pack_codes(&codes, nbits, &mut packed_bits);
+
+        let mut packed = Vec::with_capacity(self.code_size_bytes());
+        packed.extend_from_slice(&norm_o.to_le_bytes());
+        packed.extend_from_slice(&vmax.to_le_bytes());
+        packed.extend_from_slice(&base_quant_dist.to_le_bytes());
+        packed.extend_from_slice(&packed_bits);
+
+        // 1-bit sign codes from the same o_hat
+        let sign_codes: Vec<u16> = o_hat.iter().map(|&v| if v >= 0.0 { 1u16 } else { 0u16 }).collect();
+        let mut sign_packed = Vec::with_capacity(self.config.dim.div_ceil(8));
+        pack_codes(&sign_codes, 1, &mut sign_packed);
+
+        (packed, sign_packed)
+    }
+
     pub fn encode_batch(&self, n: usize, data: &[f32], nrefine: usize) -> Vec<u8> {
         assert_eq!(data.len(), n * self.config.dim);
         let per = self.code_size_bytes();

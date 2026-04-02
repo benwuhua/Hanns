@@ -388,13 +388,12 @@ impl IvfHvqIndex {
         let mut lists = self.inverted_lists.write();
         for (i, vector) in data.chunks_exact(self.config.dim).enumerate() {
             let cluster = self.find_best_centroid(vector);
-            let code = self.quantizer.encode(vector, HVQ_ENCODE_REFINE);
+            let (code, sign_bits) = self.quantizer.encode_with_sign_bits(vector, HVQ_ENCODE_REFINE);
             let norm_o = f32::from_le_bytes(code[0..4].try_into().unwrap());
             let vmax = f32::from_le_bytes(code[4..8].try_into().unwrap());
             let base_quant_dist = f32::from_le_bytes(code[8..12].try_into().unwrap());
             let packed_bits = code[12..].to_vec();
             let base_norm_sq = vector.iter().map(|x| x * x).sum::<f32>();
-            let sign_bits = self.quantizer.compute_sign_bits(vector);
             let id = ids
                 .map(|values| values[i])
                 .unwrap_or((self.ntotal + i) as i64);
@@ -481,15 +480,28 @@ impl IvfHvqIndex {
 
         // Stage 1: fastscan coarse ranking per cluster
         let fs_state = self.quantizer.precompute_fastscan_state(&q_rot);
-        let n_candidates_per_cluster = (top_k * 10).max(100);
+        // Tier-aware candidates: higher nbits → more information lost by 1-bit fastscan → need more candidates
+        let n_candidates_per_cluster = match self.config.nbits {
+            1 => (top_k * 20).max(200),
+            2..=4 => (top_k * 15).max(150),
+            // 8-bit codes lose the most when approximated by 1-bit fastscan
+            _ => (top_k * 30).max(300),
+        };
 
         let layouts = self.cluster_layouts.read();
         let mut all_local_candidates = Vec::new();
         for &cluster in &coarse {
             if let Some(layout) = layouts.get(&cluster) {
-                let topk_local = layout.fastscan_topk(&fs_state, self.config.dim, n_candidates_per_cluster);
-                for local_id in topk_local {
-                    all_local_candidates.push((cluster, local_id));
+                if layout.n_vectors <= n_candidates_per_cluster {
+                    // Small cluster: skip fastscan, score all vectors directly
+                    for local_id in 0..layout.n_vectors {
+                        all_local_candidates.push((cluster, local_id));
+                    }
+                } else {
+                    let topk_local = layout.fastscan_topk(&fs_state, self.config.dim, n_candidates_per_cluster);
+                    for local_id in topk_local {
+                        all_local_candidates.push((cluster, local_id));
+                    }
                 }
             }
         }
