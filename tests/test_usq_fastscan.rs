@@ -54,14 +54,15 @@ fn test_scan_and_rerank_recall() {
     q_padded[..dim].copy_from_slice(&query);
     let q_rot = quantizer.rotator().rotate(&q_padded);
     let q_norm_sq: f32 = q_rot.iter().map(|x| x * x).sum();
-    let centroid_score = 0.0f32; // centroid is zero
+
+    // Use UsqQueryState for scoring
+    let query_state = quantizer.precompute_query_state(&query);
 
     // Brute force reference (identical scoring path).
     let mut bf: Vec<(i64, f32)> = (0..n)
         .map(|i| {
             let score = quantizer.score_with_meta(
-                &q_rot,
-                centroid_score,
+                &query_state,
                 layout.norm_at(i),
                 layout.vmax_at(i),
                 layout.quant_quality_at(i),
@@ -75,9 +76,9 @@ fn test_scan_and_rerank_recall() {
     let bf_top: Vec<i64> = bf.iter().take(k).map(|r| r.0).collect();
 
     // scan_and_rerank (n=200 > n_candidates=150 for nbits=4, so fastscan path is taken).
-    let state = UsqFastScanState::new(&q_rot, &config);
+    let fs_state = UsqFastScanState::new(&q_rot, &config);
     let results =
-        scan_and_rerank(&quantizer, &layout, &state, &q_rot, centroid_score, q_norm_sq, k);
+        scan_and_rerank(&quantizer, &layout, &fs_state, &query_state, q_norm_sq, k);
     let result_ids: Vec<i64> = results.iter().map(|r| r.0).collect();
 
     let overlap = bf_top.iter().filter(|id| result_ids.contains(id)).count();
@@ -107,12 +108,14 @@ fn test_scan_and_rerank_exercises_fastscan() {
     q_padded[..dim].copy_from_slice(&query);
     let q_rot = quantizer.rotator().rotate(&q_padded);
     let q_norm_sq: f32 = q_rot.iter().map(|x| x * x).sum();
-    let centroid_score = 0.0f32;
+
+    // Use UsqQueryState for scoring
+    let query_state = quantizer.precompute_query_state(&query);
 
     // Brute force reference
     let mut bf: Vec<(i64, f32)> = (0..n).map(|i| {
         let score = quantizer.score_with_meta(
-            &q_rot, centroid_score,
+            &query_state,
             layout.norm_at(i), layout.vmax_at(i),
             layout.quant_quality_at(i), layout.packed_bits_at(i),
         );
@@ -122,8 +125,8 @@ fn test_scan_and_rerank_exercises_fastscan() {
     let bf_top: Vec<i64> = bf.iter().take(k).map(|r| r.0).collect();
 
     // Two-stage with fastscan
-    let state = UsqFastScanState::new(&q_rot, &config);
-    let results = scan_and_rerank(&quantizer, &layout, &state, &q_rot, centroid_score, q_norm_sq, k);
+    let fs_state = UsqFastScanState::new(&q_rot, &config);
+    let results = scan_and_rerank(&quantizer, &layout, &fs_state, &query_state, q_norm_sq, k);
     let result_ids: Vec<i64> = results.iter().map(|r| r.0).collect();
 
     let overlap = bf_top.iter().filter(|id| result_ids.contains(id)).count();

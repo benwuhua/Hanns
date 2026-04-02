@@ -36,7 +36,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest, SearchResult};
-use crate::faiss::{HnswIndex, IvfExRaBitqIndex, IvfFlatIndex, IvfPqIndex, MemIndex};
+use crate::faiss::{HnswIndex, IvfUsqIndex, IvfFlatIndex, IvfPqIndex, MemIndex};
 
 /// 内部索引枚举（避免 trait object 问题）
 enum InnerIndex {
@@ -44,7 +44,7 @@ enum InnerIndex {
     Hnsw(Box<HnswIndex>),
     IvfFlat(Box<IvfFlatIndex>),
     IvfPq(Box<IvfPqIndex>),
-    IvfExRaBitq(Box<IvfExRaBitqIndex>),
+    IvfUsq(Box<IvfUsqIndex>),
 }
 
 impl InnerIndex {
@@ -54,7 +54,7 @@ impl InnerIndex {
             InnerIndex::Hnsw(idx) => idx.train(vectors),
             InnerIndex::IvfFlat(idx) => idx.train(vectors).map(|_| ()),
             InnerIndex::IvfPq(idx) => idx.train(vectors),
-            InnerIndex::IvfExRaBitq(idx) => idx.train(vectors),
+            InnerIndex::IvfUsq(idx) => idx.train(vectors),
         }
     }
 
@@ -64,7 +64,7 @@ impl InnerIndex {
             InnerIndex::Hnsw(idx) => idx.add(vectors, ids),
             InnerIndex::IvfFlat(idx) => idx.add(vectors, ids),
             InnerIndex::IvfPq(idx) => idx.add(vectors, ids),
-            InnerIndex::IvfExRaBitq(idx) => idx.add(vectors, ids),
+            InnerIndex::IvfUsq(idx) => idx.add(vectors, ids),
         }
     }
 
@@ -83,7 +83,7 @@ impl InnerIndex {
             }
             InnerIndex::IvfFlat(idx) => idx.search(query, req),
             InnerIndex::IvfPq(idx) => idx.search(query, req),
-            InnerIndex::IvfExRaBitq(idx) => idx.search(query, req),
+            InnerIndex::IvfUsq(idx) => idx.search(query, req),
         }
     }
 
@@ -95,7 +95,7 @@ impl InnerIndex {
                 "IVF-Flat save is not implemented".to_string(),
             )),
             InnerIndex::IvfPq(idx) => idx.save(path),
-            InnerIndex::IvfExRaBitq(idx) => idx.save(path),
+            InnerIndex::IvfUsq(idx) => idx.save(path),
         }
     }
 
@@ -107,8 +107,8 @@ impl InnerIndex {
                 "IVF-Flat load is not implemented".to_string(),
             )),
             InnerIndex::IvfPq(idx) => idx.load(path),
-            InnerIndex::IvfExRaBitq(idx) => {
-                *idx = Box::new(IvfExRaBitqIndex::load(path)?);
+            InnerIndex::IvfUsq(idx) => {
+                *idx = Box::new(IvfUsqIndex::load(path)?);
                 Ok(())
             }
         }
@@ -120,7 +120,7 @@ impl InnerIndex {
             InnerIndex::Hnsw(idx) => idx.ntotal(),
             InnerIndex::IvfFlat(idx) => idx.ntotal(),
             InnerIndex::IvfPq(idx) => idx.ntotal(),
-            InnerIndex::IvfExRaBitq(idx) => idx.ntotal(),
+            InnerIndex::IvfUsq(idx) => idx.ntotal(),
         }
     }
 
@@ -130,7 +130,7 @@ impl InnerIndex {
             InnerIndex::Hnsw(_) => "hnsw",
             InnerIndex::IvfFlat(_) => "ivf_flat",
             InnerIndex::IvfPq(_) => "ivf_pq",
-            InnerIndex::IvfExRaBitq(_) => "ivf_exrabitq",
+            InnerIndex::IvfUsq(_) => "ivf_usq",
         }
     }
 }
@@ -165,8 +165,9 @@ impl PyIndex {
             "hnsw" => IndexType::Hnsw,
             "ivf_flat" | "ivfflat" => IndexType::IvfFlat,
             "ivf_pq" | "ivfpq" => IndexType::IvfPq,
-            "ivf_exrabitq" | "ivf-exrabitq" | "exrabitq" | "extended-rabitq" => {
-                IndexType::IvfExRaBitq
+            "ivf_exrabitq" | "ivf-exrabitq" | "exrabitq" | "extended-rabitq"
+            | "ivf_usq" | "ivf-usq" | "usq" => {
+                IndexType::IvfUsq
             }
             _ => {
                 return Err(PyValueError::new_err(format!(
@@ -224,8 +225,8 @@ impl PyIndex {
                     PyValueError::new_err(format!("Failed to create IVF-PQ index: {:?}", e))
                 })?))
             }
-            IndexType::IvfExRaBitq => InnerIndex::IvfExRaBitq(Box::new(
-                IvfExRaBitqIndex::from_index_config(&config).map_err(|e| {
+            IndexType::IvfUsq => InnerIndex::IvfUsq(Box::new(
+                IvfUsqIndex::from_index_config(&config).map_err(|e| {
                     PyValueError::new_err(format!("Failed to create IVF-ExRaBitQ index: {:?}", e))
                 })?,
             )),
@@ -471,9 +472,9 @@ impl PyIndex {
                     let dim = u32::from_le_bytes(dim_bytes) as usize;
 
                     (
-                        IndexType::IvfExRaBitq,
+                        IndexType::IvfUsq,
                         IndexConfig {
-                            index_type: IndexType::IvfExRaBitq,
+                            index_type: IndexType::IvfUsq,
                             dim,
                             metric_type: MetricType::L2,
                             data_type: crate::api::DataType::Float,
@@ -505,8 +506,8 @@ impl PyIndex {
                     PyValueError::new_err(format!("Failed to create IVF-PQ index: {:?}", e))
                 })?))
             }
-            IndexType::IvfExRaBitq => InnerIndex::IvfExRaBitq(Box::new(
-                IvfExRaBitqIndex::from_index_config(&config).map_err(|e| {
+            IndexType::IvfUsq => InnerIndex::IvfUsq(Box::new(
+                IvfUsqIndex::from_index_config(&config).map_err(|e| {
                     PyValueError::new_err(format!("Failed to create IVF-ExRaBitQ index: {:?}", e))
                 })?,
             )),

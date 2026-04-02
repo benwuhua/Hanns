@@ -13,15 +13,16 @@ use crate::index::{
     AnnIterator, Index as IndexTrait, IndexError, SearchResult as IndexSearchResult,
 };
 use crate::quantization::usq::{
-    fastscan_topk, UsqConfig, UsqEncoded, UsqFastScanState, UsqLayout, UsqQuantizer,
+    fastscan_topk, UsqConfig, UsqEncoded, UsqFastScanState, UsqLayout, UsqQueryState,
+    UsqQuantizer,
 };
 use crate::quantization::KMeans;
 
-const EXRABITQ_MAGIC: &[u8; 8] = b"IVFXRBTQ";
-const EXRABITQ_VERSION: u32 = 2;
+const USQ_MAGIC: &[u8; 8] = b"IVFUSQ00";
+const USQ_VERSION: u32 = 3;
 
 #[derive(Clone, Debug)]
-pub struct IvfExRaBitqConfig {
+pub struct IvfUsqConfig {
     pub dim: usize,
     pub nlist: usize,
     pub nprobe: usize,
@@ -32,7 +33,7 @@ pub struct IvfExRaBitqConfig {
     pub rerank_k: usize,
 }
 
-impl IvfExRaBitqConfig {
+impl IvfUsqConfig {
     pub fn new(dim: usize, nlist: usize, bits_per_dim: usize) -> Self {
         Self {
             dim,
@@ -77,11 +78,14 @@ impl IvfExRaBitqConfig {
                 "dimension must be > 0".to_string(),
             ));
         }
-        if config.index_type != crate::api::IndexType::IvfExRaBitq {
-            return Err(KnowhereError::InvalidArg(format!(
-                "expected IvfExRaBitq config, got {:?}",
-                config.index_type
-            )));
+        match config.index_type {
+            crate::api::IndexType::IvfExRaBitq | crate::api::IndexType::IvfUsq => {}
+            other => {
+                return Err(KnowhereError::InvalidArg(format!(
+                    "expected IvfUsq or IvfExRaBitq config, got {:?}",
+                    other
+                )));
+            }
         }
 
         let nlist = config.params.nlist.unwrap_or(100);
@@ -112,8 +116,8 @@ struct PendingEntry {
     encoded: UsqEncoded,
 }
 
-pub struct IvfExRaBitqIndex {
-    config: IvfExRaBitqConfig,
+pub struct IvfUsqIndex {
+    config: IvfUsqConfig,
     centroids: Vec<f32>,
     /// Accumulated encoded vectors per cluster.
     pending: RwLock<HashMap<usize, Vec<PendingEntry>>>,
@@ -164,12 +168,12 @@ struct StoredConfig {
 
 // ─── Implementation ───────────────────────────────────────────────────────────
 
-impl IvfExRaBitqIndex {
+impl IvfUsqIndex {
     pub fn from_index_config(config: &IndexConfig) -> Result<Self> {
-        Ok(Self::new(IvfExRaBitqConfig::from_index_config(config)?))
+        Ok(Self::new(IvfUsqConfig::from_index_config(config)?))
     }
 
-    pub fn new(config: IvfExRaBitqConfig) -> Self {
+    pub fn new(config: IvfUsqConfig) -> Self {
         let usq_config = UsqConfig::new(config.dim, config.bits_per_dim as u8)
             .expect("invalid USQ config")
             .with_seed(config.rotation_seed);
@@ -186,7 +190,7 @@ impl IvfExRaBitqIndex {
         }
     }
 
-    pub fn config(&self) -> &IvfExRaBitqConfig {
+    pub fn config(&self) -> &IvfUsqConfig {
         &self.config
     }
 
@@ -223,12 +227,6 @@ impl IvfExRaBitqIndex {
     }
 
     pub fn train(&mut self, data: &[f32]) -> Result<()> {
-        if self.config.metric_type != MetricType::L2 {
-            return Err(KnowhereError::InvalidArg(
-                "IvfExRaBitqIndex currently supports MetricType::L2 only".to_string(),
-            ));
-        }
-
         let n = data.len() / self.config.dim;
         if self.config.dim == 0 || n * self.config.dim != data.len() {
             return Err(KnowhereError::InvalidArg(
@@ -400,10 +398,10 @@ impl IvfExRaBitqIndex {
         };
 
         let payload = bincode::serialize(&snapshot)
-            .map_err(|e| KnowhereError::Codec(format!("serialize exrabitq snapshot: {e}")))?;
-        let mut bytes = Vec::with_capacity(EXRABITQ_MAGIC.len() + 8 + payload.len());
-        bytes.extend_from_slice(EXRABITQ_MAGIC);
-        bytes.extend_from_slice(&EXRABITQ_VERSION.to_le_bytes());
+            .map_err(|e| KnowhereError::Codec(format!("serialize usq snapshot: {e}")))?;
+        let mut bytes = Vec::with_capacity(USQ_MAGIC.len() + 8 + payload.len());
+        bytes.extend_from_slice(USQ_MAGIC);
+        bytes.extend_from_slice(&USQ_VERSION.to_le_bytes());
         bytes.extend_from_slice(&(self.config.dim as u32).to_le_bytes());
         bytes.extend_from_slice(&payload);
         let mut file = File::create(path)?;
@@ -414,17 +412,18 @@ impl IvfExRaBitqIndex {
     pub fn load(path: &Path) -> Result<Self> {
         let mut bytes = Vec::new();
         File::open(path)?.read_to_end(&mut bytes)?;
-        let payload = if bytes.starts_with(EXRABITQ_MAGIC) {
+        const LEGACY_EXRABITQ_MAGIC: &[u8; 8] = b"IVFXRBTQ";
+        let payload = if bytes.starts_with(USQ_MAGIC) || bytes.starts_with(LEGACY_EXRABITQ_MAGIC) {
             bytes.get(16..).ok_or_else(|| {
-                KnowhereError::Codec("exrabitq snapshot header too short".to_string())
+                KnowhereError::Codec("usq snapshot header too short".to_string())
             })?
         } else {
             bytes.as_slice()
         };
         let snapshot: StoredSnapshot = bincode::deserialize(payload)
-            .map_err(|e| KnowhereError::Codec(format!("deserialize exrabitq snapshot: {e}")))?;
+            .map_err(|e| KnowhereError::Codec(format!("deserialize usq snapshot: {e}")))?;
 
-        let config = IvfExRaBitqConfig {
+        let config = IvfUsqConfig {
             dim: snapshot.config.dim,
             nlist: snapshot.config.nlist,
             nprobe: snapshot.config.nprobe,
@@ -534,34 +533,21 @@ impl IvfExRaBitqIndex {
         nprobe: usize,
     ) -> Vec<(i64, f32)> {
         let coarse = self.rank_centroids(query, nprobe);
+        let use_l2 = matches!(self.config.metric_type, MetricType::L2);
 
-        // Pad and rotate query
-        let padded_dim = self.quantizer.config().padded_dim();
-        let mut q_padded = vec![0.0f32; padded_dim];
-        q_padded[..self.config.dim].copy_from_slice(query);
-        let q_rot = self.quantizer.rotator().rotate(&q_padded);
+        // Precompute query state (pad + rotate + centroid score + quantize)
+        let state = self.quantizer.precompute_query_state(query);
         let q_norm_sq: f32 = query.iter().map(|x| x * x).sum();
 
-        // Precompute centroid_score (global centroid, same for all clusters)
-        let centroid_score: f32 = {
-            let mut c_padded = vec![0.0f32; padded_dim];
-            c_padded[..self.config.dim].copy_from_slice(self.quantizer.centroid());
-            let c_rot = self.quantizer.rotator().rotate(&c_padded);
-            q_rot.iter().zip(c_rot.iter()).map(|(a, b)| a * b).sum()
-        };
-
         // Build fastscan state (once per query, reused across clusters)
-        let fs_state = UsqFastScanState::new(&q_rot, self.quantizer.config());
+        let fs_state = UsqFastScanState::new(&state.q_rot, self.quantizer.config());
 
-        // Tier-aware candidate count per cluster, scaled by rerank_k
-        let rerank_factor = (self.config.rerank_k as f32 / top_k as f32).max(1.0);
-        let base_candidates_per_cluster = match self.config.bits_per_dim {
+        // Tier-aware candidate count per cluster
+        let n_candidates_per_cluster = match self.config.bits_per_dim {
             1 => (top_k * 20).max(200),
             2..=4 => (top_k * 15).max(150),
             _ => (top_k * 30).max(300),
         };
-        let n_candidates_per_cluster =
-            (base_candidates_per_cluster as f32 * rerank_factor.min(4.0)) as usize;
 
         let layouts = self.cluster_layouts.read();
 
@@ -592,24 +578,25 @@ impl IvfExRaBitqIndex {
             }
 
             let ip_score = self.quantizer.score_with_meta(
-                &q_rot,
-                centroid_score,
+                &state,
                 layout.norm_at(local_id),
                 layout.vmax_at(local_id),
                 layout.quant_quality_at(local_id),
                 layout.packed_bits_at(local_id),
             );
 
-            // L2 distance: ||q||^2 + ||x||^2 - 2 * ip
-            let distance = q_norm_sq + layout.norm_sq_at(local_id) - 2.0 * ip_score;
+            // L2 distance: ||q||^2 + ||x||^2 - 2 * ip, or -ip for IP metric
+            let distance = if use_l2 {
+                q_norm_sq + layout.norm_sq_at(local_id) - 2.0 * ip_score
+            } else {
+                -ip_score
+            };
             scored.push((layout.id_at(local_id), distance));
         }
 
         scored.sort_by(|a, b| a.1.total_cmp(&b.1));
 
-        // Use rerank_k as shortlist if larger than top_k
-        let shortlist = self.config.rerank_k.max(top_k);
-        scored.truncate(shortlist);
+        scored.truncate(top_k);
         scored
     }
 
@@ -656,9 +643,9 @@ fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
 
 // ─── IndexTrait implementation ────────────────────────────────────────────────
 
-impl IndexTrait for IvfExRaBitqIndex {
+impl IndexTrait for IvfUsqIndex {
     fn index_type(&self) -> &str {
-        "IVF-ExRaBitQ"
+        "IVF-USQ"
     }
 
     fn dim(&self) -> usize {
@@ -750,7 +737,7 @@ impl IndexTrait for IvfExRaBitqIndex {
 
     fn get_vector_by_ids(&self, _ids: &[i64]) -> std::result::Result<Vec<f32>, IndexError> {
         Err(IndexError::Unsupported(
-            "get_vector_by_ids not supported for ExRaBitQ (lossy compression)".into(),
+            "get_vector_by_ids not supported for USQ (lossy compression)".into(),
         ))
     }
 
@@ -771,24 +758,24 @@ impl IndexTrait for IvfExRaBitqIndex {
             .search(query.vectors(), &req)
             .map_err(|e| IndexError::Unsupported(e.to_string()))?;
         let pairs = result.ids.into_iter().zip(result.distances).collect();
-        Ok(Box::new(IvfExRaBitqAnnIterator::new(pairs)))
+        Ok(Box::new(IvfUsqAnnIterator::new(pairs)))
     }
 }
 
 // ─── ANN Iterator ─────────────────────────────────────────────────────────────
 
-pub struct IvfExRaBitqAnnIterator {
+pub struct IvfUsqAnnIterator {
     results: Vec<(i64, f32)>,
     pos: usize,
 }
 
-impl IvfExRaBitqAnnIterator {
+impl IvfUsqAnnIterator {
     pub fn new(results: Vec<(i64, f32)>) -> Self {
         Self { results, pos: 0 }
     }
 }
 
-impl AnnIterator for IvfExRaBitqAnnIterator {
+impl AnnIterator for IvfUsqAnnIterator {
     fn next(&mut self) -> Option<(i64, f32)> {
         if self.pos >= self.results.len() {
             return None;
@@ -811,10 +798,10 @@ mod tests {
 
     #[test]
     fn test_rank_centroids_returns_closest() {
-        let config = IvfExRaBitqConfig::new(2, 3, 4);
+        let config = IvfUsqConfig::new(2, 3, 4);
         let usq_config = UsqConfig::new(2, 4).unwrap().with_seed(42);
         let quantizer = UsqQuantizer::new(usq_config);
-        let index = IvfExRaBitqIndex {
+        let index = IvfUsqIndex {
             config,
             centroids: vec![0.0, 0.0, 10.0, 10.0, 20.0, 20.0],
             pending: RwLock::new(HashMap::new()),

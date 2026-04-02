@@ -56,6 +56,9 @@ use crate::index::Index;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+const FFI_FORCE_SERIAL_HNSW_ADD_ENV: &str = "KNOWHERE_RS_FFI_FORCE_SERIAL_HNSW_ADD";
+const FFI_ENABLE_PARALLEL_HNSW_ADD_ENV: &str = "KNOWHERE_RS_FFI_ENABLE_PARALLEL_HNSW_ADD";
+
 /// C API 错误码
 #[repr(i32)]
 #[derive(Debug, Clone, Copy)]
@@ -313,6 +316,32 @@ struct IndexWrapper {
 }
 
 impl IndexWrapper {
+    fn env_var_truthy(name: &str) -> bool {
+        std::env::var(name)
+            .ok()
+            .map(|value| {
+                !matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "" | "0" | "false" | "off" | "no"
+                )
+            })
+            .unwrap_or(false)
+    }
+
+    fn ffi_force_serial_hnsw_add() -> bool {
+        Self::env_var_truthy(FFI_FORCE_SERIAL_HNSW_ADD_ENV)
+    }
+
+    fn ffi_enable_parallel_hnsw_add() -> bool {
+        Self::env_var_truthy(FFI_ENABLE_PARALLEL_HNSW_ADD_ENV)
+    }
+
+    fn should_use_parallel_hnsw_add_via_ffi(idx: &HnswIndex, count: usize) -> bool {
+        !Self::ffi_force_serial_hnsw_add()
+            && Self::ffi_enable_parallel_hnsw_add()
+            && idx.should_use_parallel_add(count)
+    }
+
     fn dense_chunk_to_sparse_query(
         query_chunk: &[f32],
     ) -> crate::faiss::sparse_inverted::SparseVector {
@@ -389,7 +418,7 @@ impl IndexWrapper {
                 return None;
             }
             CIndexType::HnswPrq => IndexType::HnswPrq,
-            CIndexType::IvfRabitq => IndexType::IvfExRaBitq,
+            CIndexType::IvfRabitq => IndexType::IvfUsq,
             CIndexType::HnswSq => IndexType::HnswSq,
             CIndexType::HnswPq => IndexType::HnswPq,
             CIndexType::IvfPq => IndexType::IvfPq,
@@ -618,7 +647,7 @@ impl IndexWrapper {
                 })
             }
             CIndexType::IvfRabitq => {
-                eprintln!("IvfRabitq merged into IvfExRaBitq; use exrabitq_ffi API");
+                eprintln!("IvfRabitq merged into IvfUsq; use ivf_usq API");
                 return None;
             }
             CIndexType::HnswSq => {
@@ -1057,7 +1086,7 @@ impl IndexWrapper {
             idx.add(vectors, ids).map_err(|_| CError::Internal)
         } else if let Some(ref mut idx) = self.hnsw {
             let count = vectors.len() / idx.dim();
-            let result = if idx.should_use_parallel_add(count) {
+            let result = if Self::should_use_parallel_hnsw_add_via_ffi(idx, count) {
                 idx.add_parallel(vectors, ids, Some(true))
                     .or_else(|_| idx.add(vectors, ids))
             } else {
@@ -4569,6 +4598,96 @@ pub extern "C" fn knowhere_bitset_xor(
 #[allow(unused_unsafe, unused_variables)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        old: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let old = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, old }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let old = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, old }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.old.take() {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    fn hnsw_wrapper_for_add_strategy_test() -> IndexWrapper {
+        let config = CIndexConfig {
+            index_type: CIndexType::Hnsw,
+            metric_type: CMetricType::L2,
+            dim: 32,
+            ef_construction: 200,
+            ef_search: 64,
+            ..Default::default()
+        };
+        IndexWrapper::new(config).expect("HNSW wrapper should be created")
+    }
+
+    #[test]
+    fn test_hnsw_ffi_add_defaults_to_serial_when_override_is_unset() {
+        let _lock = env_lock().lock().unwrap();
+        let _guard = EnvVarGuard::remove(FFI_FORCE_SERIAL_HNSW_ADD_ENV);
+        let _parallel_guard = EnvVarGuard::remove(FFI_ENABLE_PARALLEL_HNSW_ADD_ENV);
+        let wrapper = hnsw_wrapper_for_add_strategy_test();
+        let idx = wrapper.hnsw.as_ref().expect("wrapper should hold HNSW");
+
+        assert!(
+            !IndexWrapper::should_use_parallel_hnsw_add_via_ffi(idx, 1000),
+            "FFI HNSW add should default to serial add() unless parallel is explicitly enabled"
+        );
+    }
+
+    #[test]
+    fn test_hnsw_ffi_add_force_serial_override_disables_parallel() {
+        let _lock = env_lock().lock().unwrap();
+        let _guard = EnvVarGuard::set(FFI_FORCE_SERIAL_HNSW_ADD_ENV, "1");
+        let _parallel_guard = EnvVarGuard::set(FFI_ENABLE_PARALLEL_HNSW_ADD_ENV, "1");
+        let wrapper = hnsw_wrapper_for_add_strategy_test();
+        let idx = wrapper.hnsw.as_ref().expect("wrapper should hold HNSW");
+
+        assert!(
+            !IndexWrapper::should_use_parallel_hnsw_add_via_ffi(idx, 1000),
+            "FFI HNSW add override should force large builds back to serial add()"
+        );
+    }
+
+    #[test]
+    fn test_hnsw_ffi_add_parallel_requires_explicit_opt_in() {
+        let _lock = env_lock().lock().unwrap();
+        let _guard = EnvVarGuard::remove(FFI_FORCE_SERIAL_HNSW_ADD_ENV);
+        let _parallel_guard = EnvVarGuard::set(FFI_ENABLE_PARALLEL_HNSW_ADD_ENV, "1");
+        let wrapper = hnsw_wrapper_for_add_strategy_test();
+        let idx = wrapper.hnsw.as_ref().expect("wrapper should hold HNSW");
+
+        assert!(
+            IndexWrapper::should_use_parallel_hnsw_add_via_ffi(idx, 1000),
+            "FFI HNSW add should only use parallel build after explicit opt-in"
+        );
+    }
 
     #[test]
     fn test_bitset_create() {

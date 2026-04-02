@@ -20,6 +20,16 @@ pub struct UsqEncoded {
     pub quant_quality: f32,
 }
 
+/// Precomputed query state for efficient SIMD scoring.
+pub struct UsqQueryState {
+    pub q_rot: Vec<f32>,
+    pub q_sum: f32,
+    pub q_quantized: Vec<i8>,
+    pub q_quantized_sum: i32,
+    pub q_scale: f32,
+    pub centroid_score: f32,
+}
+
 /// Unified scalar quantizer: center → pad → rotate → normalize → quantize.
 ///
 /// Replaces the equivalent logic duplicated across HVQ and ExRaBitQ.
@@ -163,26 +173,84 @@ impl UsqQuantizer {
         }
     }
 
-    /// Score for rerank:
-    ///   score = centroid_score + norm * dequant_ip(q_rot, packed_bits) / quant_quality
+    /// Precompute query state for efficient SIMD scoring.
     ///
-    /// `q_rot` must already be in the rotated+padded space (length = padded_dim).
+    /// Rotates the query, computes centroid score, and quantizes the query
+    /// for integer dot-product acceleration (VNNI path).
+    pub fn precompute_query_state(&self, query: &[f32]) -> UsqQueryState {
+        let padded_dim = self.config.padded_dim();
+        let mut padded_q = vec![0.0f32; padded_dim];
+        padded_q[..self.config.dim].copy_from_slice(query);
+        let q_rot = self.rotator.rotate(&padded_q);
+
+        let q_sum: f32 = q_rot.iter().sum();
+        let q_max = q_rot
+            .iter()
+            .copied()
+            .map(f32::abs)
+            .fold(0.0f32, f32::max)
+            .max(1e-6);
+        let q_scale = q_max / 127.0;
+        let q_quantized: Vec<i8> = q_rot
+            .iter()
+            .map(|&v| (v / q_scale).round().clamp(-127.0, 127.0) as i8)
+            .collect();
+        let q_quantized_sum: i32 = q_quantized.iter().map(|&v| v as i32).sum();
+
+        let centroid_score: f32 = q_rot
+            .iter()
+            .zip(self.rotated_centroid.iter())
+            .map(|(a, b)| a * b)
+            .sum();
+
+        UsqQueryState {
+            q_rot,
+            q_sum,
+            q_quantized,
+            q_quantized_sum,
+            q_scale,
+            centroid_score,
+        }
+    }
+
+    /// Score for rerank using precomputed query state:
+    ///   score = centroid_score + norm * dequant_ip(q, packed_bits) / quant_quality
     pub fn score_with_meta(
         &self,
-        q_rot: &[f32],
-        centroid_score: f32,
+        state: &UsqQueryState,
         norm: f32,
         vmax: f32,
         quant_quality: f32,
         packed_bits: &[u8],
     ) -> f32 {
-        let padded_dim = self.config.padded_dim();
-        debug_assert_eq!(q_rot.len(), padded_dim);
-
         if quant_quality <= 1e-12 {
-            return centroid_score;
+            return state.centroid_score;
         }
 
+        let ip = self.compute_ip(state, vmax, packed_bits);
+        state.centroid_score + norm * ip / quant_quality
+    }
+
+    /// Dispatch inner product computation to the best available implementation.
+    fn compute_ip(&self, state: &UsqQueryState, vmax: f32, packed_bits: &[u8]) -> f32 {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::arch::is_x86_feature_detected!("avx512f") {
+                if self.config.nbits == 1 {
+                    return unsafe { self.compute_ip_1bit_avx512(state, vmax, packed_bits) };
+                }
+                if matches!(self.config.nbits, 4 | 8)
+                    && std::arch::is_x86_feature_detected!("avx512vnni")
+                {
+                    return unsafe { self.compute_ip_vnni(state, vmax, packed_bits) };
+                }
+            }
+        }
+        self.compute_ip_scalar(&state.q_rot, vmax, packed_bits)
+    }
+
+    /// Scalar fallback: bit-streaming dequantize + dot product.
+    fn compute_ip_scalar(&self, q_rot: &[f32], vmax: f32, packed_bits: &[u8]) -> f32 {
         let nbits = self.config.nbits as usize;
         let levels = (1u32 << self.config.nbits) as f32;
         let scale = (2.0 * vmax) / levels.max(1.0);
@@ -210,31 +278,83 @@ impl UsqQuantizer {
             ip += q * decoded;
         }
 
-        centroid_score + norm * ip / quant_quality
+        ip
     }
 
-    /// Convenience score: rotates the query and calls `score_with_meta`.
+    /// 1-bit AVX512 inner product.
+    ///
+    /// For 1-bit codes: code 0 → decoded = -vmax, code 1 → decoded = 0.
+    /// ip = sum(q[bit=0] * (-vmax)) = -vmax * (q_sum - float_sum)
+    ///    = vmax * (float_sum - q_sum)
+    ///
+    /// padded_dim is always a multiple of 64, so no tail loop needed.
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx512f")]
+    unsafe fn compute_ip_1bit_avx512(
+        &self,
+        state: &UsqQueryState,
+        vmax: f32,
+        packed_bits: &[u8],
+    ) -> f32 {
+        use std::arch::x86_64::*;
+
+        let padded_dim = self.config.padded_dim();
+        let mut acc = _mm512_setzero_ps();
+
+        for chunk_idx in 0..(padded_dim / 16) {
+            let q_offset = chunk_idx * 16;
+            let bit_offset = chunk_idx * 2;
+            let mask_bits =
+                u16::from_le_bytes([packed_bits[bit_offset], packed_bits[bit_offset + 1]]);
+            let mask = mask_bits as __mmask16;
+            let q_vec = _mm512_loadu_ps(state.q_rot.as_ptr().add(q_offset));
+            let selected = _mm512_maskz_mov_ps(mask, q_vec);
+            acc = _mm512_add_ps(acc, selected);
+        }
+
+        let float_sum = _mm512_reduce_add_ps(acc);
+        vmax * (float_sum - state.q_sum)
+    }
+
+    /// VNNI-accelerated inner product for 4-bit and 8-bit codes.
+    ///
+    /// Uses integer dot product (dpbusd) between quantized query (i8) and
+    /// unpacked codes (u8), then converts to float:
+    ///   float_ip = q_scale * (code_scale * int_ip + offset * q_quantized_sum)
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx512f,avx512vnni")]
+    unsafe fn compute_ip_vnni(
+        &self,
+        state: &UsqQueryState,
+        vmax: f32,
+        packed_bits: &[u8],
+    ) -> f32 {
+        let levels = (1u32 << self.config.nbits) as f32;
+        let code_scale = (2.0 * vmax) / levels.max(1.0);
+        let offset = -vmax;
+
+        let int_ip = match self.config.nbits {
+            8 => dot_u8_i8_avx512(packed_bits, &state.q_quantized),
+            4 => {
+                let padded_dim = self.config.padded_dim();
+                let mut expanded = vec![0u8; padded_dim];
+                unpack_packed_u4_into(packed_bits, &mut expanded);
+                dot_u8_i8_avx512(&expanded, &state.q_quantized)
+            }
+            _ => return self.compute_ip_scalar(&state.q_rot, vmax, packed_bits),
+        };
+
+        state.q_scale * (code_scale * int_ip as f32 + offset * state.q_quantized_sum as f32)
+    }
+
+    /// Convenience score: precompute query state and call `score_with_meta`.
     pub fn score(&self, encoded: &UsqEncoded, query: &[f32]) -> f32 {
         assert_eq!(query.len(), self.config.dim);
 
-        // Pad query.
-        let padded_dim = self.config.padded_dim();
-        let mut padded_q = vec![0.0f32; padded_dim];
-        padded_q[..self.config.dim].copy_from_slice(query);
-
-        // Rotate.
-        let q_rot = self.rotator.rotate(&padded_q);
-
-        // centroid_score = q_rot · rotated_centroid
-        let centroid_score: f32 = q_rot
-            .iter()
-            .zip(self.rotated_centroid.iter())
-            .map(|(a, b)| a * b)
-            .sum();
+        let state = self.precompute_query_state(query);
 
         self.score_with_meta(
-            &q_rot,
-            centroid_score,
+            &state,
             encoded.norm,
             encoded.vmax,
             encoded.quant_quality,
@@ -492,4 +612,74 @@ impl UsqQuantizer {
         let max_code = ((1u32 << nbits) - 1) as f32;
         (((x - offset) / scale).round().clamp(0.0, max_code)) as u8
     }
+}
+
+// ---------------------------------------------------------------------------
+// SIMD helper functions (module-level, not in impl block)
+// ---------------------------------------------------------------------------
+
+/// AVX512 VNNI dot product: sum(a[i] * b[i]) where a is u8, b is i8.
+///
+/// Processes 64 elements per iteration (4x `_mm512_dpbusd_epi32`).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512vnni")]
+#[allow(dead_code)]
+unsafe fn dot_u8_i8_avx512(a: &[u8], b: &[i8]) -> i32 {
+    use std::arch::x86_64::*;
+    let n = a.len();
+    let chunks = n / 64;
+    let mut acc = _mm512_setzero_si512();
+    for i in 0..chunks {
+        let off = i * 64;
+        let va = _mm512_loadu_si512(a[off..].as_ptr() as *const __m512i);
+        let vb = _mm512_loadu_si512(b[off..].as_ptr() as *const __m512i);
+        acc = _mm512_dpbusd_epi32(acc, va, vb);
+    }
+    let lanes: [i32; 16] = std::mem::transmute(acc);
+    let mut total = lanes.iter().sum::<i32>();
+    for i in (chunks * 64)..n {
+        total += a[i] as i32 * b[i] as i32;
+    }
+    total
+}
+
+/// Scalar fallback for 4-bit unpacking.
+fn unpack_packed_u4_scalar(packed: &[u8], out: &mut [u8]) {
+    for (idx, &byte) in packed.iter().enumerate() {
+        out[idx * 2] = byte & 0x0F;
+        out[idx * 2 + 1] = (byte >> 4) & 0x0F;
+    }
+}
+
+/// Unpack packed 4-bit codes (2 codes per byte, low nibble first) into u8 array.
+///
+/// Uses SSE2 for the main loop, scalar fallback for the tail.
+#[cfg(target_arch = "x86_64")]
+fn unpack_packed_u4_into(packed: &[u8], out: &mut [u8]) {
+    use std::arch::x86_64::*;
+    let nibble_mask = unsafe { _mm_set1_epi8(0x0F) };
+    let mut in_off = 0usize;
+    let mut out_off = 0usize;
+    while in_off + 16 <= packed.len() {
+        unsafe {
+            let chunk = _mm_loadu_si128(packed.as_ptr().add(in_off) as *const __m128i);
+            let low = _mm_and_si128(chunk, nibble_mask);
+            let shifted = _mm_srli_epi16(chunk, 4);
+            let high = _mm_and_si128(shifted, nibble_mask);
+            let lo = _mm_unpacklo_epi8(low, high);
+            let hi = _mm_unpackhi_epi8(low, high);
+            _mm_storeu_si128(out.as_mut_ptr().add(out_off) as *mut __m128i, lo);
+            _mm_storeu_si128(out.as_mut_ptr().add(out_off + 16) as *mut __m128i, hi);
+        }
+        in_off += 16;
+        out_off += 32;
+    }
+    unpack_packed_u4_scalar(&packed[in_off..], &mut out[out_off..]);
+}
+
+/// Scalar fallback for unpacking 4-bit codes on non-x86_64.
+#[cfg(not(target_arch = "x86_64"))]
+#[allow(dead_code)]
+fn unpack_packed_u4_into(packed: &[u8], out: &mut [u8]) {
+    unpack_packed_u4_scalar(packed, out);
 }

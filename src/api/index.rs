@@ -30,8 +30,10 @@ pub enum IndexType {
     HnswPrq,
     /// HNSW-PQ (HNSW with Product Quantization)
     HnswPq,
-    /// IVF-RaBitQ (Rotated Adaptive Bit Quantization with FastScan)
+    /// IVF-RaBitQ (Rotated Adaptive Bit Quantization with FastScan) — legacy alias for IvfUsq
     IvfExRaBitq,
+    /// IVF-USQ (Unified Scalar Quantization with FastScan)
+    IvfUsq,
     /// IVF-TurboQuant (Dense-rotation data-oblivious scalar quantization)
     IvfTurboQuant,
     /// IVF-FLAT-CC (Concurrent Version)
@@ -79,6 +81,7 @@ impl FromStr for IndexType {
             "hnsw_pq" | "hnsw-pq" => Ok(IndexType::HnswPq),
             "ivf_rabitq" | "ivf-rabitq" | "rabitq" | "ivf_exrabitq" | "ivf-exrabitq"
             | "extended-rabitq" | "exrabitq" => Ok(IndexType::IvfExRaBitq),
+            "ivf_usq" | "ivf-usq" | "usq" => Ok(IndexType::IvfUsq),
             "ivf_turboquant" | "ivf-turboquant" | "turboquant" => Ok(IndexType::IvfTurboQuant),
             "ivf_flat_cc" | "ivf-flat-cc" | "ivfcc" => Ok(IndexType::IvfFlatCc),
             "ivf_sq8" | "ivf-sq8" | "ivfsq8" => Ok(IndexType::IvfSq8),

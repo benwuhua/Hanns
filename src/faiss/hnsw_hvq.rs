@@ -8,18 +8,10 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use crate::api::MetricType;
-use crate::quantization::usq::{UsqConfig, UsqEncoded, UsqQuantizer};
+use crate::quantization::usq::{UsqConfig, UsqEncoded, UsqQueryState, UsqQuantizer};
 
 const MAX_LAYERS: usize = 16;
 const USQ_TRAIN_SEED: u64 = 42;
-
-/// Precomputed query state for the HNSW search hot path.
-struct QueryState {
-    /// Query rotated into the padded space (length = padded_dim).
-    q_rot: Vec<f32>,
-    /// Dot product of q_rot with the rotated centroid.
-    centroid_score: f32,
-}
 
 #[derive(Clone, Debug)]
 pub struct HnswHvqConfig {
@@ -163,26 +155,8 @@ impl HnswHvqIndex {
     }
 
     /// Prepare a query: pad, rotate, and compute centroid score.
-    fn prepare_query_state(&self, query: &[f32]) -> QueryState {
-        let padded_dim = self.quantizer.config().padded_dim();
-        let mut padded_q = vec![0.0f32; padded_dim];
-        padded_q[..self.config.dim].copy_from_slice(query);
-        let q_rot = self.quantizer.rotator().rotate(&padded_q);
-
-        // Compute rotated centroid, then dot with q_rot.
-        let mut padded_centroid = vec![0.0f32; padded_dim];
-        padded_centroid[..self.config.dim].copy_from_slice(self.quantizer.centroid());
-        let rotated_centroid = self.quantizer.rotator().rotate(&padded_centroid);
-        let centroid_score: f32 = q_rot
-            .iter()
-            .zip(rotated_centroid.iter())
-            .map(|(a, b)| a * b)
-            .sum();
-
-        QueryState {
-            q_rot,
-            centroid_score,
-        }
+    fn prepare_query_state(&self, query: &[f32]) -> UsqQueryState {
+        self.quantizer.precompute_query_state(query)
     }
 
     pub fn train(&mut self, data: &[f32], n: usize) {
@@ -377,13 +351,12 @@ impl HnswHvqIndex {
         }
     }
 
-    fn score_node(&self, state: &QueryState, idx: usize) -> f32 {
+    fn score_node(&self, state: &UsqQueryState, idx: usize) -> f32 {
         match self.config.metric_type {
             MetricType::Ip | MetricType::Cosine => {
                 let enc = &self.node_info[idx].encoded;
                 self.quantizer.score_with_meta(
-                    &state.q_rot,
-                    state.centroid_score,
+                    state,
                     enc.norm,
                     enc.vmax,
                     enc.quant_quality,
@@ -394,7 +367,7 @@ impl HnswHvqIndex {
         }
     }
 
-    fn search_at_layer_greedy(&self, state: &QueryState, entry: usize, layer: usize) -> usize {
+    fn search_at_layer_greedy(&self, state: &UsqQueryState, entry: usize, layer: usize) -> usize {
         let mut current = entry;
         let mut current_score = self.score_node(state, current);
 
@@ -420,7 +393,7 @@ impl HnswHvqIndex {
 
     fn search_layer_ef(
         &self,
-        state: &QueryState,
+        state: &UsqQueryState,
         entry: usize,
         layer: usize,
         ef: usize,

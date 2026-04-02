@@ -38,6 +38,296 @@
   - `/data/work/milvus-rs-integ/milvus-src/scripts/knowhere-rs-shim/start_standalone_remote.sh`
 - That wrapper sources:
   - `/data/work/milvus-rs-integ/milvus-src/scripts/knowhere-rs-shim/remote_env.sh`
+
+## Session 2026-04-02 Milvus Build Layout Experiment
+
+## Session 2026-04-02 Milvus FFI Serial-Default Hotfix
+
+### Summary
+
+- Continued Milvus `500k` regression triage after proving locally that
+  `add_parallel()` bulk-build semantics can collapse graph quality:
+  on the same deterministic `12k x 128` fixture, serial build reached
+  `recall@10 = 0.9992`, while parallel build with batch size `3000`
+  dropped to `0.2547`; shrinking the batch to `750` recovered recall to `0.8547`.
+- Promoted the previously temporary authority A/B into the code policy:
+  HNSW FFI now defaults back to serial `add()`, while parallel build is
+  opt-in only through an explicit environment variable.
+- Kept backward compatibility for the earlier `KNOWHERE_RS_FFI_FORCE_SERIAL_HNSW_ADD`
+  override while adding a new positive opt-in gate:
+  `KNOWHERE_RS_FFI_ENABLE_PARALLEL_HNSW_ADD`.
+
+### Code Changes
+
+- [src/ffi.rs](src/ffi.rs)
+  - added `FFI_ENABLE_PARALLEL_HNSW_ADD_ENV`
+  - refactored env parsing into `env_var_truthy()`
+  - changed `should_use_parallel_hnsw_add_via_ffi()` so parallel HNSW build requires:
+    - no `FORCE_SERIAL` override
+    - explicit `ENABLE_PARALLEL` opt-in
+    - `idx.should_use_parallel_add(count)`
+  - updated tests so default behavior now expects serial
+  - added an explicit opt-in test for parallel HNSW build
+
+### Verification
+
+- Local:
+  - `cargo test --lib test_hnsw_ffi_add_defaults_to_serial_when_override_is_unset -- --nocapture`
+  - `cargo test --lib test_hnsw_ffi_add_force_serial_override_disables_parallel -- --nocapture`
+  - `cargo test --lib test_hnsw_ffi_add_parallel_requires_explicit_opt_in -- --nocapture`
+
+### Result
+
+- Local policy hotfix is in place and verified.
+- Next authority step is a low-frequency `500k` rerun with default serial HNSW FFI,
+  keeping `flat_graph` and `mem-deserialize` fixes intact, so the Milvus lane
+  can be compared against the old pre-parallel baseline without relying on a
+  temporary environment override.
+
+### Authority Follow-up
+
+- The default-serial Milvus `500k` rerun was launched with:
+  - log: `/data/work/VectorDBBench/logs/rs_500k_default_serial_20260402.log`
+- Early authority signals are consistent with the earlier force-serial A/B:
+  - `insert_duration` reached `155.49334936996456s`
+  - parallel-only `[HNSW] Batch size` log lines disappeared from
+    `standalone-stage1.log`
+- However, this also exposed the next-order tradeoff:
+  - serial build fixes the bulk-build graph-quality path, but `optimize` now
+    stretches on very large compaction segments because final HNSW build is also
+    serial.
+  - observed authority examples:
+    - build `465340765540467833`:
+      `21:23:19 -> 21:30:45` with `serializedSize=713527794`
+    - build `465340765540467862`:
+      `21:31:17 -> 21:41:21` with `serializedSize=934949327`
+- `loadTextIndexesSpan` remains in the fixed seconds-scale band (`~2s-10s`), so
+  the post-`mem-deserialize` load regression does not appear to have returned.
+- Current interpretation:
+  - `FFI auto-parallel -> add_parallel()` is the graph-quality root cause.
+  - `default serial` is a valid correctness hotfix and strong authority proof,
+    but not yet the final performance answer because large compaction segments
+    make `optimize` too long.
+
+### Next Experiment Hook
+
+- Added a narrow experiment hook in [src/faiss/hnsw.rs](src/faiss/hnsw.rs):
+  - `KNOWHERE_RS_HNSW_PARALLEL_BATCH_SIZE_CAP`
+- The hook only clamps the existing `calculate_optimal_batch_size()` upper bound;
+  it does not change the default formula when unset.
+- Local verification:
+  - `cargo test --lib test_hnsw_batch_size_respects_env_cap -- --nocapture`
+  - `cargo test --lib test_hnsw_batch_size_env_cap_keeps_minimum_floor -- --nocapture`
+- Intended authority follow-up:
+  - rerun Milvus `500k` with
+    - `KNOWHERE_RS_FFI_ENABLE_PARALLEL_HNSW_ADD=1`
+    - `KNOWHERE_RS_HNSW_PARALLEL_BATCH_SIZE_CAP=512`
+  - to test whether smaller parallel batches can retain most of the serial-path
+    graph quality while avoiding the serial-path `optimize` blow-up.
+
+### Authority `parallel + cap=512` Follow-up
+
+- Authority run:
+  - log: `/data/work/VectorDBBench/logs/rs_500k_parallel_cap512_20260402.log`
+- Final benchmark-reported metrics:
+  - `insert_duration = 335.9905`
+  - `optimize_duration = 156.8985`
+  - `load_duration = 492.889`
+  - `qps = 102.8409`
+  - `recall = 0.9889`
+- But the search metrics are not trustworthy as a steady-state verdict:
+  - benchmark started search at `22:08:50`
+  - a large HNSW build for `segmentID=465341888643236697` started at `22:09:17`
+  - that build only finished at `22:13:19`
+  - save finished at `22:13:59`
+  - final load finished at `22:14:56`
+  - so most concurrency-search stages overlapped with ongoing large-segment
+    build/save/load work.
+- This authority run therefore confirms:
+  - the `batch_size_cap` hook works (`batch_size=296/312/323/...`, capped at `512`)
+  - smaller parallel batches can recover very high recall (`0.9889`)
+  - but `cap=512` still leaves the Milvus lane in a non-steady search window, so
+    the reported `qps=102.8409` is polluted by ongoing background index work.
+
+### Local Screen Batch-Cap Matrix
+
+- Reused the ignored diagnostic
+  `screen_parallel_build_batch_tradeoff_matrix` to tighten the viable
+  parallel-batch window without another authority run.
+- Commands:
+  - `cargo test --lib screen_parallel_build_batch_tradeoff_matrix -- --ignored --nocapture`
+  - `KNOWHERE_RS_HNSW_PARALLEL_BATCH_SIZE_CAP=375 cargo test --lib screen_parallel_build_batch_tradeoff_matrix -- --ignored --nocapture`
+  - `KNOWHERE_RS_HNSW_PARALLEL_BATCH_SIZE_CAP=256 cargo test --lib screen_parallel_build_batch_tradeoff_matrix -- --ignored --nocapture`
+  - `KNOWHERE_RS_HNSW_PARALLEL_BATCH_SIZE_CAP=128 cargo test --lib screen_parallel_build_batch_tradeoff_matrix -- --ignored --nocapture`
+  - `KNOWHERE_RS_HNSW_PARALLEL_BATCH_SIZE_CAP=64 cargo test --lib screen_parallel_build_batch_tradeoff_matrix -- --ignored --nocapture`
+- Deterministic local screen results (`12k x 128`, `recall@10`):
+  - serial baseline:
+    - `batch_size=1`, `build_secs≈16.4-17.4`, `recall≈0.9992`
+  - uncapped / large batches:
+    - `batch_size=5000`, `build_secs≈0.25`, `recall≈0.0773`
+    - `batch_size=3000`, `build_secs≈1.03`, `recall≈0.2547`
+    - `batch_size=1500`, `build_secs≈1.97`, `recall≈0.6289`
+    - `batch_size=750`, `build_secs≈2.48`, `recall≈0.8547`
+    - `batch_size=375`, `build_secs≈3.08`, `recall≈0.9336`
+  - capped follow-up:
+    - `cap=375`:
+      - all tested thread counts converged to `batch_size=375`
+      - `build_secs≈2.60-2.67`
+      - `recall≈0.9336`
+    - `cap=256`:
+      - all tested thread counts converged to `batch_size=256`
+      - `build_secs≈2.76-2.82`
+      - `recall≈0.9664`
+    - `cap=128`:
+      - all tested thread counts converged to `batch_size=128`
+      - `build_secs≈3.01-3.03`
+      - `recall≈0.9844`
+    - `cap=64`:
+      - all tested thread counts converged to `batch_size=64`
+      - `build_secs≈3.45-3.46`
+      - `recall≈0.9922`
+- Interpretation:
+  - the dominant variable is batch size, not thread count;
+  - once the cap is low enough, all thread counts land on essentially the same
+    quality curve;
+  - `cap=128` and especially `cap=64` are the first local points that approach
+    the old authority recall band while remaining much faster than fully serial
+    build.
+  - the current `add_parallel()` path therefore looks like a hard
+    quality-vs-throughput tradeoff, not a small tuning miss:
+    large batches are fast but graph quality collapses;
+    sufficiently small batches recover quality, but move build cost back toward
+    the serial lane.
+
+### Summary
+
+- Continued Milvus replacement investigation after ruling out scratch reuse as the first-order fix.
+- Refined the root cause from generic `candidate_search` slowness to a build-time layout issue:
+  during `add_parallel()` phase2, layer-0 candidate search could not use the contiguous
+  flat-graph layout because `refresh_layer0_flat_graph()` only happened after the full
+  parallel build completed.
+- Implemented a minimal experiment:
+  rebuild `layer0_flat_graph` after each parallel-build batch, but do not rebuild
+  `layer0_slab` on every batch.
+- Added a regression test proving parallel bulk-build profile now reports
+  `flat_u32_adjacency` with non-zero flat-graph neighbor reads during candidate search.
+- Verified locally, on the remote x86 authority wrapper lane, and in the
+  `hannsdb-x86` Milvus integration checkout.
+
+### Code Changes
+
+- [src/faiss/hnsw.rs](src/faiss/hnsw.rs)
+  - added `refresh_layer0_flat_graph_for_parallel_build()`
+  - called it after each batch in:
+    - `add_parallel()`
+    - `add_parallel_profiled()`
+  - added test:
+    - `test_parallel_build_profile_reports_flat_graph_layer0_layout`
+
+### Verification
+
+- Local:
+  - `cargo test --lib test_parallel_build_profile_reports_flat_graph_layer0_layout -- --nocapture`
+  - `cargo test --lib parallel_bulk_neighbor_search -- --nocapture`
+  - `cargo test --lib test_candidate_profile_reports_layer0_flat_graph_layout -- --nocapture`
+  - `cargo test --lib parallel_build_profile -- --nocapture`
+- Remote wrapper:
+  - `bash init.sh`
+  - `bash scripts/remote/test.sh --command "cargo test --lib parallel_build_profile -- --nocapture"`
+- `hannsdb-x86` integration checkout:
+  - synced updated `src/faiss/hnsw.rs`
+  - `. "$HOME/.cargo/env"`
+  - `cargo test --lib parallel_build_profile -- --nocapture`
+  - `CARGO_TARGET_DIR=/data/work/milvus-rs-integ/knowhere-rs-target cargo build --release --lib`
+
+### Early Milvus Authority Evidence
+
+- Single-host rs `500k` lane started on `hannsdb-x86`:
+  - log:
+    - `/data/work/VectorDBBench/logs/rs_500k_flatgraph_20260402_172631.log`
+- Early HNSW build timings from Milvus `standalone-stage1.log`:
+  - `par_search=3.88s total=4.89s`
+  - `par_search=3.68s total=4.71s`
+  - `par_search=4.22s total=5.69s`
+  - `par_search=3.37s total=4.44s`
+  - later heavier samples:
+    - `par_search=6.79s total=8.40s`
+    - `par_search=7.06s total=8.78s`
+- These are materially better than the earlier rs small-segment cluster
+  (`~7.4s-8.4s`) and much closer to native’s earlier `~4s-6s` range.
+
+### Current Blocker
+
+- Today’s SOCKS5 proxy remained unstable and intermittently returned
+  `Connection reset by peer`, so final low-frequency polling of the full
+  `500k` run could not be completed reliably.
+- Treat the early Milvus timing improvement as real evidence, but do not yet
+  claim the final `500k` benchmark verdict until the result JSON and end-state
+  log are re-read successfully.
+
+## Session 2026-04-02 Milvus FFI Force-Serial A/B
+
+### Goal
+
+- Isolate the remaining post-fix regression after:
+  - build-time `layer0_flat_graph` refresh
+  - in-memory HNSW deserialize/load
+- Verify whether Milvus FFI auto-switching HNSW build to `add_parallel(...)`
+  is the main remaining source of the bad `500k` `qps/recall` lane.
+
+### Code Change
+
+- [src/ffi.rs](src/ffi.rs)
+  - added temporary authority-only override:
+    - `KNOWHERE_RS_FFI_FORCE_SERIAL_HNSW_ADD=1`
+  - HNSW FFI `IndexWrapper::add(...)` now honors the override and forces
+    `idx.add(...)` instead of auto-switching to `idx.add_parallel(...)`
+  - added tests:
+    - `test_hnsw_ffi_add_prefers_parallel_when_override_is_unset`
+    - `test_hnsw_ffi_add_force_serial_override_disables_parallel`
+
+### Local Verification
+
+- `cargo test --lib test_hnsw_ffi_add_prefers_parallel_when_override_is_unset -- --nocapture`
+- `cargo test --lib test_hnsw_ffi_add_force_serial_override_disables_parallel -- --nocapture`
+- `cargo test --lib test_save_load_hnsw_index -- --nocapture`
+
+### Authority Setup
+
+- synced updated `src/ffi.rs` and `src/faiss/hnsw.rs` into:
+  - `/data/work/milvus-rs-integ/knowhere-rs`
+- rebuilt authority `.so`:
+  - `CARGO_TARGET_DIR=/data/work/milvus-rs-integ/knowhere-rs-target cargo build --release --lib`
+- restarted standalone with:
+  - `KNOWHERE_RS_FFI_FORCE_SERIAL_HNSW_ADD=1`
+  - `scripts/knowhere-rs-shim/start_standalone_remote.sh`
+- authority benchmark log:
+  - `/data/work/VectorDBBench/logs/rs_500k_force_serial_20260402.log`
+
+### Authority Evidence So Far
+
+- `force-serial` lane insert finished in:
+  - `155.07156541303266s`
+- this is materially better than the latest bad combined lane:
+  - `insert_duration=360.3625`
+- during the `force-serial` run, Milvus `standalone-stage1.log` no longer
+  shows the parallel-build-only diagnostics:
+  - `[HNSW] Batch size: ...`
+  - `[HNSW] phase2 breakdown: ...`
+- that is strong evidence the override truly disabled the FFI
+  `add_parallel(...)` build path on the authority Milvus lane.
+
+### Interim Interpretation
+
+- the Milvus HNSW authority lane did not merely regress inside load/build
+  micro-optimizations; it also changed build semantics after `9bb3617`
+  switched FFI HNSW adds to auto-parallel.
+- `force-serial` is already strong evidence that:
+  - `FFI -> add_parallel(...)` is a first-order behavioral change
+  - it is likely involved in the remaining bad `qps/recall` regime
+- do not claim final verdict yet:
+  - the `500k force-serial` benchmark was still in `optimize` during the last
+    successful low-frequency poll, and the result JSON had not refreshed.
 - The wrapper is the canonical way to restore the standalone environment because it:
   - sets the remote toolchain and library paths
   - enables embed etcd by default (`ETCD_USE_EMBED=true`)
@@ -150,6 +440,50 @@
     - `test_ffi_sparse_inverted_search_accepts_query_dim_larger_than_index_dim`
     - `test_search_with_bitset_sparse_inverted_accepts_query_dim_larger_than_index_dim`
   - implemented the minimal FFI/runtime fixes:
+
+### Session 235 - 2026-04-02
+- Focus: `milvus-hnsw-ffi-parallel-screen`
+- Mode:
+  - `screen`
+- Hypothesis:
+  - the remaining Milvus HNSW regression is not just build/load micro-cost; the
+    FFI auto-switch to `add_parallel(...)` changes bulk-build graph quality
+    materially versus serial `add(...)`.
+- Completed:
+  - added an authority-only FFI override in `src/ffi.rs`:
+    - `KNOWHERE_RS_FFI_FORCE_SERIAL_HNSW_ADD=1`
+  - verified the override locally and on the authority integration checkout
+  - launched a `500k` Milvus authority A/B with forced serial HNSW add
+  - added two local ignored screen diagnostics in [src/faiss/hnsw.rs](src/faiss/hnsw.rs):
+    - `screen_parallel_build_recall_gap_against_serial_build`
+    - `screen_parallel_build_recall_improves_with_smaller_batches`
+- Verification:
+  - local:
+    - `cargo test --lib test_hnsw_ffi_add_prefers_parallel_when_override_is_unset -- --nocapture`
+    - `cargo test --lib test_hnsw_ffi_add_force_serial_override_disables_parallel -- --nocapture`
+    - `cargo test --lib screen_parallel_build_recall_gap_against_serial_build -- --ignored --nocapture`
+    - `cargo test --lib screen_parallel_build_recall_improves_with_smaller_batches -- --ignored --nocapture`
+  - authority:
+    - standalone restarted with `KNOWHERE_RS_FFI_FORCE_SERIAL_HNSW_ADD=1`
+    - `500k` lane log:
+      - `/data/work/VectorDBBench/logs/rs_500k_force_serial_20260402.log`
+- Result:
+  - `screen_result=promote`
+- Notes:
+  - local screen evidence is now very strong:
+    - serial build recall@10 on deterministic 12k/128 fixture:
+      - `0.9992`
+    - parallel build recall@10 on the same fixture with `threads=4`, `batch_size=3000`:
+      - `0.2547`
+    - parallel build recall@10 with smaller batches (`threads=16`, `batch_size=750`):
+      - `0.8547`
+  - this directly ties the graph-quality collapse to the current batch-oriented
+    `add_parallel()` semantics, not just generic threading overhead.
+  - authority force-serial evidence also aligns:
+    - `500k` insert finished in `155.07s`
+    - parallel-only `[HNSW] Batch size` / `phase2 breakdown` logs disappeared
+  - the current authority run had not yet refreshed the final result JSON during
+    the last successful low-frequency poll, so the final verdict remains pending.
     - sparse query chunking now uses the query-side C-ABI dimension
     - sparse bitset lookup now maps `doc_id -> row ordinal`
     - sparse search routing covers both direct and bitset C-ABI entrypoints

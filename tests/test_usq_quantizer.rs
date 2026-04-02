@@ -1,4 +1,20 @@
-use knowhere_rs::quantization::usq::{UsqConfig, UsqLayout, UsqQuantizer, UsqRotator};
+use knowhere_rs::quantization::usq::*;
+
+fn make_data(n: usize, dim: usize) -> (Vec<f32>, Vec<i64>) {
+    let data: Vec<f32> = (0..n * dim).map(|i| (i as f32 * 0.13).sin()).collect();
+    let ids: Vec<i64> = (0..n as i64).collect();
+    (data, ids)
+}
+
+fn build_test_layout(n: usize, dim: usize, nbits: u8) -> (UsqQuantizer, UsqLayout, Vec<i64>) {
+    let config = UsqConfig::new(dim, nbits).unwrap();
+    let mut q = UsqQuantizer::new(config.clone());
+    q.set_centroid(&vec![0.0f32; dim]);
+    let (data, ids) = make_data(n, dim);
+    let encoded: Vec<_> = (0..n).map(|i| q.encode(&data[i * dim..(i + 1) * dim])).collect();
+    let layout = UsqLayout::build(&config, &encoded, &ids);
+    (q, layout, ids)
+}
 
 #[test]
 fn test_config_padded_dim() {
@@ -362,33 +378,17 @@ fn test_usq_recall_parity_vs_hvq() {
     let ids: Vec<i64> = (0..n as i64).collect();
     let layout = UsqLayout::build(&usq_config, &encoded, &ids);
 
-    // Precompute rotated centroid for centroid_score
-    let padded = usq_config.padded_dim();
-    let mut centroid_padded = vec![0.0f32; padded];
-    centroid_padded[..dim].copy_from_slice(&centroid);
-    let rotated_centroid = usq_q.rotator().rotate(&centroid_padded);
-
     let usq_recall: f32 = queries
         .iter()
         .zip(gt.iter())
         .map(|(query, true_nn)| {
-            let mut q_padded = vec![0.0f32; padded];
-            q_padded[..dim].copy_from_slice(query);
-            let q_rot = usq_q.rotator().rotate(&q_padded);
-            let q_norm_sq: f32 = q_rot.iter().map(|x| x * x).sum();
-
-            // centroid_score = q_rot · rotated_centroid
-            let centroid_score: f32 = q_rot
-                .iter()
-                .zip(rotated_centroid.iter())
-                .map(|(a, b)| a * b)
-                .sum();
+            let query_state = usq_q.precompute_query_state(query);
+            let q_norm_sq: f32 = query.iter().map(|x| x * x).sum();
 
             let mut scores: Vec<(i64, f32)> = (0..n)
                 .map(|i| {
                     let score = usq_q.score_with_meta(
-                        &q_rot,
-                        centroid_score,
+                        &query_state,
                         layout.norm_at(i),
                         layout.vmax_at(i),
                         layout.quant_quality_at(i),

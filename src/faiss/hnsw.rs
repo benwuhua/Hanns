@@ -44,6 +44,7 @@ type DistanceToIdxFn = fn(&HnswIndex, &[f32], usize) -> f32;
 const MAX_LAYERS: usize = 16;
 const HNSW_SEARCH_KNN_BF_FILTER_THRESHOLD: f32 = 0.93;
 const HNSW_SEARCH_BF_TOPK_THRESHOLD: f32 = 0.5;
+const HNSW_PARALLEL_BATCH_SIZE_CAP_ENV: &str = "KNOWHERE_RS_HNSW_PARALLEL_BATCH_SIZE_CAP";
 
 thread_local! {
     static HNSW_SEARCH_SCRATCH_TLS: RefCell<SearchScratch> = RefCell::new(SearchScratch::new());
@@ -1768,6 +1769,11 @@ impl HnswIndex {
         self.refresh_layer0_slab();
     }
 
+    fn refresh_layer0_flat_graph_for_parallel_build(&mut self) {
+        self.layer0_slab.clear();
+        self.rebuild_layer0_flat_graph();
+    }
+
     fn refresh_layer0_slab(&mut self) {
         self.layer0_slab.clear();
 
@@ -2322,6 +2328,10 @@ impl HnswIndex {
             }
             shrink_time += shrink_start.elapsed();
 
+            // Keep layer-0 candidate search on the contiguous flat-graph layout during
+            // parallel build without paying the extra slab rebuild cost on every batch.
+            self.refresh_layer0_flat_graph_for_parallel_build();
+
             processed += current_batch_size;
 
             // Progress logging (every 10% or every batch for small datasets)
@@ -2539,6 +2549,10 @@ impl HnswIndex {
                     stage_start.elapsed(),
                 );
             }
+
+            // Match the production parallel-build path: make the next batch's layer-0
+            // candidate search use the canonical contiguous flat-graph layout.
+            self.refresh_layer0_flat_graph_for_parallel_build();
         }
 
         self.refresh_layer0_flat_graph();
@@ -2571,13 +2585,18 @@ impl HnswIndex {
         let count_factor = (n as f64 / 10000.0).clamp(0.5, 1.0);
 
         let optimal = base_batch * dim_factor * count_factor;
+        let max_batch_size = std::env::var(HNSW_PARALLEL_BATCH_SIZE_CAP_ENV)
+            .ok()
+            .and_then(|raw| raw.trim().parse::<usize>().ok())
+            .map(|cap| cap.max(50))
+            .unwrap_or(5000);
 
         // Clamp to reasonable range
-        let batch_size = optimal.clamp(50.0, 5000.0) as usize;
+        let batch_size = optimal.clamp(50.0, max_batch_size as f64) as usize;
 
         eprintln!(
-            "[HNSW] Batch size: n={}, dim={}, threads={}, batch_size={}",
-            n, dim, self.num_threads, batch_size
+            "[HNSW] Batch size: n={}, dim={}, threads={}, batch_size={}, max_batch_cap={}",
+            n, dim, self.num_threads, batch_size, max_batch_size
         );
 
         batch_size
@@ -6524,12 +6543,7 @@ impl HnswIndex {
         Some((min_count, max_count, total as f32 / seen as f32))
     }
 
-    pub fn save(&self, path: &std::path::Path) -> Result<()> {
-        use std::fs::File;
-        use std::io::Write;
-
-        let mut file = File::create(path)?;
-
+    fn write_to<W: std::io::Write>(&self, file: &mut W) -> Result<()> {
         // Magic and version
         file.write_all(b"HNSW")?;
         file.write_all(&5u32.to_le_bytes())?; // Version 5: persist SQ mode/quantizer/codes
@@ -6618,16 +6632,25 @@ impl HnswIndex {
         Ok(())
     }
 
+    pub fn save(&self, path: &std::path::Path) -> Result<()> {
+        use std::fs::File;
+        use std::io::{BufWriter, Write};
+
+        let file = File::create(path)?;
+        let mut writer = BufWriter::new(file);
+        self.write_to(&mut writer)?;
+        writer.flush()?;
+        Ok(())
+    }
+
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>> {
-        let tmp = tempfile::NamedTempFile::new()?;
-        self.save(tmp.path())?;
-        let bytes = std::fs::read(tmp.path())?;
+        let mut bytes = Vec::new();
+        self.write_to(&mut bytes)?;
         Ok(bytes)
     }
 
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self> {
-        let tmp = tempfile::NamedTempFile::new()?;
-        std::fs::write(tmp.path(), bytes)?;
+        use std::io::Cursor;
 
         let bootstrap = IndexConfig {
             index_type: IndexType::Hnsw,
@@ -6637,7 +6660,8 @@ impl HnswIndex {
             params: Default::default(),
         };
         let mut index = Self::new(&bootstrap)?;
-        index.load(tmp.path())?;
+        let mut cursor = Cursor::new(bytes);
+        index.read_from(&mut cursor)?;
         Ok(index)
     }
 
@@ -6960,12 +6984,8 @@ impl HnswIndex {
         Ok(index)
     }
 
-    pub fn load(&mut self, path: &std::path::Path) -> Result<()> {
+    fn read_from<R: std::io::Read>(&mut self, file: &mut R) -> Result<()> {
         use std::collections::HashSet;
-        use std::fs::File;
-        use std::io::Read;
-
-        let mut file = File::open(path)?;
 
         let mut magic = [0u8; 4];
         file.read_exact(&mut magic)?;
@@ -7233,6 +7253,15 @@ impl HnswIndex {
         self.config.params.sq_mode = Some(self.sq_mode);
         self.trained = true;
         Ok(())
+    }
+
+    pub fn load(&mut self, path: &std::path::Path) -> Result<()> {
+        use std::fs::File;
+        use std::io::BufReader;
+
+        let file = File::open(path)?;
+        let mut reader = BufReader::new(file);
+        self.read_from(&mut reader)
     }
 
     /// Check if this index contains raw data
@@ -8053,6 +8082,8 @@ mod tests {
     use super::*;
     use crate::api::IndexType;
     use std::collections::BTreeSet;
+    use std::ffi::OsString;
+    use std::sync::{Mutex, OnceLock};
 
     fn faiss_layer0_backfill_model(
         index: &HnswIndex,
@@ -8105,6 +8136,69 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    fn temp_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        old: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: OsString) -> Self {
+            let old = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, old }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.old.take() {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    fn tiny_hnsw_for_roundtrip() -> HnswIndex {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(4),
+                ef_construction: Some(32),
+                ef_search: Some(16),
+                ..Default::default()
+            },
+        };
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        let vectors = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+        index
+    }
+
+    fn invalid_tmpdir_path(label: &str) -> OsString {
+        std::env::temp_dir()
+            .join(format!(
+                "knowhere_rs_invalid_tmpdir_{}_{}_{}",
+                label,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ))
+            .into_os_string()
     }
 
     fn clustered_layer0_vectors() -> Vec<f32> {
@@ -8515,6 +8609,76 @@ mod tests {
         vectors
     }
 
+    fn deterministic_parallel_profile_queries(
+        base: &[f32],
+        num_queries: usize,
+        dim: usize,
+    ) -> Vec<f32> {
+        let num_base = base.len() / dim;
+        let mut queries = Vec::with_capacity(num_queries * dim);
+        for i in 0..num_queries {
+            let src = (i * 97) % num_base;
+            for d in 0..dim {
+                let base_value = base[src * dim + d];
+                let offset = (((i + d) % 5) as f32 - 2.0) * 0.0002;
+                queries.push(base_value + offset);
+            }
+        }
+        queries
+    }
+
+    fn exact_topk_l2_ids(vectors: &[f32], dim: usize, query: &[f32], k: usize) -> Vec<i64> {
+        let mut scored: Vec<(usize, f32)> = vectors
+            .chunks_exact(dim)
+            .enumerate()
+            .map(|(idx, vector)| {
+                let dist: f32 = query
+                    .iter()
+                    .zip(vector.iter())
+                    .map(|(&a, &b)| {
+                        let diff = a - b;
+                        diff * diff
+                    })
+                    .sum();
+                (idx, dist)
+            })
+            .collect();
+        scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        scored
+            .into_iter()
+            .take(k)
+            .map(|(idx, _)| idx as i64)
+            .collect()
+    }
+
+    fn average_recall_at_k_for_queries(
+        index: &HnswIndex,
+        base: &[f32],
+        queries: &[f32],
+        dim: usize,
+        top_k: usize,
+        ef_search: usize,
+    ) -> f64 {
+        let req = SearchRequest {
+            top_k,
+            nprobe: ef_search,
+            params: Some(format!(r#"{{"ef": {ef_search}}}"#)),
+            ..Default::default()
+        };
+
+        let mut total = 0.0;
+        let mut count = 0usize;
+        for query in queries.chunks_exact(dim) {
+            let exact = exact_topk_l2_ids(base, dim, query, top_k);
+            let result = index.search(query, &req).unwrap();
+            let hits = result.ids.iter().filter(|id| exact.contains(id)).count();
+            total += hits as f64 / top_k as f64;
+            count += 1;
+        }
+
+        total / count.max(1) as f64
+    }
+
     #[test]
     fn test_hnsw() {
         let config = IndexConfig {
@@ -8750,6 +8914,268 @@ mod tests {
             "ordered_pool",
             "parallel build profile should expose the layer-0 ordered-pool search core shape"
         );
+    }
+
+    #[test]
+    fn test_parallel_build_profile_reports_flat_graph_layer0_layout() {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 16,
+            data_type: DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(2),
+                ef_construction: Some(64),
+                ef_search: Some(32),
+                ml: Some(2.0),
+                num_threads: Some(4),
+                ..Default::default()
+            },
+        };
+        let vectors = deterministic_parallel_profile_vectors(1_200, 16);
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        let report = index.parallel_build_profile_report(&vectors, None).unwrap();
+
+        assert_eq!(
+            report
+                .candidate_search_internal
+                .search_core_shape
+                .rust_layer0_neighbor_layout,
+            "flat_u32_adjacency",
+            "parallel bulk build should expose flat-graph layer-0 adjacency during candidate search"
+        );
+        assert!(
+            report
+                .candidate_search_internal
+                .layer0_neighbor_access_call_counts
+                .layer0_flat_graph_neighbor_reads
+                > 0,
+            "parallel bulk build should record non-zero flat-graph neighbor reads"
+        );
+    }
+
+    #[test]
+    #[ignore = "screen-only diagnostic for serial-vs-parallel bulk-build quality"]
+    fn screen_parallel_build_recall_gap_against_serial_build() {
+        let num_base = 12_000;
+        let num_queries = 128;
+        let dim = 128;
+        let top_k = 10;
+        let ef_search = 64;
+        let base = deterministic_parallel_profile_vectors(num_base, dim);
+        let queries = deterministic_parallel_profile_queries(&base, num_queries, dim);
+
+        let serial_config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(16),
+                ef_construction: Some(200),
+                ef_search: Some(ef_search),
+                num_threads: Some(1),
+                random_seed: Some(42),
+                ..Default::default()
+            },
+        };
+        let parallel_config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(16),
+                ef_construction: Some(200),
+                ef_search: Some(ef_search),
+                num_threads: Some(4),
+                random_seed: Some(42),
+                ..Default::default()
+            },
+        };
+
+        let mut serial = HnswIndex::new(&serial_config).unwrap();
+        serial.train(&base).unwrap();
+        serial.add(&base, None).unwrap();
+
+        let mut parallel = HnswIndex::new(&parallel_config).unwrap();
+        parallel.train(&base).unwrap();
+        parallel.add_parallel(&base, None, Some(true)).unwrap();
+
+        let serial_recall =
+            average_recall_at_k_for_queries(&serial, &base, &queries, dim, top_k, ef_search);
+        let parallel_recall =
+            average_recall_at_k_for_queries(&parallel, &base, &queries, dim, top_k, ef_search);
+
+        eprintln!(
+            "[screen] serial_recall_at_{top_k}={serial_recall:.4} parallel_recall_at_{top_k}={parallel_recall:.4}"
+        );
+
+        assert!(
+            serial_recall >= parallel_recall,
+            "screen fixture should not show serial build worse than parallel build (serial={serial_recall:.4}, parallel={parallel_recall:.4})"
+        );
+    }
+
+    #[test]
+    #[ignore = "screen-only diagnostic for batch-size sensitivity in parallel bulk build"]
+    fn screen_parallel_build_recall_improves_with_smaller_batches() {
+        let num_base = 12_000;
+        let num_queries = 128;
+        let dim = 128;
+        let top_k = 10;
+        let ef_search = 64;
+        let base = deterministic_parallel_profile_vectors(num_base, dim);
+        let queries = deterministic_parallel_profile_queries(&base, num_queries, dim);
+
+        let build_parallel = |num_threads: usize| {
+            let config = IndexConfig {
+                index_type: IndexType::Hnsw,
+                metric_type: MetricType::L2,
+                dim,
+                data_type: DataType::Float,
+                params: crate::api::IndexParams {
+                    m: Some(16),
+                    ef_construction: Some(200),
+                    ef_search: Some(ef_search),
+                    num_threads: Some(num_threads),
+                    random_seed: Some(42),
+                    ..Default::default()
+                },
+            };
+            let mut index = HnswIndex::new(&config).unwrap();
+            let batch_size = index.calculate_optimal_batch_size(num_base, dim);
+            index.train(&base).unwrap();
+            index.add_parallel(&base, None, Some(true)).unwrap();
+            let recall =
+                average_recall_at_k_for_queries(&index, &base, &queries, dim, top_k, ef_search);
+            (batch_size, recall)
+        };
+
+        let (coarse_batch, coarse_recall) = build_parallel(4);
+        let (fine_batch, fine_recall) = build_parallel(16);
+
+        eprintln!(
+            "[screen] coarse_batch={coarse_batch} coarse_recall_at_{top_k}={coarse_recall:.4} fine_batch={fine_batch} fine_recall_at_{top_k}={fine_recall:.4}"
+        );
+
+        assert!(
+            fine_batch < coarse_batch,
+            "screen fixture must actually reduce batch size when thread count increases"
+        );
+        assert!(
+            fine_recall >= coarse_recall,
+            "smaller parallel batches should not reduce recall on the deterministic screen fixture (coarse={coarse_recall:.4}, fine={fine_recall:.4})"
+        );
+    }
+
+    #[test]
+    #[ignore = "screen-only diagnostic for parallel bulk-build batch tradeoffs"]
+    fn screen_parallel_build_batch_tradeoff_matrix() {
+        use std::time::Instant;
+
+        let num_base = 12_000;
+        let num_queries = 128;
+        let dim = 128;
+        let top_k = 10;
+        let ef_search = 64;
+        let base = deterministic_parallel_profile_vectors(num_base, dim);
+        let queries = deterministic_parallel_profile_queries(&base, num_queries, dim);
+
+        let serial_config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim,
+            data_type: DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(16),
+                ef_construction: Some(200),
+                ef_search: Some(ef_search),
+                num_threads: Some(1),
+                random_seed: Some(42),
+                ..Default::default()
+            },
+        };
+        let mut serial = HnswIndex::new(&serial_config).unwrap();
+        serial.train(&base).unwrap();
+        let serial_start = Instant::now();
+        serial.add(&base, None).unwrap();
+        let serial_build_secs = serial_start.elapsed().as_secs_f64();
+        let serial_recall =
+            average_recall_at_k_for_queries(&serial, &base, &queries, dim, top_k, ef_search);
+        eprintln!(
+            "[screen-matrix] mode=serial threads=1 batch_size=1 build_secs={serial_build_secs:.4} recall_at_{top_k}={serial_recall:.4}"
+        );
+
+        for num_threads in [2usize, 4, 8, 16, 32] {
+            let config = IndexConfig {
+                index_type: IndexType::Hnsw,
+                metric_type: MetricType::L2,
+                dim,
+                data_type: DataType::Float,
+                params: crate::api::IndexParams {
+                    m: Some(16),
+                    ef_construction: Some(200),
+                    ef_search: Some(ef_search),
+                    num_threads: Some(num_threads),
+                    random_seed: Some(42),
+                    ..Default::default()
+                },
+            };
+            let mut index = HnswIndex::new(&config).unwrap();
+            let batch_size = index.calculate_optimal_batch_size(num_base, dim);
+            index.train(&base).unwrap();
+            let start = Instant::now();
+            index.add_parallel(&base, None, Some(true)).unwrap();
+            let build_secs = start.elapsed().as_secs_f64();
+            let recall =
+                average_recall_at_k_for_queries(&index, &base, &queries, dim, top_k, ef_search);
+            eprintln!(
+                "[screen-matrix] mode=parallel threads={num_threads} batch_size={batch_size} build_secs={build_secs:.4} recall_at_{top_k}={recall:.4}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_serialize_to_bytes_does_not_require_writable_tmpdir() {
+        let _lock = temp_env_lock().lock().unwrap();
+        let index = tiny_hnsw_for_roundtrip();
+        let _tmpdir = EnvVarGuard::set("TMPDIR", invalid_tmpdir_path("serialize"));
+
+        let bytes = index
+            .serialize_to_bytes()
+            .expect("serialize_to_bytes should not depend on a writable TMPDIR");
+
+        assert!(
+            !bytes.is_empty(),
+            "serialize_to_bytes should return a non-empty payload"
+        );
+    }
+
+    #[test]
+    fn test_deserialize_from_bytes_does_not_require_writable_tmpdir() {
+        let _lock = temp_env_lock().lock().unwrap();
+        let index = tiny_hnsw_for_roundtrip();
+
+        let path = std::env::temp_dir().join(format!(
+            "hnsw_roundtrip_bytes_{}_{}.bin",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        index.save(&path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        let _tmpdir = EnvVarGuard::set("TMPDIR", invalid_tmpdir_path("deserialize"));
+        let loaded = HnswIndex::deserialize_from_bytes(&bytes)
+            .expect("deserialize_from_bytes should not depend on a writable TMPDIR");
+
+        assert_eq!(loaded.vector_count(), index.vector_count());
+        assert_eq!(loaded.ids, index.ids);
     }
 
     #[test]
@@ -10758,6 +11184,60 @@ mod tests {
             assert!(batch_size <= 5000, "Batch size should be <= 5000");
         }
         println!("✅ All batch size calculations are within bounds\n");
+    }
+
+    #[test]
+    fn test_hnsw_batch_size_respects_env_cap() {
+        let _lock = temp_env_lock().lock().unwrap();
+        let _guard = EnvVarGuard::set(
+            HNSW_PARALLEL_BATCH_SIZE_CAP_ENV,
+            std::ffi::OsString::from("256"),
+        );
+
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 128,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                num_threads: Some(8),
+                ..Default::default()
+            },
+        };
+
+        let index = HnswIndex::new(&config).unwrap();
+        let batch_size = index.calculate_optimal_batch_size(100_000, 128);
+        assert_eq!(
+            batch_size, 256,
+            "env cap should clamp the computed parallel build batch size"
+        );
+    }
+
+    #[test]
+    fn test_hnsw_batch_size_env_cap_keeps_minimum_floor() {
+        let _lock = temp_env_lock().lock().unwrap();
+        let _guard = EnvVarGuard::set(
+            HNSW_PARALLEL_BATCH_SIZE_CAP_ENV,
+            std::ffi::OsString::from("8"),
+        );
+
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 128,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                num_threads: Some(8),
+                ..Default::default()
+            },
+        };
+
+        let index = HnswIndex::new(&config).unwrap();
+        let batch_size = index.calculate_optimal_batch_size(100_000, 128);
+        assert_eq!(
+            batch_size, 50,
+            "env cap should not push batch size below the implementation floor"
+        );
     }
 
     #[test]

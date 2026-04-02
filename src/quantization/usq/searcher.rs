@@ -1,6 +1,6 @@
 use super::fastscan::{fastscan_topk, FsCandidate, UsqFastScanState};
 use super::layout::UsqLayout;
-use super::quantizer::UsqQuantizer;
+use super::quantizer::{UsqQueryState, UsqQuantizer};
 
 /// Two-stage search: 1-bit fastscan coarse filter → B-bit rerank.
 ///
@@ -9,17 +9,15 @@ use super::quantizer::UsqQuantizer;
 /// # Arguments
 /// - `quantizer`       — trained USQ quantizer (has config + rotator).
 /// - `layout`          — SoA store holding all encoded vectors.
-/// - `state`           — precomputed fastscan LUT for this query.
-/// - `q_rot`           — query rotated into the padded space (length = padded_dim).
-/// - `centroid_score`  — dot(q_rot, rotated_centroid), needed by `score_with_meta`.
+/// - `fs_state`        — precomputed fastscan LUT for this query.
+/// - `query_state`     — precomputed query state (rotated query, centroid score, quantized).
 /// - `q_norm_sq`       — ‖q_rot‖², used to convert IP score to L2 distance.
 /// - `top_k`           — number of nearest neighbours to return.
 pub fn scan_and_rerank(
     quantizer: &UsqQuantizer,
     layout: &UsqLayout,
-    state: &UsqFastScanState,
-    q_rot: &[f32],
-    centroid_score: f32,
+    fs_state: &UsqFastScanState,
+    query_state: &UsqQueryState,
     q_norm_sq: f32,
     top_k: usize,
 ) -> Vec<(i64, f32)> {
@@ -39,19 +37,18 @@ pub fn scan_and_rerank(
 
     // If the entire layout fits within the candidate budget, skip fastscan.
     if n <= n_candidates {
-        return brute_force_rerank(quantizer, layout, q_rot, centroid_score, q_norm_sq, top_k);
+        return brute_force_rerank(quantizer, layout, query_state, q_norm_sq, top_k);
     }
 
     // Stage 1: fastscan — produce coarse candidates.
-    let candidates: Vec<FsCandidate> = fastscan_topk(layout, state, n_candidates);
+    let candidates: Vec<FsCandidate> = fastscan_topk(layout, fs_state, n_candidates);
 
     // Stage 2: rerank with B-bit quantizer.
     let mut results: Vec<(i64, f32)> = candidates
         .iter()
         .map(|c| {
             let score = quantizer.score_with_meta(
-                q_rot,
-                centroid_score,
+                query_state,
                 layout.norm_at(c.idx),
                 layout.vmax_at(c.idx),
                 layout.quant_quality_at(c.idx),
@@ -73,16 +70,14 @@ pub fn scan_and_rerank(
 fn brute_force_rerank(
     quantizer: &UsqQuantizer,
     layout: &UsqLayout,
-    q_rot: &[f32],
-    centroid_score: f32,
+    query_state: &UsqQueryState,
     q_norm_sq: f32,
     top_k: usize,
 ) -> Vec<(i64, f32)> {
     let mut results: Vec<(i64, f32)> = (0..layout.len())
         .map(|i| {
             let score = quantizer.score_with_meta(
-                q_rot,
-                centroid_score,
+                query_state,
                 layout.norm_at(i),
                 layout.vmax_at(i),
                 layout.quant_quality_at(i),
