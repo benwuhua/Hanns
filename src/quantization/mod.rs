@@ -12,6 +12,7 @@ pub mod residual_pq;
 pub mod rq;
 pub mod sq;
 pub mod turboquant;
+pub mod usq;
 
 pub use dual_pca::DualPca;
 pub use exrabitq::{ExFactor, ExRaBitQConfig, ExRaBitQQuantizer, ExRaBitQRotator};
@@ -28,6 +29,7 @@ pub use residual_pq::{
 };
 pub use rq::{RQConfig, ResidualQuantizer};
 pub use sq::{ScalarQuantizer, Sq4Quantizer, Sq8Quantizer};
+pub use usq::{UsqConfig, UsqRotator};
 pub use turboquant::{
     HadamardRotation, TurboQuantConfig, TurboQuantMode, TurboQuantMse, TurboQuantProd,
     TurboRotationBackend,
