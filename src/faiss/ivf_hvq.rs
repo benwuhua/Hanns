@@ -2,9 +2,11 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 
 use crate::api::{KnowhereError, MetricType, Predicate, Result, SearchRequest, SearchResult};
-use crate::quantization::{HvqConfig, HvqFastScanState, HvqQuantizer, KMeans};
-
-const HVQ_ENCODE_REFINE: usize = 6;
+use crate::quantization::{
+    KMeans,
+    UsqConfig, UsqEncoded, UsqFastScanState, UsqLayout, UsqQuantizer,
+    fastscan_topk,
+};
 
 #[derive(Clone, Debug)]
 pub struct IvfHvqConfig {
@@ -44,286 +46,34 @@ impl IvfHvqConfig {
     }
 }
 
-pub struct IvfHvqEntry {
-    pub id: i64,
-    pub packed_bits: Vec<u8>,
-    pub norm_o: f32,
-    pub vmax: f32,
-    pub base_quant_dist: f32,
-    pub base_norm_sq: f32,
-    pub sign_bits: Vec<u8>,
-}
-
-/// Per-cluster SoA layout for fastscan + rerank.
-struct HvqClusterLayout {
-    /// SoA rerank data
-    ids: Vec<i64>,
-    norms_o: Vec<f32>,
-    vmaxs: Vec<f32>,
-    base_quant_dists: Vec<f32>,
-    packed_bits: Vec<u8>,      // flat buffer, stride = code_size
-    code_size: usize,
-    base_norm_sqs: Vec<f32>,
-
-    /// 1-bit fastscan transposed buffer
-    fastscan_codes: Vec<u8>,
-    fastscan_block_size: usize,
-    n_vectors: usize,
-}
-
-impl HvqClusterLayout {
-    fn build(entries: &[IvfHvqEntry], dim: usize) -> Self {
-        let n = entries.len();
-        let sign_bits: Vec<&[u8]> = entries.iter().map(|e| e.sign_bits.as_slice()).collect();
-
-        let (fastscan_codes, n_blocks, fastscan_block_size) =
-            transpose_to_fastscan(&sign_bits, dim);
-
-        let ids = entries.iter().map(|e| e.id).collect();
-        let norms_o = entries.iter().map(|e| e.norm_o).collect();
-        let vmaxs = entries.iter().map(|e| e.vmax).collect();
-        let base_quant_dists = entries.iter().map(|e| e.base_quant_dist).collect();
-        let code_size = entries.first().map_or(0, |e| e.packed_bits.len());
-        let packed_bits: Vec<u8> = entries.iter().flat_map(|e| e.packed_bits.iter().copied()).collect();
-        let base_norm_sqs = entries.iter().map(|e| e.base_norm_sq).collect();
-
-        let _ = n_blocks;
-        Self {
-            ids,
-            norms_o,
-            vmaxs,
-            base_quant_dists,
-            packed_bits,
-            code_size,
-            base_norm_sqs,
-            fastscan_codes,
-            fastscan_block_size,
-            n_vectors: n,
-        }
-    }
-
-    fn fastscan_topk(&self, state: &HvqFastScanState, dim: usize, n: usize) -> Vec<usize> {
-        if n == 0 || self.n_vectors == 0 {
-            return Vec::new();
-        }
-
-        let n_groups = dim.div_ceil(4);
-
-        let mut heap = std::collections::BinaryHeap::with_capacity(n + 1);
-
-        for (block_idx, block) in self
-            .fastscan_codes
-            .chunks_exact(self.fastscan_block_size)
-            .enumerate()
-        {
-            #[cfg(target_arch = "x86_64")]
-            let raw_scores = if std::arch::is_x86_feature_detected!("avx512bw") {
-                unsafe { fastscan_block_avx512(&state.lut, block, n_groups) }
-            } else {
-                fastscan_block_scalar(&state.lut, block, n_groups)
-            };
-
-            #[cfg(not(target_arch = "x86_64"))]
-            let raw_scores = fastscan_block_scalar(&state.lut, block, n_groups);
-
-            for (slot, &raw_score) in raw_scores.iter().enumerate() {
-                let local_id = block_idx * 32 + slot;
-                if local_id >= self.n_vectors {
-                    continue;
-                }
-
-                let score = raw_score as f32 * state.lut_scale;
-                let candidate = MinScored {
-                    id: local_id,
-                    score,
-                };
-                if heap.len() < n {
-                    heap.push(candidate);
-                    continue;
-                }
-                if let Some(worst) = heap.peek() {
-                    if candidate.score > worst.score
-                        || (candidate.score == worst.score && candidate.id < worst.id)
-                    {
-                        heap.pop();
-                        heap.push(candidate);
-                    }
-                }
-            }
-        }
-
-        let mut results = Vec::with_capacity(heap.len());
-        while let Some(item) = heap.pop() {
-            results.push(item.id);
-        }
-        // Results come out in ascending score order (min-heap), reverse for descending
-        results.sort_by(|a, b| b.cmp(a));
-        results.truncate(n);
-        results
-    }
-}
-
-/// Transpose 1-bit sign codes into fastscan layout (same logic as HvqIndex::transpose_to_fastscan).
-fn transpose_to_fastscan(raw_codes: &[&[u8]], dim: usize) -> (Vec<u8>, usize, usize) {
-    let n_blocks = raw_codes.len().div_ceil(32);
-    let fastscan_block_size = dim.div_ceil(4) * 16;
-    let mut fastscan_codes = vec![0u8; n_blocks * fastscan_block_size];
-
-    for block_idx in 0..n_blocks {
-        let block_base = block_idx * fastscan_block_size;
-        for group_idx in 0..dim.div_ceil(4) {
-            let group_base = block_base + group_idx * 16;
-            for slot in 0..32usize {
-                let vid = block_idx * 32 + slot;
-                let mut nibble = 0u8;
-                if vid < raw_codes.len() {
-                    for bit_pos in 0..4usize {
-                        let dim_idx = group_idx * 4 + bit_pos;
-                        if dim_idx >= dim {
-                            break;
-                        }
-                        let byte = raw_codes[vid][dim_idx / 8];
-                        let bit = (byte >> (dim_idx % 8)) & 1;
-                        nibble |= bit << bit_pos;
-                    }
-                }
-
-                let dst = group_base + slot / 2;
-                if slot % 2 == 0 {
-                    fastscan_codes[dst] |= nibble;
-                } else {
-                    fastscan_codes[dst] |= nibble << 4;
-                }
-            }
-        }
-    }
-
-    (fastscan_codes, n_blocks, fastscan_block_size)
-}
-
-fn fastscan_block_scalar(lut: &[i8], block: &[u8], n_groups: usize) -> [i32; 32] {
-    let mut scores = [0i32; 32];
-    for group_idx in 0..n_groups {
-        let group_lut = &lut[group_idx * 16..(group_idx + 1) * 16];
-        let group_base = group_idx * 16;
-        for slot in 0..32usize {
-            let byte = block[group_base + slot / 2];
-            let nibble = if slot % 2 == 0 {
-                byte & 0x0F
-            } else {
-                (byte >> 4) & 0x0F
-            };
-            scores[slot] += group_lut[nibble as usize] as i32;
-        }
-    }
-    scores
-}
-
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512bw,avx2,ssse3")]
-unsafe fn fastscan_block_avx512(lut: &[i8], block: &[u8], n_groups: usize) -> [i32; 32] {
-    use std::arch::x86_64::*;
-
-    let mut acc_lo = _mm256_setzero_si256();
-    let mut acc_hi = _mm256_setzero_si256();
-    let nibble_mask_128 = _mm_set1_epi8(0x0F_u8 as i8);
-
-    for group_idx in 0..n_groups {
-        let group_offset = group_idx * 16;
-        let lut_ptr = lut.as_ptr().add(group_idx * 16) as *const __m128i;
-        let lut_128 = _mm_loadu_si128(lut_ptr);
-
-        let data_lo_ptr = block.as_ptr().add(group_offset) as *const __m128i;
-        let data_lo_64 = _mm_loadl_epi64(data_lo_ptr);
-        let lo_nibbles = _mm_and_si128(data_lo_64, nibble_mask_128);
-        let hi_nibbles = _mm_and_si128(_mm_srli_epi16(data_lo_64, 4), nibble_mask_128);
-        let interleaved_lo = _mm_unpacklo_epi8(lo_nibbles, hi_nibbles);
-        let partial_lo = _mm_shuffle_epi8(lut_128, interleaved_lo);
-        let partial_lo_i16 = _mm256_cvtepi8_epi16(partial_lo);
-        acc_lo = _mm256_add_epi16(acc_lo, partial_lo_i16);
-
-        let data_hi_ptr = block.as_ptr().add(group_offset + 8) as *const __m128i;
-        let data_hi_64 = _mm_loadl_epi64(data_hi_ptr);
-        let hi_lo_nibbles = _mm_and_si128(data_hi_64, nibble_mask_128);
-        let hi_hi_nibbles = _mm_and_si128(_mm_srli_epi16(data_hi_64, 4), nibble_mask_128);
-        let interleaved_hi = _mm_unpacklo_epi8(hi_lo_nibbles, hi_hi_nibbles);
-        let partial_hi = _mm_shuffle_epi8(lut_128, interleaved_hi);
-        let partial_hi_i16 = _mm256_cvtepi8_epi16(partial_hi);
-        acc_hi = _mm256_add_epi16(acc_hi, partial_hi_i16);
-    }
-
-    let mut scores = [0i32; 32];
-
-    let lo_128_lo = _mm256_castsi256_si128(acc_lo);
-    let lo_128_hi = _mm256_extracti128_si256(acc_lo, 1);
-    let lo_i32_0 = _mm256_cvtepi16_epi32(lo_128_lo);
-    let lo_i32_1 = _mm256_cvtepi16_epi32(lo_128_hi);
-    _mm256_storeu_si256(scores.as_mut_ptr() as *mut __m256i, lo_i32_0);
-    _mm256_storeu_si256(scores.as_mut_ptr().add(8) as *mut __m256i, lo_i32_1);
-
-    let hi_128_lo = _mm256_castsi256_si128(acc_hi);
-    let hi_128_hi = _mm256_extracti128_si256(acc_hi, 1);
-    let hi_i32_0 = _mm256_cvtepi16_epi32(hi_128_lo);
-    let hi_i32_1 = _mm256_cvtepi16_epi32(hi_128_hi);
-    _mm256_storeu_si256(scores.as_mut_ptr().add(16) as *mut __m256i, hi_i32_0);
-    _mm256_storeu_si256(scores.as_mut_ptr().add(24) as *mut __m256i, hi_i32_1);
-
-    scores
-}
-
-#[derive(Clone, Copy, Debug)]
-struct MinScored {
-    id: usize,
-    score: f32,
-}
-
-impl PartialEq for MinScored {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.score.to_bits() == other.score.to_bits()
-    }
-}
-
-impl Eq for MinScored {}
-
-impl Ord for MinScored {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other
-            .score
-            .total_cmp(&self.score)
-            .then_with(|| other.id.cmp(&self.id))
-    }
-}
-
-impl PartialOrd for MinScored {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
+/// Per-vector encoded data awaiting layout construction.
+struct PendingEntry {
+    id: i64,
+    encoded: UsqEncoded,
 }
 
 pub struct IvfHvqIndex {
     config: IvfHvqConfig,
     centroids: Vec<f32>,
-    inverted_lists: RwLock<HashMap<usize, Vec<IvfHvqEntry>>>,
-    cluster_layouts: RwLock<HashMap<usize, HvqClusterLayout>>,
-    quantizer: HvqQuantizer,
+    /// Accumulated encoded vectors per cluster (retained for test inspection).
+    pending: RwLock<HashMap<usize, Vec<PendingEntry>>>,
+    cluster_layouts: RwLock<HashMap<usize, UsqLayout>>,
+    quantizer: UsqQuantizer,
     trained: bool,
     ntotal: usize,
 }
 
 impl IvfHvqIndex {
     pub fn new(config: IvfHvqConfig) -> Self {
-        let quantizer = HvqQuantizer::new(
-            HvqConfig {
-                dim: config.dim,
-                nbits: config.nbits,
-            },
-            config.seed,
-        );
+        let usq_config = UsqConfig::new(config.dim, config.nbits)
+            .expect("invalid USQ config")
+            .with_seed(config.seed);
+        let quantizer = UsqQuantizer::new(usq_config);
 
         Self {
             config,
             centroids: Vec::new(),
-            inverted_lists: RwLock::new(HashMap::new()),
+            pending: RwLock::new(HashMap::new()),
             cluster_layouts: RwLock::new(HashMap::new()),
             quantizer,
             trained: false,
@@ -347,6 +97,7 @@ impl IvfHvqIndex {
             )));
         }
 
+        // KMeans for IVF cluster centroids
         let mut km = KMeans::new(self.config.nlist, self.config.dim);
         if matches!(self.config.metric_type, MetricType::Ip | MetricType::Cosine) {
             km = km.with_metric(crate::quantization::kmeans::KMeansMetric::InnerProduct);
@@ -354,14 +105,25 @@ impl IvfHvqIndex {
         km.train(data);
         self.centroids = km.centroids().to_vec();
 
-        self.quantizer = HvqQuantizer::new(
-            HvqConfig {
-                dim: self.config.dim,
-                nbits: self.config.nbits,
-            },
-            self.config.seed,
-        );
-        self.quantizer.train(n, data);
+        // Train USQ quantizer with global centroid (mean of all training data)
+        let usq_config = UsqConfig::new(self.config.dim, self.config.nbits)
+            .expect("invalid USQ config")
+            .with_seed(self.config.seed);
+        self.quantizer = UsqQuantizer::new(usq_config);
+
+        // Compute global centroid (mean of all data)
+        let mut global_centroid = vec![0.0f32; self.config.dim];
+        for row in data.chunks_exact(self.config.dim) {
+            for (c, &value) in global_centroid.iter_mut().zip(row.iter()) {
+                *c += value;
+            }
+        }
+        let inv_n = 1.0 / n as f32;
+        for value in &mut global_centroid {
+            *value *= inv_n;
+        }
+        self.quantizer.set_centroid(&global_centroid);
+
         self.trained = true;
         Ok(())
     }
@@ -387,50 +149,32 @@ impl IvfHvqIndex {
             }
         }
 
-        // Parallel encode all vectors (centroid assignment + encode_with_sign_bits)
-        let entries: Vec<(usize, IvfHvqEntry)> = {
+        // Encode all vectors (cluster assignment + USQ encode)
+        let entries: Vec<(usize, PendingEntry)> = {
             #[cfg(feature = "parallel")]
             {
                 use rayon::prelude::*;
                 let base_id = self.ntotal as i64;
-                data
-                    .par_chunks_exact(self.config.dim)
+                data.par_chunks_exact(self.config.dim)
                     .enumerate()
                     .map(|(i, vector)| {
                         let cluster = self.find_best_centroid(vector);
-                        let (code, sign_bits) = self.quantizer.encode_with_sign_bits(vector, HVQ_ENCODE_REFINE);
-                        let norm_o = f32::from_le_bytes(code[0..4].try_into().unwrap());
-                        let vmax = f32::from_le_bytes(code[4..8].try_into().unwrap());
-                        let base_quant_dist = f32::from_le_bytes(code[8..12].try_into().unwrap());
-                        let packed_bits = code[12..].to_vec();
-                        let base_norm_sq = vector.iter().map(|x| x * x).sum();
+                        let encoded = self.quantizer.encode(vector);
                         let id = ids.map(|v| v[i]).unwrap_or(base_id + i as i64);
-                        (
-                            cluster,
-                            IvfHvqEntry { id, packed_bits, norm_o, vmax, base_quant_dist, base_norm_sq, sign_bits },
-                        )
+                        (cluster, PendingEntry { id, encoded })
                     })
                     .collect()
             }
             #[cfg(not(feature = "parallel"))]
             {
                 let base_id = self.ntotal as i64;
-                data
-                    .chunks_exact(self.config.dim)
+                data.chunks_exact(self.config.dim)
                     .enumerate()
                     .map(|(i, vector)| {
                         let cluster = self.find_best_centroid(vector);
-                        let (code, sign_bits) = self.quantizer.encode_with_sign_bits(vector, HVQ_ENCODE_REFINE);
-                        let norm_o = f32::from_le_bytes(code[0..4].try_into().unwrap());
-                        let vmax = f32::from_le_bytes(code[4..8].try_into().unwrap());
-                        let base_quant_dist = f32::from_le_bytes(code[8..12].try_into().unwrap());
-                        let packed_bits = code[12..].to_vec();
-                        let base_norm_sq = vector.iter().map(|x| x * x).sum();
+                        let encoded = self.quantizer.encode(vector);
                         let id = ids.map(|v| v[i]).unwrap_or(base_id + i as i64);
-                        (
-                            cluster,
-                            IvfHvqEntry { id, packed_bits, norm_o, vmax, base_quant_dist, base_norm_sq, sign_bits },
-                        )
+                        (cluster, PendingEntry { id, encoded })
                     })
                     .collect()
             }
@@ -438,16 +182,16 @@ impl IvfHvqIndex {
 
         // Sequential cluster insertion
         let mut modified_clusters = std::collections::HashSet::new();
-        let mut lists = self.inverted_lists.write();
+        let mut pending = self.pending.write();
         for (cluster, entry) in entries {
-            lists.entry(cluster).or_default().push(entry);
+            pending.entry(cluster).or_default().push(entry);
             modified_clusters.insert(cluster);
         }
 
         self.ntotal += n;
 
         // Rebuild layouts for modified clusters
-        drop(lists);
+        drop(pending);
         self.rebuild_layouts(&modified_clusters);
 
         Ok(n)
@@ -492,11 +236,18 @@ impl IvfHvqIndex {
     }
 
     fn rebuild_layouts(&self, clusters: &std::collections::HashSet<usize>) {
-        let lists = self.inverted_lists.read();
+        let pending = self.pending.read();
         let mut layouts = self.cluster_layouts.write();
+        let config = self.quantizer.config();
         for &cluster in clusters {
-            if let Some(entries) = lists.get(&cluster) {
-                layouts.insert(cluster, HvqClusterLayout::build(entries, self.config.dim));
+            if let Some(entries) = pending.get(&cluster) {
+                if entries.is_empty() {
+                    continue;
+                }
+                let encoded: Vec<UsqEncoded> = entries.iter().map(|e| e.encoded.clone()).collect();
+                let ids: Vec<i64> = entries.iter().map(|e| e.id).collect();
+                let layout = UsqLayout::build(config, &encoded, &ids);
+                layouts.insert(cluster, layout);
             }
         }
     }
@@ -509,66 +260,81 @@ impl IvfHvqIndex {
         filter: Option<&dyn Predicate>,
     ) -> Vec<(i64, f32)> {
         let coarse = self.rank_centroids(query, nprobe);
-        let q_rot = self.quantizer.rotate_query(query);
         let use_l2 = matches!(self.config.metric_type, MetricType::L2);
+
+        // Pad and rotate query
+        let padded_dim = self.quantizer.config().padded_dim();
+        let mut q_padded = vec![0.0f32; padded_dim];
+        q_padded[..self.config.dim].copy_from_slice(query);
+        let q_rot = self.quantizer.rotator().rotate(&q_padded);
         let q_norm_sq: f32 = query.iter().map(|x| x * x).sum();
 
-        // Stage 1: fastscan coarse ranking per cluster
-        let fs_state = self.quantizer.precompute_fastscan_state(&q_rot);
-        // Tier-aware candidates: higher nbits → more information lost by 1-bit fastscan → need more candidates
+        // Precompute centroid_score (global centroid, same for all clusters)
+        let centroid_score: f32 = {
+            let mut c_padded = vec![0.0f32; padded_dim];
+            c_padded[..self.config.dim].copy_from_slice(self.quantizer.centroid());
+            let c_rot = self.quantizer.rotator().rotate(&c_padded);
+            q_rot.iter().zip(c_rot.iter()).map(|(a, b)| a * b).sum()
+        };
+
+        // Build fastscan state (once per query, reused across clusters)
+        let fs_state = UsqFastScanState::new(&q_rot, self.quantizer.config());
+
+        // Tier-aware candidate count per cluster
         let n_candidates_per_cluster = match self.config.nbits {
             1 => (top_k * 20).max(200),
             2..=4 => (top_k * 15).max(150),
-            // 8-bit codes lose the most when approximated by 1-bit fastscan
             _ => (top_k * 30).max(300),
         };
 
         let layouts = self.cluster_layouts.read();
-        let mut all_local_candidates = Vec::new();
+
+        // Stage 1: collect candidates from each cluster via fastscan
+        let mut all_candidates: Vec<(usize, usize)> = Vec::new(); // (cluster, local_idx)
         for &cluster in &coarse {
             if let Some(layout) = layouts.get(&cluster) {
-                if layout.n_vectors <= n_candidates_per_cluster {
-                    // Small cluster: skip fastscan, score all vectors directly
-                    for local_id in 0..layout.n_vectors {
-                        all_local_candidates.push((cluster, local_id));
+                if layout.len() <= n_candidates_per_cluster {
+                    // Small cluster: score all vectors directly
+                    for local_id in 0..layout.len() {
+                        all_candidates.push((cluster, local_id));
                     }
                 } else {
-                    let topk_local = layout.fastscan_topk(&fs_state, self.config.dim, n_candidates_per_cluster);
-                    for local_id in topk_local {
-                        all_local_candidates.push((cluster, local_id));
+                    let candidates = fastscan_topk(layout, &fs_state, n_candidates_per_cluster);
+                    for c in candidates {
+                        all_candidates.push((cluster, c.idx));
                     }
                 }
             }
         }
 
-        // Stage 2: rerank with score_code_with_meta
-        let state = self.quantizer.precompute_query_state(&q_rot);
+        // Stage 2: rerank with score_with_meta
         let mut scored = Vec::new();
-        for (cluster, local_id) in all_local_candidates {
+        for (cluster, local_id) in all_candidates {
             let layout = &layouts[&cluster];
-            if local_id >= layout.n_vectors {
+            if local_id >= layout.len() {
                 continue;
             }
             if let Some(predicate) = filter {
-                if !predicate.evaluate(layout.ids[local_id]) {
+                if !predicate.evaluate(layout.id_at(local_id)) {
                     continue;
                 }
             }
 
-            let ip_score = self.quantizer.score_code_with_meta(
-                &state,
-                layout.norms_o[local_id],
-                layout.vmaxs[local_id],
-                layout.base_quant_dists[local_id],
-                &layout.packed_bits[local_id * layout.code_size..(local_id + 1) * layout.code_size],
+            let ip_score = self.quantizer.score_with_meta(
+                &q_rot,
+                centroid_score,
+                layout.norm_at(local_id),
+                layout.vmax_at(local_id),
+                layout.quant_quality_at(local_id),
+                layout.packed_bits_at(local_id),
             );
 
             let distance = if use_l2 {
-                q_norm_sq + layout.base_norm_sqs[local_id] - 2.0 * ip_score
+                q_norm_sq + layout.norm_sq_at(local_id) - 2.0 * ip_score
             } else {
                 -ip_score
             };
-            scored.push((layout.ids[local_id], distance));
+            scored.push((layout.id_at(local_id), distance));
         }
 
         scored.sort_by(|a, b| a.1.total_cmp(&b.1));
@@ -665,12 +431,12 @@ mod tests {
 
         // Verify layouts were built
         let layouts = index.cluster_layouts.read();
-        let lists = index.inverted_lists.read();
+        let pending = index.pending.read();
         let mut total_in_layouts = 0;
         for (&cluster, layout) in layouts.iter() {
-            assert!(lists.contains_key(&cluster), "layout cluster missing from lists");
-            assert_eq!(layout.n_vectors, lists[&cluster].len());
-            total_in_layouts += layout.n_vectors;
+            assert!(pending.contains_key(&cluster), "layout cluster missing from pending");
+            assert_eq!(layout.len(), pending[&cluster].len());
+            total_in_layouts += layout.len();
         }
         assert_eq!(total_in_layouts, n, "total vectors in layouts should match ntotal");
     }

@@ -53,6 +53,11 @@ impl UsqQuantizer {
         &self.rotator
     }
 
+    /// Returns the current centroid (length = dim).
+    pub fn centroid(&self) -> &[f32] {
+        &self.centroid
+    }
+
     /// Set (or update) the centroid.  Recomputes the rotated centroid.
     pub fn set_centroid(&mut self, centroid: &[f32]) {
         assert_eq!(
