@@ -95,7 +95,13 @@ impl UsqQuantizer {
         let rotated = self.rotator.rotate(&residual);
 
         // 3. Encode the already-rotated residual.
-        self.encode_rotated(&rotated)
+        let mut encoded = self.encode_rotated(&rotated);
+
+        // 4. Override norm_sq with the original vector's ||x||².
+        //    encode_rotated stores ||residual||² but L2 distance needs ||x||².
+        encoded.norm_sq = vector.iter().map(|x| x * x).sum();
+
+        encoded
     }
 
     /// Encode an already-rotated residual of length padded_dim.
