@@ -266,3 +266,159 @@ fn test_layout_fastscan_block_size() {
     let _b1 = layout.fastscan_block(1);
     assert_eq!(_b0.len(), expected_block_size);
 }
+
+/// Verify USQ recall@10 is within 10% of HVQ recall@10 on the same data/queries.
+/// Both use 4-bit quantization, dim=128, n=500 vectors, 10 queries.
+#[test]
+fn test_usq_recall_parity_vs_hvq() {
+    use knowhere_rs::quantization::hvq::{HvqConfig, HvqQuantizer};
+
+    let dim = 128;
+    let n = 500;
+    let k = 10;
+
+    // Fixed seed data for reproducibility
+    let data: Vec<f32> = (0..n * dim)
+        .map(|i| (i as f32 * 0.037 + 0.1).sin() * 2.0)
+        .collect();
+    let queries: Vec<Vec<f32>> = (0..10)
+        .map(|q| {
+            (0..dim)
+                .map(|i| (i as f32 * 0.71 + q as f32 * 0.3).cos())
+                .collect()
+        })
+        .collect();
+
+    // Ground truth: brute-force L2 on raw data
+    let gt: Vec<Vec<i64>> = queries
+        .iter()
+        .map(|query| {
+            let mut dists: Vec<(i64, f32)> = (0..n)
+                .map(|i| {
+                    let d: f32 = query
+                        .iter()
+                        .zip(data[i * dim..(i + 1) * dim].iter())
+                        .map(|(a, b)| (a - b) * (a - b))
+                        .sum();
+                    (i as i64, d)
+                })
+                .collect();
+            dists.sort_by(|a, b| a.1.total_cmp(&b.1));
+            dists.iter().take(k).map(|r| r.0).collect()
+        })
+        .collect();
+
+    // --- HVQ ---
+    let hvq_config = HvqConfig { dim, nbits: 4 };
+    let mut hvq_q = HvqQuantizer::new(hvq_config, 42);
+    hvq_q.train(n, &data);
+
+    let hvq_encoded: Vec<(Vec<u8>, Vec<u8>)> = (0..n)
+        .map(|i| hvq_q.encode_with_sign_bits(&data[i * dim..(i + 1) * dim], 6))
+        .collect();
+
+    let hvq_recall: f32 = queries
+        .iter()
+        .zip(gt.iter())
+        .map(|(query, true_nn)| {
+            let q_rot = hvq_q.rotate_query(query);
+            let q_state = hvq_q.precompute_query_state(&q_rot);
+
+            let mut scores: Vec<(i64, f32)> = (0..n)
+                .map(|i| {
+                    let code = &hvq_encoded[i].0;
+                    let norm_o = f32::from_le_bytes(code[0..4].try_into().unwrap());
+                    let vmax = f32::from_le_bytes(code[4..8].try_into().unwrap());
+                    let bqd = f32::from_le_bytes(code[8..12].try_into().unwrap());
+                    let packed = &code[12..];
+                    let score = hvq_q.score_code_with_meta(&q_state, norm_o, vmax, bqd, packed);
+                    // Approx L2 dist via inner product decomposition
+                    let q_norm_sq: f32 = q_rot.iter().map(|x| x * x).sum();
+                    let v_norm_sq: f32 = data[i * dim..(i + 1) * dim].iter().map(|x| x * x).sum();
+                    (i as i64, q_norm_sq + v_norm_sq - 2.0 * score)
+                })
+                .collect();
+            scores.sort_by(|a, b| a.1.total_cmp(&b.1));
+            let top: Vec<i64> = scores.iter().take(k).map(|r| r.0).collect();
+            let hits = true_nn.iter().filter(|id| top.contains(id)).count();
+            hits as f32 / k as f32
+        })
+        .sum::<f32>()
+        / queries.len() as f32;
+
+    // --- USQ ---
+    // Compute centroid from data (same as HVQ train)
+    let centroid: Vec<f32> = (0..dim)
+        .map(|d| (0..n).map(|i| data[i * dim + d]).sum::<f32>() / n as f32)
+        .collect();
+
+    let usq_config = UsqConfig::new(dim, 4).unwrap().with_seed(42);
+    let mut usq_q = UsqQuantizer::new(usq_config.clone());
+    usq_q.set_centroid(&centroid);
+
+    let encoded: Vec<_> = (0..n)
+        .map(|i| usq_q.encode(&data[i * dim..(i + 1) * dim]))
+        .collect();
+    let ids: Vec<i64> = (0..n as i64).collect();
+    let layout = UsqLayout::build(&usq_config, &encoded, &ids);
+
+    // Precompute rotated centroid for centroid_score
+    let padded = usq_config.padded_dim();
+    let mut centroid_padded = vec![0.0f32; padded];
+    centroid_padded[..dim].copy_from_slice(&centroid);
+    let rotated_centroid = usq_q.rotator().rotate(&centroid_padded);
+
+    let usq_recall: f32 = queries
+        .iter()
+        .zip(gt.iter())
+        .map(|(query, true_nn)| {
+            let mut q_padded = vec![0.0f32; padded];
+            q_padded[..dim].copy_from_slice(query);
+            let q_rot = usq_q.rotator().rotate(&q_padded);
+            let q_norm_sq: f32 = q_rot.iter().map(|x| x * x).sum();
+
+            // centroid_score = q_rot · rotated_centroid
+            let centroid_score: f32 = q_rot
+                .iter()
+                .zip(rotated_centroid.iter())
+                .map(|(a, b)| a * b)
+                .sum();
+
+            let mut scores: Vec<(i64, f32)> = (0..n)
+                .map(|i| {
+                    let score = usq_q.score_with_meta(
+                        &q_rot,
+                        centroid_score,
+                        layout.norm_at(i),
+                        layout.vmax_at(i),
+                        layout.quant_quality_at(i),
+                        layout.packed_bits_at(i),
+                    );
+                    let v_norm_sq: f32 =
+                        data[i * dim..(i + 1) * dim].iter().map(|x| x * x).sum();
+                    (i as i64, q_norm_sq + v_norm_sq - 2.0 * score)
+                })
+                .collect();
+            scores.sort_by(|a, b| a.1.total_cmp(&b.1));
+            let top: Vec<i64> = scores.iter().take(k).map(|r| r.0).collect();
+            let hits = true_nn.iter().filter(|id| top.contains(id)).count();
+            hits as f32 / k as f32
+        })
+        .sum::<f32>()
+        / queries.len() as f32;
+
+    eprintln!("HVQ recall@{k}: {hvq_recall:.3}");
+    eprintln!("USQ recall@{k}: {usq_recall:.3}");
+
+    // USQ should be within 10% of HVQ recall (generous threshold for synthetic data)
+    assert!(
+        usq_recall >= hvq_recall * 0.90,
+        "USQ recall {usq_recall:.3} is more than 10% below HVQ recall {hvq_recall:.3}"
+    );
+
+    // Both should have at least some recall
+    assert!(
+        usq_recall > 0.2,
+        "USQ recall {usq_recall:.3} is too low (should be >0.2 on this data)"
+    );
+}
