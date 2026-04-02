@@ -1,6 +1,6 @@
 //! HNSW-HVQ Index Implementation
 //!
-//! Minimal HNSW graph search backed by HVQ compressed storage and HVQ coarse
+//! Minimal HNSW graph search backed by USQ compressed storage and USQ coarse
 //! scoring. This path is IP/Cosine-oriented: higher score is better.
 
 use rand::Rng;
@@ -8,11 +8,18 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use crate::api::MetricType;
-use crate::quantization::hvq::{HvqConfig, HvqQuantizer, HvqQueryState};
+use crate::quantization::usq::{UsqConfig, UsqEncoded, UsqQuantizer};
 
 const MAX_LAYERS: usize = 16;
-const HVQ_TRAIN_SEED: u64 = 42;
-const HVQ_ENCODE_REFINE: usize = 6;
+const USQ_TRAIN_SEED: u64 = 42;
+
+/// Precomputed query state for the HNSW search hot path.
+struct QueryState {
+    /// Query rotated into the padded space (length = padded_dim).
+    q_rot: Vec<f32>,
+    /// Dot product of q_rot with the rotated centroid.
+    centroid_score: f32,
+}
 
 #[derive(Clone, Debug)]
 pub struct HnswHvqConfig {
@@ -49,15 +56,15 @@ impl HnswHvqConfig {
 }
 
 #[derive(Clone, Debug)]
-struct HvqNodeInfo {
+struct UsqNodeInfo {
     max_layer: usize,
     layer_neighbors: Vec<Vec<usize>>,
     layer_neighbor_scores: Vec<Vec<f32>>,
-    code: Vec<u8>,
+    encoded: UsqEncoded,
 }
 
-impl HvqNodeInfo {
-    fn new(max_layer: usize, code: Vec<u8>, m: usize) -> Self {
+impl UsqNodeInfo {
+    fn new(max_layer: usize, encoded: UsqEncoded, m: usize) -> Self {
         let mut layer_neighbors = Vec::with_capacity(max_layer + 1);
         let mut layer_neighbor_scores = Vec::with_capacity(max_layer + 1);
         for layer in 0..=max_layer {
@@ -69,7 +76,7 @@ impl HvqNodeInfo {
             max_layer,
             layer_neighbors,
             layer_neighbor_scores,
-            code,
+            encoded,
         }
     }
 }
@@ -93,8 +100,8 @@ impl Ord for ScoreOrd {
 
 pub struct HnswHvqIndex {
     config: HnswHvqConfig,
-    quantizer: HvqQuantizer,
-    node_info: Vec<HvqNodeInfo>,
+    quantizer: UsqQuantizer,
+    node_info: Vec<UsqNodeInfo>,
     ids: Vec<i64>,
     id_to_idx: HashMap<i64, usize>,
     entry_point: Option<usize>,
@@ -114,13 +121,10 @@ impl HnswHvqIndex {
             "HNSW-HVQ currently supports only IP/Cosine scoring"
         );
 
-        let quantizer = HvqQuantizer::new(
-            HvqConfig {
-                dim: config.dim,
-                nbits: config.nbits,
-            },
-            HVQ_TRAIN_SEED,
-        );
+        let usq_config = UsqConfig::new(config.dim, config.nbits)
+            .expect("invalid USQ config")
+            .with_seed(USQ_TRAIN_SEED);
+        let quantizer = UsqQuantizer::new(usq_config);
 
         Self {
             config,
@@ -158,6 +162,29 @@ impl HnswHvqIndex {
         level.min(MAX_LAYERS - 1)
     }
 
+    /// Prepare a query: pad, rotate, and compute centroid score.
+    fn prepare_query_state(&self, query: &[f32]) -> QueryState {
+        let padded_dim = self.quantizer.config().padded_dim();
+        let mut padded_q = vec![0.0f32; padded_dim];
+        padded_q[..self.config.dim].copy_from_slice(query);
+        let q_rot = self.quantizer.rotator().rotate(&padded_q);
+
+        // Compute rotated centroid, then dot with q_rot.
+        let mut padded_centroid = vec![0.0f32; padded_dim];
+        padded_centroid[..self.config.dim].copy_from_slice(self.quantizer.centroid());
+        let rotated_centroid = self.quantizer.rotator().rotate(&padded_centroid);
+        let centroid_score: f32 = q_rot
+            .iter()
+            .zip(rotated_centroid.iter())
+            .map(|(a, b)| a * b)
+            .sum();
+
+        QueryState {
+            q_rot,
+            centroid_score,
+        }
+    }
+
     pub fn train(&mut self, data: &[f32], n: usize) {
         assert_eq!(
             data.len(),
@@ -167,7 +194,20 @@ impl HnswHvqIndex {
             data.len()
         );
         assert!(n > 0, "training data must be non-empty");
-        self.quantizer.train(n, data);
+
+        // Compute centroid.
+        let dim = self.config.dim;
+        let mut centroid = vec![0.0f32; dim];
+        for row in data.chunks_exact(dim) {
+            for (c, &value) in centroid.iter_mut().zip(row.iter()) {
+                *c += value;
+            }
+        }
+        let inv_n = 1.0 / n as f32;
+        for value in &mut centroid {
+            *value *= inv_n;
+        }
+        self.quantizer.set_centroid(&centroid);
         self.trained = true;
     }
 
@@ -193,13 +233,13 @@ impl HnswHvqIndex {
 
         for row in data.chunks_exact(self.config.dim) {
             let node_level = self.random_level();
-            let code = self.quantizer.encode(row, HVQ_ENCODE_REFINE);
+            let encoded = self.quantizer.encode(row);
             let idx = self.ids.len();
             let id = self.next_id;
             self.next_id += 1;
 
             self.node_info
-                .push(HvqNodeInfo::new(node_level, code, self.config.m));
+                .push(UsqNodeInfo::new(node_level, encoded, self.config.m));
             self.ids.push(id);
             self.id_to_idx.insert(id, idx);
 
@@ -224,8 +264,7 @@ impl HnswHvqIndex {
             return Vec::new();
         }
 
-        let q_rot = self.quantizer.rotate_query(query);
-        let state = self.quantizer.precompute_query_state(&q_rot);
+        let state = self.prepare_query_state(query);
 
         let mut current = self.entry_point.unwrap();
         for layer in (1..=self.max_level).rev() {
@@ -250,8 +289,7 @@ impl HnswHvqIndex {
     }
 
     fn insert_node(&mut self, idx: usize, vector: &[f32], node_level: usize) {
-        let q_rot = self.quantizer.rotate_query(vector);
-        let state = self.quantizer.precompute_query_state(&q_rot);
+        let state = self.prepare_query_state(vector);
         let mut entry = self.entry_point.unwrap();
 
         if self.max_level > node_level {
@@ -339,16 +377,24 @@ impl HnswHvqIndex {
         }
     }
 
-    fn score_node(&self, state: &HvqQueryState, idx: usize) -> f32 {
+    fn score_node(&self, state: &QueryState, idx: usize) -> f32 {
         match self.config.metric_type {
             MetricType::Ip | MetricType::Cosine => {
-                self.quantizer.score_code(state, &self.node_info[idx].code)
+                let enc = &self.node_info[idx].encoded;
+                self.quantizer.score_with_meta(
+                    &state.q_rot,
+                    state.centroid_score,
+                    enc.norm,
+                    enc.vmax,
+                    enc.quant_quality,
+                    &enc.packed_bits,
+                )
             }
             _ => unreachable!("metric was validated at construction"),
         }
     }
 
-    fn search_at_layer_greedy(&self, state: &HvqQueryState, entry: usize, layer: usize) -> usize {
+    fn search_at_layer_greedy(&self, state: &QueryState, entry: usize, layer: usize) -> usize {
         let mut current = entry;
         let mut current_score = self.score_node(state, current);
 
@@ -374,7 +420,7 @@ impl HnswHvqIndex {
 
     fn search_layer_ef(
         &self,
-        state: &HvqQueryState,
+        state: &QueryState,
         entry: usize,
         layer: usize,
         ef: usize,
