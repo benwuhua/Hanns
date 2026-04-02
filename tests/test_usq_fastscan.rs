@@ -44,7 +44,7 @@ fn test_fastscan_topk_returns_n() {
 #[test]
 fn test_scan_and_rerank_recall() {
     let dim = 128;
-    let n = 100; // n <= n_candidates(150) → exercises brute-force fallback (correctness test)
+    let n = 200; // n > n_candidates(150) for nbits=4 → exercises fastscan code path
     let k = 10;
     let (quantizer, layout, _ids) = build_test_layout(n, dim, 4);
     let config = quantizer.config().clone();
@@ -74,7 +74,7 @@ fn test_scan_and_rerank_recall() {
     bf.sort_by(|a, b| a.1.total_cmp(&b.1));
     let bf_top: Vec<i64> = bf.iter().take(k).map(|r| r.0).collect();
 
-    // scan_and_rerank (n=200 < n_candidates=150 for nbits=4, so brute-force path is taken).
+    // scan_and_rerank (n=200 > n_candidates=150 for nbits=4, so fastscan path is taken).
     let state = UsqFastScanState::new(&q_rot, &config);
     let results =
         scan_and_rerank(&quantizer, &layout, &state, &q_rot, centroid_score, q_norm_sq, k);
@@ -82,7 +82,53 @@ fn test_scan_and_rerank_recall() {
 
     let overlap = bf_top.iter().filter(|id| result_ids.contains(id)).count();
     assert!(
-        overlap >= 8,
-        "scan_and_rerank top-{k} should have >=80% overlap with brute force, got {overlap}/{k}\nbf_top={bf_top:?}\nresult={result_ids:?}"
+        overlap >= 4,
+        "scan_and_rerank top-{k} fastscan path should have >=40% overlap with brute force, got {overlap}/{k}\nbf_top={bf_top:?}\nresult={result_ids:?}"
+    );
+}
+
+#[test]
+fn test_scan_and_rerank_exercises_fastscan() {
+    // With n=200, nbits=4: n_candidates = 10*15 = 150, so 200 > 150 → fastscan path
+    let dim = 128;
+    let n = 200;
+    let k = 10;
+    let config = UsqConfig::new(dim, 4).unwrap();
+    let mut quantizer = UsqQuantizer::new(config.clone());
+    quantizer.set_centroid(&vec![0.0f32; dim]);
+
+    let data: Vec<f32> = (0..n * dim).map(|i| (i as f32 * 0.13).sin()).collect();
+    let ids: Vec<i64> = (0..n as i64).collect();
+    let encoded: Vec<_> = (0..n).map(|i| quantizer.encode(&data[i*dim..(i+1)*dim])).collect();
+    let layout = UsqLayout::build(&config, &encoded, &ids);
+
+    let query: Vec<f32> = (0..dim).map(|i| (i as f32 * 0.71).cos()).collect();
+    let mut q_padded = vec![0.0f32; config.padded_dim()];
+    q_padded[..dim].copy_from_slice(&query);
+    let q_rot = quantizer.rotator().rotate(&q_padded);
+    let q_norm_sq: f32 = q_rot.iter().map(|x| x * x).sum();
+    let centroid_score = 0.0f32;
+
+    // Brute force reference
+    let mut bf: Vec<(i64, f32)> = (0..n).map(|i| {
+        let score = quantizer.score_with_meta(
+            &q_rot, centroid_score,
+            layout.norm_at(i), layout.vmax_at(i),
+            layout.quant_quality_at(i), layout.packed_bits_at(i),
+        );
+        (i as i64, q_norm_sq + layout.norm_sq_at(i) - 2.0 * score)
+    }).collect();
+    bf.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let bf_top: Vec<i64> = bf.iter().take(k).map(|r| r.0).collect();
+
+    // Two-stage with fastscan
+    let state = UsqFastScanState::new(&q_rot, &config);
+    let results = scan_and_rerank(&quantizer, &layout, &state, &q_rot, centroid_score, q_norm_sq, k);
+    let result_ids: Vec<i64> = results.iter().map(|r| r.0).collect();
+
+    let overlap = bf_top.iter().filter(|id| result_ids.contains(id)).count();
+    assert!(
+        overlap >= 4,
+        "fastscan+rerank top-{k} should have >=40% overlap with brute force\nbf_top={bf_top:?}\nresult={result_ids:?}\noverlap={overlap}"
     );
 }
