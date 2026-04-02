@@ -1,20 +1,20 @@
-use super::config::ExRaBitQConfig;
+use super::config::UsqConfig;
 use nalgebra::linalg::QR;
 use nalgebra::DMatrix;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 #[derive(Clone)]
-pub struct ExRaBitQRotator {
+pub struct UsqRotator {
     dim: usize,
     matrix: Vec<f32>,    // row-major padded_dim x padded_dim
     transpose: Vec<f32>, // row-major padded_dim x padded_dim
 }
 
-impl ExRaBitQRotator {
-    pub fn new(config: &ExRaBitQConfig) -> Self {
+impl UsqRotator {
+    pub fn new(config: &UsqConfig) -> Self {
         let dim = config.padded_dim();
-        let mut rng = StdRng::seed_from_u64(config.rotation_seed);
+        let mut rng = StdRng::seed_from_u64(config.seed);
         let values: Vec<f32> = (0..dim * dim)
             .map(|_| rng.gen_range(-1.0f32..1.0f32))
             .collect();
@@ -46,30 +46,30 @@ impl ExRaBitQRotator {
         &self.matrix
     }
 
-    pub fn rotate_padded(&self, padded: &[f32]) -> Vec<f32> {
+    pub fn rotate(&self, padded: &[f32]) -> Vec<f32> {
         debug_assert_eq!(padded.len(), self.dim);
         let mut out = vec![0.0f32; self.dim];
-        self.rotate_padded_into(padded, &mut out);
+        self.rotate_into(padded, &mut out);
         out
     }
 
-    pub fn rotate_padded_into(&self, padded: &[f32], out: &mut [f32]) {
+    pub fn rotate_into(&self, padded: &[f32], out: &mut [f32]) {
         debug_assert_eq!(padded.len(), self.dim);
         debug_assert_eq!(out.len(), self.dim);
         self.matvec_into(&self.matrix, padded, out);
     }
 
-    pub fn inverse_rotate_padded(&self, padded: &[f32]) -> Vec<f32> {
-        debug_assert_eq!(padded.len(), self.dim);
+    pub fn inverse_rotate(&self, rotated: &[f32]) -> Vec<f32> {
+        debug_assert_eq!(rotated.len(), self.dim);
         let mut out = vec![0.0f32; self.dim];
-        self.inverse_rotate_padded_into(padded, &mut out);
+        self.inverse_rotate_into(rotated, &mut out);
         out
     }
 
-    pub fn inverse_rotate_padded_into(&self, padded: &[f32], out: &mut [f32]) {
-        debug_assert_eq!(padded.len(), self.dim);
+    pub fn inverse_rotate_into(&self, rotated: &[f32], out: &mut [f32]) {
+        debug_assert_eq!(rotated.len(), self.dim);
         debug_assert_eq!(out.len(), self.dim);
-        self.matvec_into(&self.transpose, padded, out);
+        self.matvec_into(&self.transpose, rotated, out);
     }
 
     #[inline(always)]
@@ -97,6 +97,7 @@ impl ExRaBitQRotator {
         let dim = self.dim;
         let vec_ptr = vec.as_ptr();
         let num16 = dim & !15; // round down to multiple of 16
+        debug_assert_eq!(num16, dim, "padded_dim is always a multiple of 64 (>=16), so remainder loop is unreachable");
 
         for r in 0..dim {
             let row_ptr = matrix.as_ptr().add(r * dim);

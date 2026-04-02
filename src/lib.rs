@@ -69,7 +69,7 @@ pub use faiss::{
     PageCacheStats, ScaNNConfig, ScaNNIndex,
 };
 pub use faiss::{
-    IvfExRaBitqConfig, IvfExRaBitqIndex, IvfSqCcIndex, IvfTurboQuantConfig, IvfTurboQuantIndex,
+    IvfUsqConfig, IvfUsqIndex, IvfSqCcIndex, IvfTurboQuantConfig, IvfTurboQuantIndex,
 };
 
 use tracing::info;

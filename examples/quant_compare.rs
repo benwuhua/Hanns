@@ -6,12 +6,11 @@ use std::time::Instant;
 
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 use knowhere_rs::faiss::{
-    IvfExRaBitqConfig, IvfExRaBitqIndex, IvfFlatIndex, IvfHvqConfig, IvfHvqIndex, IvfPqIndex,
+    IvfUsqConfig, IvfUsqIndex, IvfFlatIndex, IvfPqIndex,
 };
 use rayon::prelude::*;
 
 const DEFAULT_DATA_DIR: &str = "/data/work/datasets/wikipedia-cohere-1m";
-const EXPECTED_DIM: usize = 768;
 const NLIST: usize = 256;
 const TOP_K: usize = 10;
 const TRAIN_SIZE: usize = 1_000_000;
@@ -22,8 +21,7 @@ struct Tier {
     label: &'static str,
     pq_m: usize,
     pq_nbits: usize,
-    hvq_bits: u8,
-    exrabitq_bits: usize,
+    usq_bits: usize,
 }
 
 const TIERS: [Tier; 3] = [
@@ -31,22 +29,19 @@ const TIERS: [Tier; 3] = [
         label: "32x",
         pq_m: 96,
         pq_nbits: 8,
-        hvq_bits: 1,
-        exrabitq_bits: 1,
+        usq_bits: 1,
     },
     Tier {
         label: "8x",
         pq_m: 384,
         pq_nbits: 8,
-        hvq_bits: 4,
-        exrabitq_bits: 4,
+        usq_bits: 4,
     },
     Tier {
         label: "4x",
         pq_m: 768,
         pq_nbits: 8,
-        hvq_bits: 8,
-        exrabitq_bits: 8,
+        usq_bits: 8,
     },
 ];
 
@@ -131,7 +126,7 @@ fn normalize_vectors(data: &mut [f32], dim: usize) {
 
 fn print_row(method: &str, tier: &str, nprobe: usize, build_s: f64, recall: f32, qps: f64) {
     println!(
-        "{:<10} {:>4} {:>7} {:>8.2} {:>10.4} {:>11.0}",
+        "{:<10} {:>4} {:>7} {:>8} {:>10} {:>11}",
         method, tier, nprobe, build_s, recall, qps
     );
 }
@@ -178,10 +173,29 @@ fn collect_batch_ids(ids: Vec<i64>, top_k: usize, eval_queries: usize) -> Vec<Ve
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let data_dir = Path::new(DEFAULT_DATA_DIR);
+    let args: Vec<String> = std::env::args().collect();
+
+    // Args: quant_compare [METHODS] [TIERS] [DATA_DIR]
+    let enabled_methods: Vec<&str> = if args.len() > 1 {
+        args[1].split(',').collect()
+    } else {
+        vec!["USQ"]
+    };
+    let enabled_tiers: Vec<&str> = if args.len() > 2 {
+        args[2].split(',').collect()
+    } else {
+        vec!["8x"]
+    };
+    let data_dir_str = if args.len() > 3 { &args[3] } else { DEFAULT_DATA_DIR };
+    let data_dir = Path::new(data_dir_str);
+
     let base_path = data_dir.join("base.fbin");
     let query_path = data_dir.join("query.fbin");
-    let gt_path = data_dir.join("gt.cosine.ibin");
+    // Try gt.cosine.ibin first, fall back to gt.ibin
+    let gt_path = {
+        let cosine = data_dir.join("gt.cosine.ibin");
+        if cosine.exists() { cosine } else { data_dir.join("gt.ibin") }
+    };
 
     if !base_path.exists() || !query_path.exists() || !gt_path.exists() {
         println!("missing dataset under {}", data_dir.display());
@@ -193,13 +207,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (gt_n, gt_k, gt_flat) = read_ibin(&gt_path)?;
     let gt = rows_i32(&gt_flat, gt_k);
 
-    if base_dim != EXPECTED_DIM || query_dim != EXPECTED_DIM {
+    if base_dim != query_dim {
         return Err(format!(
-            "expected dim {}, got base_dim={} query_dim={}",
-            EXPECTED_DIM, base_dim, query_dim
+            "dim mismatch: base_dim={} query_dim={}",
+            base_dim, query_dim
         )
         .into());
     }
+    let dim = base_dim;
     if gt_n != query_n {
         return Err(format!("gt rows {} != query rows {}", gt_n, query_n).into());
     }
@@ -207,30 +222,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err(format!("gt_k={} < top_k={}", gt_k, TOP_K).into());
     }
 
-    normalize_vectors(&mut base, base_dim);
-    normalize_vectors(&mut queries, query_dim);
+    normalize_vectors(&mut base, dim);
+    normalize_vectors(&mut queries, dim);
 
     let train_n = TRAIN_SIZE.min(base_n);
-    let train = &base[..train_n * base_dim];
+    let train = &base[..train_n * dim];
     let eval_queries = EVAL_QUERIES.min(query_n).min(gt.len());
 
-    println!("=== IVF Quantizer Comparison: Cohere 768D ===");
+    println!("=== IVF Quantizer Comparison: {dim}D ({data_dir_str}) ===");
     println!(
         "{:<10} {:>4} {:>7} {:>8} {:>10} {:>11}",
         "method", "tier", "nprobe", "build_s", "recall@10", "search_qps"
     );
-
-    let args: Vec<String> = std::env::args().collect();
-    let enabled_methods: Vec<&str> = if args.len() > 1 {
-        args[1].split(',').collect()
-    } else {
-        vec!["FLAT", "PQ", "HVQ", "EXRABITQ"]
-    };
-    let enabled_tiers: Vec<&str> = if args.len() > 2 {
-        args[2].split(',').collect()
-    } else {
-        vec!["8x"]
-    };
 
     for tier in &TIERS {
         if !enabled_tiers
@@ -247,7 +250,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let config = IndexConfig {
                 index_type: IndexType::IvfFlat,
                 metric_type: MetricType::Ip,
-                dim: EXPECTED_DIM,
+                dim: dim,
                 data_type: knowhere_rs::api::DataType::Float,
                 params: IndexParams {
                     nlist: Some(NLIST),
@@ -270,7 +273,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     radius: None,
                 };
                 let t_search = Instant::now();
-                let batch_queries = &queries[..eval_queries * EXPECTED_DIM];
+                let batch_queries = &queries[..eval_queries * dim];
                 let results = index
                     .search(batch_queries, &req)
                     .map(|r| collect_batch_ids(r.ids, TOP_K, eval_queries))
@@ -283,7 +286,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
 
         if enabled_methods.iter().any(|m| m.eq_ignore_ascii_case("PQ")) {
-            let config = make_pq_config(EXPECTED_DIM, NLIST, NPROBES[0], tier.pq_m, tier.pq_nbits);
+            let config = make_pq_config(dim, NLIST, NPROBES[0], tier.pq_m, tier.pq_nbits);
             let mut index = IvfPqIndex::new(&config)?;
             let t_build = Instant::now();
             index.train(train)?;
@@ -299,7 +302,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     radius: None,
                 };
                 let t_search = Instant::now();
-                let batch_queries = &queries[..eval_queries * EXPECTED_DIM];
+                let batch_queries = &queries[..eval_queries * dim];
                 let results = index
                     .search(batch_queries, &req)
                     .map(|r| collect_batch_ids(r.ids, TOP_K, eval_queries))
@@ -313,50 +316,14 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         if enabled_methods
             .iter()
-            .any(|m| m.eq_ignore_ascii_case("HVQ"))
+            .any(|m| m.eq_ignore_ascii_case("USQ"))
         {
-            let config = IvfHvqConfig::new(EXPECTED_DIM, NLIST, tier.hvq_bits)
+            let config = IvfUsqConfig::new(dim, NLIST, tier.usq_bits)
                 .with_metric(MetricType::Ip)
-                .with_seed(42)
-                .with_nprobe(NPROBES[0]);
-            let mut index = IvfHvqIndex::new(config);
-            let t_build = Instant::now();
-            index.train(train)?;
-            index.add(&base, None)?;
-            let build_s = t_build.elapsed().as_secs_f64();
-
-            for &nprobe in &NPROBES {
-                let req = SearchRequest {
-                    top_k: TOP_K,
-                    nprobe,
-                    filter: None,
-                    params: None,
-                    radius: None,
-                };
-                let t_search = Instant::now();
-                let results = evaluate_queries(&queries, EXPECTED_DIM, eval_queries, |query| {
-                    index
-                        .search(query, &req)
-                        .map(|r| r.ids.into_iter().take(TOP_K).collect())
-                        .unwrap_or_default()
-                });
-                let search_qps =
-                    eval_queries as f64 / t_search.elapsed().as_secs_f64().max(f64::EPSILON);
-                let recall = compute_recall(&results, &gt[..eval_queries], TOP_K);
-                print_row("IVF-HVQ", tier.label, nprobe, build_s, recall, search_qps);
-            }
-        }
-
-        if enabled_methods
-            .iter()
-            .any(|m| m.eq_ignore_ascii_case("EXRABITQ"))
-        {
-            let config = IvfExRaBitqConfig::new(EXPECTED_DIM, NLIST, tier.exrabitq_bits)
-                .with_metric(MetricType::L2)
                 .with_rotation_seed(42)
                 .with_rerank_k(100)
                 .with_nprobe(NPROBES[0]);
-            let mut index = IvfExRaBitqIndex::new(config);
+            let mut index = IvfUsqIndex::new(config);
             let t_build = Instant::now();
             index.train(train)?;
             index.add(&base, None)?;
@@ -371,7 +338,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     radius: None,
                 };
                 let t_search = Instant::now();
-                let results = evaluate_queries(&queries, EXPECTED_DIM, eval_queries, |query| {
+                let results = evaluate_queries(&queries, dim, eval_queries, |query| {
                     index
                         .search(query, &req)
                         .map(|r| r.ids.into_iter().take(TOP_K).collect())
@@ -380,7 +347,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let search_qps =
                     eval_queries as f64 / t_search.elapsed().as_secs_f64().max(f64::EPSILON);
                 let recall = compute_recall(&results, &gt[..eval_queries], TOP_K);
-                print_row("IVF-EXRQ", tier.label, nprobe, build_s, recall, search_qps);
+                print_row("IVF-USQ", tier.label, nprobe, build_s, recall, search_qps);
             }
         }
     }

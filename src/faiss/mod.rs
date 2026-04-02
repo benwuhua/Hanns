@@ -14,11 +14,10 @@ pub mod hnsw_prq;
 pub mod hnsw_quantized;
 pub mod index;
 pub mod ivf;
-pub mod ivf_exrabitq;
 pub mod ivf_flat;
 pub mod ivf_flat_cc;
-pub mod ivf_hvq;
 pub mod ivf_opq;
+pub mod ivf_usq;
 
 pub mod ivf_sq8;
 pub mod ivf_sq_cc;
@@ -53,11 +52,10 @@ pub use index::FaissIndex;
 #[allow(deprecated)]
 // Re-exported for compatibility with callers that still name the legacy IVF scaffold.
 pub use ivf::IvfIndex;
-pub use ivf_exrabitq::{IvfExRaBitqConfig, IvfExRaBitqIndex};
 pub use ivf_flat::IvfFlatIndex;
 pub use ivf_flat_cc::IvfFlatCcIndex;
-pub use ivf_hvq::{IvfHvqConfig, IvfHvqIndex};
 pub use ivf_opq::{IvfOpqConfig, IvfOpqIndex, IvfOpqIndexWrapper};
+pub use ivf_usq::{IvfUsqConfig, IvfUsqIndex};
 
 pub use ivf_sq8::IvfSq8Index;
 pub use ivf_sq_cc::IvfSqCcIndex;

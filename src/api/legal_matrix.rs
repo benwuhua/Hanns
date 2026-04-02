@@ -124,12 +124,12 @@ impl LegalMatrix {
             );
         }
 
-        // === IVF-RaBitQ ===
+        // === IVF-USQ ===
         for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16] {
             add_legal(
                 &mut legal_index_datatype,
                 &mut legal_combinations,
-                IndexType::IvfExRaBitq,
+                IndexType::IvfUsq,
                 *dt,
                 vec![MetricType::L2],
             );
@@ -299,7 +299,7 @@ impl LegalMatrix {
             IndexType::Scann,
             IndexType::IvfSq8,
             IndexType::IvfSqCc,
-            IndexType::IvfExRaBitq,
+            IndexType::IvfUsq,
             IndexType::Hnsw,
             IndexType::HnswSq,
             IndexType::HnswPq,
@@ -485,13 +485,13 @@ mod tests {
     #[test]
     fn test_validate_index_config_ivf_exrabitq_l2_only() {
         assert!(
-            validate_index_config(IndexType::IvfExRaBitq, DataType::Float, MetricType::L2).is_ok()
+            validate_index_config(IndexType::IvfUsq, DataType::Float, MetricType::L2).is_ok()
         );
         assert!(
-            validate_index_config(IndexType::IvfExRaBitq, DataType::Float, MetricType::Ip).is_err()
+            validate_index_config(IndexType::IvfUsq, DataType::Float, MetricType::Ip).is_err()
         );
         assert!(validate_index_config(
-            IndexType::IvfExRaBitq,
+            IndexType::IvfUsq,
             DataType::Binary,
             MetricType::Hamming
         )

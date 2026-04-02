@@ -8,11 +8,11 @@ use std::path::Path;
 
 use crate::api::SearchRequest;
 
-use super::ivf_exrabitq::{IvfExRaBitqConfig, IvfExRaBitqIndex};
+use super::ivf_usq::{IvfUsqConfig, IvfUsqIndex};
 
-/// IVF-ExRaBitQ 索引句柄
-pub struct IvfExRaBitqIndexHandle {
-    index: IvfExRaBitqIndex,
+/// IVF-USQ index handle (backward-compatible with IVF-ExRaBitQ)
+pub struct IvfUsqIndexHandle {
+    index: IvfUsqIndex,
 }
 
 /// 构建 IVF-ExRaBitQ 索引
@@ -28,7 +28,7 @@ pub unsafe extern "C" fn knowhere_ivf_exrabitq_build(
     data: *const f32,
     n: u64,
     ids: *const i64,
-) -> *mut IvfExRaBitqIndexHandle {
+) -> *mut IvfUsqIndexHandle {
     if data.is_null() || dim == 0 || nlist == 0 || bits_per_dim == 0 || n == 0 {
         return std::ptr::null_mut();
     }
@@ -40,8 +40,8 @@ pub unsafe extern "C" fn knowhere_ivf_exrabitq_build(
         Some(std::slice::from_raw_parts(ids, n as usize))
     };
 
-    let config = IvfExRaBitqConfig::new(dim as usize, nlist as usize, bits_per_dim as usize);
-    let mut index = IvfExRaBitqIndex::new(config);
+    let config = IvfUsqConfig::new(dim as usize, nlist as usize, bits_per_dim as usize);
+    let mut index = IvfUsqIndex::new(config);
 
     if index.train(data_slice).is_err() {
         return std::ptr::null_mut();
@@ -51,7 +51,7 @@ pub unsafe extern "C" fn knowhere_ivf_exrabitq_build(
         return std::ptr::null_mut();
     }
 
-    Box::into_raw(Box::new(IvfExRaBitqIndexHandle { index }))
+    Box::into_raw(Box::new(IvfUsqIndexHandle { index }))
 }
 
 /// 从文件加载 IVF-ExRaBitQ 索引
@@ -61,7 +61,7 @@ pub unsafe extern "C" fn knowhere_ivf_exrabitq_build(
 #[no_mangle]
 pub unsafe extern "C" fn knowhere_ivf_exrabitq_load(
     path: *const c_char,
-) -> *mut IvfExRaBitqIndexHandle {
+) -> *mut IvfUsqIndexHandle {
     if path.is_null() {
         return std::ptr::null_mut();
     }
@@ -71,8 +71,8 @@ pub unsafe extern "C" fn knowhere_ivf_exrabitq_load(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    match IvfExRaBitqIndex::load(Path::new(path_str)) {
-        Ok(index) => Box::into_raw(Box::new(IvfExRaBitqIndexHandle { index })),
+    match IvfUsqIndex::load(Path::new(path_str)) {
+        Ok(index) => Box::into_raw(Box::new(IvfUsqIndexHandle { index })),
         Err(_) => std::ptr::null_mut(),
     }
 }
@@ -84,7 +84,7 @@ pub unsafe extern "C" fn knowhere_ivf_exrabitq_load(
 /// NUL-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn knowhere_ivf_exrabitq_save(
-    index: *mut IvfExRaBitqIndexHandle,
+    index: *mut IvfUsqIndexHandle,
     path: *const c_char,
 ) -> i32 {
     if index.is_null() || path.is_null() {
@@ -109,7 +109,7 @@ pub unsafe extern "C" fn knowhere_ivf_exrabitq_save(
 /// sizes implied by `k` and the index dimension.
 #[no_mangle]
 pub unsafe extern "C" fn knowhere_ivf_exrabitq_search(
-    index: *const IvfExRaBitqIndexHandle,
+    index: *const IvfUsqIndexHandle,
     query: *const f32,
     k: u32,
     nprobe: u32,
@@ -154,7 +154,7 @@ pub unsafe extern "C" fn knowhere_ivf_exrabitq_search(
 /// sizes implied by `nq`, `k`, and the index dimension.
 #[no_mangle]
 pub unsafe extern "C" fn knowhere_ivf_exrabitq_batch_search(
-    index: *const IvfExRaBitqIndexHandle,
+    index: *const IvfUsqIndexHandle,
     queries: *const f32,
     nq: u64,
     k: u32,
@@ -217,7 +217,7 @@ pub unsafe extern "C" fn knowhere_ivf_exrabitq_batch_search(
 /// `index` must be a valid handle returned by this module or null.
 #[no_mangle]
 pub unsafe extern "C" fn knowhere_ivf_exrabitq_has_raw_data(
-    index: *const IvfExRaBitqIndexHandle,
+    index: *const IvfUsqIndexHandle,
 ) -> i32 {
     if index.is_null() {
         return 0;
@@ -235,7 +235,7 @@ pub unsafe extern "C" fn knowhere_ivf_exrabitq_has_raw_data(
 /// # Safety
 /// `index` must be a valid handle returned by this module or null.
 #[no_mangle]
-pub unsafe extern "C" fn knowhere_ivf_exrabitq_count(index: *const IvfExRaBitqIndexHandle) -> u64 {
+pub unsafe extern "C" fn knowhere_ivf_exrabitq_count(index: *const IvfUsqIndexHandle) -> u64 {
     if index.is_null() {
         return 0;
     }
@@ -248,7 +248,7 @@ pub unsafe extern "C" fn knowhere_ivf_exrabitq_count(index: *const IvfExRaBitqIn
 /// # Safety
 /// `index` must be a valid handle returned by this module or null.
 #[no_mangle]
-pub unsafe extern "C" fn knowhere_ivf_exrabitq_size(index: *const IvfExRaBitqIndexHandle) -> u64 {
+pub unsafe extern "C" fn knowhere_ivf_exrabitq_size(index: *const IvfUsqIndexHandle) -> u64 {
     if index.is_null() {
         return 0;
     }
@@ -261,7 +261,7 @@ pub unsafe extern "C" fn knowhere_ivf_exrabitq_size(index: *const IvfExRaBitqInd
 /// # Safety
 /// `index` must be a valid handle returned by this module or null. It must not be freed twice.
 #[no_mangle]
-pub unsafe extern "C" fn knowhere_ivf_exrabitq_free(index: *mut IvfExRaBitqIndexHandle) {
+pub unsafe extern "C" fn knowhere_ivf_exrabitq_free(index: *mut IvfUsqIndexHandle) {
     if !index.is_null() {
         let _ = Box::from_raw(index);
     }
@@ -273,7 +273,7 @@ pub unsafe extern "C" fn knowhere_ivf_exrabitq_free(index: *mut IvfExRaBitqIndex
 /// `index` must be a valid handle returned by this module.
 #[no_mangle]
 pub unsafe extern "C" fn knowhere_ivf_exrabitq_set_nprobe(
-    index: *mut IvfExRaBitqIndexHandle,
+    index: *mut IvfUsqIndexHandle,
     nprobe: u32,
 ) -> i32 {
     if index.is_null() {
@@ -289,7 +289,7 @@ pub unsafe extern "C" fn knowhere_ivf_exrabitq_set_nprobe(
 /// # Safety
 /// `index` must be a valid handle returned by this module or null.
 #[no_mangle]
-pub unsafe extern "C" fn knowhere_ivf_exrabitq_dim(index: *const IvfExRaBitqIndexHandle) -> u32 {
+pub unsafe extern "C" fn knowhere_ivf_exrabitq_dim(index: *const IvfUsqIndexHandle) -> u32 {
     if index.is_null() {
         return 0;
     }
@@ -302,7 +302,7 @@ pub unsafe extern "C" fn knowhere_ivf_exrabitq_dim(index: *const IvfExRaBitqInde
 /// # Safety
 /// `index` must be a valid handle returned by this module or null.
 #[no_mangle]
-pub unsafe extern "C" fn knowhere_ivf_exrabitq_nlist(index: *const IvfExRaBitqIndexHandle) -> u32 {
+pub unsafe extern "C" fn knowhere_ivf_exrabitq_nlist(index: *const IvfUsqIndexHandle) -> u32 {
     if index.is_null() {
         return 0;
     }

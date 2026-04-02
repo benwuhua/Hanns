@@ -1,0 +1,424 @@
+use knowhere_rs::quantization::usq::*;
+
+fn make_data(n: usize, dim: usize) -> (Vec<f32>, Vec<i64>) {
+    let data: Vec<f32> = (0..n * dim).map(|i| (i as f32 * 0.13).sin()).collect();
+    let ids: Vec<i64> = (0..n as i64).collect();
+    (data, ids)
+}
+
+fn build_test_layout(n: usize, dim: usize, nbits: u8) -> (UsqQuantizer, UsqLayout, Vec<i64>) {
+    let config = UsqConfig::new(dim, nbits).unwrap();
+    let mut q = UsqQuantizer::new(config.clone());
+    q.set_centroid(&vec![0.0f32; dim]);
+    let (data, ids) = make_data(n, dim);
+    let encoded: Vec<_> = (0..n).map(|i| q.encode(&data[i * dim..(i + 1) * dim])).collect();
+    let layout = UsqLayout::build(&config, &encoded, &ids);
+    (q, layout, ids)
+}
+
+#[test]
+fn test_config_padded_dim() {
+    // dim=128 → padded=128 (already multiple of 64)
+    assert_eq!(UsqConfig::new(128, 4).unwrap().padded_dim(), 128);
+    // dim=100 → padded=128
+    assert_eq!(UsqConfig::new(100, 4).unwrap().padded_dim(), 128);
+    // dim=65 → padded=128
+    assert_eq!(UsqConfig::new(65, 4).unwrap().padded_dim(), 128);
+}
+
+#[test]
+fn test_config_code_bytes() {
+    let c = UsqConfig::new(128, 4).unwrap();
+    // 128 dims * 4 bits / 8 = 64 bytes
+    assert_eq!(c.code_bytes(), 64);
+
+    let c = UsqConfig::new(128, 1).unwrap();
+    // 128 dims * 1 bit / 8 = 16 bytes
+    assert_eq!(c.code_bytes(), 16);
+
+    let c = UsqConfig::new(128, 8).unwrap();
+    // 128 dims * 8 bits / 8 = 128 bytes
+    assert_eq!(c.code_bytes(), 128);
+}
+
+#[test]
+fn test_rotator_preserves_norm() {
+    let config = UsqConfig::new(128, 4).unwrap();
+    let rotator = UsqRotator::new(&config);
+    let padded = config.padded_dim();
+
+    let v: Vec<f32> = (0..padded).map(|i| (i as f32 * 0.1).sin()).collect();
+    let norm_before: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+    let rotated = rotator.rotate(&v);
+    let norm_after: f32 = rotated.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+    assert!(
+        (norm_before - norm_after).abs() < 1e-3,
+        "rotation should preserve norm: before={norm_before}, after={norm_after}"
+    );
+}
+
+#[test]
+fn test_rotator_inverse() {
+    let config = UsqConfig::new(128, 4).unwrap();
+    let rotator = UsqRotator::new(&config);
+    let padded = config.padded_dim();
+
+    let v: Vec<f32> = (0..padded).map(|i| (i as f32 * 0.37).sin()).collect();
+    let rotated = rotator.rotate(&v);
+    let recovered = rotator.inverse_rotate(&rotated);
+
+    for i in 0..padded {
+        assert!(
+            (v[i] - recovered[i]).abs() < 1e-3,
+            "inverse rotation failed at dim {i}: expected {}, got {}",
+            v[i], recovered[i]
+        );
+    }
+}
+
+#[test]
+fn test_rotator_deterministic() {
+    let config = UsqConfig::new(128, 4).unwrap();
+    let r1 = UsqRotator::new(&config);
+    let r2 = UsqRotator::new(&config);
+    assert_eq!(r1.matrix(), r2.matrix(), "same seed should produce same matrix");
+}
+
+// ---- Task 2: UsqQuantizer tests ----
+
+#[test]
+fn test_encode_4bit_basic() {
+    let config = UsqConfig::new(128, 4).unwrap();
+    let mut quantizer = UsqQuantizer::new(config.clone());
+    quantizer.set_centroid(&vec![0.0f32; 128]);
+
+    let v: Vec<f32> = (0..128).map(|i| (i as f32 * 0.37).sin()).collect();
+    let encoded = quantizer.encode(&v);
+
+    assert!(encoded.norm > 0.0, "norm should be positive");
+    assert!(encoded.vmax > 0.0, "vmax should be positive");
+    assert!(encoded.quant_quality > 0.0, "quant_quality should be positive");
+    assert_eq!(
+        encoded.packed_bits.len(),
+        config.code_bytes(),
+        "packed_bits wrong size"
+    );
+    assert_eq!(
+        encoded.sign_bits.len(),
+        config.sign_bytes(),
+        "sign_bits wrong size"
+    );
+}
+
+#[test]
+fn test_encode_1bit() {
+    let config = UsqConfig::new(128, 1).unwrap();
+    let mut quantizer = UsqQuantizer::new(config.clone());
+    quantizer.set_centroid(&vec![0.0f32; 128]);
+
+    let v: Vec<f32> = (0..128).map(|i| (i as f32 * 0.37).sin()).collect();
+    let encoded = quantizer.encode(&v);
+
+    // 1-bit: code size = padded_dim/8 = 128/8 = 16 bytes
+    assert_eq!(encoded.packed_bits.len(), 16);
+    // sign_bits should equal packed_bits for 1-bit
+    assert_eq!(encoded.sign_bits, encoded.packed_bits);
+}
+
+#[test]
+fn test_score_is_reasonable() {
+    let dim = 128;
+    let config = UsqConfig::new(dim, 4).unwrap();
+    let mut quantizer = UsqQuantizer::new(config.clone());
+    quantizer.set_centroid(&vec![0.0f32; dim]);
+
+    // Use the same vector as query (self-similarity should be high)
+    let v: Vec<f32> = (0..dim).map(|i| (i as f32 * 0.37).sin()).collect();
+    let encoded = quantizer.encode(&v);
+
+    // score(v, v) ≈ ‖v‖² (since centroid=0, rotation preserves inner products)
+    let self_score = quantizer.score(&encoded, &v);
+    let true_norm_sq: f32 = v.iter().map(|x| x * x).sum();
+    let relative_err =
+        ((self_score - true_norm_sq) / true_norm_sq.max(1e-6)).abs();
+    assert!(
+        relative_err < 0.3,
+        "self-score should approximate ‖v‖²: self_score={self_score:.4}, true_norm_sq={true_norm_sq:.4}, rel_err={relative_err:.4}"
+    );
+}
+
+#[test]
+fn test_encode_8bit() {
+    let config = UsqConfig::new(64, 8).unwrap();
+    let mut quantizer = UsqQuantizer::new(config.clone());
+    quantizer.set_centroid(&vec![0.0f32; 64]);
+
+    let v: Vec<f32> = (0..64).map(|i| (i as f32 * 0.5).cos()).collect();
+    let encoded = quantizer.encode(&v);
+
+    assert!(encoded.norm > 0.0);
+    assert_eq!(encoded.packed_bits.len(), config.code_bytes());
+    assert_eq!(encoded.sign_bits.len(), config.sign_bytes());
+    // For 8-bit: code_bytes = padded_dim*8/8 = padded_dim; sign_bytes = padded_dim/8 — different sizes
+    assert_ne!(encoded.sign_bits.len(), encoded.packed_bits.len());
+}
+
+#[test]
+fn test_encode_2bit() {
+    let config = UsqConfig::new(128, 2).unwrap();
+    let mut quantizer = UsqQuantizer::new(config.clone());
+    quantizer.set_centroid(&vec![0.0f32; 128]);
+
+    let v: Vec<f32> = (0..128).map(|i| (i as f32 * 0.37).sin()).collect();
+    let encoded = quantizer.encode(&v);
+
+    // 2-bit: code_bytes = padded_dim * 2 / 8 = 128*2/8 = 32 bytes
+    assert_eq!(encoded.packed_bits.len(), config.code_bytes());
+    // sign_bytes = padded_dim / 8 = 16 bytes
+    assert_eq!(encoded.sign_bits.len(), config.sign_bytes());
+    assert!(encoded.norm > 0.0);
+    assert!(encoded.quant_quality > 0.0);
+}
+
+#[test]
+fn test_nonzero_centroid() {
+    let dim = 64;
+    let config = UsqConfig::new(dim, 4).unwrap();
+    let mut quantizer = UsqQuantizer::new(config.clone());
+    let centroid: Vec<f32> = (0..dim).map(|i| i as f32 * 0.01).collect();
+    quantizer.set_centroid(&centroid);
+
+    let v: Vec<f32> = (0..dim).map(|i| (i as f32 * 0.3).sin()).collect();
+    let encoded = quantizer.encode(&v);
+
+    assert!(encoded.norm > 0.0);
+    assert_eq!(encoded.packed_bits.len(), config.code_bytes());
+}
+
+#[test]
+fn test_encode_rotated_matches_encode() {
+    let dim = 128;
+    let config = UsqConfig::new(dim, 4).unwrap();
+    let mut quantizer = UsqQuantizer::new(config.clone());
+    quantizer.set_centroid(&vec![0.0f32; dim]);
+
+    let v: Vec<f32> = (0..dim).map(|i| (i as f32 * 0.37).sin()).collect();
+
+    // encode() and encode_rotated() (with manual padding + rotation) must agree.
+    let encoded_direct = quantizer.encode(&v);
+
+    let padded_dim = config.padded_dim();
+    let mut padded = vec![0.0f32; padded_dim];
+    padded[..dim].copy_from_slice(&v);
+    let rotated = quantizer.rotator().rotate(&padded);
+    let encoded_via_rotated = quantizer.encode_rotated(&rotated);
+
+    assert_eq!(encoded_direct.packed_bits, encoded_via_rotated.packed_bits);
+    assert!((encoded_direct.norm - encoded_via_rotated.norm).abs() < 1e-5);
+    assert!((encoded_direct.vmax - encoded_via_rotated.vmax).abs() < 1e-5);
+}
+
+// ---- Task 3: UsqLayout tests ----
+
+#[test]
+fn test_layout_build_basic() {
+    let dim = 128;
+    let config = UsqConfig::new(dim, 4).unwrap();
+    let mut quantizer = UsqQuantizer::new(config.clone());
+    quantizer.set_centroid(&vec![0.0f32; dim]);
+
+    let n = 100;
+    let data: Vec<f32> = (0..n * dim).map(|i| (i as f32 * 0.13).sin()).collect();
+    let encoded: Vec<_> = (0..n).map(|i| quantizer.encode(&data[i*dim..(i+1)*dim])).collect();
+    let ids: Vec<i64> = (0..n as i64).collect();
+    let layout = UsqLayout::build(&config, &encoded, &ids);
+
+    assert_eq!(layout.len(), n);
+    assert!(!layout.is_empty());
+    assert_eq!(layout.padded_dim(), 128);
+    assert_eq!(layout.n_blocks(), n.div_ceil(32)); // ceil(100/32) = 4
+}
+
+#[test]
+fn test_layout_metadata_access() {
+    let dim = 128;
+    let config = UsqConfig::new(dim, 4).unwrap();
+    let mut quantizer = UsqQuantizer::new(config.clone());
+    quantizer.set_centroid(&vec![0.0f32; dim]);
+
+    let v: Vec<f32> = (0..dim).map(|i| (i as f32 * 0.37).sin()).collect();
+    let encoded = quantizer.encode(&v);
+    let ids = vec![42i64];
+    let layout = UsqLayout::build(&config, &[encoded.clone()], &ids);
+
+    assert_eq!(layout.id_at(0), 42);
+    assert!((layout.norm_at(0) - encoded.norm).abs() < 1e-6);
+    assert!((layout.norm_sq_at(0) - encoded.norm_sq).abs() < 1e-6);
+    assert!((layout.vmax_at(0) - encoded.vmax).abs() < 1e-6);
+    assert!((layout.quant_quality_at(0) - encoded.quant_quality).abs() < 1e-6);
+    assert_eq!(layout.packed_bits_at(0), &encoded.packed_bits[..]);
+}
+
+#[test]
+fn test_layout_fastscan_block_size() {
+    let config = UsqConfig::new(128, 4).unwrap();
+    let mut quantizer = UsqQuantizer::new(config.clone());
+    quantizer.set_centroid(&vec![0.0f32; 128]);
+
+    let n = 64; // exactly 2 full blocks
+    let data: Vec<f32> = (0..n * 128).map(|i| (i as f32 * 0.13).sin()).collect();
+    let encoded: Vec<_> = (0..n).map(|i| quantizer.encode(&data[i*128..(i+1)*128])).collect();
+    let ids: Vec<i64> = (0..n as i64).collect();
+    let layout = UsqLayout::build(&config, &encoded, &ids);
+
+    // n_groups = 128/4 = 32, block_size = 32*16 = 512 bytes
+    let expected_block_size = (128 / 4) * 16;
+    assert_eq!(layout.fastscan_block_size(), expected_block_size);
+    assert_eq!(layout.n_blocks(), 2);
+    // Can access both blocks
+    let _b0 = layout.fastscan_block(0);
+    let _b1 = layout.fastscan_block(1);
+    assert_eq!(_b0.len(), expected_block_size);
+}
+
+/// Verify USQ recall@10 is within 10% of HVQ recall@10 on the same data/queries.
+/// Both use 4-bit quantization, dim=128, n=500 vectors, 10 queries.
+#[test]
+fn test_usq_recall_parity_vs_hvq() {
+    use knowhere_rs::quantization::hvq::{HvqConfig, HvqQuantizer};
+
+    let dim = 128;
+    let n = 500;
+    let k = 10;
+
+    // Fixed seed data for reproducibility
+    let data: Vec<f32> = (0..n * dim)
+        .map(|i| (i as f32 * 0.037 + 0.1).sin() * 2.0)
+        .collect();
+    let queries: Vec<Vec<f32>> = (0..10)
+        .map(|q| {
+            (0..dim)
+                .map(|i| (i as f32 * 0.71 + q as f32 * 0.3).cos())
+                .collect()
+        })
+        .collect();
+
+    // Ground truth: brute-force L2 on raw data
+    let gt: Vec<Vec<i64>> = queries
+        .iter()
+        .map(|query| {
+            let mut dists: Vec<(i64, f32)> = (0..n)
+                .map(|i| {
+                    let d: f32 = query
+                        .iter()
+                        .zip(data[i * dim..(i + 1) * dim].iter())
+                        .map(|(a, b)| (a - b) * (a - b))
+                        .sum();
+                    (i as i64, d)
+                })
+                .collect();
+            dists.sort_by(|a, b| a.1.total_cmp(&b.1));
+            dists.iter().take(k).map(|r| r.0).collect()
+        })
+        .collect();
+
+    // --- HVQ ---
+    let hvq_config = HvqConfig { dim, nbits: 4 };
+    let mut hvq_q = HvqQuantizer::new(hvq_config, 42);
+    hvq_q.train(n, &data);
+
+    let hvq_encoded: Vec<(Vec<u8>, Vec<u8>)> = (0..n)
+        .map(|i| hvq_q.encode_with_sign_bits(&data[i * dim..(i + 1) * dim], 6))
+        .collect();
+
+    let hvq_recall: f32 = queries
+        .iter()
+        .zip(gt.iter())
+        .map(|(query, true_nn)| {
+            let q_rot = hvq_q.rotate_query(query);
+            let q_state = hvq_q.precompute_query_state(&q_rot);
+
+            let mut scores: Vec<(i64, f32)> = (0..n)
+                .map(|i| {
+                    let code = &hvq_encoded[i].0;
+                    let norm_o = f32::from_le_bytes(code[0..4].try_into().unwrap());
+                    let vmax = f32::from_le_bytes(code[4..8].try_into().unwrap());
+                    let bqd = f32::from_le_bytes(code[8..12].try_into().unwrap());
+                    let packed = &code[12..];
+                    let score = hvq_q.score_code_with_meta(&q_state, norm_o, vmax, bqd, packed);
+                    // Approx L2 dist via inner product decomposition
+                    let q_norm_sq: f32 = q_rot.iter().map(|x| x * x).sum();
+                    let v_norm_sq: f32 = data[i * dim..(i + 1) * dim].iter().map(|x| x * x).sum();
+                    (i as i64, q_norm_sq + v_norm_sq - 2.0 * score)
+                })
+                .collect();
+            scores.sort_by(|a, b| a.1.total_cmp(&b.1));
+            let top: Vec<i64> = scores.iter().take(k).map(|r| r.0).collect();
+            let hits = true_nn.iter().filter(|id| top.contains(id)).count();
+            hits as f32 / k as f32
+        })
+        .sum::<f32>()
+        / queries.len() as f32;
+
+    // --- USQ ---
+    // Compute centroid from data (same as HVQ train)
+    let centroid: Vec<f32> = (0..dim)
+        .map(|d| (0..n).map(|i| data[i * dim + d]).sum::<f32>() / n as f32)
+        .collect();
+
+    let usq_config = UsqConfig::new(dim, 4).unwrap().with_seed(42);
+    let mut usq_q = UsqQuantizer::new(usq_config.clone());
+    usq_q.set_centroid(&centroid);
+
+    let encoded: Vec<_> = (0..n)
+        .map(|i| usq_q.encode(&data[i * dim..(i + 1) * dim]))
+        .collect();
+    let ids: Vec<i64> = (0..n as i64).collect();
+    let layout = UsqLayout::build(&usq_config, &encoded, &ids);
+
+    let usq_recall: f32 = queries
+        .iter()
+        .zip(gt.iter())
+        .map(|(query, true_nn)| {
+            let query_state = usq_q.precompute_query_state(query);
+            let q_norm_sq: f32 = query.iter().map(|x| x * x).sum();
+
+            let mut scores: Vec<(i64, f32)> = (0..n)
+                .map(|i| {
+                    let score = usq_q.score_with_meta(
+                        &query_state,
+                        layout.norm_at(i),
+                        layout.vmax_at(i),
+                        layout.quant_quality_at(i),
+                        layout.packed_bits_at(i),
+                    );
+                    let v_norm_sq: f32 =
+                        data[i * dim..(i + 1) * dim].iter().map(|x| x * x).sum();
+                    (i as i64, q_norm_sq + v_norm_sq - 2.0 * score)
+                })
+                .collect();
+            scores.sort_by(|a, b| a.1.total_cmp(&b.1));
+            let top: Vec<i64> = scores.iter().take(k).map(|r| r.0).collect();
+            let hits = true_nn.iter().filter(|id| top.contains(id)).count();
+            hits as f32 / k as f32
+        })
+        .sum::<f32>()
+        / queries.len() as f32;
+
+    eprintln!("HVQ recall@{k}: {hvq_recall:.3}");
+    eprintln!("USQ recall@{k}: {usq_recall:.3}");
+
+    // USQ should be within 10% of HVQ recall (generous threshold for synthetic data)
+    assert!(
+        usq_recall >= hvq_recall * 0.90,
+        "USQ recall {usq_recall:.3} is more than 10% below HVQ recall {hvq_recall:.3}"
+    );
+
+    // Both should have at least some recall
+    assert!(
+        usq_recall > 0.2,
+        "USQ recall {usq_recall:.3} is too low (should be >0.2 on this data)"
+    );
+}

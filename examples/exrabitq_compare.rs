@@ -5,7 +5,7 @@ use std::error::Error;
 use std::time::Instant;
 
 use knowhere_rs::api::{MetricType, SearchRequest};
-use knowhere_rs::faiss::{IvfExRaBitqConfig, IvfExRaBitqIndex};
+use knowhere_rs::faiss::{IvfUsqConfig, IvfUsqIndex};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -135,14 +135,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let queries = random_vectors(nq, dim, 17);
     let ids: Vec<i64> = (0..base_n as i64).collect();
 
-    let config = IvfExRaBitqConfig::new(dim, nlist.max(1), bits)
+    let config = IvfUsqConfig::new(dim, nlist.max(1), bits)
         .with_metric(MetricType::L2)
         .with_nprobe(nprobe.max(1))
         .with_rotation_seed(29)
         .with_rerank_k(rerank_k.max(top_k))
-        .with_high_accuracy_scan(use_high_accuracy);
-
-    let mut index = IvfExRaBitqIndex::new(config);
+        .with_high_accuracy_scan(use_high_accuracy);    let mut index = IvfUsqIndex::new(config);
     let build_start = Instant::now();
     index.train(&base[..train_n * dim])?;
     index.add(&base, Some(&ids))?;
@@ -178,9 +176,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!(
         "{:<12} {:>4} {:>6} {:>7} {:>10.2} {:>10.4} {:>12.1}",
         if use_high_accuracy {
-            "EXRABITQ-HA"
+            "USQ-HA"
         } else {
-            "EXRABITQ"
+            "USQ"
         },
         bits,
         nlist,

@@ -39,7 +39,7 @@ use crate::api::{
     SearchResult as ApiSearchResult,
 };
 use crate::faiss::{
-    AisaqConfig, FileGroup, HnswIndex, IvfExRaBitqIndex, IvfFlatIndex, IvfPqIndex, IvfSq8Index,
+    AisaqConfig, FileGroup, HnswIndex, IvfUsqIndex, IvfFlatIndex, IvfPqIndex, IvfSq8Index,
     MemIndex, PQFlashIndex,
 };
 
@@ -48,7 +48,7 @@ enum RegisteredIndex {
     Hnsw(Box<HnswIndex>),
     IvfFlat(Box<IvfFlatIndex>),
     IvfPq(Box<IvfPqIndex>),
-    IvfExRaBitq(Box<IvfExRaBitqIndex>),
+    IvfUsq(Box<IvfUsqIndex>),
     IvfSq8(Box<IvfSq8Index>),
     DiskAnn(Box<PQFlashIndex>),
 }
@@ -88,7 +88,7 @@ impl RegisteredIndex {
                 }
                 Err(err) => Err(err),
             },
-            RegisteredIndex::IvfExRaBitq(idx) => match idx.add(vectors, ids) {
+            RegisteredIndex::IvfUsq(idx) => match idx.add(vectors, ids) {
                 Ok(count) => Ok(count),
                 Err(err) if needs_training(&err) => {
                     idx.train(vectors)?;
@@ -125,7 +125,7 @@ impl RegisteredIndex {
             RegisteredIndex::Hnsw(idx) => idx.search(query, req),
             RegisteredIndex::IvfFlat(idx) => idx.search(query, req),
             RegisteredIndex::IvfPq(idx) => idx.search(query, req),
-            RegisteredIndex::IvfExRaBitq(idx) => idx.search(query, req),
+            RegisteredIndex::IvfUsq(idx) => idx.search(query, req),
             RegisteredIndex::IvfSq8(idx) => idx.search(query, req),
             RegisteredIndex::DiskAnn(idx) => idx.search(query, req.top_k),
         }
@@ -137,7 +137,7 @@ impl RegisteredIndex {
             RegisteredIndex::Hnsw(idx) => save_to_temp_bytes(|path| idx.save(path)),
             RegisteredIndex::IvfFlat(idx) => save_to_temp_bytes(|path| idx.save(path)),
             RegisteredIndex::IvfPq(idx) => save_to_temp_bytes(|path| idx.save(path)),
-            RegisteredIndex::IvfExRaBitq(idx) => save_to_temp_bytes(|path| idx.save(path)),
+            RegisteredIndex::IvfUsq(idx) => save_to_temp_bytes(|path| idx.save(path)),
             RegisteredIndex::IvfSq8(idx) => idx.serialize_to_bytes(),
             RegisteredIndex::DiskAnn(idx) => save_diskann_to_bytes(idx),
         }
@@ -196,7 +196,7 @@ fn parse_index_type(t: i32) -> IndexType {
         3 => IndexType::IvfPq,
         4 => IndexType::DiskAnn,
         5 => IndexType::IvfSq8,
-        6 => IndexType::IvfExRaBitq,
+        6 => IndexType::IvfUsq,
         _ => IndexType::Flat,
     }
 }
@@ -234,8 +234,8 @@ fn build_registered_index(config: &IndexConfig) -> crate::api::Result<Registered
             config,
         )?))),
         IndexType::IvfPq => Ok(RegisteredIndex::IvfPq(Box::new(IvfPqIndex::new(config)?))),
-        IndexType::IvfExRaBitq => Ok(RegisteredIndex::IvfExRaBitq(Box::new(
-            IvfExRaBitqIndex::from_index_config(config)?,
+        IndexType::IvfUsq | IndexType::IvfExRaBitq => Ok(RegisteredIndex::IvfUsq(Box::new(
+            IvfUsqIndex::from_index_config(config)?,
         ))),
         IndexType::IvfSq8 => Ok(RegisteredIndex::IvfSq8(Box::new(IvfSq8Index::new(config)?))),
         IndexType::DiskAnn => Ok(RegisteredIndex::DiskAnn(Box::new(PQFlashIndex::new(
@@ -432,8 +432,8 @@ fn deserialize_registered_index(bytes: &[u8]) -> crate::api::Result<RegisteredIn
     if bytes.starts_with(b"IVFXRBTQ") {
         let file = NamedTempFile::new()?;
         fs::write(file.path(), bytes)?;
-        let index = IvfExRaBitqIndex::load(file.path())?;
-        return Ok(RegisteredIndex::IvfExRaBitq(Box::new(index)));
+        let index = IvfUsqIndex::load(file.path())?;
+        return Ok(RegisteredIndex::IvfUsq(Box::new(index)));
     }
 
     if bytes.starts_with(b"IVFFLAT") {
@@ -752,7 +752,7 @@ mod tests {
             RegisteredIndex::Hnsw(idx) => idx.train(vectors).map(|_| ()),
             RegisteredIndex::IvfFlat(idx) => idx.train(vectors).map(|_| ()),
             RegisteredIndex::IvfPq(idx) => idx.train(vectors).map(|_| ()),
-            RegisteredIndex::IvfExRaBitq(idx) => idx.train(vectors).map(|_| ()),
+            RegisteredIndex::IvfUsq(idx) => idx.train(vectors).map(|_| ()),
             RegisteredIndex::IvfSq8(idx) => idx.train(vectors).map(|_| ()),
             RegisteredIndex::DiskAnn(idx) => idx.train(vectors).map(|_| ()),
         }
@@ -825,6 +825,6 @@ mod tests {
 
     #[test]
     fn test_jni_ivf_exrabitq_round_trip() {
-        run_round_trip(IndexType::IvfExRaBitq);
+        run_round_trip(IndexType::IvfUsq);
     }
 }
