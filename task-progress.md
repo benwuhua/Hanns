@@ -15,7 +15,7 @@
 - Current focus: `none`
 - Next feature: `none`
 - Strategic state: `final_rollup_closed_leadership_met` (see `docs/performance-program.md`)
-- Last updated: 2026-04-02
+- Last updated: 2026-04-03
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 - Workflow policy: capability-closure first for DiskANN/IVF-PQ (align to native/official feature set before further benchmark tuning); narrow performance hypotheses should start with `screen`, promote to tracked work only after `screen_result=promote`, and update durable docs only after authority verdicts
 - Progress: 66/66 features passing (100%)
@@ -38,6 +38,51 @@
   - `/data/work/milvus-rs-integ/milvus-src/scripts/knowhere-rs-shim/start_standalone_remote.sh`
 - That wrapper sources:
   - `/data/work/milvus-rs-integ/milvus-src/scripts/knowhere-rs-shim/remote_env.sh`
+
+## Session 2026-04-03 RHTSDG Local Screen
+
+### Summary
+
+- Started a Rust-local `screen` for a prospective `RHTSDG` index family instead of opening tracked work directly.
+- Implemented deterministic TSDG fixture coverage in `tests/test_rhtsdg_tsdg.rs`.
+- Implemented a minimal safe neighborhood + single-round XNDescent local-join core in `tests/test_rhtsdg_xndescent.rs`.
+- Implemented a single-layer ordered-frontier search prototype plus a synthetic recall fixture in `tests/test_rhtsdg_screen.rs`.
+
+### Hypothesis
+
+- Hypothesis: offline `XNDescent + TSDG` can produce a viable graph/search skeleton in Rust that is worth promoting into tracked authority work.
+- Expected mechanism: bounded neighborhood insertion, symmetric local-join expansion, alpha-pruning, and occurrence filtering should compose into a stable base-graph/search prototype before any FFI or authority integration work begins.
+- Threshold: local search fixture should be correct, and local synthetic recall gate should meet `recall@10 >= 0.95`.
+
+### Verification
+
+- Local:
+  - `cargo test --test test_rhtsdg_tsdg -- --nocapture`
+  - `cargo test --test test_rhtsdg_xndescent -- --nocapture`
+  - `cargo test --test test_rhtsdg_screen search_matches_bruteforce_top1_on_small_grid -- --nocapture`
+  - `cargo test --release --test test_rhtsdg_screen screen_rhtsdg_recall_gate_on_synthetic_fixture -- --ignored --nocapture`
+
+### Result
+
+- `screen_result=needs_more_local`
+- Observed local signals:
+  - TSDG fixture tests passed
+  - XNDescent neighborhood/local-join tests passed
+  - single-layer search matched brute-force top-1 on the deterministic grid fixture
+  - synthetic screen summary: `recall_at_10=1.0`, `query_count=256`, `build_kind=exact_knn_fixture`
+- Reason the screen is not yet promotable:
+  - the current `RhtsdgIndex` screen fixture uses an exact brute-force k-NN graph (`build_kind=exact_knn_fixture`), not a real `XNDescent -> TSDG -> hierarchical graph` build path
+  - this proves the search skeleton and local invariants, but it does not yet prove that the actual RHTSDG construction pipeline yields a high-quality graph
+
+### Next Local Step
+
+- Integrate the real build path into `RhtsdgIndex` so the screen fixture exercises:
+  - random / seeded initialization
+  - `update_sample_neighbors()`
+  - `local_join()`
+  - TSDG diversification
+  - graph materialization consumed by the search path
+- Re-run the same local screen after that integration and only promote into `feature-list.json` if the screen still clears the recall gate on a non-exact graph build.
 
 ## Session 2026-04-02 Milvus Build Layout Experiment
 
