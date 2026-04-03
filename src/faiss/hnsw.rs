@@ -6364,7 +6364,11 @@ impl HnswIndex {
             }
         }
 
-        let results = self.search_layer_idx_with_scratch(query, best_ep_idx, 0, ef, scratch);
+        // Fast path: use slab+ip_batch_4 via the bitset path with an empty bitset.
+        // search_layer0_bitset_fast checks slab availability and falls back to the
+        // generic slow path if the slab is not built (e.g., during initial adds).
+        let empty_bitset = crate::bitset::BitsetView::new(0);
+        let results = self.search_layer0_bitset_fast(query, best_ep_idx, ef, &empty_bitset, scratch);
 
         let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
         for (idx, dist) in results {
