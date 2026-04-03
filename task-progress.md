@@ -18,7 +18,7 @@
 - Last updated: 2026-04-03
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 - Workflow policy: capability-closure first for DiskANN/IVF-PQ (align to native/official feature set before further benchmark tuning); narrow performance hypotheses should start with `screen`, promote to tracked work only after `screen_result=promote`, and update durable docs only after authority verdicts
-- Progress: 66/66 features passing (100%)
+- Progress: 68/68 features passing (100%)
 
 ## Authority Runbook
 
@@ -96,12 +96,35 @@
 - Local hygiene note:
   - `cargo fmt --all -- --check` is currently red because the repository already contains unrelated formatting drift outside the RHTSDG files; this was not corrected as part of the focused RHTSDG slice
 
+### Authority Update
+
+- Opened tracked RHTSDG entries in `feature-list.json` after the promoted local screen.
+- Added tracked verification artifacts:
+  - `benches/rhtsdg_bench.rs`
+  - `examples/rhtsdg_vs_hnsw.rs`
+- Authority verification passed:
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command "cargo test --test test_rhtsdg_index_trait -- --nocapture"`
+    - log: `/data/work/knowhere-rs-logs-rhtsdg/test_20260403T103310Z_99718.log`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command "cargo test --release --test test_rhtsdg_screen screen_rhtsdg_recall_gate_on_synthetic_fixture -- --ignored --nocapture"`
+    - log: `/data/work/knowhere-rs-logs-rhtsdg/test_20260403T103358Z_99890.log`
+    - remote screen summary: `recall_at_10=1.0`, `query_count=256`, `build_kind=xndescent_tsdg_fixture`
+  - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command "cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128"`
+    - log: `/data/work/knowhere-rs-logs-rhtsdg/test_20260403T103549Z_388.log`
+    - authority comparison summary on `./data/sift` subset (`20k` base / `200` query):
+      - `hnsw`: `build_s=3.204`, `search_s=0.016`, `qps=12173.15`, `recall@10=1.0000`
+      - `rhtsdg`: `build_s=23.318`, `search_s=0.061`, `qps=3284.84`, `recall@10=0.1740`
+- Interpretation:
+  - `rhtsdg-rust-core-index` is now tracked and authority-verified as a Rust-core integration slice.
+  - `rhtsdg-remote-recall-benchmark` is now tracked and authority-verified as an exploratory remote comparison lane.
+  - The current authority comparison is not a production-candidate result for RHTSDG; it is a truthful first remote artifact for the integrated Rust-core path.
+
 ### Next Step
 
-- Open tracked RHTSDG work formally:
-  - add `feature-list.json` entries for Rust-core and remote recall validation
-  - bootstrap the authority machine with `bash init.sh`
-  - run remote verification for `test_rhtsdg_index_trait` and the ignored synthetic screen gate before making any production or stop-go claim
+- No tracked RHTSDG follow-up is currently open.
+- Any further RHTSDG work should start with a fresh plan/screen around one of:
+  - graph-quality improvement on real datasets
+  - external ABI widening (`src/ffi.rs`, `src/python/mod.rs`, `src/jni/mod.rs`)
+  - durable benchmark/report integration beyond the current exploratory comparison
 
 ## Session 2026-04-02 Milvus Build Layout Experiment
 
@@ -459,6 +482,37 @@
    - `VectorDBBench/vectordb_bench/results/Milvus/*.json`
 
 ## Session Log
+
+### Session 236 - 2026-04-03
+- Focus: `rhtsdg-remote-recall-benchmark`
+- Mode:
+  - `authority`
+- Completed:
+  - promoted the earlier RHTSDG local screen into tracked work without widening the external ABI surface
+  - added a Criterion prefilter in `benches/rhtsdg_bench.rs`
+  - added a replayable comparison driver in `examples/rhtsdg_vs_hnsw.rs`
+  - refreshed `feature-list.json`, `task-progress.md`, and `RELEASE_NOTES.md` for the tracked RHTSDG slice
+  - synced the workspace to the remote x86 authority machine and replayed the new RHTSDG verification chain there
+- Verification:
+  - local:
+    - `cargo test --test test_rhtsdg_tsdg --test test_rhtsdg_xndescent --test test_rhtsdg_screen --test test_rhtsdg_index_trait -- --nocapture` -> `ok`
+    - `cargo bench --bench rhtsdg_bench -- --noplot` -> `ok`
+    - `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command "cargo test --test test_rhtsdg_index_trait -- --nocapture"` -> `ok`
+    - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command "cargo test --release --test test_rhtsdg_screen screen_rhtsdg_recall_gate_on_synthetic_fixture -- --ignored --nocapture"` -> `ok`
+    - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command "cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128"` -> `ok`
+    - `python3 scripts/validate_features.py feature-list.json` -> `VALID - 68 features (68 passing, 0 failing); workflow/doc checks passed`
+- Result:
+  - `rhtsdg-rust-core-index` is now `passing`
+  - `rhtsdg-remote-recall-benchmark` is now `passing`
+  - the current authority comparison is explicit exploratory evidence, not a production-candidate verdict:
+    - `hnsw`: `build_s=3.204`, `search_s=0.016`, `qps=12173.15`, `recall@10=1.0000`
+    - `rhtsdg`: `build_s=23.318`, `search_s=0.061`, `qps=3284.84`, `recall@10=0.1740`
+- Notes:
+  - the remote bootstrap still reports `remote_commit=HEAD` / `remote_branch=HEAD`; the cargo execution surface worked, but the authority workspace is not exposing normal git revision metadata
+  - RHTSDG remains Rust-core only in this round; FFI/JNI/Python were not reopened
 
 ### Session 234 - 2026-04-02
 - Focus: `milvus-hnsw-build-hotspot-screen`

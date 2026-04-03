@@ -1171,6 +1171,43 @@
       "dependencies": [
         "hnsw-reopen-round12-activation"
       ]
+    },
+    {
+      "id": "rhtsdg-rust-core-index",
+      "category": "rhtsdg",
+      "title": "Promote RHTSDG into the Rust core index surface",
+      "description": "Promote the screened Rust-only RHTSDG implementation into the tracked core index surface: config/legal-matrix wiring, Rust `Index` trait support, bitset/raw-vector/iterator coverage, and persistence, while keeping FFI/JNI/Python out of scope.",
+      "priority": "high",
+      "status": "passing",
+      "verification_steps": [
+        "cargo test --test test_rhtsdg_index_trait -- --nocapture",
+        "cargo test --test test_rhtsdg_tsdg --test test_rhtsdg_xndescent --test test_rhtsdg_screen --test test_rhtsdg_index_trait -- --nocapture",
+        "bash init.sh",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command \"cargo test --test test_rhtsdg_index_trait -- --nocapture\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "baseline-remote-rs-lib-smoke"
+      ]
+    },
+    {
+      "id": "rhtsdg-remote-recall-benchmark",
+      "category": "rhtsdg",
+      "title": "Run the first authority RHTSDG screen and HNSW comparison",
+      "description": "Run the promoted Rust-only RHTSDG screen and comparison commands on the remote x86 authority machine so the new index family has a replayable authority artifact, even though the current lane remains exploratory and Rust-core only.",
+      "priority": "high",
+      "status": "passing",
+      "verification_steps": [
+        "cargo bench --bench rhtsdg_bench -- --noplot",
+        "cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128",
+        "bash init.sh",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command \"cargo test --release --test test_rhtsdg_screen screen_rhtsdg_recall_gate_on_synthetic_fixture -- --ignored --nocapture\"",
+        "KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command \"cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128\"",
+        "python3 scripts/validate_features.py feature-list.json"
+      ],
+      "dependencies": [
+        "rhtsdg-rust-core-index"
+      ]
     }
   ]
 }

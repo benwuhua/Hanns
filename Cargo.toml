@@ -82,6 +82,10 @@ harness = false
 name = "cpp_faiss_simd_bench"
 harness = false
 
+[[bench]]
+name = "rhtsdg_bench"
+harness = false
+
 [profile.release]
 lto = true
 codegen-units = 1
