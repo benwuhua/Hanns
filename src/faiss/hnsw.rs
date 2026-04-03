@@ -5421,6 +5421,169 @@ impl HnswIndex {
         scratch.layer0_results.to_sorted_pairs()
     }
 
+    /// Layer-0 bitset search using slab layout + ordered pool.
+    ///
+    /// Falls back to `search_layer_idx_with_bitset_scratch` when slab is not available.
+    fn search_layer0_bitset_fast(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        ef: usize,
+        bitset: &crate::bitset::BitsetView,
+        scratch: &mut SearchScratch,
+    ) -> Vec<(usize, f32)> {
+        let num_nodes = self.node_info.len();
+
+        // Require slab + flat_graph for fast path
+        if !self.layer0_slab.is_enabled_for(num_nodes)
+            || !self.layer0_flat_graph.is_enabled_for(num_nodes)
+        {
+            return self.search_layer_idx_with_bitset_scratch(
+                query, entry_idx, 0, ef, bitset, scratch,
+            );
+        }
+
+        let is_l2 = self.metric_type == MetricType::L2;
+        let query_ptr = query.as_ptr();
+        let base_ptr = self.vectors.as_ptr();
+
+        scratch.prepare(num_nodes);
+        scratch.prepare_layer0_pools(ef);
+
+        let entry_dist = if is_l2 {
+            unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, entry_idx) }
+        } else {
+            self.distance(query, entry_idx)
+        };
+
+        let entry = Layer0PoolEntry {
+            idx: entry_idx,
+            dist: entry_dist,
+        };
+        scratch.layer0_frontier.push(entry);
+        if entry_idx >= bitset.len() || !bitset.get(entry_idx) {
+            scratch.layer0_results.insert(entry, ef);
+        }
+        scratch.mark_visited(entry_idx);
+
+        loop {
+            let Some(candidate) = scratch.layer0_frontier.pop_best() else {
+                break;
+            };
+
+            if scratch.layer0_results.len() >= ef
+                && scratch
+                    .layer0_results
+                    .worst_dist()
+                    .is_some_and(|worst_dist| candidate.dist >= worst_dist)
+            {
+                break;
+            }
+
+            let neighbors = self.layer0_slab.neighbors_for(candidate.idx);
+            let mut batch_indices = [0usize; 4];
+            let mut batch_len = 0usize;
+
+            for &nbr_u32 in neighbors {
+                let nbr_idx = nbr_u32 as usize;
+                if nbr_idx >= num_nodes {
+                    continue;
+                }
+                if !unsafe { scratch.mark_visited_unchecked(nbr_idx) } {
+                    continue;
+                }
+
+                batch_indices[batch_len] = nbr_idx;
+                batch_len += 1;
+
+                if batch_len == 4 {
+                    let distances = if is_l2 {
+                        unsafe {
+                            [
+                                (self.l2_distance_sq_ptr_kernel)(
+                                    query_ptr,
+                                    self.layer0_slab.vector_ptr_for(batch_indices[0]),
+                                    self.dim,
+                                ),
+                                (self.l2_distance_sq_ptr_kernel)(
+                                    query_ptr,
+                                    self.layer0_slab.vector_ptr_for(batch_indices[1]),
+                                    self.dim,
+                                ),
+                                (self.l2_distance_sq_ptr_kernel)(
+                                    query_ptr,
+                                    self.layer0_slab.vector_ptr_for(batch_indices[2]),
+                                    self.dim,
+                                ),
+                                (self.l2_distance_sq_ptr_kernel)(
+                                    query_ptr,
+                                    self.layer0_slab.vector_ptr_for(batch_indices[3]),
+                                    self.dim,
+                                ),
+                            ]
+                        }
+                    } else {
+                        // Cosine/IP: use batch-4 dispatch (handles norm)
+                        match Self::distance_to_4_idxs_dispatch(
+                            self,
+                            query,
+                            batch_indices,
+                            query_ptr,
+                            base_ptr,
+                        ) {
+                            Some(d) => d,
+                            None => {
+                                [
+                                    self.distance(query, batch_indices[0]),
+                                    self.distance(query, batch_indices[1]),
+                                    self.distance(query, batch_indices[2]),
+                                    self.distance(query, batch_indices[3]),
+                                ]
+                            }
+                        }
+                    };
+
+                    for i in 0..4 {
+                        let nbr_idx = batch_indices[i];
+                        let is_filtered = nbr_idx < bitset.len() && bitset.get(nbr_idx);
+                        let entry = Layer0PoolEntry {
+                            idx: nbr_idx,
+                            dist: distances[i],
+                        };
+                        // Always add to frontier (filtered nodes help traverse the graph)
+                        scratch.layer0_frontier.push(entry);
+                        // Only add to results if not filtered
+                        if !is_filtered {
+                            scratch.layer0_results.insert(entry, ef);
+                        }
+                    }
+                    batch_len = 0;
+                }
+            }
+
+            // Flush remaining batch
+            for i in 0..batch_len {
+                let nbr_idx = batch_indices[i];
+                let nbr_dist = if is_l2 {
+                    unsafe { self.l2_distance_to_idx_ptr(query_ptr, base_ptr, nbr_idx) }
+                } else {
+                    self.distance(query, nbr_idx)
+                };
+                let is_filtered = nbr_idx < bitset.len() && bitset.get(nbr_idx);
+                let entry = Layer0PoolEntry {
+                    idx: nbr_idx,
+                    dist: nbr_dist,
+                };
+                scratch.layer0_frontier.push(entry);
+                if !is_filtered {
+                    scratch.layer0_results.insert(entry, ef);
+                }
+            }
+        }
+
+        scratch.layer0_results.to_sorted_pairs()
+    }
+
     fn search_layer_idx_l2_ordered_pool_with_optional_profile(
         &self,
         query: &[f32],
@@ -6297,11 +6460,10 @@ impl HnswIndex {
             curr_ep_dist = next_dist;
         }
 
-        // Layer 0 search with bitset
-        let results = self.search_layer_idx_with_bitset_scratch(
+        // Layer 0 search with bitset — use fast path when slab available
+        let results = self.search_layer0_bitset_fast(
             query,
             curr_ep_idx,
-            0,
             ef,
             bitset,
             scratch,
@@ -10016,6 +10178,83 @@ mod tests {
                 scratch.visited_epoch.len()
             );
         });
+    }
+
+    #[test]
+    fn test_search_layer0_bitset_fast_matches_shared_path() {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::Cosine,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(16),
+                ef_construction: Some(200),
+                ef_search: Some(200),
+                ..Default::default()
+            },
+        };
+        let n = 500;
+        let vectors: Vec<f32> = (0..n)
+            .flat_map(|i| {
+                let angle = (i as f32) * std::f32::consts::PI * 2.0 / (n as f32);
+                vec![angle.cos(), angle.sin()]
+            })
+            .collect();
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        assert!(
+            index.layer0_slab.is_enabled_for(index.node_info.len()),
+            "slab must be enabled for this test to exercise the fast path"
+        );
+
+        // Create bitset that filters out nodes 0-49
+        let mut bitset = BitsetView::new(n);
+        for i in 0..50 {
+            bitset.set(i, true);
+        }
+
+        let query = [1.0_f32, 0.0];
+        let ef = 50;
+
+        // Use the actual HNSW entry point for layer-0 search
+        let ep_idx = index.get_idx_from_id_fast(index.entry_point.unwrap());
+
+        // Reference: shared path (bypass slab by calling the shared function directly)
+        index.prepare_search_query_context(&query);
+        let mut scratch_ref = SearchScratch::new();
+        let reference = index.search_layer_idx_with_bitset_scratch(
+            &query, ep_idx, 0, ef, &bitset, &mut scratch_ref,
+        );
+        index.clear_search_query_context();
+
+        // Fast path
+        index.prepare_search_query_context(&query);
+        let mut scratch_fast = SearchScratch::new();
+        let fast = index.search_layer0_bitset_fast(
+            &query, ep_idx, ef, &bitset, &mut scratch_fast,
+        );
+        index.clear_search_query_context();
+
+        // Both should return results, and fast path should not include filtered nodes
+        assert!(!fast.is_empty(), "fast path should return results");
+        for (idx, _dist) in &fast {
+            assert!(
+                *idx >= 50,
+                "fast path result idx {} should have been filtered by bitset",
+                idx,
+            );
+        }
+        for (idx, _dist) in &reference {
+            assert!(
+                *idx >= 50,
+                "reference path result idx {} should have been filtered by bitset",
+                idx,
+            );
+        }
     }
 
     #[test]
