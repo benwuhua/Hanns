@@ -30,6 +30,35 @@ use crate::index::{Index as IndexTrait, IndexError, SearchResult as IndexSearchR
 use crate::quantization::ScalarQuantizer;
 use crate::simd;
 
+/// Trait for bitset operations used in HNSW search.
+/// Implemented by both owned `BitsetView` and borrowed `BitsetRef`.
+pub trait BitsetCheck {
+    fn bitset_len(&self) -> usize;
+    fn bitset_get(&self, index: usize) -> bool;
+}
+
+impl BitsetCheck for crate::bitset::BitsetView {
+    #[inline]
+    fn bitset_len(&self) -> usize {
+        self.len()
+    }
+    #[inline]
+    fn bitset_get(&self, index: usize) -> bool {
+        self.get(index)
+    }
+}
+
+impl<'a> BitsetCheck for crate::bitset::BitsetRef<'a> {
+    #[inline]
+    fn bitset_len(&self) -> usize {
+        self.len()
+    }
+    #[inline]
+    fn bitset_get(&self, index: usize) -> bool {
+        self.get(index)
+    }
+}
+
 type BatchNeighborResults = (usize, usize, Vec<Vec<(usize, f32)>>);
 type BatchNeighborResultsProfiled = (
     usize,
@@ -2637,7 +2666,8 @@ impl HnswIndex {
     ) -> (Vec<Vec<(usize, f32)>>, usize, usize, usize) {
         HNSW_BUILD_SEARCH_SCRATCH_TLS.with(|scratch_cell| {
             let mut scratch = scratch_cell.borrow_mut();
-            let results = self.find_neighbors_for_insertion_with_scratch(vec, node_level, &mut scratch);
+            let results =
+                self.find_neighbors_for_insertion_with_scratch(vec, node_level, &mut scratch);
             (
                 results,
                 scratch.visited_epoch.capacity(),
@@ -4624,13 +4654,13 @@ impl HnswIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn search_layer_idx_shared(
+    fn search_layer_idx_shared<B: BitsetCheck>(
         &self,
         query: &[f32],
         entry_idx: usize,
         level: usize,
         ef: usize,
-        bitset: Option<&BitsetView>,
+        bitset: Option<&B>,
         scratch: &mut SearchScratch,
         mut profile: Option<&mut HnswCandidateSearchProfileStats>,
     ) -> Vec<(usize, f32)> {
@@ -4671,7 +4701,7 @@ impl HnswIndex {
             return vec![(best_idx, best_dist)];
         }
 
-        let is_filtered = |idx: usize| bitset.is_some_and(|mask| idx < mask.len() && mask.get(idx));
+        let is_filtered = |idx: usize| bitset.is_some_and(|mask| idx < mask.bitset_len() && mask.bitset_get(idx));
         let use_l2_ptr_dispatch = self.metric_type == MetricType::L2;
         let query_ptr = query.as_ptr();
         let base_ptr = self.vectors.as_ptr();
@@ -4913,7 +4943,7 @@ impl HnswIndex {
         bitset: Option<&BitsetView>,
         scratch: &mut SearchScratch,
     ) -> Vec<(usize, f32)> {
-        self.search_layer_idx_shared(query, entry_idx, level, ef, bitset, scratch, None)
+        self.search_layer_idx_shared::<BitsetView>(query, entry_idx, level, ef, bitset, scratch, None)
     }
 
     fn search_layer_idx_with_optional_profile(
@@ -4925,7 +4955,7 @@ impl HnswIndex {
         scratch: &mut SearchScratch,
         profile: Option<&mut HnswCandidateSearchProfileStats>,
     ) -> Vec<(usize, f32)> {
-        self.search_layer_idx_shared(query, entry_idx, level, ef, None, scratch, profile)
+        self.search_layer_idx_shared::<BitsetView>(query, entry_idx, level, ef, None, scratch, profile)
     }
 
     fn search_layer_idx_l2_heap_with_optional_profile(
@@ -5431,12 +5461,12 @@ impl HnswIndex {
     /// Layer-0 bitset search using slab layout + ordered pool.
     ///
     /// Falls back to `search_layer_idx_with_bitset_scratch` when slab is not available.
-    fn search_layer0_bitset_fast(
+    fn search_layer0_bitset_fast<B: BitsetCheck>(
         &self,
         query: &[f32],
         entry_idx: usize,
         ef: usize,
-        bitset: &crate::bitset::BitsetView,
+        bitset: &B,
         scratch: &mut SearchScratch,
     ) -> Vec<(usize, f32)> {
         let num_nodes = self.node_info.len();
@@ -5445,9 +5475,8 @@ impl HnswIndex {
         if !self.layer0_slab.is_enabled_for(num_nodes)
             || !self.layer0_flat_graph.is_enabled_for(num_nodes)
         {
-            return self.search_layer_idx_with_bitset_scratch(
-                query, entry_idx, 0, ef, bitset, scratch,
-            );
+            return self
+                .search_layer_idx_with_bitset_scratch(query, entry_idx, 0, ef, bitset, scratch);
         }
 
         let is_l2 = self.metric_type == MetricType::L2;
@@ -5468,7 +5497,7 @@ impl HnswIndex {
             dist: entry_dist,
         };
         scratch.layer0_frontier.push(entry);
-        if entry_idx >= bitset.len() || !bitset.get(entry_idx) {
+        if entry_idx >= bitset.bitset_len() || !bitset.bitset_get(entry_idx) {
             scratch.layer0_results.insert(entry, ef);
         }
         scratch.mark_visited(entry_idx);
@@ -5517,10 +5546,18 @@ impl HnswIndex {
                         }
                     } else {
                         // Cosine/IP: batch-4 IP from slab vector pointers
-                        let v0 = self.layer0_slab.vector_slice_for(batch_indices[0], self.dim);
-                        let v1 = self.layer0_slab.vector_slice_for(batch_indices[1], self.dim);
-                        let v2 = self.layer0_slab.vector_slice_for(batch_indices[2], self.dim);
-                        let v3 = self.layer0_slab.vector_slice_for(batch_indices[3], self.dim);
+                        let v0 = self
+                            .layer0_slab
+                            .vector_slice_for(batch_indices[0], self.dim);
+                        let v1 = self
+                            .layer0_slab
+                            .vector_slice_for(batch_indices[1], self.dim);
+                        let v2 = self
+                            .layer0_slab
+                            .vector_slice_for(batch_indices[2], self.dim);
+                        let v3 = self
+                            .layer0_slab
+                            .vector_slice_for(batch_indices[3], self.dim);
                         let mut ips = simd::ip_batch_4(query, v0, v1, v2, v3);
                         if self.metric_type == MetricType::Ip {
                             for ip in &mut ips {
@@ -5542,7 +5579,7 @@ impl HnswIndex {
 
                     for i in 0..4 {
                         let nbr_idx = batch_indices[i];
-                        let is_filtered = nbr_idx < bitset.len() && bitset.get(nbr_idx);
+                        let is_filtered = nbr_idx < bitset.bitset_len() && bitset.bitset_get(nbr_idx);
                         let entry = Layer0PoolEntry {
                             idx: nbr_idx,
                             dist: distances[i],
@@ -5566,7 +5603,7 @@ impl HnswIndex {
                 } else {
                     self.distance(query, nbr_idx)
                 };
-                let is_filtered = nbr_idx < bitset.len() && bitset.get(nbr_idx);
+                let is_filtered = nbr_idx < bitset.bitset_len() && bitset.bitset_get(nbr_idx);
                 let entry = Layer0PoolEntry {
                     idx: nbr_idx,
                     dist: nbr_dist,
@@ -6368,7 +6405,8 @@ impl HnswIndex {
         // search_layer0_bitset_fast checks slab availability and falls back to the
         // generic slow path if the slab is not built (e.g., during initial adds).
         let empty_bitset = crate::bitset::BitsetView::new(0);
-        let results = self.search_layer0_bitset_fast(query, best_ep_idx, ef, &empty_bitset, scratch);
+        let results =
+            self.search_layer0_bitset_fast(query, best_ep_idx, ef, &empty_bitset, scratch);
 
         let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
         for (idx, dist) in results {
@@ -6413,12 +6451,12 @@ impl HnswIndex {
     ///
     /// # Returns
     /// Filtered search results
-    fn search_single_with_bitset(
+    fn search_single_with_bitset<B: BitsetCheck>(
         &self,
         query: &[f32],
         ef: usize,
         k: usize,
-        bitset: &crate::bitset::BitsetView,
+        bitset: &B,
     ) -> Vec<(i64, f32)> {
         if self.ids.is_empty() || self.entry_point.is_none() {
             return vec![];
@@ -6426,7 +6464,7 @@ impl HnswIndex {
 
         if self.metric_type == MetricType::Cosine && self.ids.len() <= ef.max(k).max(64) {
             return self
-                .brute_force_search(query, k, |_id, idx| idx >= bitset.len() || !bitset.get(idx));
+                .brute_force_search(query, k, |_id, idx| idx >= bitset.bitset_len() || !bitset.bitset_get(idx));
         }
 
         self.prepare_search_query_context(query);
@@ -6438,12 +6476,12 @@ impl HnswIndex {
         result
     }
 
-    fn search_single_with_bitset_scratch(
+    fn search_single_with_bitset_scratch<B: BitsetCheck>(
         &self,
         query: &[f32],
         ef: usize,
         k: usize,
-        bitset: &crate::bitset::BitsetView,
+        bitset: &B,
         scratch: &mut SearchScratch,
     ) -> Vec<(i64, f32)> {
         let mut curr_ep_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
@@ -6462,13 +6500,7 @@ impl HnswIndex {
         }
 
         // Layer 0 search with bitset — use fast path when slab available
-        let results = self.search_layer0_bitset_fast(
-            query,
-            curr_ep_idx,
-            ef,
-            bitset,
-            scratch,
-        );
+        let results = self.search_layer0_bitset_fast(query, curr_ep_idx, ef, bitset, scratch);
 
         let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
         for (idx, dist) in results {
@@ -6486,31 +6518,150 @@ impl HnswIndex {
         final_results
     }
 
+    fn search_single_with_bitset_ref_scratch<'a>(
+        &self,
+        query: &[f32],
+        entry_idx: usize,
+        ef: usize,
+        k: usize,
+        bitset: &crate::bitset::BitsetRef<'a>,
+        scratch: &mut SearchScratch,
+    ) -> Vec<(i64, f32)> {
+        let results = self.search_layer0_bitset_fast(query, entry_idx, ef, bitset, scratch);
+        let mut final_results: Vec<(i64, f32)> = Vec::with_capacity(k);
+        for (idx, dist) in results {
+            let id = self.get_id_from_idx(idx);
+            if self.is_deleted(id) {
+                continue;
+            }
+            final_results.push((id, dist));
+            if final_results.len() >= k {
+                break;
+            }
+        }
+        final_results
+    }
+
+    fn search_single_with_bitset_ref<'a>(
+        &self,
+        query: &[f32],
+        ef: usize,
+        k: usize,
+        bitset: &crate::bitset::BitsetRef<'a>,
+    ) -> Vec<(i64, f32)> {
+        if self.ids.is_empty() || self.entry_point.is_none() {
+            return vec![];
+        }
+
+        self.prepare_search_query_context(query);
+        let mut curr_ep_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
+
+        // Upper layer descent — greedy, no need for full search
+        let mut curr_ep_dist = self.distance(query, curr_ep_idx);
+        for level in (1..=self.max_level).rev() {
+            let (next_idx, next_dist) = self.greedy_upper_layer_descent_idx_with_entry_dist(
+                query,
+                curr_ep_idx,
+                level,
+                curr_ep_dist,
+            );
+            curr_ep_idx = next_idx;
+            curr_ep_dist = next_dist;
+        }
+
+        let mut result = HNSW_SEARCH_SCRATCH_TLS.with(|scratch_cell| {
+            let mut scratch = scratch_cell.borrow_mut();
+            self.search_single_with_bitset_ref_scratch(query, curr_ep_idx, ef, k, bitset, &mut scratch)
+        });
+        self.clear_search_query_context();
+        self.rerank_sq_results(query, &mut result);
+        result
+    }
+
+    pub fn search_with_bitset_ref<'a>(
+        &self,
+        query: &[f32],
+        req: &SearchRequest,
+        bitset: &crate::bitset::BitsetRef<'a>,
+    ) -> Result<ApiSearchResult> {
+        if self.vectors.is_empty() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "index is empty".to_string(),
+            ));
+        }
+
+        let n_queries = query.len() / self.dim;
+        if n_queries * self.dim != query.len() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "query dimension mismatch".to_string(),
+            ));
+        }
+
+        let k = req.top_k;
+        let ef = self
+            .config
+            .params
+            .effective_hnsw_ef_search(self.ef_search, req.nprobe, k);
+
+        let mut all_ids = Vec::new();
+        let mut all_dists = Vec::new();
+
+        for q_idx in 0..n_queries {
+            let q_start = q_idx * self.dim;
+            let query_vec = &query[q_start..q_start + self.dim];
+            let results = self.search_single_with_bitset_ref(query_vec, ef, k, bitset);
+            for (id, dist) in results.into_iter().take(k) {
+                all_ids.push(id);
+                all_dists.push(dist);
+            }
+        }
+
+        // Finalize distances
+        for i in 0..all_dists.len() {
+            if all_ids[i] != -1 {
+                match self.metric_type {
+                    MetricType::L2 => {
+                        all_dists[i] = all_dists[i].sqrt();
+                    }
+                    MetricType::Ip => {
+                        all_dists[i] = -all_dists[i];
+                    }
+                    MetricType::Cosine => {}
+                    _ => {
+                        all_dists[i] = all_dists[i].sqrt();
+                    }
+                }
+            }
+        }
+
+        Ok(ApiSearchResult::new(all_ids, all_dists, 0.0))
+    }
+
     /// Search for nearest neighbors at a specific layer with bitset filtering.
     ///
     /// This is the first pure-Rust core rewrite slice for filtered HNSW: move
     /// away from `id + HashSet` traversal toward the same `idx + SearchScratch`
     /// shape used by the generic search kernel.
-    fn search_layer_idx_with_bitset_scratch(
+    fn search_layer_idx_with_bitset_scratch<B: BitsetCheck>(
         &self,
         query: &[f32],
         entry_idx: usize,
         level: usize,
         ef: usize,
-        bitset: &crate::bitset::BitsetView,
+        bitset: &B,
         scratch: &mut SearchScratch,
     ) -> Vec<(usize, f32)> {
         self.search_layer_idx_shared(query, entry_idx, level, ef, Some(bitset), scratch, None)
     }
 
     #[cfg(test)]
-    fn search_layer_idx_with_bitset_scratch_stats(
+    fn search_layer_idx_with_bitset_scratch_stats<B: BitsetCheck>(
         &self,
         query: &[f32],
         entry_idx: usize,
         level: usize,
         ef: usize,
-        bitset: &crate::bitset::BitsetView,
+        bitset: &B,
         scratch: &mut SearchScratch,
     ) -> (Vec<(usize, f32)>, usize) {
         let before_snapshot = scratch.visited_epoch.clone();
@@ -8926,7 +9077,8 @@ mod tests {
         let query = [102.1, 0.0];
 
         let mut fresh_scratch = SearchScratch::new();
-        let expected = index.find_neighbors_for_insertion_with_scratch(&query, 0, &mut fresh_scratch);
+        let expected =
+            index.find_neighbors_for_insertion_with_scratch(&query, 0, &mut fresh_scratch);
 
         let (first, first_visited_cap, first_frontier_cap, first_result_cap) =
             index.find_neighbors_for_insertion_tls_for_test(&query, 0);
@@ -10026,7 +10178,7 @@ mod tests {
         let mut scratch = SearchScratch::new();
         let mut stats = HnswCandidateSearchProfileStats::default();
 
-        let results = index.search_layer_idx_shared(
+        let results = index.search_layer_idx_shared::<BitsetView>(
             &query,
             0,
             0,
@@ -10055,7 +10207,7 @@ mod tests {
         let mut stats = HnswCandidateSearchProfileStats::default();
 
         let results =
-            index.search_layer_idx_shared(&query, 0, 0, 4, None, &mut scratch, Some(&mut stats));
+            index.search_layer_idx_shared::<BitsetView>(&query, 0, 0, 4, None, &mut scratch, Some(&mut stats));
 
         assert_eq!(
             results.len(),
@@ -10076,7 +10228,7 @@ mod tests {
         let mut stats = HnswCandidateSearchProfileStats::default();
 
         let results =
-            index.search_layer_idx_shared(&query, 0, 0, 4, None, &mut scratch, Some(&mut stats));
+            index.search_layer_idx_shared::<BitsetView>(&query, 0, 0, 4, None, &mut scratch, Some(&mut stats));
 
         assert_eq!(
             results.len(),
@@ -10163,10 +10315,17 @@ mod tests {
         let r2 = index.search_single_with_bitset(&query, 50, 10, &bitset);
 
         // Results must be identical (deterministic with same graph)
-        assert_eq!(r1.len(), r2.len(), "bitset search results must be deterministic across calls");
+        assert_eq!(
+            r1.len(),
+            r2.len(),
+            "bitset search results must be deterministic across calls"
+        );
         for (a, b) in r1.iter().zip(r2.iter()) {
             assert_eq!(a.0, b.0, "IDs must match across calls");
-            assert!((a.1 - b.1).abs() < 1e-6, "distances must match across calls");
+            assert!(
+                (a.1 - b.1).abs() < 1e-6,
+                "distances must match across calls"
+            );
         }
 
         // Verify TLS scratch has been sized (not empty)
@@ -10228,16 +10387,19 @@ mod tests {
         index.prepare_search_query_context(&query);
         let mut scratch_ref = SearchScratch::new();
         let reference = index.search_layer_idx_with_bitset_scratch(
-            &query, ep_idx, 0, ef, &bitset, &mut scratch_ref,
+            &query,
+            ep_idx,
+            0,
+            ef,
+            &bitset,
+            &mut scratch_ref,
         );
         index.clear_search_query_context();
 
         // Fast path
         index.prepare_search_query_context(&query);
         let mut scratch_fast = SearchScratch::new();
-        let fast = index.search_layer0_bitset_fast(
-            &query, ep_idx, ef, &bitset, &mut scratch_fast,
-        );
+        let fast = index.search_layer0_bitset_fast(&query, ep_idx, ef, &bitset, &mut scratch_fast);
         index.clear_search_query_context();
 
         // Both should return results, and fast path should not include filtered nodes
@@ -10300,12 +10462,13 @@ mod tests {
 
         index.prepare_search_query_context(&query);
         let mut scratch = SearchScratch::new();
-        let results = index.search_layer0_bitset_fast(
-            &query, ep_idx, ef, &bitset, &mut scratch,
-        );
+        let results = index.search_layer0_bitset_fast(&query, ep_idx, ef, &bitset, &mut scratch);
         index.clear_search_query_context();
 
-        assert!(!results.is_empty(), "L2 slab batch-4 bitset search should return results");
+        assert!(
+            !results.is_empty(),
+            "L2 slab batch-4 bitset search should return results"
+        );
         for (idx, _dist) in &results {
             assert!(
                 *idx >= 20,
@@ -10354,12 +10517,14 @@ mod tests {
 
         index.prepare_search_query_context(&query);
         let mut scratch = SearchScratch::new();
-        let results = index.search_layer0_bitset_fast(
-            &query, entry_idx, ef, &empty_bitset, &mut scratch,
-        );
+        let results =
+            index.search_layer0_bitset_fast(&query, entry_idx, ef, &empty_bitset, &mut scratch);
         index.clear_search_query_context();
 
-        assert!(!results.is_empty(), "cosine slab batch-4 search should return results");
+        assert!(
+            !results.is_empty(),
+            "cosine slab batch-4 search should return results"
+        );
         assert!(results.len() <= ef, "results should not exceed ef");
 
         // Verify distances are valid cosine distances (in [0.0, 2.0])

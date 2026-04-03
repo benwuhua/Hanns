@@ -896,7 +896,7 @@ impl IndexWrapper {
                         hnsw: None,
                         scann: None,
                         hnsw_prq: None,
-    
+
                         hnsw_sq: None,
                         hnsw_pq: None,
                         ivf_pq: None,
@@ -1886,10 +1886,7 @@ impl IndexWrapper {
                 persistence,
                 metadata_granularity: "per-index-capability",
             }
-        } else if self.ivf_sq8.is_some()
-            || self.ivf_flat.is_some()
-            || self.ivf_pq.is_some()
-        {
+        } else if self.ivf_sq8.is_some() || self.ivf_flat.is_some() || self.ivf_pq.is_some() {
             IndexMetaSemantics {
                 family: "ivf",
                 raw_data_gate: if self.has_raw_data() {
@@ -2522,20 +2519,22 @@ pub extern "C" fn knowhere_search_with_bitset(
 
         let query_slice = std::slice::from_raw_parts(query, count * dim);
 
-        // 重建 BitsetView
-        let bitset_data =
-            std::slice::from_raw_parts(bitset_wrapper.data, bitset_wrapper.len.div_ceil(64))
-                .to_vec();
-        let bitset_view = crate::bitset::BitsetView::from_vec(bitset_data, bitset_wrapper.len);
+        // Zero-copy bitset for HNSW path: borrow CBitset words directly
+        let bitset_words = std::slice::from_raw_parts(
+            bitset_wrapper.data,
+            bitset_wrapper.len.div_ceil(64),
+        );
+        let bitset_ref = crate::bitset::BitsetRef::new(bitset_words, bitset_wrapper.len);
+
+        // Owned bitset for indexes that need it (flat, sparse, etc.)
+        let bitset_view =
+            crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_wrapper.len);
         let sparse_bitset = crate::faiss::sparse_inverted::bitset_to_bool_vec(&bitset_view);
 
-        // 使用 BitsetPredicate 进行搜索
         let req = SearchRequest {
             top_k,
             nprobe: 8,
-            filter: Some(std::sync::Arc::new(crate::api::BitsetPredicate::new(
-                bitset_view.clone(),
-            ))),
+            filter: None,
             params: None,
             radius: None,
         };
@@ -2565,7 +2564,7 @@ pub extern "C" fn knowhere_search_with_bitset(
                 Err(_) => std::ptr::null_mut(),
             }
         } else if let Some(ref idx) = index.hnsw {
-            match idx.search_with_bitset(query_slice, &req, &bitset_view) {
+            match idx.search_with_bitset_ref(query_slice, &req, &bitset_ref) {
                 Ok(result) => {
                     let mut ids = result.ids;
                     let mut distances = result.distances;

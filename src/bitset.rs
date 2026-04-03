@@ -439,6 +439,70 @@ impl BitsetView {
     }
 }
 
+/// Borrowed bitset reference — zero-copy view over external u64 words.
+///
+/// Used in FFI hot paths where the bitset data is owned by the caller (C `CBitset`)
+/// and remains valid for the duration of the search call.
+#[derive(Clone, Copy)]
+pub struct BitsetRef<'a> {
+    data: &'a [u64],
+    len: usize,
+}
+
+impl<'a> BitsetRef<'a> {
+    /// Create a borrowed bitset view from a slice of u64 words and a bit count.
+    #[inline]
+    pub fn new(data: &'a [u64], len: usize) -> Self {
+        Self { data, len }
+    }
+
+    /// Number of bits in the bitset.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Check bit at index. Returns false for out-of-range indices.
+    #[inline]
+    pub fn get(&self, index: usize) -> bool {
+        if index >= self.len {
+            return false;
+        }
+        let word = index / 64;
+        let bit = index % 64;
+        (self.data[word] >> bit) & 1 == 1
+    }
+
+    /// Alias for `get` — matches `BitsetView::test` naming.
+    #[inline]
+    pub fn test(&self, index: usize) -> bool {
+        self.get(index)
+    }
+
+    /// Count number of set bits (1s) in the bitset.
+    pub fn count_ones(&self) -> usize {
+        let full_words = self.len / 64;
+        let mut count = 0usize;
+        for &word in &self.data[..full_words.min(self.data.len())] {
+            count += word.count_ones() as usize;
+        }
+        let remaining = self.len % 64;
+        if remaining > 0 {
+            let last_idx = full_words;
+            if last_idx < self.data.len() {
+                let mask = (1u64 << remaining) - 1;
+                count += (self.data[last_idx] & mask).count_ones() as usize;
+            }
+        }
+        count
+    }
+}
+
 impl Default for BitsetView {
     fn default() -> Self {
         Self::new(0)
@@ -1304,5 +1368,24 @@ mod tests {
             neon_count_time,
             neon_count_time.as_nanos() as f64 / iterations as f64
         );
+    }
+
+    #[test]
+    fn test_bitset_ref_zero_copy() {
+        let words: Vec<u64> = vec![0b1010, 0b0101];
+        let len = 100;
+
+        let bitset_ref = BitsetRef::new(&words, len);
+
+        assert_eq!(bitset_ref.len(), 100);
+        assert!(!bitset_ref.is_empty());
+        assert_eq!(bitset_ref.get(0), false);
+        assert_eq!(bitset_ref.get(1), true);
+        assert_eq!(bitset_ref.get(2), false);
+        assert_eq!(bitset_ref.get(3), true);
+        assert_eq!(bitset_ref.get(64), true);
+        assert_eq!(bitset_ref.get(65), false);
+        assert!(!bitset_ref.get(200));
+        assert_eq!(bitset_ref.count_ones(), 4);
     }
 }
