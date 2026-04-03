@@ -367,6 +367,13 @@ impl Layer0Slab {
         self.words.as_ptr().add(base) as *const f32
     }
 
+    fn vector_slice_for(&self, node_idx: usize, dim: usize) -> &[f32] {
+        let base = node_idx * self.stride_words + self.vector_offset_words;
+        let raw = &self.words[base..base + dim];
+        // Safety: f32 and u32 have the same size; values were stored via f32::to_bits()
+        unsafe { std::slice::from_raw_parts(raw.as_ptr() as *const f32, dim) }
+    }
+
     #[cfg(any(test, feature = "long-tests"))]
     fn vector_for_audit(&self, node_idx: usize) -> &[f32] {
         let base = node_idx * self.stride_words + self.vector_offset_words;
@@ -5509,24 +5516,28 @@ impl HnswIndex {
                             )
                         }
                     } else {
-                        // Cosine/IP: use batch-4 dispatch (handles norm)
-                        match Self::distance_to_4_idxs_dispatch(
-                            self,
-                            query,
-                            batch_indices,
-                            query_ptr,
-                            base_ptr,
-                        ) {
-                            Some(d) => d,
-                            None => {
-                                [
-                                    self.distance(query, batch_indices[0]),
-                                    self.distance(query, batch_indices[1]),
-                                    self.distance(query, batch_indices[2]),
-                                    self.distance(query, batch_indices[3]),
-                                ]
+                        // Cosine/IP: batch-4 IP from slab vector pointers
+                        let v0 = self.layer0_slab.vector_slice_for(batch_indices[0], self.dim);
+                        let v1 = self.layer0_slab.vector_slice_for(batch_indices[1], self.dim);
+                        let v2 = self.layer0_slab.vector_slice_for(batch_indices[2], self.dim);
+                        let v3 = self.layer0_slab.vector_slice_for(batch_indices[3], self.dim);
+                        let mut ips = simd::ip_batch_4(query, v0, v1, v2, v3);
+                        if self.metric_type == MetricType::Ip {
+                            for ip in &mut ips {
+                                *ip = -*ip;
+                            }
+                        } else {
+                            // Cosine: stored vectors are pre-normalized; divide by query norm only
+                            let q_norm = HNSW_COSINE_QUERY_NORM_TLS.with(|c| c.get());
+                            if q_norm > 0.0 {
+                                for ip in &mut ips {
+                                    *ip = 1.0 - *ip / q_norm;
+                                }
+                            } else {
+                                ips.fill(1.0);
                             }
                         }
+                        ips
                     };
 
                     for i in 0..4 {
@@ -10296,6 +10307,63 @@ mod tests {
                 *idx >= 20,
                 "result idx {} should have been filtered by bitset",
                 idx
+            );
+        }
+    }
+
+    #[test]
+    fn test_search_layer0_bitset_fast_cosine_uses_slab_vectors() {
+        use crate::bitset::BitsetView;
+
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::Cosine,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(16),
+                ef_construction: Some(200),
+                ef_search: Some(200),
+                ..Default::default()
+            },
+        };
+        let n = 300usize;
+        let vectors: Vec<f32> = (0..n * 4)
+            .map(|i| ((i * 7 + 13) % 100) as f32 / 100.0)
+            .collect();
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        assert!(
+            index.layer0_slab.is_enabled_for(index.node_info.len()),
+            "slab must be enabled for this test to exercise the cosine slab path"
+        );
+
+        let query = [0.7_f32, 0.1, -0.3, 0.5];
+        let ef = 50;
+        let entry_idx = index.get_idx_from_id_fast(index.entry_point.unwrap());
+
+        // Empty bitset (no filtering)
+        let empty_bitset = BitsetView::new(n);
+
+        index.prepare_search_query_context(&query);
+        let mut scratch = SearchScratch::new();
+        let results = index.search_layer0_bitset_fast(
+            &query, entry_idx, ef, &empty_bitset, &mut scratch,
+        );
+        index.clear_search_query_context();
+
+        assert!(!results.is_empty(), "cosine slab batch-4 search should return results");
+        assert!(results.len() <= ef, "results should not exceed ef");
+
+        // Verify distances are valid cosine distances (in [0.0, 2.0])
+        for (_idx, dist) in &results {
+            assert!(
+                *dist >= 0.0 && *dist <= 2.0 + 1e-5,
+                "cosine distance {} out of [0, 2] range",
+                dist
             );
         }
     }
