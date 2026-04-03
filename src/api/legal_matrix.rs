@@ -170,6 +170,17 @@ impl LegalMatrix {
             vec![MetricType::Hamming],
         );
 
+        // === RHTSDG ===
+        for dt in &[DataType::Float, DataType::Float16, DataType::BFloat16] {
+            add_legal(
+                &mut legal_index_datatype,
+                &mut legal_combinations,
+                IndexType::Rhtsdg,
+                *dt,
+                vec![MetricType::L2, MetricType::Ip, MetricType::Cosine],
+            );
+        }
+
         // === HNSW-SQ ===
         for dt in &[
             DataType::Float,
@@ -301,6 +312,7 @@ impl LegalMatrix {
             IndexType::IvfSqCc,
             IndexType::IvfUsq,
             IndexType::Hnsw,
+            IndexType::Rhtsdg,
             IndexType::HnswSq,
             IndexType::HnswPq,
             IndexType::HnswPrq,
@@ -484,18 +496,12 @@ mod tests {
 
     #[test]
     fn test_validate_index_config_ivf_exrabitq_l2_only() {
+        assert!(validate_index_config(IndexType::IvfUsq, DataType::Float, MetricType::L2).is_ok());
+        assert!(validate_index_config(IndexType::IvfUsq, DataType::Float, MetricType::Ip).is_err());
         assert!(
-            validate_index_config(IndexType::IvfUsq, DataType::Float, MetricType::L2).is_ok()
+            validate_index_config(IndexType::IvfUsq, DataType::Binary, MetricType::Hamming)
+                .is_err()
         );
-        assert!(
-            validate_index_config(IndexType::IvfUsq, DataType::Float, MetricType::Ip).is_err()
-        );
-        assert!(validate_index_config(
-            IndexType::IvfUsq,
-            DataType::Binary,
-            MetricType::Hamming
-        )
-        .is_err());
     }
 
     #[test]

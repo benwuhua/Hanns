@@ -19,6 +19,8 @@ pub enum IndexType {
     IvfPq,
     /// HNSW
     Hnsw,
+    /// RHTSDG
+    Rhtsdg,
     /// DiskANN
     DiskAnn,
     /// ANNOY
@@ -73,6 +75,7 @@ impl FromStr for IndexType {
             "ivf_flat" | "ivf-flat" => Ok(IndexType::IvfFlat),
             "ivf_pq" | "ivf-pq" => Ok(IndexType::IvfPq),
             "hnsw" => Ok(IndexType::Hnsw),
+            "rhtsdg" => Ok(IndexType::Rhtsdg),
             "diskann" | "disk_ann" => Ok(IndexType::DiskAnn),
             "annoy" => Ok(IndexType::Annoy),
             #[cfg(feature = "scann")]
@@ -405,6 +408,27 @@ pub struct IndexParams {
     /// Set to 0.0 to disable the adaptive floor and honor the requested/base ef.
     #[serde(default)]
     pub hnsw_adaptive_k: Option<f64>,
+    /// For RHTSDG: alpha-pruning factor
+    #[serde(default)]
+    pub rhtsdg_alpha: Option<f32>,
+    /// For RHTSDG: occurrence threshold used in stage-2 reverse-edge filtering
+    #[serde(default)]
+    pub rhtsdg_occ_threshold: Option<u32>,
+    /// For RHTSDG/XNDescent: base k for candidate graph construction
+    #[serde(default)]
+    pub rhtsdg_knn_k: Option<usize>,
+    /// For RHTSDG/XNDescent: sample count for new-neighbor processing
+    #[serde(default)]
+    pub rhtsdg_sample_count: Option<usize>,
+    /// For RHTSDG/XNDescent: iteration count
+    #[serde(default)]
+    pub rhtsdg_iter_count: Option<usize>,
+    /// For RHTSDG/XNDescent: reverse sample count
+    #[serde(default)]
+    pub rhtsdg_reverse_count: Option<usize>,
+    /// For RHTSDG/XNDescent: optional shortcut graph toggle
+    #[serde(default)]
+    pub rhtsdg_use_shortcut: Option<bool>,
 }
 
 impl IndexParams {

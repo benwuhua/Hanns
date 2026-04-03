@@ -1,20 +1,30 @@
+use crate::api::MetricType;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct DistanceMatrix {
     dim: usize,
     points: Vec<f32>,
+    metric: MetricType,
 }
 
 impl DistanceMatrix {
     pub fn from_points(dim: usize, points: Vec<f32>) -> Self {
+        Self::from_points_with_metric(dim, points, MetricType::L2)
+    }
+
+    pub fn from_points_with_metric(dim: usize, points: Vec<f32>, metric: MetricType) -> Self {
         assert!(dim > 0, "dimension must be positive");
         assert_eq!(
             points.len() % dim,
             0,
             "point buffer length must be divisible by dim"
         );
-        Self { dim, points }
+        Self {
+            dim,
+            points,
+            metric,
+        }
     }
 
     pub fn distance(&self, lhs: usize, rhs: usize) -> f32 {
@@ -22,15 +32,7 @@ impl DistanceMatrix {
         let rhs_start = rhs * self.dim;
         let lhs_slice = &self.points[lhs_start..lhs_start + self.dim];
         let rhs_slice = &self.points[rhs_start..rhs_start + self.dim];
-        lhs_slice
-            .iter()
-            .zip(rhs_slice.iter())
-            .map(|(a, b)| {
-                let delta = a - b;
-                delta * delta
-            })
-            .sum::<f32>()
-            .sqrt()
+        metric_distance(self.metric, lhs_slice, rhs_slice)
     }
 }
 
@@ -122,4 +124,30 @@ pub fn stage2_filter_neighbors(
     combined.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
     combined.truncate(max_k);
     combined.into_iter().map(|(id, _)| id).collect()
+}
+
+fn metric_distance(metric: MetricType, lhs: &[f32], rhs: &[f32]) -> f32 {
+    match metric {
+        MetricType::L2 => lhs
+            .iter()
+            .zip(rhs.iter())
+            .map(|(a, b)| {
+                let delta = a - b;
+                delta * delta
+            })
+            .sum::<f32>()
+            .sqrt(),
+        MetricType::Ip => -lhs.iter().zip(rhs.iter()).map(|(a, b)| a * b).sum::<f32>(),
+        MetricType::Cosine => {
+            let dot = lhs.iter().zip(rhs.iter()).map(|(a, b)| a * b).sum::<f32>();
+            let lhs_norm = lhs.iter().map(|v| v * v).sum::<f32>().sqrt();
+            let rhs_norm = rhs.iter().map(|v| v * v).sum::<f32>().sqrt();
+            if lhs_norm == 0.0 || rhs_norm == 0.0 {
+                1.0
+            } else {
+                1.0 - dot / (lhs_norm * rhs_norm)
+            }
+        }
+        MetricType::Hamming => unreachable!("rhtsdg does not support hamming"),
+    }
 }

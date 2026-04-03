@@ -1,3 +1,4 @@
+pub mod config;
 pub mod neighbor;
 mod search;
 pub mod tsdg;

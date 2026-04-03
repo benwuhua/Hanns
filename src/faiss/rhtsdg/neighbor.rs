@@ -63,17 +63,12 @@ impl Neighborhood {
             return true;
         }
 
-        let Some((worst_idx, worst_neighbor)) = inner
-            .pool
-            .iter()
-            .enumerate()
-            .max_by(|lhs, rhs| {
-                lhs.1
-                    .distance
-                    .total_cmp(&rhs.1.distance)
-                    .then_with(|| lhs.1.id.cmp(&rhs.1.id))
-            })
-        else {
+        let Some((worst_idx, worst_neighbor)) = inner.pool.iter().enumerate().max_by(|lhs, rhs| {
+            lhs.1
+                .distance
+                .total_cmp(&rhs.1.distance)
+                .then_with(|| lhs.1.id.cmp(&rhs.1.id))
+        }) else {
             return false;
         };
 
@@ -96,7 +91,11 @@ impl Neighborhood {
     }
 
     pub fn contains(&self, id: u32) -> bool {
-        self.inner.lock().pool.iter().any(|neighbor| neighbor.id == id)
+        self.inner
+            .lock()
+            .pool
+            .iter()
+            .any(|neighbor| neighbor.id == id)
     }
 
     pub fn seed_for_test(&self, neighbors: &[Neighbor]) {
@@ -133,5 +132,21 @@ impl Neighborhood {
     pub fn sample_lists(&self) -> (Vec<u32>, Vec<u32>) {
         let inner = self.inner.lock();
         (inner.nn_new.clone(), inner.nn_old.clone())
+    }
+
+    pub fn promote_new_to_old(&self) {
+        let mut inner = self.inner.lock();
+        for neighbor in &mut inner.pool {
+            if neighbor.status == NeighborStatus::New {
+                neighbor.status = NeighborStatus::Old;
+            }
+        }
+    }
+
+    pub fn snapshot_ids(&self) -> Vec<u32> {
+        self.snapshot()
+            .into_iter()
+            .map(|neighbor| neighbor.id)
+            .collect()
     }
 }

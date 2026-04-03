@@ -63,6 +63,7 @@ pub use ivf_sq_cc::IvfSqCcIndex;
 pub use ivf_turboquant::{IvfTurboQuantConfig, IvfTurboQuantIndex};
 pub use ivfpq::IvfPqIndex;
 pub use mem_index::MemIndex;
+pub use rhtsdg::RhtsdgIndex;
 pub use scann::{ScaNNConfig, ScaNNIndex};
 pub use sparse::{SparseIndex, SparseVector};
 pub use sparse_inverted::{

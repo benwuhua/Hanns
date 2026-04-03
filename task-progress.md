@@ -64,25 +64,44 @@
 
 ### Result
 
-- `screen_result=needs_more_local`
-- Observed local signals:
+- `screen_result=promote`
+- Initial local pass proved the TSDG/XNDescent/search skeleton but stayed at `needs_more_local` because the screen fixture still used `build_kind=exact_knn_fixture`.
+- Follow-up local pass replaced the exact graph with a real local `XNDescent -> TSDG` build path in `RhtsdgIndex::build_for_tests()`.
+- Updated local signals:
   - TSDG fixture tests passed
   - XNDescent neighborhood/local-join tests passed
   - single-layer search matched brute-force top-1 on the deterministic grid fixture
-  - synthetic screen summary: `recall_at_10=1.0`, `query_count=256`, `build_kind=exact_knn_fixture`
-- Reason the screen is not yet promotable:
-  - the current `RhtsdgIndex` screen fixture uses an exact brute-force k-NN graph (`build_kind=exact_knn_fixture`), not a real `XNDescent -> TSDG -> hierarchical graph` build path
-  - this proves the search skeleton and local invariants, but it does not yet prove that the actual RHTSDG construction pipeline yields a high-quality graph
+  - build-from-vectors search matched brute-force top-1 on the same grid fixture
+  - release synthetic screen summary: `recall_at_10=1.0`, `query_count=256`, `build_kind=xndescent_tsdg_fixture`
+- Promotion basis:
+  - the screen fixture now exercises local candidate-graph construction rather than a precomputed exact graph
+  - the non-exact local build still clears the recall gate, so the RHTSDG work is worth promoting into tracked Rust-core integration
 
-### Next Local Step
+### Rust-Core Integration Update
 
-- Integrate the real build path into `RhtsdgIndex` so the screen fixture exercises:
-  - random / seeded initialization
-  - `update_sample_neighbors()`
-  - `local_join()`
-  - TSDG diversification
-  - graph materialization consumed by the search path
-- Re-run the same local screen after that integration and only promote into `feature-list.json` if the screen still clears the recall gate on a non-exact graph build.
+- Completed the Rust-only config/legal wiring for `IndexType::Rhtsdg` without widening FFI/JNI/Python surface area.
+- Promoted `RhtsdgIndex` from a test-only search prototype into a Rust `Index` implementation with:
+  - `train/add/search/search_with_bitset`
+  - raw-vector retrieval via `get_vector_by_ids`
+  - `AnnIterator`
+  - file and in-memory persistence using `IndexCodec` header + bincode snapshot payload
+- Kept the current graph build local to `src/faiss/rhtsdg/*` and still backed by the same `XNDescent -> TSDG` base-graph path used in the promoted screen.
+- Additional local verification:
+  - `cargo test --test test_rhtsdg_index_trait -- --nocapture`
+  - `cargo test --test test_rhtsdg_tsdg --test test_rhtsdg_xndescent --test test_rhtsdg_screen --test test_rhtsdg_index_trait -- --nocapture`
+  - `cargo test --release --test test_rhtsdg_screen screen_rhtsdg_recall_gate_on_synthetic_fixture -- --ignored --nocapture`
+- Current local signal after Rust-core integration:
+  - trait/persistence tests pass
+  - release synthetic screen still reports `recall_at_10=1.0`, `query_count=256`, `build_kind=xndescent_tsdg_fixture`
+- Local hygiene note:
+  - `cargo fmt --all -- --check` is currently red because the repository already contains unrelated formatting drift outside the RHTSDG files; this was not corrected as part of the focused RHTSDG slice
+
+### Next Step
+
+- Open tracked RHTSDG work formally:
+  - add `feature-list.json` entries for Rust-core and remote recall validation
+  - bootstrap the authority machine with `bash init.sh`
+  - run remote verification for `test_rhtsdg_index_trait` and the ignored synthetic screen gate before making any production or stop-go claim
 
 ## Session 2026-04-02 Milvus Build Layout Experiment
 
