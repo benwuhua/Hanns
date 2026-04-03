@@ -27,6 +27,7 @@ pub mod lazy_index;
 pub mod mem_index;
 pub mod pq_simd;
 pub mod raw;
+pub mod rhtsdg;
 pub mod scann;
 pub mod sparse;
 pub mod sparse_inverted;
