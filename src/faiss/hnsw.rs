@@ -5499,28 +5499,14 @@ impl HnswIndex {
                 if batch_len == 4 {
                     let distances = if is_l2 {
                         unsafe {
-                            [
-                                (self.l2_distance_sq_ptr_kernel)(
-                                    query_ptr,
-                                    self.layer0_slab.vector_ptr_for(batch_indices[0]),
-                                    self.dim,
-                                ),
-                                (self.l2_distance_sq_ptr_kernel)(
-                                    query_ptr,
-                                    self.layer0_slab.vector_ptr_for(batch_indices[1]),
-                                    self.dim,
-                                ),
-                                (self.l2_distance_sq_ptr_kernel)(
-                                    query_ptr,
-                                    self.layer0_slab.vector_ptr_for(batch_indices[2]),
-                                    self.dim,
-                                ),
-                                (self.l2_distance_sq_ptr_kernel)(
-                                    query_ptr,
-                                    self.layer0_slab.vector_ptr_for(batch_indices[3]),
-                                    self.dim,
-                                ),
-                            ]
+                            simd::l2_batch_4_ptrs(
+                                query_ptr,
+                                self.layer0_slab.vector_ptr_for(batch_indices[0]),
+                                self.layer0_slab.vector_ptr_for(batch_indices[1]),
+                                self.layer0_slab.vector_ptr_for(batch_indices[2]),
+                                self.layer0_slab.vector_ptr_for(batch_indices[3]),
+                                self.dim,
+                            )
                         }
                     } else {
                         // Cosine/IP: use batch-4 dispatch (handles norm)
@@ -10253,6 +10239,63 @@ mod tests {
                 *idx >= 50,
                 "reference path result idx {} should have been filtered by bitset",
                 idx,
+            );
+        }
+    }
+
+    #[test]
+    fn test_search_layer0_bitset_fast_l2_uses_slab_batch4() {
+        use crate::bitset::BitsetView;
+
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                m: Some(16),
+                ef_construction: Some(200),
+                ef_search: Some(200),
+                ..Default::default()
+            },
+        };
+        let n = 200;
+        let vectors: Vec<f32> = (0..n * 4)
+            .map(|i| ((i * 7 + 13) % 100) as f32 / 100.0)
+            .collect();
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        index.train(&vectors).unwrap();
+        index.add(&vectors, None).unwrap();
+
+        assert!(
+            index.layer0_slab.is_enabled_for(index.node_info.len()),
+            "slab must be enabled for this test to exercise the fast path"
+        );
+
+        // Create bitset that filters out nodes 0-19
+        let mut bitset = BitsetView::new(n);
+        for i in 0..20 {
+            bitset.set(i, true);
+        }
+
+        let query = [0.5_f32, 0.3, 0.1, 0.7];
+        let ef = 50;
+        let ep_idx = index.get_idx_from_id_fast(index.entry_point.unwrap());
+
+        index.prepare_search_query_context(&query);
+        let mut scratch = SearchScratch::new();
+        let results = index.search_layer0_bitset_fast(
+            &query, ep_idx, ef, &bitset, &mut scratch,
+        );
+        index.clear_search_query_context();
+
+        assert!(!results.is_empty(), "L2 slab batch-4 bitset search should return results");
+        for (idx, _dist) in &results {
+            assert!(
+                *idx >= 20,
+                "result idx {} should have been filtered by bitset",
+                idx
             );
         }
     }
