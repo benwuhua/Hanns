@@ -86,6 +86,21 @@ fn node_id_subset_mapping_still_resolves_logical_indices() {
 }
 
 #[test]
+fn invalid_direct_indices_are_rejected_before_l2_ptr_access() {
+    let points = vec![
+        0.0, 0.0, //
+        2.0, 0.0, //
+    ];
+    let matrix = DistanceMatrix::from_points(2, Box::leak(points.into_boxed_slice()));
+
+    let result = std::panic::catch_unwind(|| {
+        matrix.distance(0, 2);
+    });
+
+    assert!(result.is_err(), "invalid direct indices must panic safely");
+}
+
+#[test]
 fn invalid_node_ids_are_rejected_before_l2_ptr_access() {
     let points = vec![
         10.0, 0.0, // physical 0

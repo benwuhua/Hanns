@@ -17,6 +17,7 @@ pub struct TsdgTrace {
 #[derive(Debug, Clone, Copy)]
 pub struct DistanceMatrix<'a> {
     dim: usize,
+    point_count: usize,
     points: &'a [f32],
     node_ids: Option<&'a [u32]>,
     metric: MetricType,
@@ -53,6 +54,7 @@ impl<'a> DistanceMatrix<'a> {
         }
         Self {
             dim,
+            point_count,
             points,
             node_ids,
             metric,
@@ -73,6 +75,10 @@ impl<'a> DistanceMatrix<'a> {
     pub fn distance(&self, lhs: usize, rhs: usize) -> f32 {
         let lhs = self.resolve_idx(lhs);
         let rhs = self.resolve_idx(rhs);
+        assert!(
+            lhs < self.point_count && rhs < self.point_count,
+            "distance indices must reference valid point rows"
+        );
         let lhs_start = lhs * self.dim;
         let rhs_start = rhs * self.dim;
         if let Some(kernel) = self.l2_distance_sq_ptr_kernel {
