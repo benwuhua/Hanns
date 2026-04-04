@@ -507,6 +507,27 @@
 
 ## Session Log
 
+### Session 247 - 2026-04-04
+- Focus: `rhtsdg-neighborhood-scratch-snapshot-no-go`
+- Mode:
+  - `screen`
+- Hypothesis:
+  - replace clone-heavy neighborhood candidate extraction with caller-reused scratch buffers in `xndescent`
+- Completed:
+  - added failing local tests for reusable sample-list buffers and deterministic join-candidate ordering
+  - implemented `Neighborhood` `*_into` helpers and rewired `xndescent` sampling/join loops to use caller-owned scratch vectors
+  - re-ran the full local RHTSDG slice and the representative example lane
+- Verification:
+  - local:
+    - `cargo test --test test_rhtsdg_xndescent sample_lists_into_reuses_caller_buffers_without_reallocation -- --nocapture` -> `ok`
+    - `cargo test --test test_rhtsdg_xndescent join_candidate_lists_remain_distance_sorted_and_deduped -- --nocapture` -> `ok`
+    - `cargo test --test test_rhtsdg_tsdg --test test_rhtsdg_xndescent --test test_rhtsdg_screen --test test_rhtsdg_index_trait -- --nocapture` -> `ok`
+    - `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `hnsw build_s=2.036, search_s=0.011, qps=17724.54, recall@10=1.0000; rhtsdg build_s=10.584, search_s=0.020, qps=9963.38, recall@10=0.9965`
+- Result:
+  - `screen_result=no_go`
+  - build time improved slightly versus the recovered pre-screen lane, but search time worsened and qps dropped relative to `rhtsdg build_s=10.654, search_s=0.019, qps=10283.04, recall@10=0.9965`
+  - the code changes were reverted locally; no Task 4 implementation was kept
+
 ### Session 246 - 2026-04-04
 - Focus: `rhtsdg-hierarchy-borrowed-view-no-go`
 - Mode:
