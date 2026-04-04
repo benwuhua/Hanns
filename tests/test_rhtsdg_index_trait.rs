@@ -61,6 +61,16 @@ fn rhtsdg_index_round_trips_save_and_load() {
     assert_eq!(before.ids, after.ids);
     assert_eq!(before.distances, after.distances);
     assert_eq!(raw_before, raw_after);
+    assert_eq!(
+        index.layer_sizes_for_test(),
+        loaded.layer_sizes_for_test(),
+        "save/load should preserve hierarchy shape"
+    );
+    assert_eq!(
+        index.entry_point_for_test(),
+        loaded.entry_point_for_test(),
+        "save/load should preserve hierarchy entry point"
+    );
 }
 
 #[test]
@@ -77,6 +87,28 @@ fn rhtsdg_index_search_with_bitset_filters_internal_positions() {
         .expect("bitset search should succeed");
     assert_eq!(result.ids[0], 200);
     assert!(!result.ids.contains(&100));
+}
+
+#[test]
+fn rhtsdg_search_returns_public_euclidean_l2_distances() {
+    let (config, data, query) = rhtsdg_fixture();
+    let mut index = RhtsdgIndex::new(&config).expect("rhtsdg should build");
+    Index::train(&mut index, &data).expect("train should succeed");
+    Index::add(&mut index, &data).expect("add should succeed");
+
+    let result = Index::search(&index, &query, 3).expect("search should succeed");
+    assert_eq!(result.ids, vec![100, 200, 300]);
+    assert_eq!(result.distances[0], 0.0);
+    assert!(
+        (result.distances[1] - 1.0).abs() < 1e-6,
+        "expected Euclidean distance 1.0, got {}",
+        result.distances[1]
+    );
+    assert!(
+        (result.distances[2] - 2.0).abs() < 1e-6,
+        "expected Euclidean distance 2.0, got {}",
+        result.distances[2]
+    );
 }
 
 #[test]
