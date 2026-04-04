@@ -32,7 +32,11 @@ pub struct UsqLayout {
 impl UsqLayout {
     /// Build a UsqLayout from encoded vectors and their IDs.
     pub fn build(config: &UsqConfig, encoded: &[UsqEncoded], ids: &[i64]) -> Self {
-        assert_eq!(encoded.len(), ids.len(), "encoded and ids must have the same length");
+        assert_eq!(
+            encoded.len(),
+            ids.len(),
+            "encoded and ids must have the same length"
+        );
 
         let code_bytes = config.code_bytes();
         let padded_dim = config.padded_dim();

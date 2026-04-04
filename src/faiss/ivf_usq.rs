@@ -13,8 +13,7 @@ use crate::index::{
     AnnIterator, Index as IndexTrait, IndexError, SearchResult as IndexSearchResult,
 };
 use crate::quantization::usq::{
-    fastscan_topk, UsqConfig, UsqEncoded, UsqFastScanState, UsqLayout, UsqQueryState,
-    UsqQuantizer,
+    fastscan_topk, UsqConfig, UsqEncoded, UsqFastScanState, UsqLayout, UsqQuantizer, UsqQueryState,
 };
 use crate::quantization::KMeans;
 
@@ -414,9 +413,9 @@ impl IvfUsqIndex {
         File::open(path)?.read_to_end(&mut bytes)?;
         const LEGACY_EXRABITQ_MAGIC: &[u8; 8] = b"IVFXRBTQ";
         let payload = if bytes.starts_with(USQ_MAGIC) || bytes.starts_with(LEGACY_EXRABITQ_MAGIC) {
-            bytes.get(16..).ok_or_else(|| {
-                KnowhereError::Codec("usq snapshot header too short".to_string())
-            })?
+            bytes
+                .get(16..)
+                .ok_or_else(|| KnowhereError::Codec("usq snapshot header too short".to_string()))?
         } else {
             bytes.as_slice()
         };
@@ -526,12 +525,7 @@ impl IvfUsqIndex {
         }
     }
 
-    fn search_single(
-        &self,
-        query: &[f32],
-        top_k: usize,
-        nprobe: usize,
-    ) -> Vec<(i64, f32)> {
+    fn search_single(&self, query: &[f32], top_k: usize, nprobe: usize) -> Vec<(i64, f32)> {
         let coarse = self.rank_centroids(query, nprobe);
         let use_l2 = matches!(self.config.metric_type, MetricType::L2);
 

@@ -13,7 +13,11 @@ impl UsqConfig {
         if nbits == 0 || nbits > 8 {
             return Err(format!("nbits must be 1..=8, got {nbits}"));
         }
-        Ok(Self { dim, nbits, seed: 42 })
+        Ok(Self {
+            dim,
+            nbits,
+            seed: 42,
+        })
     }
 
     pub fn with_seed(mut self, seed: u64) -> Self {

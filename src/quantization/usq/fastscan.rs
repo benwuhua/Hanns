@@ -29,11 +29,20 @@ impl UsqFastScanState {
         for g in 0..n_groups {
             let base = g * 4;
             // Load the 4 query components for this group (safe: padded ensures in-bounds).
-            let q = [q_rot[base], q_rot[base + 1], q_rot[base + 2], q_rot[base + 3]];
+            let q = [
+                q_rot[base],
+                q_rot[base + 1],
+                q_rot[base + 2],
+                q_rot[base + 3],
+            ];
             for nibble in 0..16usize {
                 let mut val = 0.0f32;
                 for bit in 0..4usize {
-                    let sign = if (nibble >> bit) & 1 != 0 { 1.0f32 } else { -1.0f32 };
+                    let sign = if (nibble >> bit) & 1 != 0 {
+                        1.0f32
+                    } else {
+                        -1.0f32
+                    };
                     val += q[bit] * sign;
                 }
                 lut_f32[g * 16 + nibble] = val;
@@ -74,7 +83,11 @@ use std::cmp::Reverse;
 
 /// Scan all fastscan blocks in `layout` and return up to `top_n` candidates
 /// with the highest raw scores (sorted descending).
-pub fn fastscan_topk(layout: &UsqLayout, state: &UsqFastScanState, top_n: usize) -> Vec<FsCandidate> {
+pub fn fastscan_topk(
+    layout: &UsqLayout,
+    state: &UsqFastScanState,
+    top_n: usize,
+) -> Vec<FsCandidate> {
     if top_n == 0 || layout.is_empty() {
         return Vec::new();
     }
@@ -124,7 +137,11 @@ pub fn fastscan_topk(layout: &UsqLayout, state: &UsqFastScanState, top_n: usize)
         .into_iter()
         .map(|Reverse((raw_score, idx))| FsCandidate { idx, raw_score })
         .collect();
-    results.sort_by(|a, b| b.raw_score.cmp(&a.raw_score).then_with(|| a.idx.cmp(&b.idx)));
+    results.sort_by(|a, b| {
+        b.raw_score
+            .cmp(&a.raw_score)
+            .then_with(|| a.idx.cmp(&b.idx))
+    });
     results
 }
 
@@ -137,7 +154,11 @@ fn fastscan_block_scalar(state: &UsqFastScanState, block: &[u8], n_groups: usize
         let group_base = group_idx * 16;
         for slot in 0..32usize {
             let byte = block[group_base + slot / 2];
-            let nibble = if slot % 2 == 0 { byte & 0x0F } else { (byte >> 4) & 0x0F };
+            let nibble = if slot % 2 == 0 {
+                byte & 0x0F
+            } else {
+                (byte >> 4) & 0x0F
+            };
             scores[slot] += lut[nibble as usize] as i32;
         }
     }

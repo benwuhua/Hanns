@@ -97,7 +97,10 @@ impl UsqRotator {
         let dim = self.dim;
         let vec_ptr = vec.as_ptr();
         let num16 = dim & !15; // round down to multiple of 16
-        debug_assert_eq!(num16, dim, "padded_dim is always a multiple of 64 (>=16), so remainder loop is unreachable");
+        debug_assert_eq!(
+            num16, dim,
+            "padded_dim is always a multiple of 64 (>=16), so remainder loop is unreachable"
+        );
 
         for r in 0..dim {
             let row_ptr = matrix.as_ptr().add(r * dim);

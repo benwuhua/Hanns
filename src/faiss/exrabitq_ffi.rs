@@ -59,9 +59,7 @@ pub unsafe extern "C" fn knowhere_ivf_exrabitq_build(
 /// # Safety
 /// `path` must be a valid, NUL-terminated C string.
 #[no_mangle]
-pub unsafe extern "C" fn knowhere_ivf_exrabitq_load(
-    path: *const c_char,
-) -> *mut IvfUsqIndexHandle {
+pub unsafe extern "C" fn knowhere_ivf_exrabitq_load(path: *const c_char) -> *mut IvfUsqIndexHandle {
     if path.is_null() {
         return std::ptr::null_mut();
     }

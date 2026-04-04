@@ -36,7 +36,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest, SearchResult};
-use crate::faiss::{HnswIndex, IvfUsqIndex, IvfFlatIndex, IvfPqIndex, MemIndex};
+use crate::faiss::{HnswIndex, IvfFlatIndex, IvfPqIndex, IvfUsqIndex, MemIndex};
 
 /// 内部索引枚举（避免 trait object 问题）
 enum InnerIndex {
@@ -165,10 +165,8 @@ impl PyIndex {
             "hnsw" => IndexType::Hnsw,
             "ivf_flat" | "ivfflat" => IndexType::IvfFlat,
             "ivf_pq" | "ivfpq" => IndexType::IvfPq,
-            "ivf_exrabitq" | "ivf-exrabitq" | "exrabitq" | "extended-rabitq"
-            | "ivf_usq" | "ivf-usq" | "usq" => {
-                IndexType::IvfUsq
-            }
+            "ivf_exrabitq" | "ivf-exrabitq" | "exrabitq" | "extended-rabitq" | "ivf_usq"
+            | "ivf-usq" | "usq" => IndexType::IvfUsq,
             _ => {
                 return Err(PyValueError::new_err(format!(
                 "Unknown index type: {} (supported: flat, hnsw, ivf_flat, ivf_pq, ivf_exrabitq)",

@@ -39,7 +39,7 @@ use crate::api::{
     SearchResult as ApiSearchResult,
 };
 use crate::faiss::{
-    AisaqConfig, FileGroup, HnswIndex, IvfUsqIndex, IvfFlatIndex, IvfPqIndex, IvfSq8Index,
+    AisaqConfig, FileGroup, HnswIndex, IvfFlatIndex, IvfPqIndex, IvfSq8Index, IvfUsqIndex,
     MemIndex, PQFlashIndex,
 };
 

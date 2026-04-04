@@ -641,7 +641,10 @@ impl HvqQuantizer {
         packed.extend_from_slice(&packed_bits);
 
         // 1-bit sign codes from the same o_hat
-        let sign_codes: Vec<u16> = o_hat.iter().map(|&v| if v >= 0.0 { 1u16 } else { 0u16 }).collect();
+        let sign_codes: Vec<u16> = o_hat
+            .iter()
+            .map(|&v| if v >= 0.0 { 1u16 } else { 0u16 })
+            .collect();
         let mut sign_packed = Vec::with_capacity(self.config.dim.div_ceil(8));
         pack_codes(&sign_codes, 1, &mut sign_packed);
 
@@ -847,12 +850,24 @@ impl HvqQuantizer {
         {
             if std::arch::is_x86_feature_detected!("avx512f") {
                 if self.config.nbits == 1 {
-                    return self.score_code_1bit_with_meta(state, norm_o, vmax, base_quant_dist, packed_bits);
+                    return self.score_code_1bit_with_meta(
+                        state,
+                        norm_o,
+                        vmax,
+                        base_quant_dist,
+                        packed_bits,
+                    );
                 }
                 if matches!(self.config.nbits, 4 | 8)
                     && std::arch::is_x86_feature_detected!("avx512vnni")
                 {
-                    return self.score_code_simd_with_meta(state, norm_o, vmax, base_quant_dist, packed_bits);
+                    return self.score_code_simd_with_meta(
+                        state,
+                        norm_o,
+                        vmax,
+                        base_quant_dist,
+                        packed_bits,
+                    );
                 }
             }
         }
@@ -922,7 +937,15 @@ impl HvqQuantizer {
         let int_ip = match self.config.nbits {
             8 => dot_u8_i8_vnni_assumed(packed_code, &state.q_quantized),
             4 => dot_packed_u4_i8_vnni(packed_code, &state.q_quantized),
-            _ => return self.score_code_scalar_with_meta(state, norm_o, vmax, base_quant_dist, packed_code),
+            _ => {
+                return self.score_code_scalar_with_meta(
+                    state,
+                    norm_o,
+                    vmax,
+                    base_quant_dist,
+                    packed_code,
+                )
+            }
         };
 
         let float_ip =
@@ -940,7 +963,15 @@ impl HvqQuantizer {
         packed_code: &[u8],
     ) -> f32 {
         if std::arch::is_x86_feature_detected!("avx512f") {
-            unsafe { self.score_code_1bit_with_meta_avx512_impl(state, norm_o, vmax, base_quant_dist, packed_code) }
+            unsafe {
+                self.score_code_1bit_with_meta_avx512_impl(
+                    state,
+                    norm_o,
+                    vmax,
+                    base_quant_dist,
+                    packed_code,
+                )
+            }
         } else {
             self.score_code_scalar_with_meta(state, norm_o, vmax, base_quant_dist, packed_code)
         }
@@ -2593,7 +2624,11 @@ mod tests {
                     let base_quant_dist = f32::from_le_bytes(code[8..12].try_into().unwrap());
                     let packed_bits = &code[12..];
                     let with_meta = hvq.score_code_with_meta(
-                        &state, norm_o, vmax, base_quant_dist, packed_bits,
+                        &state,
+                        norm_o,
+                        vmax,
+                        base_quant_dist,
+                        packed_bits,
                     );
                     let diff = (original - with_meta).abs();
                     assert!(

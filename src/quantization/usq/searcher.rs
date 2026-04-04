@@ -1,6 +1,6 @@
 use super::fastscan::{fastscan_topk, FsCandidate, UsqFastScanState};
 use super::layout::UsqLayout;
-use super::quantizer::{UsqQueryState, UsqQuantizer};
+use super::quantizer::{UsqQuantizer, UsqQueryState};
 
 /// Two-stage search: 1-bit fastscan coarse filter → B-bit rerank.
 ///

@@ -323,12 +323,7 @@ impl UsqQuantizer {
     ///   float_ip = q_scale * (code_scale * int_ip + offset * q_quantized_sum)
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx512f,avx512vnni")]
-    unsafe fn compute_ip_vnni(
-        &self,
-        state: &UsqQueryState,
-        vmax: f32,
-        packed_bits: &[u8],
-    ) -> f32 {
+    unsafe fn compute_ip_vnni(&self, state: &UsqQueryState, vmax: f32, packed_bits: &[u8]) -> f32 {
         let levels = (1u32 << self.config.nbits) as f32;
         let code_scale = (2.0 * vmax) / levels.max(1.0);
         let offset = -vmax;
@@ -387,7 +382,10 @@ impl UsqQuantizer {
     /// Greedy refinement quantizer for `nbits >= 4`.
     /// Returns `(codes, ip, qed_length)`.
     fn greedy_quantize(&self, o_hat: &[f32], nrefine: usize) -> (Vec<u16>, f32, f32) {
-        debug_assert!(o_hat.len() % 64 == 0, "o_hat must be padded to multiple of 64");
+        debug_assert!(
+            o_hat.len() % 64 == 0,
+            "o_hat must be padded to multiple of 64"
+        );
         let dim = o_hat.len();
         let nbits = self.config.nbits;
         let vmax = Self::unit_vmax(o_hat);
@@ -487,7 +485,10 @@ impl UsqQuantizer {
     /// Threshold-sweep quantizer for `nbits < 4` (ExRaBitQ style).
     /// Returns `(codes, ip, qed_length)`.
     fn fast_quantize(&self, o_hat: &[f32]) -> (Vec<u16>, f32, f32) {
-        debug_assert!(o_hat.len() % 64 == 0, "o_hat must be padded to multiple of 64");
+        debug_assert!(
+            o_hat.len() % 64 == 0,
+            "o_hat must be padded to multiple of 64"
+        );
         let dim = o_hat.len();
         let levels = 1u16 << self.config.nbits;
         let half_levels = levels / 2;

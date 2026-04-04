@@ -1,7 +1,8 @@
-//! Wikipedia-Cohere 1M HNSW-only benchmark (IP, dim=768)
+//! Wikipedia-Cohere 1M HNSW ef-sweep benchmark
 //! Usage:
-//!   cargo run --example cohere_hnsw --release -- <data_dir> [M]
+//!   cargo run --example cohere_hnsw --release -- <data_dir> [M] [metric]
 //! data_dir must contain: base.fbin/query.fbin/gt.ibin
+//! metric: cosine (default), ip, l2
 
 use std::env;
 use std::error::Error;
@@ -15,9 +16,9 @@ use knowhere_rs::faiss::HnswIndex;
 use rayon::prelude::*;
 
 const TOP_K: usize = 10;
-const HNSW_EF_CONSTRUCTION: usize = 200;
+const HNSW_EF_CONSTRUCTION: usize = 128; // match VDB benchmark
 const HNSW_LEVEL_MULTIPLIER: f32 = 0.5;
-const EF_SWEEP: [usize; 6] = [16, 32, 50, 60, 100, 138];
+const EF_SWEEP: [usize; 10] = [16, 32, 48, 64, 80, 96, 112, 128, 160, 200];
 const SINGLE_QPS_QUERIES: usize = 1000;
 const EXPECTED_DIM: usize = 768;
 const EXPECTED_GT_K: usize = 100;
@@ -113,20 +114,30 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(|s| s.parse::<usize>())
         .transpose()?
         .unwrap_or(16);
+    let metric_name = args.next().unwrap_or_else(|| "cosine".to_string());
+    let metric_type = match metric_name.to_lowercase().as_str() {
+        "cosine" => MetricType::Cosine,
+        "ip" => MetricType::Ip,
+        "l2" => MetricType::L2,
+        other => return Err(format!("unknown metric: {other}").into()),
+    };
 
     let data_dir = Path::new(&data_dir_arg);
     let base_path = data_dir.join("base.fbin");
     let query_path = data_dir.join("query.fbin");
-    let gt_path = data_dir.join("gt.ibin");
+    let gt_path = if metric_type == MetricType::Cosine {
+        let cosine_path = data_dir.join("gt.cosine.ibin");
+        if cosine_path.exists() {
+            cosine_path
+        } else {
+            data_dir.join("gt.ibin")
+        }
+    } else {
+        data_dir.join("gt.ibin")
+    };
 
-    println!("=== Wikipedia-Cohere 1M HNSW-only benchmark ===");
-    println!("data_dir={}", data_dir.display());
-    println!(
-        "files: base={}, query={}, gt={}",
-        base_path.display(),
-        query_path.display(),
-        gt_path.display()
-    );
+    println!("=== Cohere 1M HNSW ef-sweep ===");
+    println!("data_dir={} M={} metric={:?}", data_dir.display(), hnsw_m, metric_type);
 
     let t_load = Instant::now();
     let (base_n, base_dim, base) = read_fbin(&base_path)?;
@@ -135,57 +146,28 @@ fn main() -> Result<(), Box<dyn Error>> {
     let gt = rows_i32(&gt_flat, gt_k);
     println!(
         "loaded: base_n={} query_n={} gt_n={} dim={} gt_k={} (load {:.2}s)",
-        base_n,
-        query_n,
-        gt_n,
-        base_dim,
-        gt_k,
+        base_n, query_n, gt_n, base_dim, gt_k,
         t_load.elapsed().as_secs_f64()
     );
 
     if base_dim == 0 || base_dim != query_dim {
-        return Err(format!(
-            "dim mismatch: base_dim={} query_dim={}",
-            base_dim, query_dim
-        )
-        .into());
+        return Err(format!("dim mismatch: base_dim={} query_dim={}", base_dim, query_dim).into());
     }
     if gt_n != query_n {
         return Err(format!("gt rows {} != query rows {}", gt_n, query_n).into());
     }
-    if base_dim != EXPECTED_DIM {
-        println!(
-            "warning: expected dim={} but got {}, continuing",
-            EXPECTED_DIM, base_dim
-        );
-    }
     if gt_k < TOP_K {
         return Err(format!("gt_k={} < top_k={}", gt_k, TOP_K).into());
-    }
-    if gt_k != EXPECTED_GT_K {
-        println!(
-            "warning: expected gt_k={} but got {}, continuing",
-            EXPECTED_GT_K, gt_k
-        );
     }
 
     let qps_n = SINGLE_QPS_QUERIES.min(query_n);
     let eval_n = query_n.min(gt.len());
-    println!(
-        "setup: hnsw_m={} single_qps_queries={} eval_queries={}",
-        hnsw_m, qps_n, eval_n
-    );
 
-    println!(
-        "\n--- HNSW (IP, M={}, ef_construction={}) ---",
-        hnsw_m, HNSW_EF_CONSTRUCTION
-    );
-    let mut hnsw_params =
-        IndexParams::hnsw(HNSW_EF_CONSTRUCTION, EF_SWEEP[0], HNSW_LEVEL_MULTIPLIER);
+    let mut hnsw_params = IndexParams::hnsw(HNSW_EF_CONSTRUCTION, EF_SWEEP[0], HNSW_LEVEL_MULTIPLIER);
     hnsw_params.m = Some(hnsw_m);
     let hnsw_cfg = IndexConfig {
         index_type: IndexType::Hnsw,
-        metric_type: MetricType::Ip,
+        metric_type,
         data_type: DataType::Float,
         dim: base_dim,
         params: hnsw_params,
@@ -197,12 +179,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     hnsw.add(&base, None)?;
     println!("build_time={:.2}s", t.elapsed().as_secs_f64());
 
+    println!("\nef    recall@10  single_qps  batch_qps");
+    println!("----  ---------  ----------  ---------");
     for &ef in &EF_SWEEP {
         hnsw.set_ef_search(ef);
         let req = SearchRequest {
             top_k: TOP_K,
             nprobe: ef,
-            params: Some(format!(r#"{{\"ef\": {ef}}}"#)),
+            params: Some(format!(r#"{{"ef": {ef}}}"#)),
             ..Default::default()
         };
 
@@ -226,7 +210,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let recall = compute_recall(&results, &gt[..eval_n], TOP_K);
 
         println!(
-            "ef={:>4} recall@10={:.4} single_qps={:.0} batch_qps={:.0}",
+            "{:>4}  {:.4}     {:.0}       {:.0}",
             ef, recall, qps_single, qps_batch
         );
     }

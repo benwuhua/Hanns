@@ -27,8 +27,10 @@ pub use residual_pq::{
 };
 pub use rq::{RQConfig, ResidualQuantizer};
 pub use sq::{ScalarQuantizer, Sq4Quantizer, Sq8Quantizer};
-pub use usq::{UsqConfig, UsqEncoded, UsqFastScanState, UsqLayout, UsqQuantizer, UsqRotator, fastscan_topk};
 pub use turboquant::{
     HadamardRotation, TurboQuantConfig, TurboQuantMode, TurboQuantMse, TurboQuantProd,
     TurboRotationBackend,
+};
+pub use usq::{
+    fastscan_topk, UsqConfig, UsqEncoded, UsqFastScanState, UsqLayout, UsqQuantizer, UsqRotator,
 };

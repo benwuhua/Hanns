@@ -8,7 +8,7 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use crate::api::MetricType;
-use crate::quantization::usq::{UsqConfig, UsqEncoded, UsqQueryState, UsqQuantizer};
+use crate::quantization::usq::{UsqConfig, UsqEncoded, UsqQuantizer, UsqQueryState};
 
 const MAX_LAYERS: usize = 16;
 const USQ_TRAIN_SEED: u64 = 42;
