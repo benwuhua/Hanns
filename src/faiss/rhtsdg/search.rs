@@ -853,7 +853,7 @@ fn diversify_graph(
     occ_threshold: u32,
     max_k: usize,
 ) -> Vec<Vec<u32>> {
-    let distance = DistanceMatrix::from_points_with_metric(dim, vectors.to_vec(), metric);
+    let distance = DistanceMatrix::from_points_with_metric(dim, vectors, metric);
     let reverse = collect_reverse_edges(base_graph);
     let mut graph = Vec::with_capacity(base_graph.len());
 

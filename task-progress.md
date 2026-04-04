@@ -507,6 +507,29 @@
 
 ## Session Log
 
+### Session 246 - 2026-04-04
+- Focus: `rhtsdg-hierarchy-borrowed-view-no-go`
+- Mode:
+  - `screen`
+- Hypothesis:
+  - remove layer-local vector copying from hierarchy build by borrowing the global vector buffer via node remap
+- Completed:
+  - added a build-trace audit for `layer_vector_copy_bytes`
+  - added a borrowed-vs-copied subset-ordering regression to check remap behavior
+  - refactored the hierarchy build path to borrow the global vector slice through a node-id remap instead of materializing per-layer copies
+- Verification:
+  - local:
+    - `cargo test --test test_rhtsdg_xndescent hierarchy_build_trace_reports_zero_layer_vector_copy_bytes -- --nocapture` -> `ok`
+    - `cargo test --test test_rhtsdg_tsdg --test test_rhtsdg_xndescent -- --nocapture` -> `ok`
+    - `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `hnsw build_s=1.976, search_s=0.013, qps=15814.81, recall@10=1.0000; rhtsdg build_s=10.717, search_s=0.023, qps=8842.63, recall@10=0.9965`
+    - post-revert restore check:
+      - `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `hnsw build_s=2.081, search_s=0.011, qps=17630.66, recall@10=1.0000; rhtsdg build_s=10.257, search_s=0.045, qps=4422.47, recall@10=0.1740`
+- Result:
+  - `screen_result=no_go`
+  - local lane regressed vs the locked baseline: build stayed slower and search worsened relative to `rhtsdg build_s=10.477, search_s=0.018, qps=10942.39, recall@10=0.9965`
+  - the Task 3 commit was also out of scope for the narrow acceptance-lane lock task
+  - `layer_vector_copy_bytes` proved useful as an intermediate check, but it is not a durable audit signal on its own
+
 ### Session 240 - 2026-04-03
 - Focus: `rhtsdg-search-frontier-pruning`
 - Mode:
