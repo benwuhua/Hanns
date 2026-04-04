@@ -152,9 +152,55 @@ def chart_speedup():
     print(f"  wrote {path}")
 
 
+def chart_usq_quantization():
+    # Cohere Wikipedia-1M, 768-dim IP, nprobe=32, x86 authority (2026-04-02)
+    labels   = ["IVF-Flat\n(full precision)", "IVF-SQ8\n(8-bit, 4× compression)",
+                "IVF-USQ 4-bit\n(8× compression)", "IVF-USQ 8-bit\n(4× compression)"]
+    qps      = [339,  605,  1_308, 1_011]
+    recalls  = [0.798, 0.805, 0.879, 0.968]
+    colors   = [NATIVE, "#8899CC", "#6EAAF7", HANNS]
+
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    fig.patch.set_facecolor(BG)
+
+    bars = ax.bar(labels, qps, color=colors, zorder=3, width=0.55)
+    ax.set_ylabel("Queries per Second (QPS)", labelpad=10)
+    ax.set_title("Quantization: QPS vs Compression  —  Cohere Wikipedia-1M, 768-dim, x86",
+                 pad=14, fontsize=13, fontweight="bold")
+    ax.yaxis.grid(True, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines[["top","right","left","bottom"]].set_visible(False)
+
+    # QPS value + recall label above each bar
+    for bar, q, r in zip(bars, qps, recalls):
+        h = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2, h + 25,
+                f"{q:,} QPS", ha="center", va="bottom", fontsize=10,
+                fontweight="bold", color=TEXT)
+        ax.text(bar.get_x() + bar.get_width()/2, h + 80,
+                f"recall {r:.3f}", ha="center", va="bottom", fontsize=9,
+                color=ACCENT)
+
+    ax.set_ylim(0, max(qps) * 1.22)
+    ax.tick_params(axis='x', labelsize=10)
+
+    # annotation: USQ 4x vs IVF-Flat
+    ax.annotate("", xy=(3 - 0.275, 1_011), xytext=(0 + 0.275, 339),
+                arrowprops=dict(arrowstyle="->", color=ACCENT, lw=1.5))
+    ax.text(1.5, 820, "3.0× faster\n+17% recall\n¼ the memory",
+            ha="center", fontsize=9, color=ACCENT, fontweight="bold")
+
+    fig.tight_layout()
+    path = f"{OUT}/usq_quantization.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight", facecolor=BG)
+    plt.close(fig)
+    print(f"  wrote {path}")
+
+
 if __name__ == "__main__":
     print("Generating Hanns benchmark charts...")
     chart_qps_comparison()
     chart_recall_qps()
     chart_speedup()
+    chart_usq_quantization()
     print("Done. Files in assets/benchmarks/")

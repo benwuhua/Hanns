@@ -33,6 +33,27 @@ Built from scratch. No C++ dependencies. Benchmarked head-to-head against FAISS 
 
 ---
 
+## Quantization: More Speed, Less Memory
+
+USQ (Unit Sphere Quantizer) — Hanns' unified quantizer — compresses vectors to 1/4/8-bit with an orthogonal rotation pass, then scores with AVX512VNNI integer dot products.
+
+![USQ Quantization](assets/benchmarks/usq_quantization.png)
+
+> Dataset: Cohere Wikipedia-1M (768-dim, Inner Product), nprobe=32, x86.
+
+**USQ 4× compression** (8-bit) achieves recall **0.968** at **1,011 QPS** — **3× faster** than uncompressed IVF-Flat at higher recall, using **¼ the memory**.
+
+| Method | Compression | Memory | QPS (nprobe=32) | Recall@10 |
+|--------|-------------|--------|-----------------|-----------|
+| IVF-Flat | 1× (full) | 100% | 339 | 0.798 |
+| IVF-SQ8 | 4× | 25% | 605 | 0.805 |
+| IVF-USQ 4-bit | **8×** | **12.5%** | **1,308** | 0.879 |
+| IVF-USQ 8-bit | **4×** | **25%** | **1,011** | **0.968** |
+
+On 3072-dim embeddings (SimpleWiki-OpenAI-260K), USQ 8× still achieves recall **0.925** at 1,607 QPS.
+
+---
+
 ## Why Hanns?
 
 - **Pure Rust**: no C/C++ dependencies, no unsafe FFI wrappers. Full type safety and memory safety.
