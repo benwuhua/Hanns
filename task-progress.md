@@ -507,6 +507,126 @@
 
 ## Session Log
 
+### Session 251 - 2026-04-04
+- Focus: `rhtsdg-tsdg-l2-ptr-fastpath`
+- Mode:
+  - `screen`
+  - `authority`
+- Hypothesis:
+  - cut RHTSDG build cost by replacing the hottest TSDG L2 pairwise distance loop with the cached SIMD squared-distance ptr kernel, while preserving graph quality and search behavior
+- Completed:
+  - built a profiling-friendly local release example with debuginfo and frame pointers, then used macOS `sample` on a longer `sift1m` lane to isolate the dominant build hotspot to `diversify_graph_with_trace -> DistanceMatrix::distance`
+  - implemented a narrow L2 fast path in `src/faiss/rhtsdg/tsdg.rs` that caches `crate::simd::l2_distance_sq_ptr_kernel()` and uses it only for valid L2 `DistanceMatrix` calls
+  - added focused TSDG regression coverage for:
+    - L2 fast-path selection vs non-L2 fallback
+    - subset `node_ids` mapping
+    - invalid `node_ids` rejection before ptr-kernel access
+    - invalid direct indices rejection before ptr-kernel access
+  - fixed two safety gaps found during code-quality review by restoring the checked boundary before entering the unsafe ptr path
+- Verification:
+  - local:
+    - profiling lane:
+      - `CARGO_INCREMENTAL=0 cargo rustc --release --example rhtsdg_vs_hnsw -- -C debuginfo=2 -C force-frame-pointers=yes` -> `ok`
+      - `sample <pid> 10 -mayDie -file /tmp/rhtsdg_sample_50000_1000.txt` -> `ok`
+      - profiling summary: `DistanceMatrix::distance` dominated build-side samples inside `diversify_graph_with_trace`
+    - tests:
+      - `cargo test --test test_rhtsdg_tsdg -- --nocapture` -> `ok`
+      - `cargo test --test test_rhtsdg_tsdg --test test_rhtsdg_xndescent --test test_rhtsdg_screen --test test_rhtsdg_index_trait -- --nocapture` -> `ok`
+    - representative lane:
+      - `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `hnsw build_s=1.944, search_s=0.013, qps=15165.97, recall@10=1.0000; rhtsdg build_s=5.548, search_s=0.018, qps=10987.00, recall@10=0.9965`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg-fastpath KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg-fastpath bash scripts/remote/test.sh --command "cargo test --release --test test_rhtsdg_tsdg -- --nocapture"` -> `ok`
+    - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg-fastpath KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg-fastpath bash scripts/remote/test.sh --command "cargo test --release --test test_rhtsdg_screen screen_rhtsdg_recall_gate_on_synthetic_fixture -- --ignored --nocapture"` -> `ok`
+    - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg-fastpath KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg-fastpath bash scripts/remote/test.sh --command "cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128"` -> `ok`
+- Result:
+  - `screen_result=promote`
+  - the local lane now clears the locked session-241 gate on the representative workload while materially improving build time:
+    - baseline lock: `rhtsdg build_s=10.477, search_s=0.018, qps=10942.39, recall@10=0.9965`
+    - promoted lane: `rhtsdg build_s=5.548, search_s=0.018, qps=10987.00, recall@10=0.9965`
+  - the promoted bundle also held on the remote x86 authority lane:
+    - synthetic screen: `recall_at_10=1.0`, `query_count=256`, `build_kind=xndescent_tsdg_fixture`
+    - authority lane: `hnsw build_s=3.197, search_s=0.016, qps=12141.84, recall@10=1.0000; rhtsdg build_s=6.342, search_s=0.039, qps=5071.67, recall@10=0.9965`
+  - this screen line is now durably closed; no `feature-list.json` reopen was needed
+- Notes:
+  - code-quality review surfaced two real safety regressions introduced by the raw-pointer fast path; both were fixed before promotion:
+    - invalid subset `node_ids` could bypass the old panic boundary
+    - invalid direct indices to `DistanceMatrix::distance()` could bypass the old panic boundary
+  - commits for this local promoted bundle:
+    - `3786de5 perf(rhtsdg): fast-path TSDG L2 distance`
+    - `059b143 test(rhtsdg): cover tsdg subset and ip fallback`
+    - `36cb76d fix(rhtsdg): validate tsdg node ids`
+    - `dd7c40b fix(rhtsdg): guard tsdg distance indices`
+  - trusted authority logs for this round:
+    - TSDG test smoke: `/data/work/knowhere-rs-logs-rhtsdg-fastpath/test_20260404T050351Z_59891.log`
+    - synthetic screen: `/data/work/knowhere-rs-logs-rhtsdg-fastpath/test_20260404T050547Z_60148.log`
+    - example lane: `/data/work/knowhere-rs-logs-rhtsdg-fastpath/test_20260404T050617Z_60234.log`
+
+### Session 250 - 2026-04-04
+- Focus: `rhtsdg-layer0-frontier-maintenance-no-go`
+- Mode:
+  - `screen`
+- Hypothesis:
+  - optimize layer-0 frontier/result maintenance without changing traversal semantics
+- Completed:
+  - added focused local search-trace tests for layer-0 mutation pressure and dominated-neighbor pruning
+  - implemented a narrow layer-0 cached-threshold helper in `src/faiss/rhtsdg/search.rs`
+  - reverted the optimization after the representative lane failed to beat the stronger local comparison point
+- Verification:
+  - local:
+    - `cargo test --test test_rhtsdg_screen layer0_trace_reports_fewer_result_heap_mutations_than_neighbors_seen -- --nocapture` -> `ok`
+    - `cargo test --test test_rhtsdg_screen -- --nocapture` -> `ok`
+    - `cargo test --test test_rhtsdg_tsdg --test test_rhtsdg_xndescent --test test_rhtsdg_screen --test test_rhtsdg_index_trait -- --nocapture` -> `ok`
+    - comparison point: `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `hnsw build_s=2.009, search_s=0.013, qps=15902.46, recall@10=1.0000; rhtsdg build_s=10.638, search_s=0.018, qps=11247.86, recall@10=0.9965`
+    - optimized lane: `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `hnsw build_s=2.007, search_s=0.011, qps=17661.67, recall@10=1.0000; rhtsdg build_s=10.435, search_s=0.019, qps=10288.26, recall@10=0.9965`
+- Result:
+  - `screen_result=no_go`
+  - build time improved only slightly, but search latency worsened and qps regressed relative to the stronger local comparison point while recall stayed unchanged
+  - the code change was reverted locally and not committed
+
+### Session 249 - 2026-04-04
+- Focus: `rhtsdg-search-threshold-cache-no-go`
+- Mode:
+  - `screen`
+- Hypothesis:
+  - cache layer-search worst-result threshold state to avoid repeated heap worst-distance lookups without changing traversal semantics
+- Completed:
+  - added focused local search-trace tests for threshold-cache hits and result ordering under saturated `ef`
+  - implemented a narrow layer-search threshold-cache state in `src/faiss/rhtsdg/search.rs`
+  - reverted the optimization after the representative lane failed to beat the current local comparison point
+- Verification:
+  - local:
+    - `cargo test --test test_rhtsdg_screen search_trace_reports_threshold_cache_hits_after_ef_is_full -- --nocapture` -> `ok`
+    - `cargo test --test test_rhtsdg_screen search_results_remain_sorted_after_threshold_cache_updates -- --nocapture` -> `ok`
+    - `cargo test --test test_rhtsdg_tsdg --test test_rhtsdg_xndescent --test test_rhtsdg_screen --test test_rhtsdg_index_trait -- --nocapture` -> `ok`
+    - comparison point before the screen: `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `hnsw build_s=2.009, search_s=0.013, qps=15902.46, recall@10=1.0000; rhtsdg build_s=10.638, search_s=0.018, qps=11247.86, recall@10=0.9965`
+    - optimized lane: `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `hnsw build_s=2.006, search_s=0.011, qps=17444.59, recall@10=1.0000; rhtsdg build_s=10.435, search_s=0.019, qps=10290.27, recall@10=0.9965`
+- Result:
+  - `screen_result=no_go`
+  - build time stayed roughly flat, but search latency worsened and qps regressed relative to the immediate local comparison point while recall stayed unchanged
+  - the code change was reverted locally and not committed
+
+### Session 248 - 2026-04-04
+- Focus: `rhtsdg-tsdg-reverse-edge-occurrence-no-go`
+- Mode:
+  - `screen`
+- Hypothesis:
+  - reduce TSDG reverse-edge and occurrence-filter overhead without changing graph quality
+- Completed:
+  - added focused local tests for reverse-edge trace auditing and deterministic tie ordering in occurrence filtering
+  - tried a narrow TSDG optimization that precomputed alive-center distances and tightened stage-2 candidate handling
+  - reverted the optimization after the representative lane failed to beat the locked baseline
+- Verification:
+  - local:
+    - `cargo test --test test_rhtsdg_tsdg -- --nocapture` -> `ok`
+    - `cargo test --test test_rhtsdg_tsdg --test test_rhtsdg_xndescent --test test_rhtsdg_screen --test test_rhtsdg_index_trait -- --nocapture` -> `ok`
+    - optimized lane: `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `hnsw build_s=2.087, search_s=0.014, qps=14633.66, recall@10=1.0000; rhtsdg build_s=7.800, search_s=0.022, qps=9297.03, recall@10=0.9965`
+    - restored post-revert lane: `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `hnsw build_s=2.044, search_s=0.013, qps=15710.82, recall@10=1.0000; rhtsdg build_s=10.639, search_s=0.019, qps=10436.48, recall@10=0.9965`
+- Result:
+  - `screen_result=no_go`
+  - the optimized lane regressed search latency and qps; the subsequent rollback restored the clean baseline state
+  - the code change was reverted locally and not committed
+
 ### Session 247 - 2026-04-04
 - Focus: `rhtsdg-neighborhood-scratch-snapshot-no-go`
 - Mode:
