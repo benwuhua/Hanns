@@ -91,7 +91,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         args.top_k,
         rhtsdg.recall_at_k
     );
-    if env::var_os("KNOWHERE_RS_RHTSDG_TRACE").is_some() {
+    if env_var_truthy("KNOWHERE_RS_RHTSDG_TRACE") {
         eprintln!("rhtsdg_trace={:?}", trace_summary);
     }
 
@@ -390,4 +390,57 @@ fn l2_distance(lhs: &[f32], rhs: &[f32]) -> f32 {
         })
         .sum::<f32>()
         .sqrt()
+}
+
+fn env_var_truthy(name: &str) -> bool {
+    env_value_truthy(env::var_os(name))
+}
+
+fn env_value_truthy(value: Option<std::ffi::OsString>) -> bool {
+    let Some(value) = value else {
+        return false;
+    };
+    let value = value.to_string_lossy();
+    let value = value.trim();
+    if value.is_empty() {
+        return false;
+    }
+
+    !matches!(
+        value.to_ascii_lowercase().as_str(),
+        "0" | "false" | "off" | "no"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::env_value_truthy;
+    use std::ffi::OsString;
+
+    #[test]
+    fn env_var_truthy_treats_falsey_values_as_disabled() {
+        let cases = ["", "0", "false", "off", "no", "  false  ", "\tNO\n"];
+        for case in cases {
+            assert!(
+                !env_value_truthy(Some(OsString::from(case))),
+                "case={case:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn env_var_truthy_treats_other_present_values_as_enabled() {
+        let cases = ["1", "true", "yes", "on", "maybe", "  enabled  "];
+        for case in cases {
+            assert!(
+                env_value_truthy(Some(OsString::from(case))),
+                "case={case:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn env_var_truthy_returns_false_when_absent() {
+        assert!(!env_value_truthy(None));
+    }
 }
