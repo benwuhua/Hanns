@@ -22,10 +22,18 @@
 
 ## RHTSDG Acceptance Lane Lock
 
-- current trusted local baseline remains session 241 until a new lane beats both:
+- current trusted local baseline provenance:
+  - dated lane: 2026-04-03 local batch-4 distance tuning on `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128`
+  - best trusted local result from that lane: `rhtsdg build_s=10.477, search_s=0.018, qps=10942.39, recall@10=0.9965`
+- current trusted local baseline remains locked until a new lane beats both:
   - search_s <= 0.018 or qps >= 10942.39
   - recall@10 >= 0.9965
-- current trusted authority comparison point remains session 241 until a new remote lane beats both:
+- current trusted authority baseline provenance:
+  - dated authority lane: 2026-04-03 batch-4 authority comparison
+  - screen log: `/data/work/knowhere-rs-logs-rhtsdg/test_20260403T152431Z_50798.log`
+  - example log: `/data/work/knowhere-rs-logs-rhtsdg/test_20260403T152612Z_51676.log`
+  - best trusted authority result from that lane: `rhtsdg build_s=17.902, search_s=0.039, qps=5066.65, recall@10=0.9965`
+- current trusted authority comparison point remains locked until a new remote lane beats both:
   - search_s <= 0.039 or qps >= 5066.65
   - recall@10 >= 0.9965
 - current trusted local/authority comparison point for future stop/go decisions:
