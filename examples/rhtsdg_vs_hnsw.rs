@@ -61,6 +61,22 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let hnsw = run_hnsw(&dataset, &truth, &args)?;
     let rhtsdg = run_rhtsdg(&dataset, &truth, &args)?;
+    let trace_summary = (
+        (
+            "hnsw",
+            hnsw.build_secs,
+            hnsw.search_secs,
+            hnsw.qps,
+            hnsw.recall_at_k,
+        ),
+        (
+            "rhtsdg",
+            rhtsdg.build_secs,
+            rhtsdg.search_secs,
+            rhtsdg.qps,
+            rhtsdg.recall_at_k,
+        ),
+    );
 
     println!(
         "{:<8} build_s={:>8.3} search_s={:>8.3} qps={:>10.2} recall@{}={:>7.4}",
@@ -75,6 +91,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         args.top_k,
         rhtsdg.recall_at_k
     );
+    if env::var_os("KNOWHERE_RS_RHTSDG_TRACE").is_some() {
+        eprintln!("rhtsdg_trace={:?}", trace_summary);
+    }
 
     Ok(())
 }

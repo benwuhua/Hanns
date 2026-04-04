@@ -15,10 +15,26 @@
 - Current focus: `none`
 - Next feature: `none`
 - Strategic state: `final_rollup_closed_leadership_met` (see `docs/performance-program.md`)
-- Last updated: 2026-04-03
+- Last updated: 2026-04-04
 - Operator preference: future sessions should proceed autonomously and use documented recommended options by default
 - Workflow policy: capability-closure first for DiskANN/IVF-PQ (align to native/official feature set before further benchmark tuning); narrow performance hypotheses should start with `screen`, promote to tracked work only after `screen_result=promote`, and update durable docs only after authority verdicts
 - Progress: 68/68 features passing (100%)
+
+## RHTSDG Acceptance Lane Lock
+
+- current trusted local baseline remains session 241 until a new lane beats both:
+  - search_s <= 0.018 or qps >= 10942.39
+  - recall@10 >= 0.9965
+- current trusted authority comparison point remains session 241 until a new remote lane beats both:
+  - search_s <= 0.039 or qps >= 5066.65
+  - recall@10 >= 0.9965
+- current trusted local/authority comparison point for future stop/go decisions:
+  - local: `rhtsdg build_s=10.477, search_s=0.018, qps=10942.39, recall@10=0.9965`
+  - authority: `rhtsdg build_s=17.902, search_s=0.039, qps=5066.65, recall@10=0.9965`
+- current local verification run on 2026-04-04 stayed above the acceptance floor and kept the same recall lane:
+  - `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128`
+  - `hnsw build_s=1.996, search_s=0.011, qps=17985.28, recall@10=1.0000`
+  - `rhtsdg build_s=10.757, search_s=0.019, qps=10534.49, recall@10=0.9965`
 
 ## Authority Runbook
 
@@ -482,6 +498,249 @@
    - `VectorDBBench/vectordb_bench/results/Milvus/*.json`
 
 ## Session Log
+
+### Session 245 - 2026-04-04
+- Focus: `rhtsdg-build-search-trace-scaffolding`
+- Mode:
+  - `screen`
+- Completed:
+  - added a test-only `RhtsdgBuildTrace` path so local fixtures can observe XNDescent iteration count plus TSDG stage-1 and stage-2 work
+  - added a test-only `upper_layer_visits` counter to `SearchTrace` so layered search can report upper-layer work separately from layer-0 frontier pops
+  - threaded minimal trace structs through `src/faiss/rhtsdg/xndescent.rs`, `src/faiss/rhtsdg/tsdg.rs`, and `src/faiss/rhtsdg/search.rs` without changing public search semantics
+  - added deterministic regression locks in `tests/test_rhtsdg_xndescent.rs` and `tests/test_rhtsdg_screen.rs` for the new build/search trace behavior
+- Verification:
+  - local:
+    - `cargo test --test test_rhtsdg_xndescent build_trace_reports_nonzero_xndescent_and_tsdg_phases -- --nocapture` -> `ok`
+    - `cargo test --test test_rhtsdg_screen search_trace_reports_layer0_and_upper_layer_work_separately -- --nocapture` -> `ok`
+    - `cargo test --test test_rhtsdg_tsdg --test test_rhtsdg_xndescent --test test_rhtsdg_screen --test test_rhtsdg_index_trait -- --nocapture` -> `ok`
+    - `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `ok`
+- Result:
+  - `screen_result=needs_more_local`
+  - this round was instrumentation, not an optimization verdict, so it does not reopen tracked work or produce an authority claim
+  - the representative local lane stayed in the existing performance band after the trace scaffolding: `rhtsdg build_s=10.518, search_s=0.019, qps=10589.36, recall@10=0.9965`
+  - the best previously trusted local search lane still remains session 241: `rhtsdg build_s=10.477, search_s=0.018, qps=10942.39, recall@10=0.9965`
+- Notes:
+  - the new trace hooks are in place for the next build-side and search-side `screen` hypotheses, so future rounds can measure whether a win came from XNDescent, TSDG, upper-layer traversal, or layer-0 expansion
+  - because there was no local stop/go improvement claim in this round, authority replay was intentionally skipped
+
+### Session 244 - 2026-04-03
+- Focus: `rhtsdg-upper-layer-greedy-descent-screen`
+- Mode:
+  - `screen`
+- Completed:
+  - wrote a failing two-layer fixture to test whether upper-layer descent could skip the generic heap search and use a direct greedy walk before the layer-0 search
+  - implemented a temporary greedy upper-layer descent path in `src/faiss/rhtsdg/search.rs` and added a hierarchy-only test constructor for the fixture
+  - measured the change on the representative local `rhtsdg_vs_hnsw` lane, then rejected it because it regressed the existing local search baseline and rolled the experiment back out
+- Verification:
+  - local:
+    - `cargo test --test test_rhtsdg_screen upper_layers_use_greedy_descent_before_layer0_search -- --nocapture` -> `ok` during the experiment
+    - `cargo test --test test_rhtsdg_tsdg --test test_rhtsdg_xndescent --test test_rhtsdg_screen --test test_rhtsdg_index_trait -- --nocapture` -> `ok` after rollback
+    - `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `ok`
+- Result:
+  - `screen_result=needs_more_local`
+  - the temporary greedy upper-layer path regressed the representative local lane to `rhtsdg build_s=12.851, search_s=0.024, qps=8306.01, recall@10=0.9965`
+  - after rolling the experiment back out, the local lane returned to the existing batch-4/pruning baseline neighborhood at `rhtsdg build_s=10.999, search_s=0.020, qps=9973.65, recall@10=0.9965`
+  - the best previously trusted local search lane remains session 241: `rhtsdg build_s=10.477, search_s=0.018, qps=10942.39, recall@10=0.9965`
+- Notes:
+  - because the direct local measurement was materially worse than the current baseline, this round was not promoted to authority and produced no remote artifacts
+  - the loss suggests upper-layer heap work is not a dominant cost on the recorded workload; the next useful screen should focus on layer-0 traversal order or frontier/result maintenance instead
+
+### Session 243 - 2026-04-03
+- Focus: `rhtsdg-flat-layer-adjacency-screen`
+- Mode:
+  - `screen`
+- Completed:
+  - wrote a failing local fixture to verify whether RHTSDG could expose flat contiguous layer adjacency storage for search
+  - implemented a temporary `FlatLayerGraph` representation in `src/faiss/rhtsdg/search.rs` and routed layer search through the flattened adjacency slices
+  - measured the flat-layer variant on the existing local `rhtsdg_vs_hnsw` lane, then rejected it because it regressed both build and search relative to the existing session-241 baseline
+  - rolled the flat-layer code back out so the worktree returned to the previously better batch-4/pruning search path
+- Verification:
+  - local:
+    - `cargo test --test test_rhtsdg_screen build_populates_flat_layer_storage_for_search -- --nocapture` -> `ok` during the experiment
+    - `cargo test --test test_rhtsdg_tsdg --test test_rhtsdg_xndescent --test test_rhtsdg_screen --test test_rhtsdg_index_trait -- --nocapture` -> `ok` after rollback
+    - `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `ok`
+- Result:
+  - `screen_result=needs_more_local`
+  - the temporary flat-layer variant did not clear the existing local best; its direct local measurement was `rhtsdg build_s=14.306, search_s=0.023, qps=8876.66, recall@10=0.9965`
+  - after rolling the experiment back out, the local lane returned to the known batch-4/pruning baseline neighborhood at `rhtsdg build_s=10.933, search_s=0.020, qps=10113.99, recall@10=0.9965`
+  - the best previously trusted local search lane remains session 241: `rhtsdg build_s=10.477, search_s=0.018, qps=10942.39, recall@10=0.9965`
+- Notes:
+  - because the flat-layer layout lost on the representative local lane, it was not promoted to authority and no remote artifacts were generated
+  - current evidence suggests the nested per-node adjacency vectors are not the dominant remaining search bottleneck on this workload; the next hypothesis should target traversal policy or result/frontier maintenance instead of adjacency flattening
+
+### Session 242 - 2026-04-03
+- Focus: `rhtsdg-search-container-followup`
+- Mode:
+  - `screen`
+- Completed:
+  - explored a follow-up search-side optimization round after the batch-4 L2 win, including cross-call heap reuse and singleton L2 pointer-kernel auditing
+  - added local audit fixtures around frontier pruning, batch-4 usage, and then evaluated whether extra container reuse and singleton-pointer dispatch improved the main `rhtsdg_vs_hnsw` lane
+  - rejected the cross-call heap-reuse idea locally and rolled the code back to the previously better batch-4/pruning state rather than widening the change into authority work
+- Verification:
+  - local:
+    - `cargo test --test test_rhtsdg_screen repeated_searches_reuse_heap_capacity_across_calls -- --nocapture` -> `ok` during the experiment
+    - `cargo test --test test_rhtsdg_screen search_trace_uses_l2_ptr_distance_for_entry_and_leftover_neighbors -- --nocapture` -> `ok` during the experiment
+    - `cargo test --test test_rhtsdg_tsdg --test test_rhtsdg_xndescent --test test_rhtsdg_screen --test test_rhtsdg_index_trait -- --nocapture` -> `ok`
+    - `target/release/examples/rhtsdg_vs_hnsw --dataset sift1m --top-k 10 --ef-search 128` -> `ok`
+- Result:
+  - `screen_result=needs_more_local`
+  - the post-session-241 follow-up ideas did not beat the existing best local search lane in a trustworthy way
+  - best previously trusted local search lane remains session 241: `rhtsdg build_s=10.477, search_s=0.018, qps=10942.39, recall@10=0.9965`
+  - the reverted end-of-session local confirmation is still below that mark: `rhtsdg build_s=12.275, search_s=0.020, qps=10096.17, recall@10=0.9965`
+- Notes:
+  - because the screen result did not clear the existing local best, this round was not promoted to authority and no new remote artifacts were generated
+  - the next search-side hypothesis should target a different bottleneck than cross-call heap reuse; current evidence suggests the remaining cost is more likely in traversal policy or candidate ordering than in heap allocation alone
+
+### Session 241 - 2026-04-03
+- Focus: `rhtsdg-search-batch4-distance`
+- Mode:
+  - `screen`
+  - `authority`
+- Completed:
+  - added a batch-4 search audit hook to `src/faiss/rhtsdg/search.rs` so test fixtures can assert whether L2 layer search uses grouped distance evaluation
+  - changed RHTSDG L2 layer search to evaluate neighbor distances in groups of four with `simd::l2_batch_4_ptrs` when four unvisited neighbors are available
+  - kept the earlier frontier-pruning behavior intact while preserving `visited` marking and per-neighbor acceptance checks
+  - added a regression in `tests/test_rhtsdg_screen.rs` locking that a deterministic 4-neighbor L2 fixture actually triggers the batch-4 path
+- Verification:
+  - local:
+    - `cargo test --test test_rhtsdg_screen search_trace_uses_batch4_l2_distance_when_four_neighbors_are_available -- --nocapture` -> `ok`
+    - `cargo test --test test_rhtsdg_tsdg --test test_rhtsdg_xndescent --test test_rhtsdg_screen --test test_rhtsdg_index_trait -- --nocapture` -> `ok`
+    - `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command "cargo test --release --test test_rhtsdg_screen screen_rhtsdg_recall_gate_on_synthetic_fixture -- --ignored --nocapture"` -> `ok`
+    - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command "cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128"` -> `ok`
+- Result:
+  - the synthetic authority screen remains stable at `recall_at_10=1.0`, `query_count=256`, `build_kind=xndescent_tsdg_fixture`
+  - local same-lane comparison improved from `rhtsdg build_s=10.475, search_s=0.031, qps=6406.29, recall@10=0.9965` to `rhtsdg build_s=10.477, search_s=0.018, qps=10942.39, recall@10=0.9965`
+  - authority same-lane comparison improved from `rhtsdg build_s=18.088, search_s=0.083, qps=2398.77, recall@10=0.9965` to `rhtsdg build_s=17.902, search_s=0.039, qps=5066.65, recall@10=0.9965`
+  - authority reference lane:
+    - `hnsw`: `build_s=3.288`, `search_s=0.017`, `qps=11759.22`, `recall@10=1.0000`
+    - `rhtsdg`: `build_s=17.902`, `search_s=0.039`, `qps=5066.65`, `recall@10=0.9965`
+- Notes:
+  - this round moved RHTSDG search from scalar-per-neighbor L2 distance to grouped batch-4 evaluation on the main layer-search lane
+  - the remaining authority gap to HNSW is now much smaller on query throughput than before, and the next likely hotspot is frontier/result container overhead rather than raw L2 distance computation
+  - trusted authority logs for this round:
+    - screen: `/data/work/knowhere-rs-logs-rhtsdg/test_20260403T152431Z_50798.log`
+    - example: `/data/work/knowhere-rs-logs-rhtsdg/test_20260403T152612Z_51676.log`
+
+### Session 240 - 2026-04-03
+- Focus: `rhtsdg-search-frontier-pruning`
+- Mode:
+  - `screen`
+  - `authority`
+- Completed:
+  - added a search-trace fixture hook in `src/faiss/rhtsdg/search.rs` so search-side pruning behavior can be regression-tested directly
+  - changed layer search so dominated neighbors are still marked as seen but are no longer pushed onto the frontier once `ef` is saturated
+  - replaced the final result-heap `into_vec + sort` path with `into_sorted_vec` in the same search hot path
+  - added a regression in `tests/test_rhtsdg_screen.rs` locking the intended behavior: dominated neighbors remain deduped by `visited`, but they do not consume frontier pops
+- Verification:
+  - local:
+    - `cargo test --test test_rhtsdg_screen search_prunes_dominated_frontier_candidates_once_ef_is_saturated -- --nocapture` -> `ok`
+    - `cargo test --test test_rhtsdg_tsdg --test test_rhtsdg_xndescent --test test_rhtsdg_screen --test test_rhtsdg_index_trait -- --nocapture` -> `ok`
+    - `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command "cargo test --release --test test_rhtsdg_screen screen_rhtsdg_recall_gate_on_synthetic_fixture -- --ignored --nocapture"` -> `ok`
+    - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command "cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128"` -> `ok`
+- Result:
+  - the synthetic authority screen remains stable at `recall_at_10=1.0`, `query_count=256`, `build_kind=xndescent_tsdg_fixture`
+  - local same-lane comparison improved from `rhtsdg build_s=10.471, search_s=0.048, qps=4161.43, recall@10=0.9965` to `rhtsdg build_s=10.475, search_s=0.031, qps=6406.29, recall@10=0.9965`
+  - authority same-lane comparison improved from `rhtsdg build_s=19.680, search_s=0.093, qps=2142.44, recall@10=0.9965` to `rhtsdg build_s=18.088, search_s=0.083, qps=2398.77, recall@10=0.9965`
+  - authority reference lane:
+    - `hnsw`: `build_s=3.267`, `search_s=0.017`, `qps=11736.55`, `recall@10=1.0000`
+    - `rhtsdg`: `build_s=18.088`, `search_s=0.083`, `qps=2398.77`, `recall@10=0.9965`
+- Notes:
+  - an intermediate local attempt that skipped `visited` marking for dominated neighbors regressed search throughput badly; the corrected version keeps deduplication while still cutting frontier work
+  - this round materially improved search throughput, but authority still shows a large gap to HNSW, so the next likely hotspot is distance-evaluation cost and per-query traversal policy rather than graph quality
+  - trusted authority logs for this round:
+    - screen: `/data/work/knowhere-rs-logs-rhtsdg/test_20260403T151731Z_47150.log`
+    - example: `/data/work/knowhere-rs-logs-rhtsdg/test_20260403T151906Z_48019.log`
+
+### Session 239 - 2026-04-03
+- Focus: `rhtsdg-xndescent-parallel-join`
+- Mode:
+  - `screen`
+  - `authority`
+- Completed:
+  - parallelized the main per-node XNDescent maintenance loops in `src/faiss/rhtsdg/xndescent.rs`, including sample rebuild, sampled/exact initialization, local join, and new-to-old promotion
+  - tightened `src/faiss/rhtsdg/neighbor.rs` with deterministic equal-distance tie-breaking so capacity truncation keeps the smaller id when distances match
+  - added a regression lock in `tests/test_rhtsdg_xndescent.rs` for tie-distance replacement at neighborhood capacity
+- Verification:
+  - local:
+    - `cargo test --test test_rhtsdg_xndescent insert_neighbor_prefers_smaller_id_when_distance_ties_at_capacity -- --nocapture` -> `ok`
+    - `cargo test --test test_rhtsdg_xndescent -- --nocapture` -> `ok`
+    - `cargo test --test test_rhtsdg_tsdg --test test_rhtsdg_xndescent --test test_rhtsdg_screen --test test_rhtsdg_index_trait -- --nocapture` -> `ok`
+    - `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command "cargo test --release --test test_rhtsdg_screen screen_rhtsdg_recall_gate_on_synthetic_fixture -- --ignored --nocapture"` -> `ok`
+    - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command "cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128"` -> `ok`
+- Result:
+  - the synthetic authority screen remains stable at `recall_at_10=1.0`, `query_count=256`, `build_kind=xndescent_tsdg_fixture`
+  - local same-lane comparison improved from `rhtsdg build_s=19.929, search_s=0.049, qps=4057.07, recall@10=0.9965` to `rhtsdg build_s=10.471, search_s=0.048, qps=4161.43, recall@10=0.9965`
+  - authority same-lane comparison improved from `rhtsdg build_s=31.755, search_s=0.090, qps=2224.95, recall@10=0.9965` to `rhtsdg build_s=19.680, search_s=0.093, qps=2142.44, recall@10=0.9965`
+  - authority reference lane:
+    - `hnsw`: `build_s=3.261`, `search_s=0.017`, `qps=12108.91`, `recall@10=1.0000`
+    - `rhtsdg`: `build_s=19.680`, `search_s=0.093`, `qps=2142.44`, `recall@10=0.9965`
+- Notes:
+  - the parallel XNDescent loops materially cut RHTSDG build cost on both local and authority lanes without changing recall
+  - search cost did not improve on authority, so the next hotspot is still search-side traversal and candidate materialization rather than graph quality
+  - trusted authority logs for this round:
+    - screen: `/data/work/knowhere-rs-logs-rhtsdg/test_20260403T145735Z_41551.log`
+    - example: `/data/work/knowhere-rs-logs-rhtsdg/test_20260403T145924Z_41999.log`
+
+### Session 238 - 2026-04-03
+- Focus: `rhtsdg-build-cost-reduction`
+- Mode:
+  - `screen`
+  - `authority`
+- Completed:
+  - changed `src/faiss/rhtsdg/neighbor.rs` so neighborhood pools stay distance-sorted after every insert instead of re-sorting clones during `snapshot()` and `rebuild_samples()`
+  - kept the earlier high-recall XNDescent changes intact while removing one of the hottest per-iteration sort paths from neighborhood sampling
+  - added a regression lock that nearest new neighbors are sampled before old neighbors in `tests/test_rhtsdg_xndescent.rs`
+- Verification:
+  - local:
+    - `cargo test --test test_rhtsdg_xndescent -- --nocapture` -> `ok`
+    - `cargo test --test test_rhtsdg_tsdg --test test_rhtsdg_screen --test test_rhtsdg_index_trait -- --nocapture` -> `ok`
+    - `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command "cargo test --release --test test_rhtsdg_screen screen_rhtsdg_recall_gate_on_synthetic_fixture -- --ignored --nocapture"` -> `ok`
+    - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command "cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128"` -> `ok`
+- Result:
+  - local same-lane comparison improved from `rhtsdg build_s=59.967, search_s=0.050, qps=4037.99, recall@10=0.9965` to `rhtsdg build_s=19.929, search_s=0.049, qps=4057.07, recall@10=0.9965`
+  - authority same-lane comparison improved from `rhtsdg build_s=52.133, search_s=0.088, qps=2276.31, recall@10=0.9965` to `rhtsdg build_s=31.755, search_s=0.090, qps=2224.95, recall@10=0.9965`
+- Notes:
+  - one local SSH session reset while the remote example was still running; the authoritative result above comes from the completed rerun `test_20260403T144923Z_37696.log`
+  - after this round, the remaining dominant costs are candidate-list copies/linear scans and search-side graph traversal overhead, not graph quality on the recorded lane
+
+### Session 237 - 2026-04-03
+- Focus: `rhtsdg-post-authority-optimization`
+- Mode:
+  - `screen`
+  - `authority`
+- Completed:
+  - replaced the single-direction ring seed in `src/faiss/rhtsdg/xndescent.rs` with a deterministic sampled/exact-nearest initialization path
+  - wired `reverse_count` into real reverse-neighbor sampling and local-join candidate expansion
+  - switched internal RHTSDG L2 comparisons to squared distance while preserving public Euclidean output distances
+  - extended the RHTSDG regression suite with reverse-neighbor truncation, sampled-init, and public-distance locks
+- Verification:
+  - local:
+    - `cargo test --test test_rhtsdg_tsdg --test test_rhtsdg_xndescent --test test_rhtsdg_screen --test test_rhtsdg_index_trait -- --nocapture` -> `ok`
+    - `cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128` -> `ok`
+  - authority:
+    - `bash init.sh` -> `ok`
+    - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command "cargo test --release --test test_rhtsdg_screen screen_rhtsdg_recall_gate_on_synthetic_fixture -- --ignored --nocapture"` -> `ok`
+    - `KNOWHERE_RS_REMOTE_TARGET_DIR=/data/work/knowhere-rs-target-rhtsdg KNOWHERE_RS_REMOTE_LOG_DIR=/data/work/knowhere-rs-logs-rhtsdg bash scripts/remote/test.sh --command "cargo run --release --example rhtsdg_vs_hnsw -- --dataset sift1m --top-k 10 --ef-search 128"` -> `ok`
+- Result:
+  - the synthetic release screen remains stable at `recall_at_10=1.0`, `query_count=256`, `build_kind=xndescent_tsdg_fixture`
+  - the new authority comparison on the same `./data/sift` subset (`20k` base / `200` query) shifts RHTSDG from low-recall exploratory status to high-recall/high-cost status:
+    - `hnsw`: `build_s=3.135`, `search_s=0.016`, `qps=12280.26`, `recall@10=1.0000`
+    - `rhtsdg`: `build_s=52.133`, `search_s=0.088`, `qps=2276.31`, `recall@10=0.9965`
+- Notes:
+  - one intermediate authority replay was invalid because `bash init.sh` and the remote benchmark were launched in parallel, so the benchmark ran against stale remote source; the rerun above is the trusted one
+  - this round closes the graph-quality gap on the recorded lane, but it reopens build/search cost as the dominant next optimization target
 
 ### Session 236 - 2026-04-03
 - Focus: `rhtsdg-remote-recall-benchmark`
