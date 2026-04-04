@@ -1,5 +1,8 @@
 use crate::api::MetricType;
 use crate::faiss::rhtsdg::neighbor::{Neighbor, NeighborStatus, Neighborhood};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct XNDescentConfig {
@@ -10,15 +13,44 @@ pub struct XNDescentConfig {
     pub use_shortcut: bool,
 }
 
-pub struct XNDescentBuilder {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct XNDescentTrace {
+    pub iterations: usize,
+}
+
+enum VectorStore<'a> {
+    Owned(Vec<f32>),
+    Borrowed {
+        vectors: &'a [f32],
+        node_ids: &'a [u32],
+    },
+}
+
+impl<'a> VectorStore<'a> {
+    fn points(&self) -> &[f32] {
+        match self {
+            Self::Owned(vectors) => vectors,
+            Self::Borrowed { vectors, .. } => vectors,
+        }
+    }
+
+    fn resolve_idx(&self, idx: usize) -> usize {
+        match self {
+            Self::Owned(_) => idx,
+            Self::Borrowed { node_ids, .. } => node_ids[idx] as usize,
+        }
+    }
+}
+
+pub struct XNDescentBuilder<'a> {
     dim: usize,
-    vectors: Vec<f32>,
+    vectors: VectorStore<'a>,
     metric: MetricType,
     config: XNDescentConfig,
     graph: Vec<Neighborhood>,
 }
 
-impl XNDescentBuilder {
+impl<'a> XNDescentBuilder<'a> {
     pub fn new(dim: usize, vectors: Vec<f32>, metric: MetricType, config: XNDescentConfig) -> Self {
         assert!(dim > 0, "dim must be positive");
         assert_eq!(
@@ -34,7 +66,38 @@ impl XNDescentBuilder {
 
         Self {
             dim,
-            vectors,
+            vectors: VectorStore::Owned(vectors),
+            metric,
+            config,
+            graph,
+        }
+    }
+
+    pub fn new_borrowed(
+        dim: usize,
+        vectors: &'a [f32],
+        node_ids: &'a [u32],
+        metric: MetricType,
+        config: XNDescentConfig,
+    ) -> Self {
+        assert!(dim > 0, "dim must be positive");
+        assert_eq!(
+            vectors.len() % dim,
+            0,
+            "vector buffer length must be divisible by dim"
+        );
+        assert!(
+            node_ids.iter().all(|&node_id| (node_id as usize) < vectors.len() / dim),
+            "node ids must index into the borrowed global vector buffer"
+        );
+
+        let graph = (0..node_ids.len())
+            .map(|_| Neighborhood::new(config.k.max(1)))
+            .collect();
+
+        Self {
+            dim,
+            vectors: VectorStore::Borrowed { vectors, node_ids },
             metric,
             config,
             graph,
@@ -48,18 +111,7 @@ impl XNDescentBuilder {
         config: XNDescentConfig,
     ) -> Vec<Vec<u32>> {
         let builder = Self::new(dim, vectors, metric, config);
-        builder.init_ring_graph();
-
-        for _ in 0..builder.config.iter_count.max(1) {
-            builder.update_sample_neighbors();
-            let updates = builder.local_join();
-            builder.promote_new_to_old();
-            if updates == 0 {
-                break;
-            }
-        }
-
-        builder.extract_neighbors()
+        builder.run()
     }
 
     pub fn new_for_tests(dim: usize, vectors: Vec<f32>, config: XNDescentConfig) -> Self {
@@ -83,13 +135,73 @@ impl XNDescentBuilder {
         self.local_join()
     }
 
+    pub fn run(&self) -> Vec<Vec<u32>> {
+        self.run_with_trace().0
+    }
+
+    pub fn run_with_trace(&self) -> (Vec<Vec<u32>>, XNDescentTrace) {
+        let mut trace = XNDescentTrace::default();
+        self.init_ring_graph();
+
+        for _ in 0..self.config.iter_count.max(1) {
+            trace.iterations += 1;
+            self.update_sample_neighbors();
+            let updates = self.local_join();
+            self.promote_new_to_old();
+            if updates == 0 {
+                break;
+            }
+        }
+
+        (self.extract_neighbors(), trace)
+    }
+
+    pub fn vectors(&self) -> &[f32] {
+        self.vectors.points()
+    }
+
     pub fn has_edge_for_test(&self, node: usize, neighbor: u32) -> bool {
         self.graph[node].contains(neighbor)
     }
 
     fn update_sample_neighbors(&self) {
-        for neighborhood in &self.graph {
+        self.graph.par_iter().for_each(|neighborhood| {
             neighborhood.rebuild_samples(self.config.sample_count.max(1));
+        });
+
+        if self.config.reverse_count == 0 {
+            self.graph.par_iter().for_each(|neighborhood| {
+                neighborhood.set_reverse_samples(Vec::new(), Vec::new());
+            });
+            return;
+        }
+
+        let mut reverse_new = vec![Vec::new(); self.graph.len()];
+        let mut reverse_old = vec![Vec::new(); self.graph.len()];
+
+        for (node, neighborhood) in self.graph.iter().enumerate() {
+            let (nn_new, nn_old) = neighborhood.sample_lists();
+            for neighbor in nn_new {
+                let dist = self.distance(node, neighbor as usize);
+                push_reverse_candidate(&mut reverse_new[neighbor as usize], node as u32, dist);
+            }
+            for neighbor in nn_old {
+                let dist = self.distance(node, neighbor as usize);
+                push_reverse_candidate(&mut reverse_old[neighbor as usize], node as u32, dist);
+            }
+        }
+
+        for (node, neighborhood) in self.graph.iter().enumerate() {
+            reverse_new[node]
+                .sort_by(|lhs, rhs| lhs.1.total_cmp(&rhs.1).then_with(|| lhs.0.cmp(&rhs.0)));
+            reverse_new[node].truncate(self.config.reverse_count);
+            reverse_old[node]
+                .sort_by(|lhs, rhs| lhs.1.total_cmp(&rhs.1).then_with(|| lhs.0.cmp(&rhs.0)));
+            reverse_old[node].truncate(self.config.reverse_count);
+            neighborhood.set_reverse_samples(
+                reverse_new[node].iter().map(|(id, _)| *id).collect(),
+                reverse_old[node].iter().map(|(id, _)| *id).collect(),
+            );
         }
     }
 
@@ -100,57 +212,75 @@ impl XNDescentBuilder {
         }
 
         let seed_degree = self.config.k.min(num_points - 1).max(1);
-        for node in 0..num_points {
-            for offset in 1..=seed_degree {
-                let neighbor = ((node + offset) % num_points) as u32;
-                let dist = self.distance(node, neighbor as usize);
-                self.graph[node].insert(neighbor, dist, NeighborStatus::New);
+        let candidate_budget = seed_degree.saturating_mul(8).max(32).min(num_points - 1);
+        self.graph.par_iter().enumerate().for_each(|(node, neighborhood)| {
+            let candidates = if candidate_budget >= num_points - 1 {
+                (0..num_points)
+                    .filter(|&candidate| candidate != node)
+                    .map(|candidate| candidate as u32)
+                    .collect::<Vec<_>>()
+            } else {
+                sample_candidate_ids(node, num_points, candidate_budget)
+            };
+            let mut ranked = candidates
+                .into_iter()
+                .map(|neighbor| {
+                    let dist = self.distance(node, neighbor as usize);
+                    (neighbor, dist)
+                })
+                .collect::<Vec<_>>();
+            ranked.sort_by(|lhs, rhs| lhs.1.total_cmp(&rhs.1).then_with(|| lhs.0.cmp(&rhs.0)));
+
+            for (neighbor, dist) in ranked.into_iter().take(seed_degree) {
+                neighborhood.insert(neighbor, dist, NeighborStatus::New);
             }
-        }
+        });
     }
 
     fn local_join(&self) -> usize {
-        let mut updates = 0usize;
+        (0..self.graph.len())
+            .into_par_iter()
+            .map(|node| {
+                let mut updates = 0usize;
+                let (nn_new, nn_old) = self.graph[node].join_candidate_lists();
 
-        for node in 0..self.graph.len() {
-            let (nn_new, nn_old) = self.graph[node].sample_lists();
+                for i in 0..nn_new.len() {
+                    let id_i = nn_new[i] as usize;
 
-            for i in 0..nn_new.len() {
-                let id_i = nn_new[i] as usize;
+                    for j in (i + 1)..nn_new.len() {
+                        let id_j = nn_new[j] as usize;
+                        let dist = self.distance(id_i, id_j);
 
-                for j in (i + 1)..nn_new.len() {
-                    let id_j = nn_new[j] as usize;
-                    let dist = self.distance(id_i, id_j);
-
-                    if self.graph[id_i].insert(id_j as u32, dist, NeighborStatus::New) {
-                        updates += 1;
+                        if self.graph[id_i].insert(id_j as u32, dist, NeighborStatus::New) {
+                            updates += 1;
+                        }
+                        if self.graph[id_j].insert(id_i as u32, dist, NeighborStatus::New) {
+                            updates += 1;
+                        }
                     }
-                    if self.graph[id_j].insert(id_i as u32, dist, NeighborStatus::New) {
-                        updates += 1;
+
+                    for &old_id in &nn_old {
+                        let old_idx = old_id as usize;
+                        let dist = self.distance(id_i, old_idx);
+
+                        if self.graph[id_i].insert(old_id, dist, NeighborStatus::New) {
+                            updates += 1;
+                        }
+                        if self.graph[old_idx].insert(id_i as u32, dist, NeighborStatus::New) {
+                            updates += 1;
+                        }
                     }
                 }
 
-                for &old_id in &nn_old {
-                    let old_idx = old_id as usize;
-                    let dist = self.distance(id_i, old_idx);
-
-                    if self.graph[id_i].insert(old_id, dist, NeighborStatus::New) {
-                        updates += 1;
-                    }
-                    if self.graph[old_idx].insert(id_i as u32, dist, NeighborStatus::New) {
-                        updates += 1;
-                    }
-                }
-            }
-        }
-
-        updates
+                updates
+            })
+            .sum()
     }
 
     fn promote_new_to_old(&self) {
-        for neighborhood in &self.graph {
+        self.graph.par_iter().for_each(|neighborhood| {
             neighborhood.promote_new_to_old();
-        }
+        });
     }
 
     fn extract_neighbors(&self) -> Vec<Vec<u32>> {
@@ -158,10 +288,13 @@ impl XNDescentBuilder {
     }
 
     fn distance(&self, lhs: usize, rhs: usize) -> f32 {
+        let lhs = self.vectors.resolve_idx(lhs);
+        let rhs = self.vectors.resolve_idx(rhs);
         let lhs_start = lhs * self.dim;
         let rhs_start = rhs * self.dim;
-        let lhs_slice = &self.vectors[lhs_start..lhs_start + self.dim];
-        let rhs_slice = &self.vectors[rhs_start..rhs_start + self.dim];
+        let vectors = self.vectors.points();
+        let lhs_slice = &vectors[lhs_start..lhs_start + self.dim];
+        let rhs_slice = &vectors[rhs_start..rhs_start + self.dim];
         metric_distance(self.metric, lhs_slice, rhs_slice)
     }
 }
@@ -175,8 +308,7 @@ fn metric_distance(metric: MetricType, lhs: &[f32], rhs: &[f32]) -> f32 {
                 let delta = a - b;
                 delta * delta
             })
-            .sum::<f32>()
-            .sqrt(),
+            .sum::<f32>(),
         MetricType::Ip => -lhs.iter().zip(rhs.iter()).map(|(a, b)| a * b).sum::<f32>(),
         MetricType::Cosine => {
             let dot = lhs.iter().zip(rhs.iter()).map(|(a, b)| a * b).sum::<f32>();
@@ -190,4 +322,35 @@ fn metric_distance(metric: MetricType, lhs: &[f32], rhs: &[f32]) -> f32 {
         }
         MetricType::Hamming => unreachable!("rhtsdg does not support hamming"),
     }
+}
+
+fn push_reverse_candidate(bucket: &mut Vec<(u32, f32)>, id: u32, distance: f32) {
+    if let Some(existing) = bucket
+        .iter_mut()
+        .find(|(existing_id, _)| *existing_id == id)
+    {
+        if distance < existing.1 {
+            existing.1 = distance;
+        }
+        return;
+    }
+    bucket.push((id, distance));
+}
+
+fn sample_candidate_ids(node: usize, num_points: usize, budget: usize) -> Vec<u32> {
+    let mut rng = StdRng::seed_from_u64(0x9E37_79B9_7F4A_7C15u64 ^ node as u64);
+    let mut candidates = Vec::with_capacity(budget);
+
+    while candidates.len() < budget {
+        let candidate = rng.gen_range(0..num_points);
+        if candidate == node {
+            continue;
+        }
+        let candidate = candidate as u32;
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    }
+
+    candidates
 }
