@@ -18,39 +18,15 @@ pub struct XNDescentTrace {
     pub iterations: usize,
 }
 
-enum VectorStore<'a> {
-    Owned(Vec<f32>),
-    Borrowed {
-        vectors: &'a [f32],
-        node_ids: &'a [u32],
-    },
-}
-
-impl<'a> VectorStore<'a> {
-    fn points(&self) -> &[f32] {
-        match self {
-            Self::Owned(vectors) => vectors,
-            Self::Borrowed { vectors, .. } => vectors,
-        }
-    }
-
-    fn resolve_idx(&self, idx: usize) -> usize {
-        match self {
-            Self::Owned(_) => idx,
-            Self::Borrowed { node_ids, .. } => node_ids[idx] as usize,
-        }
-    }
-}
-
-pub struct XNDescentBuilder<'a> {
+pub struct XNDescentBuilder {
     dim: usize,
-    vectors: VectorStore<'a>,
+    vectors: Vec<f32>,
     metric: MetricType,
     config: XNDescentConfig,
     graph: Vec<Neighborhood>,
 }
 
-impl<'a> XNDescentBuilder<'a> {
+impl XNDescentBuilder {
     pub fn new(dim: usize, vectors: Vec<f32>, metric: MetricType, config: XNDescentConfig) -> Self {
         assert!(dim > 0, "dim must be positive");
         assert_eq!(
@@ -66,38 +42,7 @@ impl<'a> XNDescentBuilder<'a> {
 
         Self {
             dim,
-            vectors: VectorStore::Owned(vectors),
-            metric,
-            config,
-            graph,
-        }
-    }
-
-    pub fn new_borrowed(
-        dim: usize,
-        vectors: &'a [f32],
-        node_ids: &'a [u32],
-        metric: MetricType,
-        config: XNDescentConfig,
-    ) -> Self {
-        assert!(dim > 0, "dim must be positive");
-        assert_eq!(
-            vectors.len() % dim,
-            0,
-            "vector buffer length must be divisible by dim"
-        );
-        assert!(
-            node_ids.iter().all(|&node_id| (node_id as usize) < vectors.len() / dim),
-            "node ids must index into the borrowed global vector buffer"
-        );
-
-        let graph = (0..node_ids.len())
-            .map(|_| Neighborhood::new(config.k.max(1)))
-            .collect();
-
-        Self {
-            dim,
-            vectors: VectorStore::Borrowed { vectors, node_ids },
+            vectors,
             metric,
             config,
             graph,
@@ -157,7 +102,7 @@ impl<'a> XNDescentBuilder<'a> {
     }
 
     pub fn vectors(&self) -> &[f32] {
-        self.vectors.points()
+        &self.vectors
     }
 
     pub fn has_edge_for_test(&self, node: usize, neighbor: u32) -> bool {
@@ -288,13 +233,10 @@ impl<'a> XNDescentBuilder<'a> {
     }
 
     fn distance(&self, lhs: usize, rhs: usize) -> f32 {
-        let lhs = self.vectors.resolve_idx(lhs);
-        let rhs = self.vectors.resolve_idx(rhs);
         let lhs_start = lhs * self.dim;
         let rhs_start = rhs * self.dim;
-        let vectors = self.vectors.points();
-        let lhs_slice = &vectors[lhs_start..lhs_start + self.dim];
-        let rhs_slice = &vectors[rhs_start..rhs_start + self.dim];
+        let lhs_slice = &self.vectors[lhs_start..lhs_start + self.dim];
+        let rhs_slice = &self.vectors[rhs_start..rhs_start + self.dim];
         metric_distance(self.metric, lhs_slice, rhs_slice)
     }
 }

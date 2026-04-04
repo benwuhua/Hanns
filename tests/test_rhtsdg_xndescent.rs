@@ -1,6 +1,5 @@
 use knowhere_rs::faiss::rhtsdg::neighbor::{Neighbor, NeighborStatus, Neighborhood};
 use knowhere_rs::faiss::rhtsdg::RhtsdgIndex;
-use knowhere_rs::faiss::rhtsdg::tsdg::{sort_neighbors_by_center_distance, DistanceMatrix};
 use knowhere_rs::faiss::rhtsdg::xndescent::{XNDescentBuilder, XNDescentConfig};
 
 #[test]
@@ -181,88 +180,4 @@ fn build_trace_reports_nonzero_xndescent_and_tsdg_phases() {
     assert!(trace.xndescent_iters > 0);
     assert!(trace.stage1_pairs_checked > 0);
     assert!(trace.stage2_reverse_candidates > 0);
-}
-
-#[test]
-fn hierarchy_build_trace_reports_zero_layer_vector_copy_bytes() {
-    let dim = 2;
-    let vectors = vec![
-        0.0, 0.0, //
-        1.0, 0.0, //
-        2.0, 0.0, //
-        3.0, 0.0, //
-        4.0, 0.0, //
-        5.0, 0.0, //
-    ];
-
-    let trace = RhtsdgIndex::build_trace_for_tests(dim, vectors);
-
-    assert_eq!(trace.layer_vector_copy_bytes, 0);
-}
-
-#[test]
-fn subset_distance_view_matches_copied_ordering() {
-    let fixture = subset_distance_fixture();
-    assert_eq!(fixture.borrowed_order(), fixture.copied_order());
-}
-
-struct SubsetDistanceFixture {
-    dim: usize,
-    global_points: Vec<f32>,
-    node_ids: Vec<u32>,
-    copied_points: Vec<f32>,
-    center: usize,
-    neighbors: Vec<u32>,
-}
-
-fn subset_distance_fixture() -> SubsetDistanceFixture {
-    let dim = 2;
-    let global_points = vec![
-        99.0, 99.0, // unused spacer 0
-        4.0, 0.0,   // node 1
-        99.0, 99.0, // unused spacer 2
-        1.0, 0.0,   // node 3
-        0.0, 0.0,   // node 4
-        2.0, 0.0,   // node 5
-    ];
-    let node_ids = vec![4, 1, 5, 3];
-    let copied_points: Vec<f32> = node_ids
-        .iter()
-        .flat_map(|&node| {
-            let start = node as usize * dim;
-            global_points[start..start + dim].iter().copied()
-        })
-        .collect();
-
-    SubsetDistanceFixture {
-        dim,
-        global_points,
-        node_ids,
-        copied_points,
-        center: 0,
-        neighbors: vec![0, 1, 2, 3],
-    }
-}
-
-impl SubsetDistanceFixture {
-    fn borrowed_order(&self) -> Vec<u32> {
-        let matrix = DistanceMatrix::from_points_for_nodes(
-            self.dim,
-            &self.global_points,
-            knowhere_rs::api::MetricType::L2,
-            Some(&self.node_ids),
-        );
-        sort_neighbors_by_center_distance(self.center, &self.neighbors, &matrix)
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect()
-    }
-
-    fn copied_order(&self) -> Vec<u32> {
-        let matrix = DistanceMatrix::from_points(self.dim, Box::leak(self.copied_points.clone().into_boxed_slice()));
-        sort_neighbors_by_center_distance(self.center, &self.neighbors, &matrix)
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect()
-    }
 }

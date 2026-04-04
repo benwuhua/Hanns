@@ -54,7 +54,6 @@ pub struct RhtsdgBuildTrace {
     pub xndescent_iters: usize,
     pub stage1_pairs_checked: usize,
     pub stage2_reverse_candidates: usize,
-    pub layer_vector_copy_bytes: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1102,7 +1101,6 @@ fn build_hierarchy_with_trace(
         trace.xndescent_iters += layer_trace.xndescent_iters;
         trace.stage1_pairs_checked += layer_trace.stage1_pairs_checked;
         trace.stage2_reverse_candidates += layer_trace.stage2_reverse_candidates;
-        trace.layer_vector_copy_bytes += layer_trace.layer_vector_copy_bytes;
         layer_graphs.push(layer_graph);
     }
 
@@ -1159,11 +1157,18 @@ fn build_layer_graph_for_nodes_with_trace(
         use_shortcut: build_config.nndescent.use_shortcut,
     };
 
+    let mut local_vectors = Vec::with_capacity(layer_nodes.len() * dim);
+    for &node in layer_nodes {
+        let start = node as usize * dim;
+        local_vectors.extend_from_slice(&vectors[start..start + dim]);
+    }
+
     let local_graph = if layer_nodes.len() <= build_config.nndescent.sample_count.max(8) {
-        let base_graph = build_exact_knn_graph_for_nodes(dim, vectors, metric, knn_k, layer_nodes);
-        let distance = DistanceMatrix::from_points_for_nodes(dim, vectors, metric, Some(layer_nodes));
+        let base_graph = build_exact_knn_graph(dim, &local_vectors, metric, knn_k);
         let (graph, tsdg_trace) = diversify_graph_with_trace(
-            &distance,
+            dim,
+            &local_vectors,
+            metric,
             &base_graph,
             build_config.alpha,
             build_config.occ_threshold,
@@ -1173,13 +1178,13 @@ fn build_layer_graph_for_nodes_with_trace(
         trace.stage2_reverse_candidates += tsdg_trace.stage2_reverse_candidates;
         graph
     } else {
-        let builder = XNDescentBuilder::new_borrowed(dim, vectors, layer_nodes, metric, nndescent);
+        let builder = XNDescentBuilder::new(dim, local_vectors, metric, nndescent);
         let (base_graph, xn_trace): (Vec<Vec<u32>>, XNDescentTrace) = builder.run_with_trace();
         trace.xndescent_iters += xn_trace.iterations;
-        trace.layer_vector_copy_bytes += 0;
-        let distance = DistanceMatrix::from_points_for_nodes(dim, vectors, metric, Some(layer_nodes));
         let (graph, tsdg_trace) = diversify_graph_with_trace(
-            &distance,
+            dim,
+            builder.vectors(),
+            metric,
             &base_graph,
             build_config.alpha,
             build_config.occ_threshold,
@@ -1202,12 +1207,15 @@ fn build_layer_graph_for_nodes_with_trace(
 }
 
 fn diversify_graph_with_trace(
-    distance: &DistanceMatrix<'_>,
+    dim: usize,
+    vectors: &[f32],
+    metric: MetricType,
     base_graph: &[Vec<u32>],
     alpha: f32,
     occ_threshold: u32,
     max_k: usize,
 ) -> (Vec<Vec<u32>>, TsdgTrace) {
+    let distance = DistanceMatrix::from_points_with_metric(dim, vectors, metric);
     let reverse = collect_reverse_edges(base_graph);
     let mut graph = Vec::with_capacity(base_graph.len());
     let mut trace = TsdgTrace::default();
@@ -1236,18 +1244,18 @@ fn diversify_graph_with_trace(
     (graph, trace)
 }
 
-fn build_exact_knn_graph_for_nodes(
+fn build_exact_knn_graph(
     dim: usize,
     vectors: &[f32],
     metric: MetricType,
     k: usize,
-    node_ids: &[u32],
 ) -> Vec<Vec<u32>> {
-    let distance = DistanceMatrix::from_points_for_nodes(dim, vectors, metric, Some(node_ids));
-    let mut graph = Vec::with_capacity(node_ids.len());
+    let num_points = vectors.len() / dim;
+    let distance = DistanceMatrix::from_points_with_metric(dim, vectors, metric);
+    let mut graph = Vec::with_capacity(num_points);
 
-    for center in 0..node_ids.len() {
-        let mut neighbors: Vec<(u32, f32)> = (0..node_ids.len())
+    for center in 0..num_points {
+        let mut neighbors: Vec<(u32, f32)> = (0..num_points)
             .filter(|&candidate| candidate != center)
             .map(|candidate| (candidate as u32, distance.distance(center, candidate)))
             .collect();
