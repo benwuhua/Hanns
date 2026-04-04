@@ -5,6 +5,8 @@ use std::io::{Cursor, Read, Seek, Write};
 use std::path::Path;
 use std::time::Instant;
 
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 
 use crate::api::{
@@ -15,12 +17,16 @@ use crate::bitset::BitsetView;
 use crate::codec::IndexCodec;
 use crate::dataset::Dataset;
 use crate::faiss::rhtsdg::config::RhtsdgConfig;
-use crate::faiss::rhtsdg::tsdg::{stage1_prune_neighbors, stage2_filter_neighbors, DistanceMatrix};
-use crate::faiss::rhtsdg::xndescent::{XNDescentBuilder, XNDescentConfig};
+use crate::faiss::rhtsdg::tsdg::{
+    stage1_prune_neighbors_with_trace, stage2_filter_neighbors_with_trace, DistanceMatrix,
+    TsdgTrace,
+};
+use crate::faiss::rhtsdg::xndescent::{XNDescentBuilder, XNDescentConfig, XNDescentTrace};
 use crate::index::{
     AnnIterator, Index as IndexTrait, IndexError, SearchResult as IndexSearchResult,
 };
 use crate::search::{with_visited, VisitedList};
+use crate::simd;
 
 #[derive(Debug)]
 pub struct RhtsdgIndex {
@@ -29,6 +35,8 @@ pub struct RhtsdgIndex {
     vectors: Vec<f32>,
     ids: Vec<i64>,
     layer_graphs: Vec<Vec<Vec<u32>>>,
+    element_levels: Vec<usize>,
+    max_level: usize,
     entry_point: u32,
     trained: bool,
     build_kind: &'static str,
@@ -41,12 +49,39 @@ pub struct ScreenSummary {
     pub build_kind: &'static str,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RhtsdgBuildTrace {
+    pub xndescent_iters: usize,
+    pub stage1_pairs_checked: usize,
+    pub stage2_reverse_candidates: usize,
+    pub layer_vector_copy_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchTrace {
+    pub results: Vec<u32>,
+    pub visited: usize,
+    pub frontier_pops: usize,
+    pub batch4_calls: usize,
+    pub upper_layer_visits: usize,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct SearchCounters {
+    visited: usize,
+    frontier_pops: usize,
+    batch4_calls: usize,
+    upper_layer_visits: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredRhtsdgSnapshot {
     trained: bool,
     vectors: Vec<f32>,
     ids: Vec<i64>,
     layer_graphs: Vec<Vec<Vec<u32>>>,
+    element_levels: Vec<usize>,
+    max_level: usize,
     entry_point: u32,
 }
 
@@ -142,6 +177,8 @@ impl RhtsdgIndex {
             vectors: Vec::new(),
             ids: Vec::new(),
             layer_graphs: vec![Vec::new()],
+            element_levels: Vec::new(),
+            max_level: 0,
             entry_point: 0,
             trained: false,
             build_kind: "runtime_empty",
@@ -229,20 +266,22 @@ impl RhtsdgIndex {
             0,
             "vector buffer length must be divisible by dim"
         );
+        let node_count = vectors.len() / dim;
         assert_eq!(
-            vectors.len() / dim,
+            node_count,
             layer0_graph.len(),
             "graph node count must match vector count"
         );
 
         let config = IndexConfig::new(IndexType::Rhtsdg, MetricType::L2, dim);
-        let node_count = vectors.len() / dim;
         Self {
             build_config: RhtsdgConfig::from_index_config(&config),
             config,
             ids: (0..node_count).map(|id| id as i64).collect(),
             vectors,
             layer_graphs: vec![layer0_graph],
+            element_levels: vec![0; node_count],
+            max_level: 0,
             entry_point,
             trained: true,
             build_kind: "manual_fixture",
@@ -264,23 +303,43 @@ impl RhtsdgIndex {
         config.params.rhtsdg_sample_count = Some(knn_k.min(8).max(1));
         config.params.rhtsdg_iter_count = Some(4);
 
-        let layer0_graph = build_layer0_graph(
-            dim,
-            &vectors,
-            MetricType::L2,
-            &RhtsdgConfig::from_index_config(&config),
-        );
+        let build_config = RhtsdgConfig::from_index_config(&config);
+        let (layer_graphs, element_levels, max_level, entry_point) =
+            build_hierarchy(dim, &vectors, MetricType::L2, &config, &build_config);
 
         Self {
-            build_config: RhtsdgConfig::from_index_config(&config),
+            build_config,
             config,
             ids: (0..num_points).map(|id| id as i64).collect(),
             vectors,
-            layer_graphs: vec![layer0_graph],
-            entry_point: 0,
+            layer_graphs,
+            element_levels,
+            max_level,
+            entry_point,
             trained: true,
             build_kind: "xndescent_tsdg_fixture",
         }
+    }
+
+    pub fn build_trace_for_tests(dim: usize, vectors: Vec<f32>) -> RhtsdgBuildTrace {
+        assert!(dim > 0, "dim must be positive");
+        assert_eq!(
+            vectors.len() % dim,
+            0,
+            "vector buffer length must be divisible by dim"
+        );
+
+        let num_points = vectors.len() / dim;
+        let knn_k = num_points.saturating_sub(1).min(16).max(1);
+        let mut config = IndexConfig::new(IndexType::Rhtsdg, MetricType::L2, dim);
+        config.params.rhtsdg_knn_k = Some(knn_k);
+        config.params.rhtsdg_sample_count = Some(knn_k.min(8).max(1));
+        config.params.rhtsdg_iter_count = Some(4);
+
+        let build_config = RhtsdgConfig::from_index_config(&config);
+        let (_, _, _, _, trace) =
+            build_hierarchy_with_trace(dim, &vectors, MetricType::L2, &config, &build_config);
+        trace
     }
 
     pub fn len(&self) -> usize {
@@ -289,6 +348,21 @@ impl RhtsdgIndex {
 
     pub fn build_kind_for_test(&self) -> &'static str {
         self.build_kind
+    }
+
+    pub fn layer_sizes_for_test(&self) -> Vec<usize> {
+        (0..=self.max_level)
+            .map(|layer| {
+                self.element_levels
+                    .iter()
+                    .filter(|&&level| level >= layer)
+                    .count()
+            })
+            .collect()
+    }
+
+    pub fn entry_point_for_test(&self) -> u32 {
+        self.entry_point
     }
 
     pub fn search_batch_for_test(&self, queries: &[f32], k: usize, ef: usize) -> Vec<Vec<u32>> {
@@ -307,6 +381,27 @@ impl RhtsdgIndex {
                     .collect()
             })
             .collect()
+    }
+
+    pub fn search_trace_for_test(&self, query: &[f32], top_k: usize, ef: usize) -> SearchTrace {
+        assert_eq!(
+            query.len(),
+            self.config.dim,
+            "query length must equal dim for trace fixture"
+        );
+
+        let mut counters = SearchCounters::default();
+        let results = self.search_positions_inner(query, top_k, ef, None, &mut counters, true);
+        SearchTrace {
+            results: results
+                .into_iter()
+                .map(|(id, _)| self.ids[id as usize] as u32)
+                .collect(),
+            visited: counters.visited,
+            frontier_pops: counters.frontier_pops,
+            batch4_calls: counters.batch4_calls,
+            upper_layer_visits: counters.upper_layer_visits,
+        }
     }
 
     fn validate_buffer(&self, vectors: &[f32], operation: &str) -> Result<()> {
@@ -342,18 +437,23 @@ impl RhtsdgIndex {
     fn rebuild_graph(&mut self) {
         if self.ids.is_empty() {
             self.layer_graphs = vec![Vec::new()];
+            self.element_levels.clear();
+            self.max_level = 0;
             self.entry_point = 0;
             return;
         }
 
-        let layer0_graph = build_layer0_graph(
+        let (layer_graphs, element_levels, max_level, entry_point) = build_hierarchy(
             self.config.dim,
             &self.vectors,
             self.config.metric_type,
+            &self.config,
             &self.build_config,
         );
-        self.layer_graphs = vec![layer0_graph];
-        self.entry_point = 0;
+        self.layer_graphs = layer_graphs;
+        self.element_levels = element_levels;
+        self.max_level = max_level;
+        self.entry_point = entry_point;
     }
 
     fn search_internal(
@@ -386,7 +486,7 @@ impl RhtsdgIndex {
             }
             for (internal_id, dist) in hits {
                 ids.push(self.ids[internal_id as usize]);
-                distances.push(dist);
+                distances.push(public_distance(self.config.metric_type, dist));
             }
         }
 
@@ -408,6 +508,19 @@ impl RhtsdgIndex {
         ef: usize,
         bitset: Option<&BitsetView>,
     ) -> Vec<(u32, f32)> {
+        let mut counters = SearchCounters::default();
+        self.search_positions_inner(query, top_k, ef, bitset, &mut counters, false)
+    }
+
+    fn search_positions_inner(
+        &self,
+        query: &[f32],
+        top_k: usize,
+        ef: usize,
+        bitset: Option<&BitsetView>,
+        counters: &mut SearchCounters,
+        track_counters: bool,
+    ) -> Vec<(u32, f32)> {
         if self.layer_graphs.is_empty() || self.ids.is_empty() || top_k == 0 {
             return Vec::new();
         }
@@ -416,7 +529,7 @@ impl RhtsdgIndex {
         let mut current = self.entry_point;
         for layer in (1..self.layer_graphs.len()).rev() {
             if let Some((best, _)) = self
-                .search_layer(query, &[current], 1, layer, bitset)
+                .search_layer(query, &[current], 1, layer, bitset, counters, track_counters)
                 .into_iter()
                 .next()
             {
@@ -424,7 +537,7 @@ impl RhtsdgIndex {
             }
         }
 
-        self.search_layer(query, &[current], ef, 0, bitset)
+        self.search_layer(query, &[current], ef, 0, bitset, counters, track_counters)
             .into_iter()
             .take(top_k)
             .collect()
@@ -437,9 +550,20 @@ impl RhtsdgIndex {
         ef: usize,
         layer: usize,
         bitset: Option<&BitsetView>,
+        counters: &mut SearchCounters,
+        track_counters: bool,
     ) -> Vec<(u32, f32)> {
         with_visited(self.len(), |visited| {
-            self.search_layer_inner(query, entry_points, ef, layer, bitset, visited)
+            self.search_layer_inner(
+                query,
+                entry_points,
+                ef,
+                layer,
+                bitset,
+                visited,
+                counters,
+                track_counters,
+            )
         })
     }
 
@@ -451,6 +575,8 @@ impl RhtsdgIndex {
         layer: usize,
         bitset: Option<&BitsetView>,
         visited: &mut VisitedList,
+        counters: &mut SearchCounters,
+        track_counters: bool,
     ) -> Vec<(u32, f32)> {
         let mut frontier = BinaryHeap::new();
         let mut results = BinaryHeap::new();
@@ -460,6 +586,7 @@ impl RhtsdgIndex {
                 continue;
             }
             visited.mark(entry);
+            record_visited(counters, track_counters);
             let dist = self.distance_to_node(query, entry as usize);
             frontier.push(FrontierEntry { id: entry, dist });
             if accepts_result(bitset, entry as usize) {
@@ -468,33 +595,71 @@ impl RhtsdgIndex {
         }
 
         while let Some(candidate) = frontier.pop() {
+            record_frontier_pop(counters, track_counters, layer);
             if results.len() >= ef && candidate.dist > worst_result_dist(&results) {
                 break;
             }
 
-            for &neighbor in &self.layer_graphs[layer][candidate.id as usize] {
+            let neighbors = &self.layer_graphs[layer][candidate.id as usize];
+            let mut offset = 0usize;
+
+            while offset < neighbors.len() {
+                if self.config.metric_type == MetricType::L2 {
+                    let mut batch_ids = [0u32; 4];
+                    let mut batch_len = 0usize;
+                    let mut scan = offset;
+
+                    while scan < neighbors.len() && batch_len < 4 {
+                        let neighbor = neighbors[scan];
+                        scan += 1;
+                        if visited.is_visited(neighbor) {
+                            continue;
+                        }
+                        visited.mark(neighbor);
+                        record_visited(counters, track_counters);
+                        batch_ids[batch_len] = neighbor;
+                        batch_len += 1;
+                    }
+
+                    if batch_len == 4 {
+                        let dists = unsafe { self.l2_distance_to_4_nodes(query.as_ptr(), batch_ids) };
+                        record_batch4(counters, track_counters);
+                        for lane in 0..4 {
+                            consider_neighbor(
+                                &mut frontier,
+                                &mut results,
+                                bitset,
+                                batch_ids[lane],
+                                dists[lane],
+                                ef,
+                            );
+                        }
+                        offset = scan;
+                        continue;
+                    }
+
+                    for &neighbor in &batch_ids[..batch_len] {
+                        let dist = self.distance_to_node(query, neighbor as usize);
+                        consider_neighbor(&mut frontier, &mut results, bitset, neighbor, dist, ef);
+                    }
+                    offset = scan;
+                    continue;
+                }
+
+                let neighbor = neighbors[offset];
+                offset += 1;
                 if visited.is_visited(neighbor) {
                     continue;
                 }
                 visited.mark(neighbor);
-
+                record_visited(counters, track_counters);
                 let dist = self.distance_to_node(query, neighbor as usize);
-                frontier.push(FrontierEntry { id: neighbor, dist });
-                if accepts_result(bitset, neighbor as usize)
-                    && (results.len() < ef || dist < worst_result_dist(&results))
-                {
-                    push_result(&mut results, ResultEntry { id: neighbor, dist }, ef);
-                }
+                consider_neighbor(&mut frontier, &mut results, bitset, neighbor, dist, ef);
             }
         }
 
-        let mut ordered = results.into_vec();
-        ordered.sort_by(|lhs, rhs| {
-            lhs.dist
-                .total_cmp(&rhs.dist)
-                .then_with(|| lhs.id.cmp(&rhs.id))
-        });
-        ordered
+        results
+            .into_sorted_vec()
             .into_iter()
             .map(|entry| (entry.id, entry.dist))
             .collect()
@@ -504,6 +669,19 @@ impl RhtsdgIndex {
         let start = node * self.config.dim;
         let vector = &self.vectors[start..start + self.config.dim];
         metric_distance(self.config.metric_type, query, vector)
+    }
+
+    #[inline]
+    unsafe fn l2_distance_to_4_nodes(&self, query_ptr: *const f32, nodes: [u32; 4]) -> [f32; 4] {
+        let base_ptr = self.vectors.as_ptr();
+        simd::l2_batch_4_ptrs(
+            query_ptr,
+            base_ptr.add(nodes[0] as usize * self.config.dim),
+            base_ptr.add(nodes[1] as usize * self.config.dim),
+            base_ptr.add(nodes[2] as usize * self.config.dim),
+            base_ptr.add(nodes[3] as usize * self.config.dim),
+            self.config.dim,
+        )
     }
 
     fn position_of_id(&self, id: i64) -> Option<usize> {
@@ -516,6 +694,8 @@ impl RhtsdgIndex {
             vectors: self.vectors.clone(),
             ids: self.ids.clone(),
             layer_graphs: self.layer_graphs.clone(),
+            element_levels: self.element_levels.clone(),
+            max_level: self.max_level,
             entry_point: self.entry_point,
         }
     }
@@ -529,6 +709,13 @@ impl RhtsdgIndex {
         if self.layer_graphs.is_empty() {
             self.layer_graphs = vec![Vec::new()];
         }
+        self.element_levels = snapshot.element_levels;
+        if self.element_levels.len() != self.ids.len() {
+            self.element_levels = vec![0; self.ids.len()];
+        }
+        self.max_level = snapshot
+            .max_level
+            .min(self.layer_graphs.len().saturating_sub(1));
         self.entry_point = snapshot.entry_point;
         self.build_kind = "loaded";
     }
@@ -769,6 +956,46 @@ fn worst_result_dist(results: &BinaryHeap<ResultEntry>) -> f32 {
         .unwrap_or(f32::INFINITY)
 }
 
+fn record_visited(counters: &mut SearchCounters, track_counters: bool) {
+    if track_counters {
+        counters.visited += 1;
+    }
+}
+
+fn record_frontier_pop(counters: &mut SearchCounters, track_counters: bool, layer: usize) {
+    if track_counters {
+        if layer == 0 {
+            counters.frontier_pops += 1;
+        } else {
+            counters.upper_layer_visits += 1;
+        }
+    }
+}
+
+fn record_batch4(counters: &mut SearchCounters, track_counters: bool) {
+    if track_counters {
+        counters.batch4_calls += 1;
+    }
+}
+
+fn consider_neighbor(
+    frontier: &mut BinaryHeap<FrontierEntry>,
+    results: &mut BinaryHeap<ResultEntry>,
+    bitset: Option<&BitsetView>,
+    neighbor: u32,
+    dist: f32,
+    ef: usize,
+) {
+    if results.len() >= ef && dist >= worst_result_dist(results) {
+        return;
+    }
+
+    frontier.push(FrontierEntry { id: neighbor, dist });
+    if accepts_result(bitset, neighbor as usize) {
+        push_result(results, ResultEntry { id: neighbor, dist }, ef);
+    }
+}
+
 fn metric_distance(metric: MetricType, lhs: &[f32], rhs: &[f32]) -> f32 {
     match metric {
         MetricType::L2 => lhs
@@ -778,8 +1005,7 @@ fn metric_distance(metric: MetricType, lhs: &[f32], rhs: &[f32]) -> f32 {
                 let delta = a - b;
                 delta * delta
             })
-            .sum::<f32>()
-            .sqrt(),
+            .sum::<f32>(),
         MetricType::Ip => -lhs.iter().zip(rhs.iter()).map(|(a, b)| a * b).sum::<f32>(),
         MetricType::Cosine => {
             let dot = lhs.iter().zip(rhs.iter()).map(|(a, b)| a * b).sum::<f32>();
@@ -791,6 +1017,14 @@ fn metric_distance(metric: MetricType, lhs: &[f32], rhs: &[f32]) -> f32 {
                 1.0 - dot / (lhs_norm * rhs_norm)
             }
         }
+        MetricType::Hamming => unreachable!("rhtsdg does not support hamming"),
+    }
+}
+
+fn public_distance(metric: MetricType, raw_distance: f32) -> f32 {
+    match metric {
+        MetricType::L2 => raw_distance.sqrt(),
+        MetricType::Ip | MetricType::Cosine => raw_distance,
         MetricType::Hamming => unreachable!("rhtsdg does not support hamming"),
     }
 }
@@ -810,56 +1044,183 @@ fn brute_force_topk(vectors: &[f32], dim: usize, queries: &[f32], k: usize) -> V
         .collect()
 }
 
-fn build_layer0_graph(
+fn build_hierarchy(
+    dim: usize,
+    vectors: &[f32],
+    metric: MetricType,
+    config: &IndexConfig,
+    build_config: &RhtsdgConfig,
+) -> (Vec<Vec<Vec<u32>>>, Vec<usize>, usize, u32) {
+    let (layer_graphs, element_levels, max_level, entry_point, _) =
+        build_hierarchy_with_trace(dim, vectors, metric, config, build_config);
+    (layer_graphs, element_levels, max_level, entry_point)
+}
+
+fn build_hierarchy_with_trace(
+    dim: usize,
+    vectors: &[f32],
+    metric: MetricType,
+    config: &IndexConfig,
+    build_config: &RhtsdgConfig,
+) -> (Vec<Vec<Vec<u32>>>, Vec<usize>, usize, u32, RhtsdgBuildTrace) {
+    let num_points = vectors.len() / dim;
+    if num_points == 0 {
+        return (vec![Vec::new()], Vec::new(), 0, 0, RhtsdgBuildTrace::default());
+    }
+    if num_points == 1 {
+        return (
+            vec![vec![Vec::new()]],
+            vec![0],
+            0,
+            0,
+            RhtsdgBuildTrace::default(),
+        );
+    }
+
+    let (element_levels, max_level, entry_point) = assign_random_levels(
+        num_points,
+        build_config,
+        config.params.random_seed.unwrap_or(42),
+    );
+    let mut layer_graphs = Vec::with_capacity(max_level + 1);
+    let mut trace = RhtsdgBuildTrace::default();
+
+    for layer in 0..=max_level {
+        let layer_nodes: Vec<u32> = element_levels
+            .iter()
+            .enumerate()
+            .filter_map(|(node, &level)| (level >= layer).then_some(node as u32))
+            .collect();
+        let (layer_graph, layer_trace) = build_layer_graph_for_nodes_with_trace(
+            dim,
+            vectors,
+            metric,
+            build_config,
+            &layer_nodes,
+            num_points,
+        );
+        trace.xndescent_iters += layer_trace.xndescent_iters;
+        trace.stage1_pairs_checked += layer_trace.stage1_pairs_checked;
+        trace.stage2_reverse_candidates += layer_trace.stage2_reverse_candidates;
+        trace.layer_vector_copy_bytes += layer_trace.layer_vector_copy_bytes;
+        layer_graphs.push(layer_graph);
+    }
+
+    (layer_graphs, element_levels, max_level, entry_point, trace)
+}
+
+fn assign_random_levels(
+    num_points: usize,
+    build_config: &RhtsdgConfig,
+    random_seed: u64,
+) -> (Vec<usize>, usize, u32) {
+    let base = build_config.knn_k.max(2) as f32;
+    let level_multiplier = 1.0 / base.ln().max(1.0);
+    let mut rng = StdRng::seed_from_u64(random_seed);
+    let mut element_levels = vec![0usize; num_points];
+    let mut max_level = 0usize;
+    let mut entry_point = 0u32;
+
+    for (node, level_slot) in element_levels.iter_mut().enumerate() {
+        let sample = rng
+            .gen::<f32>()
+            .clamp(f32::MIN_POSITIVE, 1.0 - f32::EPSILON);
+        let level = (-sample.ln() * level_multiplier) as usize;
+        *level_slot = level;
+        if level > max_level {
+            max_level = level;
+            entry_point = node as u32;
+        }
+    }
+
+    (element_levels, max_level, entry_point)
+}
+
+fn build_layer_graph_for_nodes_with_trace(
     dim: usize,
     vectors: &[f32],
     metric: MetricType,
     build_config: &RhtsdgConfig,
-) -> Vec<Vec<u32>> {
-    let num_points = vectors.len() / dim;
-    if num_points == 0 {
-        return Vec::new();
-    }
-    if num_points == 1 {
-        return vec![Vec::new()];
+    layer_nodes: &[u32],
+    num_points: usize,
+) -> (Vec<Vec<u32>>, RhtsdgBuildTrace) {
+    let mut graph = vec![Vec::new(); num_points];
+    let mut trace = RhtsdgBuildTrace::default();
+    if layer_nodes.len() <= 1 {
+        return (graph, trace);
     }
 
-    let knn_k = build_config.knn_k.min(num_points - 1).max(1);
+    let knn_k = build_config.knn_k.min(layer_nodes.len() - 1).max(1);
     let nndescent = XNDescentConfig {
-        k: build_config.nndescent.k.min(num_points - 1).max(1),
+        k: build_config.nndescent.k.min(layer_nodes.len() - 1).max(1),
         sample_count: build_config.nndescent.sample_count.min(knn_k).max(1),
         iter_count: build_config.nndescent.iter_count.max(1),
         reverse_count: build_config.nndescent.reverse_count.max(1),
         use_shortcut: build_config.nndescent.use_shortcut,
     };
-    let base_graph = XNDescentBuilder::build(dim, vectors.to_vec(), metric, nndescent);
-    diversify_graph(
-        dim,
-        vectors,
-        metric,
-        &base_graph,
-        build_config.alpha,
-        build_config.occ_threshold,
-        knn_k,
-    )
+
+    let local_graph = if layer_nodes.len() <= build_config.nndescent.sample_count.max(8) {
+        let base_graph = build_exact_knn_graph_for_nodes(dim, vectors, metric, knn_k, layer_nodes);
+        let distance = DistanceMatrix::from_points_for_nodes(dim, vectors, metric, Some(layer_nodes));
+        let (graph, tsdg_trace) = diversify_graph_with_trace(
+            &distance,
+            &base_graph,
+            build_config.alpha,
+            build_config.occ_threshold,
+            knn_k,
+        );
+        trace.stage1_pairs_checked += tsdg_trace.stage1_pairs_checked;
+        trace.stage2_reverse_candidates += tsdg_trace.stage2_reverse_candidates;
+        graph
+    } else {
+        let builder = XNDescentBuilder::new_borrowed(dim, vectors, layer_nodes, metric, nndescent);
+        let (base_graph, xn_trace): (Vec<Vec<u32>>, XNDescentTrace) = builder.run_with_trace();
+        trace.xndescent_iters += xn_trace.iterations;
+        trace.layer_vector_copy_bytes += 0;
+        let distance = DistanceMatrix::from_points_for_nodes(dim, vectors, metric, Some(layer_nodes));
+        let (graph, tsdg_trace) = diversify_graph_with_trace(
+            &distance,
+            &base_graph,
+            build_config.alpha,
+            build_config.occ_threshold,
+            knn_k,
+        );
+        trace.stage1_pairs_checked += tsdg_trace.stage1_pairs_checked;
+        trace.stage2_reverse_candidates += tsdg_trace.stage2_reverse_candidates;
+        graph
+    };
+
+    for (local_idx, neighbors) in local_graph.into_iter().enumerate() {
+        let global_node = layer_nodes[local_idx] as usize;
+        graph[global_node] = neighbors
+            .into_iter()
+            .map(|local_neighbor| layer_nodes[local_neighbor as usize])
+            .collect();
+    }
+
+    (graph, trace)
 }
 
-fn diversify_graph(
-    dim: usize,
-    vectors: &[f32],
-    metric: MetricType,
+fn diversify_graph_with_trace(
+    distance: &DistanceMatrix<'_>,
     base_graph: &[Vec<u32>],
     alpha: f32,
     occ_threshold: u32,
     max_k: usize,
-) -> Vec<Vec<u32>> {
-    let distance = DistanceMatrix::from_points_with_metric(dim, vectors, metric);
+) -> (Vec<Vec<u32>>, TsdgTrace) {
     let reverse = collect_reverse_edges(base_graph);
     let mut graph = Vec::with_capacity(base_graph.len());
+    let mut trace = TsdgTrace::default();
 
     for center in 0..base_graph.len() {
-        let (alive, occs) = stage1_prune_neighbors(center, &base_graph[center], &distance, alpha);
-        let kept = stage2_filter_neighbors(
+        let (alive, occs) = stage1_prune_neighbors_with_trace(
+            center,
+            &base_graph[center],
+            &distance,
+            alpha,
+            Some(&mut trace),
+        );
+        let kept = stage2_filter_neighbors_with_trace(
             center,
             &alive,
             &occs,
@@ -867,8 +1228,32 @@ fn diversify_graph(
             &distance,
             occ_threshold,
             max_k,
+            Some(&mut trace),
         );
         graph.push(kept);
+    }
+
+    (graph, trace)
+}
+
+fn build_exact_knn_graph_for_nodes(
+    dim: usize,
+    vectors: &[f32],
+    metric: MetricType,
+    k: usize,
+    node_ids: &[u32],
+) -> Vec<Vec<u32>> {
+    let distance = DistanceMatrix::from_points_for_nodes(dim, vectors, metric, Some(node_ids));
+    let mut graph = Vec::with_capacity(node_ids.len());
+
+    for center in 0..node_ids.len() {
+        let mut neighbors: Vec<(u32, f32)> = (0..node_ids.len())
+            .filter(|&candidate| candidate != center)
+            .map(|candidate| (candidate as u32, distance.distance(center, candidate)))
+            .collect();
+        neighbors.sort_by(|lhs, rhs| lhs.1.total_cmp(&rhs.1).then_with(|| lhs.0.cmp(&rhs.0)));
+        neighbors.truncate(k);
+        graph.push(neighbors.into_iter().map(|(id, _)| id).collect());
     }
 
     graph
