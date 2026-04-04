@@ -86,6 +86,28 @@ fn node_id_subset_mapping_still_resolves_logical_indices() {
 }
 
 #[test]
+fn invalid_node_ids_are_rejected_before_l2_ptr_access() {
+    let points = vec![
+        10.0, 0.0, // physical 0
+        20.0, 0.0, // physical 1
+        30.0, 0.0, // physical 2
+        40.0, 0.0, // physical 3
+    ];
+    let node_ids = vec![4, 0];
+
+    let result = std::panic::catch_unwind(|| {
+        DistanceMatrix::from_points_for_nodes(
+            2,
+            Box::leak(points.into_boxed_slice()),
+            MetricType::L2,
+            Some(Box::leak(node_ids.into_boxed_slice())),
+        );
+    });
+
+    assert!(result.is_err(), "invalid node_ids must be rejected safely");
+}
+
+#[test]
 fn ip_distance_matrix_keeps_fallback_distance_values() {
     let points = vec![
         1.0, 2.0, //

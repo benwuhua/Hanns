@@ -44,6 +44,13 @@ impl<'a> DistanceMatrix<'a> {
             0,
             "point buffer length must be divisible by dim"
         );
+        let point_count = points.len() / dim;
+        if let Some(node_ids) = node_ids {
+            assert!(
+                node_ids.iter().all(|&node_id| (node_id as usize) < point_count),
+                "node_ids must reference valid point indices"
+            );
+        }
         Self {
             dim,
             points,
