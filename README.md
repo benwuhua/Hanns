@@ -60,6 +60,28 @@ On 3072-dim embeddings (SimpleWiki-OpenAI-260K), USQ 8× still achieves recall *
 
 ---
 
+## AISAQ vs DiskANN / Vamana
+
+Hanns AISAQ implements the Vamana graph algorithm (same as Microsoft DiskANN) with a PQ-compressed flash mode for disk-resident large-scale search.
+
+![DiskANN Comparison](assets/benchmarks/diskann_comparison.png)
+
+> Vamana reference numbers from [ann-benchmarks.com](https://ann-benchmarks.com/sift-128-euclidean_10_euclidean.html)
+> (config: Vamana-100-64-1.2, AWS r6i.16xlarge Ice Lake, 31 threads).
+> Hanns AISAQ: x86 dedicated server, L=64, NoPQ, in-memory.
+> **Hardware differs** — comparison is directional, not exact.
+
+| System | Config | Recall@10 | QPS |
+|--------|--------|-----------|-----|
+| Vamana (ann-benchmarks) | R=100, L=64, 31T | 0.972 | 6,463 |
+| Vamana (ann-benchmarks) | R=100, L=64, 31T | 0.985 | 5,215 |
+| **Hanns AISAQ NoPQ** | R=48, L=64 | **0.979** | **5,806** |
+| Hanns AISAQ PQ32 (disk) | R=48, io_uring | 0.911 | 1,063 |
+
+At recall ≈ 0.979, Hanns AISAQ delivers **competitive QPS** against the reference Vamana implementation, while also supporting a disk-resident PQ-compressed mode for datasets that exceed RAM capacity.
+
+---
+
 ## Why Hanns?
 
 - **Pure Rust**: no C/C++ dependencies, no unsafe FFI wrappers. Full type safety and memory safety.

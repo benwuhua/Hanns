@@ -206,10 +206,56 @@ def chart_usq_quantization():
     print(f"  wrote {path}")
 
 
+def chart_diskann_comparison():
+    # Hanns AISAQ NoPQ — x86 authority, SIFT-1M L2 (2026-03-26)
+    hanns_recall = [0.979]
+    hanns_qps    = [5_806]
+
+    # Microsoft Vamana (DiskANN) — ann-benchmarks.com, SIFT-128-euclidean
+    # Config: Vamana-100-64-1.2, AWS r6i.16xlarge (Ice Lake 3.5GHz), 31 threads
+    # Source: https://ann-benchmarks.com/sift-128-euclidean_10_euclidean.html
+    ref_recall = [0.9460, 0.9725, 0.9848, 0.9901, 0.9934, 0.9954, 0.9967, 0.9977]
+    ref_qps    = [8_760,  6_463,  5_215,  4_386,  3_847,  3_372,  3_076,  2_814]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    fig.patch.set_facecolor(BG)
+
+    ax.plot(ref_recall, ref_qps, "s--", color=NATIVE, linewidth=1.5,
+            markersize=6, label="Vamana / DiskANN (ann-benchmarks, AWS r6i.16xlarge, 31T)", zorder=3)
+    ax.scatter(hanns_recall, hanns_qps, marker="*", s=220,
+               color=HANNS, zorder=5, label="Hanns AISAQ NoPQ (x86 server, L=64)")
+
+    # annotate Hanns point
+    ax.annotate("  Hanns\n  5,806 QPS\n  recall 0.979",
+                xy=(0.979, 5_806), fontsize=9, color=HANNS, fontweight="bold",
+                xytext=(0.965, 6_800),
+                arrowprops=dict(arrowstyle="->", color=HANNS, lw=1.2))
+
+    ax.set_xlabel("Recall@10", labelpad=8)
+    ax.set_ylabel("Queries per Second (QPS)", labelpad=8)
+    ax.set_title("AISAQ vs DiskANN / Vamana  —  SIFT-1M 128-dim L2",
+                 pad=14, fontsize=13, fontweight="bold")
+    ax.yaxis.grid(True, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines[["top","right","left","bottom"]].set_visible(False)
+    ax.legend(framealpha=0, fontsize=9, loc="upper right")
+
+    ax.text(0.5, 0.02,
+            "Note: hardware differs — ann-benchmarks uses AWS r6i.16xlarge; Hanns runs on dedicated x86 server.",
+            transform=ax.transAxes, fontsize=7.5, color=TEXT, alpha=0.6, ha="center")
+
+    fig.tight_layout()
+    path = f"{OUT}/diskann_comparison.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight", facecolor=BG)
+    plt.close(fig)
+    print(f"  wrote {path}")
+
+
 if __name__ == "__main__":
     print("Generating Hanns benchmark charts...")
     chart_qps_comparison()
     chart_recall_qps()
     chart_speedup()
     chart_usq_quantization()
+    chart_diskann_comparison()
     print("Done. Files in assets/benchmarks/")
