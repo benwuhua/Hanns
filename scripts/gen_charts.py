@@ -153,42 +153,51 @@ def chart_speedup():
 
 
 def chart_usq_quantization():
-    # Cohere Wikipedia-1M, 768-dim IP, nprobe=32, x86 authority (2026-04-02)
-    labels   = ["IVF-Flat\n(full precision)", "IVF-SQ8\n(8-bit, 4× compression)",
-                "IVF-USQ 4-bit\n(8× compression)", "IVF-USQ 8-bit\n(4× compression)"]
-    qps      = [339,  605,  1_308, 1_011]
-    recalls  = [0.798, 0.805, 0.879, 0.968]
-    colors   = [NATIVE, "#8899CC", "#6EAAF7", HANNS]
+    # Cohere Wikipedia-1M, 768-dim IP, nprobe=32, x86 authority
+    # IVF-PQ: 2026-04-04 authority run; IVF-USQ: 2026-04-02 authority run
+    labels  = ["IVF-PQ\nm=32 (8×)", "IVF-PQ\nm=48 (5.3×)",
+               "IVF-Flat\n(full prec.)", "IVF-SQ8\n(4×)",
+               "USQ 4-bit\n(8×)", "USQ 8-bit\n(4×)"]
+    qps     = [723,   502,   339,   605,   1_308, 1_011]
+    recalls = [0.066, 0.127, 0.798, 0.805, 0.879, 0.968]
+    RED     = "#F85149"
+    colors  = [RED, RED, NATIVE, "#8899CC", "#6EAAF7", HANNS]
 
-    fig, ax = plt.subplots(figsize=(10, 5.5))
+    fig, ax = plt.subplots(figsize=(11, 5.8))
     fig.patch.set_facecolor(BG)
 
-    bars = ax.bar(labels, qps, color=colors, zorder=3, width=0.55)
+    bars = ax.bar(labels, qps, color=colors, zorder=3, width=0.58)
     ax.set_ylabel("Queries per Second (QPS)", labelpad=10)
-    ax.set_title("Quantization: QPS vs Compression  —  Cohere Wikipedia-1M, 768-dim, x86",
-                 pad=14, fontsize=13, fontweight="bold")
+    ax.set_title("Quantization Comparison  —  Cohere Wikipedia-1M, 768-dim IP, nprobe=32, x86",
+                 pad=14, fontsize=12, fontweight="bold")
     ax.yaxis.grid(True, zorder=0)
     ax.set_axisbelow(True)
     ax.spines[["top","right","left","bottom"]].set_visible(False)
 
-    # QPS value + recall label above each bar
-    for bar, q, r in zip(bars, qps, recalls):
+    for bar, q, r, col in zip(bars, qps, recalls, colors):
         h = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width()/2, h + 25,
-                f"{q:,} QPS", ha="center", va="bottom", fontsize=10,
+        # recall label — red for PQ (unusable), green for USQ
+        r_color = RED if r < 0.2 else (ACCENT if r > 0.8 else TEXT)
+        r_label = f"recall {r:.3f}" if r >= 0.2 else f"recall {r:.3f} ✗"
+        ax.text(bar.get_x() + bar.get_width()/2, h + 20,
+                f"{q:,}", ha="center", va="bottom", fontsize=9,
                 fontweight="bold", color=TEXT)
-        ax.text(bar.get_x() + bar.get_width()/2, h + 80,
-                f"recall {r:.3f}", ha="center", va="bottom", fontsize=9,
-                color=ACCENT)
+        ax.text(bar.get_x() + bar.get_width()/2, h + 75,
+                r_label, ha="center", va="bottom", fontsize=8.5,
+                color=r_color, fontweight="bold")
 
-    ax.set_ylim(0, max(qps) * 1.22)
-    ax.tick_params(axis='x', labelsize=10)
+    # divider between PQ and Hanns groups
+    top = max(qps) * 1.28
+    ax.axvline(1.5, color=GRID, linewidth=1.2, linestyle="--", zorder=2)
+    ax.axvline(3.5, color=GRID, linewidth=1.2, linestyle="--", zorder=2)
+    ax.text(0.5, top, "FAISS PQ", ha="center", fontsize=9,
+            color=RED, style="italic")
+    ax.text(2.5, top, "Baselines", ha="center", fontsize=9, color=NATIVE, style="italic")
+    ax.text(4.5, top, "Hanns USQ", ha="center", fontsize=9,
+            color=HANNS, style="italic", fontweight="bold")
 
-    # annotation: USQ 4x vs IVF-Flat
-    ax.annotate("", xy=(3 - 0.275, 1_011), xytext=(0 + 0.275, 339),
-                arrowprops=dict(arrowstyle="->", color=ACCENT, lw=1.5))
-    ax.text(1.5, 820, "3.0× faster\n+17% recall\n¼ the memory",
-            ha="center", fontsize=9, color=ACCENT, fontweight="bold")
+    ax.set_ylim(0, max(qps) * 1.40)
+    ax.tick_params(axis='x', labelsize=9.5)
 
     fig.tight_layout()
     path = f"{OUT}/usq_quantization.png"

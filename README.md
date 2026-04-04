@@ -33,22 +33,28 @@ Built from scratch. No C++ dependencies. Benchmarked head-to-head against FAISS 
 
 ---
 
-## Quantization: More Speed, Less Memory
+## Quantization: Where FAISS PQ Breaks Down, USQ Excels
 
-USQ (Unit Sphere Quantizer) — Hanns' unified quantizer — compresses vectors to 1/4/8-bit with an orthogonal rotation pass, then scores with AVX512VNNI integer dot products.
+Standard Product Quantization (PQ) — used by FAISS and most ANN libraries — minimizes L2 reconstruction error. On modern embedding search (high-dim, Inner Product metric), this is the wrong objective: PQ recall collapses to near zero.
+
+USQ (Unit Sphere Quantizer) applies a QR orthogonal rotation before quantizing, making compression metric-agnostic. The result speaks for itself:
 
 ![USQ Quantization](assets/benchmarks/usq_quantization.png)
 
-> Dataset: Cohere Wikipedia-1M (768-dim, Inner Product), nprobe=32, x86.
+> Dataset: Cohere Wikipedia-1M (768-dim, Inner Product), nprobe=32, x86 authority.
 
-**USQ 4× compression** (8-bit) achieves recall **0.968** at **1,011 QPS** — **3× faster** than uncompressed IVF-Flat at higher recall, using **¼ the memory**.
+| Method | Compression | QPS (nprobe=32) | Recall@10 | Usable? |
+|--------|-------------|-----------------|-----------|---------|
+| IVF-PQ m=32 | 8× | 723 | **0.066** | ✗ |
+| IVF-PQ m=48 | 5.3× | 502 | **0.127** | ✗ |
+| IVF-Flat | 1× (full) | 339 | 0.798 | ✓ |
+| IVF-SQ8 | 4× | 605 | 0.805 | ✓ |
+| **USQ 4-bit** | **8×** | **1,308** | **0.879** | ✓ |
+| **USQ 8-bit** | **4×** | **1,011** | **0.968** | ✓ |
 
-| Method | Compression | Memory | QPS (nprobe=32) | Recall@10 |
-|--------|-------------|--------|-----------------|-----------|
-| IVF-Flat | 1× (full) | 100% | 339 | 0.798 |
-| IVF-SQ8 | 4× | 25% | 605 | 0.805 |
-| IVF-USQ 4-bit | **8×** | **12.5%** | **1,308** | 0.879 |
-| IVF-USQ 8-bit | **4×** | **25%** | **1,011** | **0.968** |
+USQ 8-bit (4× compression): **3× faster** than IVF-Flat, **+17% better recall**, **¼ the memory**.
+
+USQ 4-bit (8× compression): at the same compression ratio where PQ gives recall=0.066, USQ gives **0.879** — a **13× improvement in recall**.
 
 On 3072-dim embeddings (SimpleWiki-OpenAI-260K), USQ 8× still achieves recall **0.925** at 1,607 QPS.
 
