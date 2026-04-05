@@ -2397,6 +2397,8 @@ pub extern "C" fn knowhere_search(
 
         let query_slice = std::slice::from_raw_parts(query, count * dim);
 
+        let t0 = std::time::Instant::now();
+
         let result = if let Some(ref idx) = index.sparse_inverted {
             index.search_sparse_queries(query_slice, dim, |sparse_query| {
                 idx.search(sparse_query, top_k, None)
@@ -2412,6 +2414,14 @@ pub extern "C" fn knowhere_search(
         } else {
             index.search(query_slice, top_k)
         };
+
+        if std::env::var_os("KNOWHERE_RS_TRACE_SEARCH").is_some() {
+            eprintln!(
+                "TRACE_SEARCH nq={} elapsed_us={}",
+                count,
+                t0.elapsed().as_micros()
+            );
+        }
 
         match result {
             Ok(result) => {
