@@ -131,6 +131,7 @@ the original `save/load` bottlenecks.
 | rs old | 120.0815 | 2552.0039 | 2672.0854 | 350.0788 | 0.9594 | valid |
 | rs buffered-io rerun | 321.3929 | 914.7687 | 1236.1617 | 352.3533 | 0.9614 | valid |
 | rs buffered-io first run | 319.8884 | 333.6131 | 653.5015 | 138.7446 | 0.9602 | invalid search window |
+| rs parallel build (20260405) | 361.2361 | 559.4534 | 920.6895 | 283.7027 | 0.9639 | valid |
 
 Takeaways:
 
@@ -140,6 +141,14 @@ Takeaways:
 - The first buffered-I/O run had polluted search metrics because search started
   while segment replacement was still in progress.
 - Buffered I/O alone did not close the search throughput gap to native.
+- **2026-04-05**: Parallel build enabled via correct env var
+  (`KNOWHERE_RS_FFI_ENABLE_PARALLEL_HNSW_ADD=1`). Previous attempts used wrong
+  env var name (`FFI_ENABLE_PARALLEL_HNSW_ADD_ENV`) and ran serial build
+  unknowingly, taking 88+ minutes. With correct var, optimize=559s (was
+  serial >5400s). QPS=284 vs native 848 = 3x gap. Gap is in Milvus FFI
+  integration overhead, not HNSW search algorithm (standalone RS ef=128 →
+  1380 QPS single-thread; Milvus-integrated → 284 QPS = 4.9x FFI overhead).
+  Recall 0.964 > native 0.956 (+0.008).
 
 ## B. OpenAI 500k Comparison
 

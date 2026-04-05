@@ -1,0 +1,67 @@
+{
+  "benchmark": "milvus-vectordbbench-cohere1m-hnsw-compare",
+  "authority_scope": "remote_x86_only",
+  "host": "hannsdb-x86",
+  "date": "2026-04-05",
+  "rs_git_sha": "8a0df4e54c9f2b202550d5423692d719848ad0ad",
+  "rs_config": {
+    "parallel_build": true,
+    "env_var": "KNOWHERE_RS_FFI_ENABLE_PARALLEL_HNSW_ADD=1",
+    "batch_cap": null,
+    "notes": "Correct env var (KNOWHERE_RS_FFI_ENABLE_PARALLEL_HNSW_ADD). Previous runs used wrong name (FFI_ENABLE_PARALLEL_HNSW_ADD_ENV) and were actually serial."
+  },
+  "params": {
+    "case_type": "Performance768D1M",
+    "db": "Milvus",
+    "index": "HNSW",
+    "metric_type": "COSINE",
+    "top_k": 100,
+    "m": 16,
+    "ef_construction": 128,
+    "ef_search": 128
+  },
+  "rows": [
+    {
+      "backend": "milvus-native-knowhere",
+      "qps": 848.398,
+      "recall": 0.9558,
+      "insert_duration": 179.063,
+      "optimize_duration": 339.6463,
+      "load_duration": 518.7093,
+      "search_window": "valid",
+      "source_result": "result_20260401_milvus-native-knowhere-hnsw-cohere1m-20260330_milvus.json"
+    },
+    {
+      "backend": "milvus-knowhere-rs-parallel",
+      "qps": 283.7027,
+      "recall": 0.9639,
+      "insert_duration": 361.2361,
+      "optimize_duration": 559.4534,
+      "load_duration": 920.6895,
+      "search_window": "valid",
+      "conc_qps_list": [192.5292, 278.6201, 283.7027, 283.0109, 283.4358, 282.9079, 281.284, 280.9163],
+      "conc_num_list": [1, 5, 10, 20, 30, 40, 60, 80],
+      "serial_latency_p99_s": 0.0067,
+      "source_result": "result_20260405_milvus-knowhere-rs-hnsw-cohere1m-20260330_milvus.json"
+    }
+  ],
+  "ratios": {
+    "rs_over_native_qps": 0.3345,
+    "rs_minus_native_recall": 0.0081,
+    "rs_over_native_optimize_duration": 1.647,
+    "rs_over_native_insert_duration": 2.018,
+    "rs_over_native_load_duration": 1.774
+  },
+  "verdict": "rs_below_target",
+  "analysis": {
+    "qps_gap": "3x slower than native (283 vs 848). Consistent with April 3 analysis: gap is in Milvus FFI integration path, not HNSW search algorithm. Standalone RS HNSW ef=128 on 768D Cohere: 1380 single QPS vs Milvus-integrated 284 QPS = 4.9x overhead.",
+    "optimize_improvement": "Parallel build (correct env var) reduced optimize from serial (88+ min) to 559s. Note: optimize=168s in invalid run was artificially short due to early search start.",
+    "recall_higher": "RS recall 0.964 > native 0.956 (+0.008). Consistent with serial-quality graph from parallel build.",
+    "qps_saturation": "QPS flat from concurrency 10-80 (283->281). Single-thread search is the bottleneck, not concurrency."
+  },
+  "prev_runs": [
+    {"date": "2026-04-05", "config": "serial (wrong env var FFI_ENABLE_PARALLEL_HNSW_ADD_ENV)", "optimize": ">5400s", "window": "did not complete"},
+    {"date": "2026-04-05", "config": "parallel wrong env var (cap64 also wrong)", "optimize": ">3900s", "window": "did not complete"},
+    {"date": "2026-04-05", "config": "parallel correct env var, invalid window", "optimize_vdb": "168s", "qps": 116.15, "recall": 0.9617, "window": "invalid"}
+  ]
+}
