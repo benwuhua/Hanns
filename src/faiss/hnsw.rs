@@ -7447,12 +7447,22 @@ impl HnswIndex {
             .checked_mul(self.dim)
             .ok_or_else(|| crate::api::KnowhereError::Codec("vector size overflow".to_string()))?;
 
-        // Vectors
+        // Vectors — batched read: 65536 f32 per call (256KB), down from 134M individual calls
         self.vectors = vec![0.0f32; total_f32];
-        for i in 0..total_f32 {
-            let mut buf = [0u8; 4];
-            file.read_exact(&mut buf)?;
-            self.vectors[i] = f32::from_le_bytes(buf);
+        {
+            const BATCH: usize = 65536;
+            let mut byte_buf = vec![0u8; BATCH * 4];
+            let mut offset = 0;
+            while offset < total_f32 {
+                let count = BATCH.min(total_f32 - offset);
+                let buf = &mut byte_buf[..count * 4];
+                file.read_exact(buf)?;
+                for i in 0..count {
+                    self.vectors[offset + i] =
+                        f32::from_le_bytes(buf[i * 4..i * 4 + 4].try_into().unwrap());
+                }
+                offset += count;
+            }
         }
         if self.metric_type == MetricType::Cosine {
             for vec in self.vectors.chunks_exact_mut(self.dim) {
@@ -7477,26 +7487,36 @@ impl HnswIndex {
             )));
         }
 
-        // IDs
+        // IDs — batched read: 32768 i64 per call (256KB)
         self.ids = Vec::with_capacity(count);
         let mut id_set = HashSet::with_capacity(count);
         let mut using_sequential_ids = true;
-        // OPT-021: Removed HashMap - IDs are stored in order
-        for i in 0..count {
-            let mut buf = [0u8; 8];
-            file.read_exact(&mut buf)?;
-            let id = i64::from_le_bytes(buf);
-            if !id_set.insert(id) {
-                return Err(crate::api::KnowhereError::Codec(format!(
-                    "duplicate id in index file: {}",
-                    id
-                )));
+        {
+            const BATCH: usize = 32768;
+            let mut byte_buf = vec![0u8; BATCH * 8];
+            let mut loaded = 0;
+            while loaded < count {
+                let batch = BATCH.min(count - loaded);
+                let buf = &mut byte_buf[..batch * 8];
+                file.read_exact(buf)?;
+                for j in 0..batch {
+                    let id = i64::from_le_bytes(
+                        buf[j * 8..j * 8 + 8].try_into().unwrap()
+                    );
+                    let global_i = loaded + j;
+                    if !id_set.insert(id) {
+                        return Err(crate::api::KnowhereError::Codec(format!(
+                            "duplicate id in index file: {}",
+                            id
+                        )));
+                    }
+                    if id < 0 || id as usize != global_i {
+                        using_sequential_ids = false;
+                    }
+                    self.ids.push(id);
+                }
+                loaded += batch;
             }
-            if id < 0 || id as usize != i {
-                using_sequential_ids = false;
-            }
-            self.ids.push(id);
-            // OPT-021: No HashMap insert needed - idx = position in array
         }
         self.use_sequential_ids = using_sequential_ids;
 
