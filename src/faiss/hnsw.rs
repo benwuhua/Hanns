@@ -6900,14 +6900,30 @@ impl HnswIndex {
         // Number of vectors
         file.write_all(&(self.ids.len() as u64).to_le_bytes())?;
 
-        // Vectors
-        for v in &self.vectors {
-            file.write_all(&v.to_le_bytes())?;
+        // Vectors — batched write: 65536 f32 per call (256KB), down from 134M individual calls
+        {
+            const BATCH: usize = 65536;
+            let mut byte_buf = vec![0u8; BATCH * 4];
+            for chunk in self.vectors.chunks(BATCH) {
+                let buf = &mut byte_buf[..chunk.len() * 4];
+                for (i, &v) in chunk.iter().enumerate() {
+                    buf[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+                }
+                file.write_all(buf)?;
+            }
         }
 
-        // IDs
-        for &id in &self.ids {
-            file.write_all(&id.to_le_bytes())?;
+        // IDs — batched write: 32768 i64 per call (256KB)
+        {
+            const BATCH: usize = 32768;
+            let mut byte_buf = vec![0u8; BATCH * 8];
+            for chunk in self.ids.chunks(BATCH) {
+                let buf = &mut byte_buf[..chunk.len() * 8];
+                for (i, &id) in chunk.iter().enumerate() {
+                    buf[i * 8..i * 8 + 8].copy_from_slice(&id.to_le_bytes());
+                }
+                file.write_all(buf)?;
+            }
         }
 
         // Node info (layer assignments and connections)
