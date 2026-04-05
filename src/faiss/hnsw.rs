@@ -1974,14 +1974,17 @@ impl HnswIndex {
         }
 
         let mut scratch = SearchScratch::new();
+        // Pre-allocate one reusable buffer to avoid 1M heap allocs (one per node).
+        // copy_from_slice is a plain memcpy with no allocator call.
+        let mut vec_scratch = vec![0.0f32; self.dim];
         for (i, &node_level) in node_levels.iter().enumerate().take(n) {
             let idx = first_new_idx + i;
 
             // Skip the first node (it's the entry point, no connections needed)
             if idx > 0 {
                 let vec_start = idx * self.dim;
-                let vec: Vec<f32> = self.vectors[vec_start..vec_start + self.dim].to_vec();
-                self.insert_node_with_scratch(idx, &vec, node_level, &mut scratch);
+                vec_scratch.copy_from_slice(&self.vectors[vec_start..vec_start + self.dim]);
+                self.insert_node_with_scratch(idx, &vec_scratch, node_level, &mut scratch);
             }
         }
 
@@ -2057,12 +2060,15 @@ impl HnswIndex {
         }
 
         let mut scratch = SearchScratch::new();
+        // Pre-allocate one reusable buffer to avoid 1M heap allocs (one per node).
+        // copy_from_slice is a plain memcpy with no allocator call.
+        let mut vec_scratch = vec![0.0f32; self.dim];
         for (i, &node_level) in node_levels.iter().enumerate().take(n) {
             let idx = first_new_idx + i;
             if idx > 0 {
                 let vec_start = idx * self.dim;
-                let vec: Vec<f32> = self.vectors[vec_start..vec_start + self.dim].to_vec();
-                self.insert_node_profiled_with_scratch(idx, &vec, node_level, stats, &mut scratch);
+                vec_scratch.copy_from_slice(&self.vectors[vec_start..vec_start + self.dim]);
+                self.insert_node_profiled_with_scratch(idx, &vec_scratch, node_level, stats, &mut scratch);
             }
         }
 
