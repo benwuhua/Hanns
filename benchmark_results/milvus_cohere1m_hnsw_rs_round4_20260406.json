@@ -1,0 +1,40 @@
+{
+  "date": "2026-04-06",
+  "machine": "hannsdb-x86",
+  "dataset": "Cohere-1M",
+  "index": "HNSW",
+  "code": "knowhere-rs",
+  "commit": "106dee7",
+  "results": {
+    "insert_s": 336.7843,
+    "optimize_s": 336.8796,
+    "load_s": 673.6639,
+    "qps": 349.2827,
+    "recall": 0.9573
+  },
+  "vs_native": {
+    "insert": "+10.6% slower",
+    "optimize": "2.53x faster",
+    "load": "1.72x faster",
+    "qps": "parity (-0.3%)",
+    "recall": "parity"
+  },
+  "vs_r1_baseline": {
+    "insert": "-4.0%",
+    "optimize": "-27.7%",
+    "load": "-17.5%",
+    "qps": "+22.2%"
+  },
+  "optimization_history": {
+    "R0_baseline": {"qps": 284, "commit": "before Round 1"},
+    "R1_batch_io_and_alloc": {"qps": 285.9, "changes": "batch serialize IO + eliminate per-node to_vec"},
+    "R2_ffi_fix_plus_prefetch": {"qps": 260.4, "changes": "FFI lazy bitset alloc + slab prefetch + TRACE_SLAB (all in one commit)"},
+    "R3_remove_trace_slab_fix_prefetch": {"qps": 141.3, "changes": "remove TRACE_SLAB, change prefetch offsets -- regression: prefetch causing L1 thrash"},
+    "R4_remove_prefetch": {"qps": 349.3, "changes": "remove prefetch call site -- FFI fix benefit revealed: +22% vs R1"}
+  },
+  "key_learnings": {
+    "ffi_lazy_bitset": "Moving bitset_view/sparse_bitset creation inside branches eliminates 135KB/call at 796 QPS/s = +22% QPS",
+    "prefetch_danger": "64 neighbors * 4 prefetch lines * 128 candidates = 32768 cache fills/search evicts scratch buffer from L1 -> QPS halved",
+    "trace_env_var": "std::env::var_os() acquires global RwLock; even at 0.1% overhead it shows up at 796 QPS * 16 workers"
+  }
+}
