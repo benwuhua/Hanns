@@ -5576,10 +5576,6 @@ impl HnswIndex {
                     continue;
                 }
 
-                unsafe {
-                    self.prefetch_layer0_slab_idx(nbr_idx);
-                }
-
                 batch_indices[batch_len] = nbr_idx;
                 batch_len += 1;
 
