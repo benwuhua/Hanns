@@ -55,8 +55,15 @@ use crate::faiss::{HnswIndex, IvfFlatIndex, IvfPqIndex, MemIndex, ScaNNConfig, S
 use crate::index::Index;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering as AtomicOrdering};
 const FFI_FORCE_SERIAL_HNSW_ADD_ENV: &str = "KNOWHERE_RS_FFI_FORCE_SERIAL_HNSW_ADD";
 const FFI_ENABLE_PARALLEL_HNSW_ADD_ENV: &str = "KNOWHERE_RS_FFI_ENABLE_PARALLEL_HNSW_ADD";
+
+// [HNSW_WINDOW] search concurrency window diagnostic
+static SEARCH_IN_FLIGHT: AtomicI32 = AtomicI32::new(0);
+static SEARCH_PEAK_CONCURRENT: AtomicI32 = AtomicI32::new(0);
+static SEARCH_WINDOW_COUNT: AtomicU64 = AtomicU64::new(0);
+static SEARCH_WINDOW_START_NS: AtomicU64 = AtomicU64::new(0);
 
 /// C API 错误码
 #[repr(i32)]
@@ -2570,7 +2577,56 @@ pub extern "C" fn knowhere_search_with_bitset(
                 Err(_) => std::ptr::null_mut(),
             }
         } else if let Some(ref idx) = index.hnsw {
-            match idx.search_with_bitset_ref(query_slice, &req, &bitset_ref) {
+            // [HNSW_WINDOW] entry
+            let prev_if = SEARCH_IN_FLIGHT.fetch_add(1, AtomicOrdering::Relaxed);
+            let cur_if = prev_if + 1;
+            if prev_if == 0 {
+                let now_ns = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u64;
+                SEARCH_WINDOW_START_NS.store(now_ns, AtomicOrdering::Relaxed);
+            }
+            {
+                let mut peak = SEARCH_PEAK_CONCURRENT.load(AtomicOrdering::Relaxed);
+                loop {
+                    if cur_if <= peak {
+                        break;
+                    }
+                    match SEARCH_PEAK_CONCURRENT.compare_exchange_weak(
+                        peak,
+                        cur_if,
+                        AtomicOrdering::Relaxed,
+                        AtomicOrdering::Relaxed,
+                    ) {
+                        Ok(_) => break,
+                        Err(p) => peak = p,
+                    }
+                }
+            }
+
+            let hnsw_result = idx.search_with_bitset_ref(query_slice, &req, &bitset_ref);
+
+            // [HNSW_WINDOW] exit
+            let remaining_if = SEARCH_IN_FLIGHT.fetch_sub(1, AtomicOrdering::Relaxed) - 1;
+            if remaining_if == 0 {
+                let window_n = SEARCH_WINDOW_COUNT.fetch_add(1, AtomicOrdering::Relaxed) + 1;
+                let start_ns = SEARCH_WINDOW_START_NS.load(AtomicOrdering::Relaxed);
+                let end_ns = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u64;
+                let duration_ms = (end_ns.saturating_sub(start_ns)) as f64 / 1_000_000.0;
+                let peak = SEARCH_PEAK_CONCURRENT.swap(0, AtomicOrdering::Relaxed);
+                if window_n <= 20 || window_n % 200 == 0 {
+                    eprintln!(
+                        "[HNSW_WINDOW] window={} peak_concurrent={} duration_ms={:.1}",
+                        window_n, peak, duration_ms
+                    );
+                }
+            }
+
+            match hnsw_result {
                 Ok(result) => {
                     let mut ids = result.ids;
                     let mut distances = result.distances;
