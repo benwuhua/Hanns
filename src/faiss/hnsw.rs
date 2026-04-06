@@ -6717,20 +6717,14 @@ impl HnswIndex {
             .params
             .effective_hnsw_ef_search(self.ef_search, req.nprobe, k);
 
-        // Parallel nq search: each query is independent; scratch buffers are TLS-safe.
-        let per_query: Vec<Vec<(i64, f32)>> = (0..n_queries)
-            .into_par_iter()
-            .map(|q_idx| {
-                let q_start = q_idx * self.dim;
-                let query_vec = &query[q_start..q_start + self.dim];
-                self.search_single_with_bitset_ref(query_vec, ef, k, bitset)
-            })
-            .collect();
+        let mut all_ids = Vec::new();
+        let mut all_dists = Vec::new();
 
-        let mut all_ids = Vec::with_capacity(n_queries * k);
-        let mut all_dists = Vec::with_capacity(n_queries * k);
-        for pairs in per_query {
-            for (id, dist) in pairs.into_iter().take(k) {
+        for q_idx in 0..n_queries {
+            let q_start = q_idx * self.dim;
+            let query_vec = &query[q_start..q_start + self.dim];
+            let results = self.search_single_with_bitset_ref(query_vec, ef, k, bitset);
+            for (id, dist) in results.into_iter().take(k) {
                 all_ids.push(id);
                 all_dists.push(dist);
             }
