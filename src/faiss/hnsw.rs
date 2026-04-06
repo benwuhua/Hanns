@@ -4110,6 +4110,47 @@ impl HnswIndex {
         }
     }
 
+    #[inline(always)]
+    unsafe fn prefetch_layer0_slab_idx(&self, idx: usize) -> bool {
+        let stride_words = self.layer0_slab.stride_words;
+        if stride_words == 0 {
+            return false;
+        }
+
+        let Some(base_word) = idx.checked_mul(stride_words) else {
+            return false;
+        };
+        if base_word >= self.layer0_slab.words.len() {
+            return false;
+        }
+
+        let slab_ptr = self.layer0_slab.words.as_ptr().add(base_word) as *const i8;
+        let stride_bytes = stride_words * std::mem::size_of::<u32>();
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+
+            _mm_prefetch(slab_ptr, _MM_HINT_T0);
+            if stride_bytes > 64 {
+                _mm_prefetch(slab_ptr.add(64), _MM_HINT_T0);
+            }
+            if stride_bytes > 128 {
+                _mm_prefetch(slab_ptr.add(128), _MM_HINT_T0);
+            }
+            if stride_bytes > 192 {
+                _mm_prefetch(slab_ptr.add(192), _MM_HINT_T0);
+            }
+            true
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            let _ = slab_ptr;
+            let _ = stride_bytes;
+            false
+        }
+    }
+
     pub fn search(&self, query: &[f32], req: &SearchRequest) -> Result<ApiSearchResult> {
         #[cfg(feature = "metrics")]
         let _timer = {
@@ -5481,8 +5522,32 @@ impl HnswIndex {
         if !self.layer0_slab.is_enabled_for(num_nodes)
             || !self.layer0_flat_graph.is_enabled_for(num_nodes)
         {
+            if std::env::var_os("KNOWHERE_RS_TRACE_SLAB").is_some() {
+                eprintln!(
+                    "SLAB_MISS slab_enabled={} slab_words={} slab_expected={} fg_enabled={} fg_nodes={}",
+                    self.layer0_slab.enabled,
+                    self.layer0_slab.words.len(),
+                    num_nodes * self.layer0_slab.stride_words,
+                    self.layer0_flat_graph.enabled,
+                    self.layer0_flat_graph.degrees.len(),
+                );
+            }
             return self
                 .search_layer_idx_with_bitset_scratch(query, entry_idx, 0, ef, bitset, scratch);
+        }
+
+        if std::env::var_os("KNOWHERE_RS_TRACE_SLAB").is_some() {
+            use std::sync::atomic::{AtomicBool, Ordering};
+
+            static PRINTED: AtomicBool = AtomicBool::new(false);
+            if !PRINTED.fetch_or(true, Ordering::Relaxed) {
+                eprintln!(
+                    "SLAB_HIT num_nodes={} slab_words={} stride={}",
+                    num_nodes,
+                    self.layer0_slab.words.len(),
+                    self.layer0_slab.stride_words,
+                );
+            }
         }
 
         let is_l2 = self.metric_type == MetricType::L2;
@@ -5533,6 +5598,10 @@ impl HnswIndex {
                 }
                 if !unsafe { scratch.mark_visited_unchecked(nbr_idx) } {
                     continue;
+                }
+
+                unsafe {
+                    self.prefetch_layer0_slab_idx(nbr_idx);
                 }
 
                 batch_indices[batch_len] = nbr_idx;

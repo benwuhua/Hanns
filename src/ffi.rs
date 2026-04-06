@@ -2536,11 +2536,6 @@ pub extern "C" fn knowhere_search_with_bitset(
         );
         let bitset_ref = crate::bitset::BitsetRef::new(bitset_words, bitset_wrapper.len);
 
-        // Owned bitset for indexes that need it (flat, sparse, etc.)
-        let bitset_view =
-            crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_wrapper.len);
-        let sparse_bitset = crate::faiss::sparse_inverted::bitset_to_bool_vec(&bitset_view);
-
         let req = SearchRequest {
             top_k,
             nprobe: 8,
@@ -2550,6 +2545,8 @@ pub extern "C" fn knowhere_search_with_bitset(
         };
 
         if let Some(ref idx) = index.flat {
+            let bitset_view =
+                crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_wrapper.len);
             match idx.search_with_bitset(query_slice, &req, &bitset_view) {
                 Ok(result) => {
                     let mut ids = result.ids;
@@ -2598,6 +2595,9 @@ pub extern "C" fn knowhere_search_with_bitset(
                 Err(_) => std::ptr::null_mut(),
             }
         } else if let Some(ref idx) = index.sparse_inverted {
+            let bitset_view =
+                crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_wrapper.len);
+            let sparse_bitset = crate::faiss::sparse_inverted::bitset_to_bool_vec(&bitset_view);
             match index.search_sparse_queries(query_slice, dim, |sparse_query| {
                 idx.search(sparse_query, top_k, Some(&sparse_bitset))
             }) {
@@ -2620,6 +2620,9 @@ pub extern "C" fn knowhere_search_with_bitset(
                 Err(_) => std::ptr::null_mut(),
             }
         } else if let Some(ref idx) = index.sparse_wand {
+            let bitset_view =
+                crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_wrapper.len);
+            let sparse_bitset = crate::faiss::sparse_inverted::bitset_to_bool_vec(&bitset_view);
             match index.search_sparse_queries(query_slice, dim, |sparse_query| {
                 idx.search(sparse_query, top_k, Some(&sparse_bitset))
             }) {
@@ -2642,6 +2645,9 @@ pub extern "C" fn knowhere_search_with_bitset(
                 Err(_) => std::ptr::null_mut(),
             }
         } else if let Some(ref idx) = index.sparse_wand_cc {
+            let bitset_view =
+                crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_wrapper.len);
+            let sparse_bitset = crate::faiss::sparse_inverted::bitset_to_bool_vec(&bitset_view);
             match index.search_sparse_queries(query_slice, dim, |sparse_query| {
                 idx.search(sparse_query, top_k, Some(&sparse_bitset))
             }) {
