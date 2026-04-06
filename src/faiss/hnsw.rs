@@ -344,6 +344,33 @@ impl Ord for SearchMaxDist {
     }
 }
 
+/// Request kernel to back this memory with 2MB huge pages (Linux transparent hugepages).
+/// This is a hint; the kernel may ignore it. Failures are silently ignored.
+/// Motivation: Layer0Slab is ~400MB. With standard 4KB pages, random slab access
+/// requires ~99K TLB entries (L1 TLB has ~1500). With 2MB pages, only ~199 entries
+/// are needed, eliminating TLB miss overhead.
+#[cfg(target_os = "linux")]
+fn madvise_hugepage<T>(data: &[T]) {
+    if data.is_empty() {
+        return;
+    }
+    use std::os::raw::{c_int, c_void};
+    extern "C" {
+        fn madvise(addr: *mut c_void, length: usize, advice: c_int) -> c_int;
+    }
+    const MADV_HUGEPAGE: c_int = 14;
+    unsafe {
+        madvise(
+            data.as_ptr() as *mut c_void,
+            data.len() * std::mem::size_of::<T>(),
+            MADV_HUGEPAGE,
+        );
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn madvise_hugepage<T>(_data: &[T]) {}
+
 #[derive(Clone, Debug, Default)]
 struct Layer0FlatGraph {
     max_neighbors: usize,
@@ -1811,6 +1838,7 @@ impl HnswIndex {
         }
 
         self.layer0_flat_graph.enabled = true;
+        madvise_hugepage(&self.layer0_flat_graph.neighbors);
     }
 
     fn refresh_layer0_flat_graph(&mut self) {
@@ -1858,6 +1886,7 @@ impl HnswIndex {
         }
 
         self.layer0_slab.enabled = true;
+        madvise_hugepage(&self.layer0_slab.words);
     }
 
     pub fn train(&mut self, vectors: &[f32]) -> Result<()> {
