@@ -55,12 +55,6 @@ use crate::faiss::{HnswIndex, IvfFlatIndex, IvfPqIndex, MemIndex, ScaNNConfig, S
 use crate::index::Index;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-
-static HNSW_ADD_CALLS: AtomicU64 = AtomicU64::new(0);
-static HNSW_ADD_VECTORS_TOTAL: AtomicU64 = AtomicU64::new(0);
-static HNSW_ADD_TIME_NS: AtomicU64 = AtomicU64::new(0);
-
 const FFI_FORCE_SERIAL_HNSW_ADD_ENV: &str = "KNOWHERE_RS_FFI_FORCE_SERIAL_HNSW_ADD";
 const FFI_ENABLE_PARALLEL_HNSW_ADD_ENV: &str = "KNOWHERE_RS_FFI_ENABLE_PARALLEL_HNSW_ADD";
 
@@ -2353,25 +2347,7 @@ pub extern "C" fn knowhere_add_index(
             None
         };
 
-        let t0 = std::time::Instant::now();
-        let result = index.add(vectors_slice, ids_slice);
-        let elapsed_ns = t0.elapsed().as_nanos() as u64;
-
-        let call_n = HNSW_ADD_CALLS.fetch_add(1, Relaxed) + 1;
-        HNSW_ADD_VECTORS_TOTAL.fetch_add(count as u64, Relaxed);
-        HNSW_ADD_TIME_NS.fetch_add(elapsed_ns, Relaxed);
-
-        if call_n <= 5 || call_n % 100 == 0 {
-            eprintln!(
-                "[HNSW_ADD] call={} batch_size={} total_vectors={} total_ms={:.0}",
-                call_n,
-                count,
-                HNSW_ADD_VECTORS_TOTAL.load(Relaxed),
-                HNSW_ADD_TIME_NS.load(Relaxed) as f64 / 1_000_000.0,
-            );
-        }
-
-        match result {
+        match index.add(vectors_slice, ids_slice) {
             Ok(_) => CError::Success as i32,
             Err(e) => e as i32,
         }
