@@ -81,6 +81,8 @@ thread_local! {
     static HNSW_BUILD_SEARCH_SCRATCH_TLS: RefCell<SearchScratch> = RefCell::new(SearchScratch::new());
     static HNSW_COSINE_QUERY_NORM_TLS: std::cell::Cell<f32> = std::cell::Cell::new(0.0);
     static HNSW_SQ_PRECOMPUTED_TLS: RefCell<Vec<i16>> = RefCell::new(Vec::new());
+    // layout: [upper_descent_ns, l0_search_ns, finalize_ns, total_ns]
+    static HNSW_LATENCY_SAMPLES: RefCell<Vec<[u64; 4]>> = RefCell::new(Vec::new());
 }
 
 static HNSW_CONCURRENT_SEARCHES: AtomicI32 = AtomicI32::new(0);
@@ -6612,8 +6614,12 @@ impl HnswIndex {
             return vec![];
         }
 
+        let t0 = Instant::now();
+
         self.prepare_search_query_context(query);
         let mut curr_ep_idx = self.get_idx_from_id_fast(self.entry_point.unwrap());
+
+        let t1 = Instant::now();
 
         // Upper layer descent — greedy, no need for full search
         let mut curr_ep_dist = self.distance(query, curr_ep_idx);
@@ -6628,12 +6634,44 @@ impl HnswIndex {
             curr_ep_dist = next_dist;
         }
 
+        let t2 = Instant::now();
+
         let mut result = HNSW_SEARCH_SCRATCH_TLS.with(|scratch_cell| {
             let mut scratch = scratch_cell.borrow_mut();
             self.search_single_with_bitset_ref_scratch(query, curr_ep_idx, ef, k, bitset, &mut scratch)
         });
+
+        let t3 = Instant::now();
+
         self.clear_search_query_context();
         self.rerank_sq_results(query, &mut result);
+
+        let t4 = Instant::now();
+
+        let upper_ns = t2.duration_since(t1).as_nanos() as u64;
+        let l0_ns = t3.duration_since(t2).as_nanos() as u64;
+        let finalize_ns = t4.duration_since(t3).as_nanos() as u64;
+        let total_ns = t4.duration_since(t0).as_nanos() as u64;
+
+        HNSW_LATENCY_SAMPLES.with(|cell| {
+            let mut v = cell.borrow_mut();
+            v.push([upper_ns, l0_ns, finalize_ns, total_ns]);
+            if v.len() >= 500 {
+                let mut samples = v.clone();
+                v.clear();
+                drop(v);
+                samples.sort_unstable_by_key(|x| x[3]);
+                let n = samples.len();
+                let p50 = samples[n / 2];
+                let p99 = samples[n * 99 / 100];
+                eprintln!(
+                    "[HNSW_LAT] p50: upper={:.0}us l0={:.0}us fin={:.0}us total={:.0}us | p99: upper={:.0}us l0={:.0}us fin={:.0}us total={:.0}us",
+                    p50[0] as f64 / 1000.0, p50[1] as f64 / 1000.0, p50[2] as f64 / 1000.0, p50[3] as f64 / 1000.0,
+                    p99[0] as f64 / 1000.0, p99[1] as f64 / 1000.0, p99[2] as f64 / 1000.0, p99[3] as f64 / 1000.0,
+                );
+            }
+        });
+
         result
     }
 
