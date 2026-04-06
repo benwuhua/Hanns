@@ -360,7 +360,7 @@ fn madvise_hugepage<T>(data: &[T]) {
     }
     const MADV_HUGEPAGE: c_int = 14;
     unsafe {
-        madvise(
+        let _ = madvise(
             data.as_ptr() as *mut c_void,
             data.len() * std::mem::size_of::<T>(),
             MADV_HUGEPAGE,
@@ -1838,12 +1838,12 @@ impl HnswIndex {
         }
 
         self.layer0_flat_graph.enabled = true;
-        madvise_hugepage(&self.layer0_flat_graph.neighbors);
     }
 
     fn refresh_layer0_flat_graph(&mut self) {
         self.layer0_slab.clear();
         self.rebuild_layer0_flat_graph();
+        madvise_hugepage(&self.layer0_flat_graph.neighbors);
         self.refresh_layer0_slab();
     }
 
