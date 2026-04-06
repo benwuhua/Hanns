@@ -4135,11 +4135,11 @@ impl HnswIndex {
             if stride_bytes > 64 {
                 _mm_prefetch(slab_ptr.add(64), _MM_HINT_T0);
             }
-            if stride_bytes > 128 {
-                _mm_prefetch(slab_ptr.add(128), _MM_HINT_T0);
+            if stride_bytes > 256 {
+                _mm_prefetch(slab_ptr.add(256), _MM_HINT_T0);
             }
-            if stride_bytes > 192 {
-                _mm_prefetch(slab_ptr.add(192), _MM_HINT_T0);
+            if stride_bytes > 512 {
+                _mm_prefetch(slab_ptr.add(512), _MM_HINT_T0);
             }
             true
         }
@@ -5522,32 +5522,8 @@ impl HnswIndex {
         if !self.layer0_slab.is_enabled_for(num_nodes)
             || !self.layer0_flat_graph.is_enabled_for(num_nodes)
         {
-            if std::env::var_os("KNOWHERE_RS_TRACE_SLAB").is_some() {
-                eprintln!(
-                    "SLAB_MISS slab_enabled={} slab_words={} slab_expected={} fg_enabled={} fg_nodes={}",
-                    self.layer0_slab.enabled,
-                    self.layer0_slab.words.len(),
-                    num_nodes * self.layer0_slab.stride_words,
-                    self.layer0_flat_graph.enabled,
-                    self.layer0_flat_graph.degrees.len(),
-                );
-            }
             return self
                 .search_layer_idx_with_bitset_scratch(query, entry_idx, 0, ef, bitset, scratch);
-        }
-
-        if std::env::var_os("KNOWHERE_RS_TRACE_SLAB").is_some() {
-            use std::sync::atomic::{AtomicBool, Ordering};
-
-            static PRINTED: AtomicBool = AtomicBool::new(false);
-            if !PRINTED.fetch_or(true, Ordering::Relaxed) {
-                eprintln!(
-                    "SLAB_HIT num_nodes={} slab_words={} stride={}",
-                    num_nodes,
-                    self.layer0_slab.words.len(),
-                    self.layer0_slab.stride_words,
-                );
-            }
         }
 
         let is_l2 = self.metric_type == MetricType::L2;
