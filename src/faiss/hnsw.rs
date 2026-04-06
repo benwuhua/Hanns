@@ -14,6 +14,7 @@ use rayon::prelude::*;
 use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BinaryHeap, HashSet};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::Arc;
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 use std::sync::OnceLock;
@@ -80,6 +81,17 @@ thread_local! {
     static HNSW_BUILD_SEARCH_SCRATCH_TLS: RefCell<SearchScratch> = RefCell::new(SearchScratch::new());
     static HNSW_COSINE_QUERY_NORM_TLS: std::cell::Cell<f32> = std::cell::Cell::new(0.0);
     static HNSW_SQ_PRECOMPUTED_TLS: RefCell<Vec<i16>> = RefCell::new(Vec::new());
+}
+
+static HNSW_CONCURRENT_SEARCHES: AtomicI32 = AtomicI32::new(0);
+static HNSW_SEARCH_CALLS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static HNSW_PEAK_CONCURRENT: AtomicI32 = AtomicI32::new(0);
+
+struct ConcurrencyGuard;
+impl Drop for ConcurrencyGuard {
+    fn drop(&mut self) {
+        HNSW_CONCURRENT_SEARCHES.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
@@ -6643,6 +6655,30 @@ impl HnswIndex {
                 "query dimension mismatch".to_string(),
             ));
         }
+
+        // Concurrency diagnostic
+        let concurrent_now = HNSW_CONCURRENT_SEARCHES.fetch_add(1, Ordering::Relaxed) + 1;
+        let call_num = HNSW_SEARCH_CALLS_TOTAL.fetch_add(1, Ordering::Relaxed) + 1;
+        // Update peak
+        let mut peak = HNSW_PEAK_CONCURRENT.load(Ordering::Relaxed);
+        while concurrent_now > peak {
+            match HNSW_PEAK_CONCURRENT.compare_exchange_weak(
+                peak, concurrent_now, Ordering::Relaxed, Ordering::Relaxed
+            ) {
+                Ok(_) => break,
+                Err(x) => peak = x,
+            }
+        }
+        // Every 1000 calls, dump stats to stderr
+        if call_num % 1000 == 0 {
+            eprintln!(
+                "[HNSW_CONC] calls={} peak_concurrent={} current={}",
+                call_num,
+                HNSW_PEAK_CONCURRENT.load(Ordering::Relaxed),
+                concurrent_now
+            );
+        }
+        let _guard = ConcurrencyGuard;
 
         let k = req.top_k;
         let ef = self
