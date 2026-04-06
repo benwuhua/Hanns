@@ -6672,7 +6672,7 @@ impl HnswIndex {
         // Every 1000 calls, dump stats to stderr
         if call_num % 1000 == 0 {
             eprintln!(
-                "[HNSW_CONC] calls={} peak_concurrent={} current={}",
+                "[HNSW_CONC] calls={} peak_concurrent={} current_at_entry={}",
                 call_num,
                 HNSW_PEAK_CONCURRENT.load(Ordering::Relaxed),
                 concurrent_now
