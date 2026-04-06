@@ -1,0 +1,51 @@
+{
+  "date": "2026-04-06",
+  "host": "hannsdb-x86",
+  "description": "Round 1 HNSW perf optimization: batch serialize/deserialize I/O + eliminate to_vec()",
+  "knowhere_rs_sha": "5c69d16",
+  "commits": [
+    "803de8c perf(hnsw): batch vector/ID writes in write_to (134M -> 2K write_all calls)",
+    "16186e8 perf(hnsw): batch vector/ID reads in read_from (134M -> 2K read_exact calls)",
+    "51055be perf(hnsw): eliminate per-node to_vec() in add/add_profiled",
+    "5c69d16 feat(ffi): add optional search tracing via KNOWHERE_RS_TRACE_SEARCH env var"
+  ],
+  "dataset": "Cohere-1M 768D Cosine HNSW",
+  "env": {
+    "KNOWHERE_RS_FFI_ENABLE_PARALLEL_HNSW_ADD": "1",
+    "search_window": "valid"
+  },
+  "results": {
+    "insert_s": 350.9392,
+    "optimize_s": 465.9544,
+    "load_s": 816.8937,
+    "qps": 285.9026,
+    "recall": 0.9623
+  },
+  "baseline_20260405": {
+    "insert_s": 361,
+    "optimize_s": 559,
+    "load_s": 921,
+    "qps": 284,
+    "recall": 0.964
+  },
+  "native_20260405": {
+    "insert_s": 179,
+    "optimize_s": 340,
+    "load_s": 519,
+    "qps": 848,
+    "recall": 0.956
+  },
+  "vs_baseline": {
+    "insert": "-2.8%",
+    "optimize": "-16.7%",
+    "load": "-11.4%",
+    "qps": "+0.7%"
+  },
+  "vs_native": {
+    "insert": "1.96x slower",
+    "optimize": "1.37x slower",
+    "load": "1.57x slower",
+    "qps": "3.0x slower"
+  },
+  "notes": "Round 1 optimizations significantly improved optimize and load. QPS bottleneck remains, likely in Milvus-integrated query dispatch path (serial nq=1 calls vs batch). Standalone RS HNSW achieves ~1380 QPS vs Milvus-integrated 286 QPS (4.8x overhead)."
+}
