@@ -123,7 +123,6 @@ static HNSW_NQ_POOL: once_cell::sync::Lazy<rayon::ThreadPool> =
             .unwrap_or(8);
         // Reserve CPU slots for CGO executor threads that will inject via install()
         let pool_threads = hw.saturating_sub(CGO_EXECUTOR_SLOTS).max(4);
-        eprintln!("[HNSW_POOL] hw={hw} CGO_EXECUTOR_SLOTS={CGO_EXECUTOR_SLOTS} pool_threads={pool_threads}");
         rayon::ThreadPoolBuilder::new()
             .num_threads(pool_threads)
             .thread_name(|i| format!("hnsw-nq-{i}"))
@@ -6820,7 +6819,6 @@ impl HnswIndex {
         let mut all_dists = Vec::with_capacity(n_queries * k);
 
         if n_queries >= NQ_PARALLEL_THRESHOLD {
-            eprintln!("[HNSW_NQ] n_queries={n_queries} k={k} ef={ef}");
             // Parallel path: pre-allocate flat output buffers (mirrors native's
             // p_id[idx*k] / p_dist[idx*k] pattern — zero per-task allocation).
             all_ids.resize(n_queries * k, -1i64);
