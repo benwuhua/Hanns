@@ -2272,6 +2272,8 @@ impl IndexWrapper {
         } else if let Some(ref idx) = self.minhash_lsh {
             idx.save(path.to_str().unwrap())
                 .map_err(|_| CError::Internal)
+        } else if let Some(ref idx) = self.diskann {
+            idx.save(path).map(|_| ()).map_err(|_| CError::Internal)
         } else {
             Err(CError::InvalidArg)
         }
@@ -2310,6 +2312,10 @@ impl IndexWrapper {
         } else if let Some(ref mut idx) = self.minhash_lsh {
             idx.load(path.to_str().unwrap())
                 .map_err(|_| CError::Internal)
+        } else if let Some(ref mut idx) = self.diskann {
+            *idx = crate::faiss::diskann_aisaq::PQFlashIndex::load(path)
+                .map_err(|_| CError::Internal)?;
+            Ok(())
         } else {
             Err(CError::InvalidArg)
         }
@@ -7225,6 +7231,72 @@ mod tests {
         assert!(result_xor.is_null());
 
         knowhere_bitset_free(a);
+    }
+
+    #[test]
+    fn test_diskann_ffi_save_load_roundtrip() {
+        let tmp_dir = std::env::temp_dir().join("diskann_ffi_test");
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        let save_path = tmp_dir.to_str().unwrap();
+
+        unsafe {
+            let dim = 8usize;
+            let n = 50usize;
+
+            let config = CIndexConfig {
+                index_type: CIndexType::DiskAnn,
+                metric_type: CMetricType::L2,
+                dim,
+                ef_construction: 12,
+                ef_search: 30,
+                ..CIndexConfig::default()
+            };
+            let index = knowhere_create_index(config);
+            assert!(!index.is_null());
+
+            let vectors: Vec<f32> = (0..n * dim).map(|i| i as f32).collect();
+            let ids: Vec<i64> = (0..n as i64).collect();
+
+            let err = knowhere_train_index(index as *mut _, vectors.as_ptr(), n, dim);
+            assert_eq!(err, 0);
+            let err =
+                knowhere_add_index(index as *mut _, vectors.as_ptr(), ids.as_ptr(), n, dim);
+            assert_eq!(err, 0);
+
+            // Save
+            let path_cstr = std::ffi::CString::new(save_path).unwrap();
+            let err = knowhere_save_index(index, path_cstr.as_ptr());
+            assert_eq!(err, 0, "save must succeed");
+
+            knowhere_free_index(index as *mut _);
+
+            // Load into a fresh index
+            let config2 = CIndexConfig {
+                index_type: CIndexType::DiskAnn,
+                metric_type: CMetricType::L2,
+                dim,
+                ef_construction: 12,
+                ef_search: 30,
+                ..CIndexConfig::default()
+            };
+            let loaded = knowhere_create_index(config2);
+            assert!(!loaded.is_null());
+
+            let err = knowhere_load_index(loaded as *mut _, path_cstr.as_ptr());
+            assert_eq!(err, 0, "load must succeed");
+
+            // Search on loaded index
+            let query: Vec<f32> = vec![0.0f32; dim];
+            let result = knowhere_search(loaded, query.as_ptr(), 1, 3, dim);
+            assert!(!result.is_null(), "search on loaded index must succeed");
+            let result_ref = &*result;
+            assert!(result_ref.num_results > 0);
+
+            knowhere_free_result(result);
+            knowhere_free_index(loaded as *mut _);
+        }
+
+        let _ = std::fs::remove_dir_all(tmp_dir);
     }
 
     #[test]
