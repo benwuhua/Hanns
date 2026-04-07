@@ -55,6 +55,15 @@ use crate::faiss::{HnswIndex, IvfFlatIndex, IvfPqIndex, MemIndex, ScaNNConfig, S
 use crate::index::Index;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering as FfiOrdering};
+
+// [HNSW_TIMING] burst 并发诊断
+static TIMING_IN_FLIGHT: AtomicI32 = AtomicI32::new(0);
+static TIMING_PEAK: AtomicI32 = AtomicI32::new(0);
+static TIMING_BURST_START_NS: AtomicU64 = AtomicU64::new(0);
+static TIMING_LAST_BURST_END_NS: AtomicU64 = AtomicU64::new(0);
+static TIMING_BURST_N: AtomicU64 = AtomicU64::new(0);
+
 const FFI_FORCE_SERIAL_HNSW_ADD_ENV: &str = "KNOWHERE_RS_FFI_FORCE_SERIAL_HNSW_ADD";
 const FFI_ENABLE_PARALLEL_HNSW_ADD_ENV: &str = "KNOWHERE_RS_FFI_ENABLE_PARALLEL_HNSW_ADD";
 
@@ -2570,7 +2579,56 @@ pub extern "C" fn knowhere_search_with_bitset(
                 Err(_) => std::ptr::null_mut(),
             }
         } else if let Some(ref idx) = index.hnsw {
-            match idx.search_with_bitset_ref(query_slice, &req, &bitset_ref) {
+            // [HNSW_TIMING] burst entry
+            let prev_if = TIMING_IN_FLIGHT.fetch_add(1, FfiOrdering::Relaxed);
+            let cur_if = prev_if + 1;
+            let entry_ns = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos() as u64;
+            if prev_if == 0 {
+                TIMING_BURST_START_NS.store(entry_ns, FfiOrdering::Relaxed);
+            }
+            // CAS-update peak
+            let mut peak = TIMING_PEAK.load(FfiOrdering::Relaxed);
+            loop {
+                if cur_if <= peak { break; }
+                match TIMING_PEAK.compare_exchange_weak(
+                    peak, cur_if, FfiOrdering::Relaxed, FfiOrdering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(p) => peak = p,
+                }
+            }
+
+            let hnsw_result = idx.search_with_bitset_ref(query_slice, &req, &bitset_ref);
+
+            // [HNSW_TIMING] burst exit
+            let remaining = TIMING_IN_FLIGHT.fetch_sub(1, FfiOrdering::Relaxed) - 1;
+            if remaining == 0 {
+                let end_ns = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u64;
+                let burst_start = TIMING_BURST_START_NS.load(FfiOrdering::Relaxed);
+                let burst_ms = end_ns.saturating_sub(burst_start) as f64 / 1_000_000.0;
+                let last_end = TIMING_LAST_BURST_END_NS.swap(end_ns, FfiOrdering::Relaxed);
+                let gap_ms = if last_end == 0 || burst_start < last_end {
+                    0.0_f64
+                } else {
+                    (burst_start - last_end) as f64 / 1_000_000.0
+                };
+                let peak_val = TIMING_PEAK.swap(0, FfiOrdering::Relaxed);
+                let n = TIMING_BURST_N.fetch_add(1, FfiOrdering::Relaxed) + 1;
+                if n <= 30 || n % 200 == 0 {
+                    eprintln!(
+                        "[HNSW_TIMING] burst={} peak={} burst_ms={:.1} gap_ms={:.1}",
+                        n, peak_val, burst_ms, gap_ms
+                    );
+                }
+            }
+
+            match hnsw_result {
                 Ok(result) => {
                     let mut ids = result.ids;
                     let mut distances = result.distances;
