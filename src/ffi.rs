@@ -293,7 +293,7 @@ struct IndexMetaSummary<'a> {
     resource_contract: ResourceContractSummary<'a>,
 }
 
-/// 包装索引对象 - 支持 Flat, HNSW, ScaNN, HNSW-PRQ, IVF-RaBitQ, HNSW-SQ, HNSW-PQ, BinFlat, BinaryHnsw, IVF-SQ8, BinIvfFlat, SparseWand, SparseWandCC, MinHashLSH
+/// 包装索引对象 - 支持 Flat, HNSW, ScaNN, HNSW-PRQ, IVF-RaBitQ, HNSW-SQ, HNSW-PQ, BinFlat, BinaryHnsw, IVF-SQ8, BinIvfFlat, SparseWand, SparseWandCC, MinHashLSH, DiskANN
 struct IndexWrapper {
     flat: Option<MemIndex>,
     hnsw: Option<HnswIndex>,
@@ -311,6 +311,7 @@ struct IndexWrapper {
     sparse_wand: Option<crate::faiss::SparseWandIndex>,
     sparse_wand_cc: Option<crate::faiss::SparseWandIndexCC>,
     minhash_lsh: Option<crate::index::MinHashLSHIndex>,
+    diskann: Option<crate::faiss::diskann_aisaq::PQFlashIndex>,
     dim: usize,
 }
 
@@ -473,6 +474,7 @@ impl IndexWrapper {
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
+                    diskann: None,
                     dim,
                 })
             }
@@ -509,6 +511,7 @@ impl IndexWrapper {
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
+                    diskann: None,
                     dim,
                 })
             }
@@ -560,6 +563,7 @@ impl IndexWrapper {
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
+                    diskann: None,
                     dim,
                 })
             }
@@ -642,6 +646,7 @@ impl IndexWrapper {
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
+                    diskann: None,
                     dim,
                 })
             }
@@ -695,6 +700,7 @@ impl IndexWrapper {
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
+                    diskann: None,
                     dim,
                 })
             }
@@ -736,6 +742,7 @@ impl IndexWrapper {
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
+                    diskann: None,
                     dim,
                 })
             }
@@ -775,6 +782,7 @@ impl IndexWrapper {
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
+                    diskann: None,
                     dim,
                 })
             }
@@ -813,6 +821,7 @@ impl IndexWrapper {
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
+                    diskann: None,
                     dim,
                 })
             }
@@ -848,6 +857,7 @@ impl IndexWrapper {
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
+                    diskann: None,
                 })
             }
             CIndexType::BinFlat => {
@@ -871,6 +881,7 @@ impl IndexWrapper {
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
+                    diskann: None,
                     dim,
                 })
             }
@@ -908,6 +919,7 @@ impl IndexWrapper {
                         sparse_wand: None,
                         sparse_wand_cc: None,
                         minhash_lsh: None,
+                        diskann: None,
                         dim,
                     })
                 } else {
@@ -944,6 +956,7 @@ impl IndexWrapper {
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
+                    diskann: None,
                 })
             }
             CIndexType::SparseInverted => {
@@ -975,6 +988,7 @@ impl IndexWrapper {
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
+                    diskann: None,
                 })
             }
             CIndexType::SparseWand => {
@@ -1008,6 +1022,7 @@ impl IndexWrapper {
                     sparse_wand: Some(sparse_wand),
                     sparse_wand_cc: None,
                     minhash_lsh: None,
+                    diskann: None,
                 })
             }
             CIndexType::SparseWandCc => {
@@ -1046,6 +1061,7 @@ impl IndexWrapper {
                     sparse_wand: None,
                     sparse_wand_cc: Some(sparse_wand_cc),
                     minhash_lsh: None,
+                    diskann: None,
                 })
             }
             CIndexType::MinHashLsh => {
@@ -1070,6 +1086,7 @@ impl IndexWrapper {
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: Some(minhash_lsh),
+                    diskann: None,
                 })
             }
             CIndexType::DiskAnn => {
