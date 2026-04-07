@@ -2737,6 +2737,28 @@ pub extern "C" fn knowhere_search_with_bitset(
                 }
                 Err(_) => std::ptr::null_mut(),
             }
+        } else if let Some(ref idx) = index.diskann {
+            let bitset_view =
+                crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_wrapper.len);
+            match idx.search_batch_with_bitset(query_slice, top_k, &bitset_view) {
+                Ok(result) => {
+                    let mut ids = result.ids;
+                    let mut distances = result.distances;
+                    let num_results = ids.len();
+                    let ids_ptr = ids.as_mut_ptr();
+                    let distances_ptr = distances.as_mut_ptr();
+                    std::mem::forget(ids);
+                    std::mem::forget(distances);
+                    let csr = CSearchResult {
+                        ids: ids_ptr,
+                        distances: distances_ptr,
+                        num_results,
+                        elapsed_ms: result.elapsed_ms as f32,
+                    };
+                    Box::into_raw(Box::new(csr))
+                }
+                Err(_) => std::ptr::null_mut(),
+            }
         } else {
             // Do not silently drop bitset on unsupported index types.
             eprintln!("search_with_bitset not supported for this index type");
