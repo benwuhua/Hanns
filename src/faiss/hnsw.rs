@@ -11178,6 +11178,71 @@ mod tests {
     }
 
     #[test]
+    fn test_hnsw_search_with_bitset_ref_multi_query() {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        };
+
+        let mut index = HnswIndex::new(&config).unwrap();
+
+        // Build index with 20 vectors so ef=5 searches work
+        let mut vectors: Vec<f32> = Vec::new();
+        for i in 0..20 {
+            vectors.extend_from_slice(&[i as f32, 0.0, 0.0, 0.0]);
+        }
+        let ids: Vec<i64> = (0..20).collect();
+        index.train(&vectors).unwrap();
+        index.add(&vectors, Some(&ids)).unwrap();
+
+        let req = SearchRequest {
+            top_k: 3,
+            nprobe: 10,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+
+        // Empty bitset (len=0) — all indices are out-of-range, so nothing is filtered
+        let empty_bitset = crate::bitset::BitsetRef::new(&[], 0);
+
+        // 8 queries — exceeds NQ_PARALLEL_THRESHOLD=4, exercises parallel path
+        let mut query_batch: Vec<f32> = Vec::new();
+        let expected_nearest: Vec<i64> = vec![0, 1, 2, 3, 4, 5, 6, 7]; // nearest to each query
+        for i in 0..8usize {
+            query_batch.extend_from_slice(&[i as f32 + 0.1, 0.0, 0.0, 0.0]);
+        }
+
+        let result = index
+            .search_with_bitset_ref(&query_batch, &req, &empty_bitset)
+            .unwrap();
+
+        // 8 queries × top_k=3 = 24 results
+        assert_eq!(result.ids.len(), 24, "expected 8×3=24 ids");
+        assert_eq!(result.distances.len(), 24);
+
+        // Each query's top-1 result should be its nearest neighbor
+        for q in 0..8 {
+            let top1_id = result.ids[q * 3];
+            assert_eq!(
+                top1_id, expected_nearest[q],
+                "query {q}: expected nearest={}, got {}",
+                expected_nearest[q], top1_id
+            );
+        }
+
+        // Results must be ordered nearest-first within each query slot
+        for q in 0..8 {
+            let d0 = result.distances[q * 3];
+            let d1 = result.distances[q * 3 + 1];
+            assert!(d0 <= d1, "query {q}: distances not ordered: {d0} > {d1}");
+        }
+    }
+
+    #[test]
     fn test_hnsw_search_with_bitset_all_filtered() {
         use crate::bitset::BitsetView;
 
