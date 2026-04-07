@@ -299,10 +299,10 @@ impl Layer0OrderedResults {
         }
     }
 
-    fn to_sorted_pairs(&self) -> Vec<(usize, f32)> {
-        let mut pairs: Vec<(usize, f32)> = self
-            .entries
-            .clone()
+    fn to_sorted_pairs(&mut self) -> Vec<(usize, f32)> {
+        // Drain the heap in-place (no clone). The heap is cleared via prepare()
+        // before next use anyway, so taking ownership here is correct.
+        let mut pairs: Vec<(usize, f32)> = std::mem::take(&mut self.entries)
             .into_sorted_vec()
             .into_iter()
             .map(|(SearchMaxDist(dist), idx)| (idx, dist))
@@ -9815,6 +9815,14 @@ mod tests {
             "ordered results must remain sorted from nearest to farthest"
         );
 
+        // to_sorted_pairs drains the heap (no-clone path); re-populate for the
+        // second phase of this test, which checks can_insert gating and eviction.
+        // In real search code, prepare() is always called before the heap is reused.
+        results.prepare(3);
+        results.insert(Layer0PoolEntry { idx: 10, dist: 3.0 }, 3);
+        results.insert(Layer0PoolEntry { idx: 11, dist: 1.0 }, 3);
+        results.insert(Layer0PoolEntry { idx: 12, dist: 2.0 }, 3);
+
         assert!(
             !results.can_insert(4.0, 3),
             "a full results pool must reject candidates worse than the current worst distance"
@@ -11359,6 +11367,36 @@ mod tests {
             let d1 = result.distances[q * 3 + 1];
             assert!(d0 <= d1, "query {q}: distances not ordered: {d0} > {d1}");
         }
+    }
+
+    #[test]
+    fn test_layer0_to_sorted_pairs_correct_order() {
+        // Verify to_sorted_pairs produces ascending-distance results.
+        // This test will pass both before and after switching from clone to take.
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams::default(),
+        };
+        let mut index = HnswIndex::new(&config).unwrap();
+        let vectors: Vec<f32> = (0..10).flat_map(|i| [i as f32, 0.0f32, 0.0f32, 0.0f32]).collect();
+        let ids: Vec<i64> = (0..10).collect();
+        index.train(&vectors).unwrap();
+        index.add(&vectors, Some(&ids)).unwrap();
+
+        let req = SearchRequest { top_k: 3, nprobe: 10, filter: None, params: None, radius: None };
+        let bitset = crate::bitset::BitsetRef::new(&[], 0);
+        let query = vec![3.1f32, 0.0, 0.0, 0.0];
+        let result = index.search_with_bitset_ref(&query, &req, &bitset).unwrap();
+
+        assert_eq!(result.ids.len(), 3);
+        // query=[3.1,0,0,0]; nearest is id=3 (dist=0.01), then id=4 (dist=0.81), then id=2 (dist=1.21)
+        assert_eq!(result.ids[0], 3, "top-1 should be id=3");
+        // distances must be ascending
+        assert!(result.distances[0] <= result.distances[1], "distances must be ascending");
+        assert!(result.distances[1] <= result.distances[2], "distances must be ascending");
     }
 
     #[test]
