@@ -1090,8 +1090,44 @@ impl IndexWrapper {
                 })
             }
             CIndexType::DiskAnn => {
-                eprintln!("DiskANN not yet fully implemented via FFI");
-                None
+                use crate::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
+                let max_degree = if config.ef_construction > 0 {
+                    config.ef_construction
+                } else {
+                    48
+                };
+                let search_list_size = if config.ef_search > 0 {
+                    config.ef_search
+                } else {
+                    128
+                };
+                let aisaq_config = AisaqConfig {
+                    max_degree,
+                    search_list_size,
+                    disk_pq_dims: 0, // in-memory mode, no disk PQ
+                    ..AisaqConfig::default()
+                };
+                let diskann = PQFlashIndex::new(aisaq_config, metric, dim).ok()?;
+                Some(Self {
+                    flat: None,
+                    hnsw: None,
+                    scann: None,
+                    hnsw_prq: None,
+                    hnsw_sq: None,
+                    hnsw_pq: None,
+                    ivf_pq: None,
+                    bin_flat: None,
+                    binary_hnsw: None,
+                    ivf_sq8: None,
+                    ivf_flat: None,
+                    bin_ivf_flat: None,
+                    sparse_inverted: None,
+                    sparse_wand: None,
+                    sparse_wand_cc: None,
+                    minhash_lsh: None,
+                    diskann: Some(diskann),
+                    dim,
+                })
             }
             _ => None,
         }
@@ -7153,5 +7189,24 @@ mod tests {
         assert!(result_xor.is_null());
 
         knowhere_bitset_free(a);
+    }
+
+    #[test]
+    fn test_diskann_ffi_create() {
+        // DiskANN index creation must succeed (was returning None before this fix)
+        let config = CIndexConfig {
+            index_type: CIndexType::DiskAnn,
+            metric_type: CMetricType::L2,
+            dim: 8,
+            ef_construction: 16, // reused as max_degree
+            ef_search: 32,       // reused as search_list_size
+            ..CIndexConfig::default()
+        };
+        let index = unsafe { knowhere_create_index(config) };
+        assert!(
+            !index.is_null(),
+            "DiskANN index creation must return non-null"
+        );
+        unsafe { knowhere_free_index(index as *mut _) };
     }
 }
