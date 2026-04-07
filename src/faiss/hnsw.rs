@@ -99,6 +99,23 @@ const CGO_EXECUTOR_SLOTS: usize = 32;
 /// Minimum nq to use the pool; below this rayon task overhead dominates.
 const NQ_PARALLEL_THRESHOLD: usize = 4;
 
+/// Copy+Send+Sync wrapper around a raw pointer, used for parallel nq output buffers.
+/// SAFETY invariant: callers must ensure each thread writes to a disjoint slice.
+/// The `get` method forces the closure to capture the whole struct (avoiding Rust 2021
+/// field-level capture of the inner `*mut T`).
+#[derive(Clone, Copy)]
+struct SendPtr<T>(*mut T);
+// SAFETY: The raw pointer is used only for disjoint per-query slices; no aliasing occurs.
+unsafe impl<T> Send for SendPtr<T> {}
+unsafe impl<T> Sync for SendPtr<T> {}
+
+impl<T> SendPtr<T> {
+    #[inline(always)]
+    fn get(self) -> *mut T {
+        self.0
+    }
+}
+
 static HNSW_NQ_POOL: once_cell::sync::Lazy<rayon::ThreadPool> =
     once_cell::sync::Lazy::new(|| {
         let hw = std::thread::available_parallelism()
@@ -4380,13 +4397,24 @@ impl HnswIndex {
         let should_bruteforce = self.should_bruteforce_bitset_knn(k, bitset);
 
         if n_queries >= NQ_PARALLEL_THRESHOLD {
-            let per_query: Vec<std::sync::Mutex<Vec<(i64, f32)>>> =
-                (0..n_queries).map(|_| std::sync::Mutex::new(vec![])).collect();
-            let per_query_ref = &per_query;
+            // Parallel path: pre-allocate flat output buffers (mirrors native's
+            // p_id[idx*k] / p_dist[idx*k] pattern — zero per-task allocation).
+            all_ids.resize(n_queries * k, -1i64);
+            all_dists.resize(n_queries * k, f32::INFINITY);
+
+            // SAFETY: each spawned task writes to a disjoint slice [q_idx*k..(q_idx+1)*k].
+            // The pointers are valid for the duration of scope_fifo (all tasks complete
+            // before scope_fifo returns, which is before all_ids/all_dists are dropped).
+            let ids_ptr: SendPtr<i64> = SendPtr(all_ids.as_mut_ptr());
+            let dists_ptr: SendPtr<f32> = SendPtr(all_dists.as_mut_ptr());
+            let ids_ptr_ref: &SendPtr<i64> = &ids_ptr;
+            let dists_ptr_ref: &SendPtr<f32> = &dists_ptr;
 
             HNSW_NQ_POOL.install(|| {
                 rayon::scope_fifo(|s| {
                     for q_idx in 0..n_queries {
+                        let ids_ptr_copy = *ids_ptr_ref;
+                        let dists_ptr_copy = *dists_ptr_ref;
                         s.spawn_fifo(move |_| {
                             let q_start = q_idx * self.dim;
                             let query_vec = &query[q_start..q_start + self.dim];
@@ -4400,19 +4428,24 @@ impl HnswIndex {
                             if should_bruteforce {
                                 self.rerank_sq_results(query_vec, &mut results);
                             }
-                            results.truncate(k);
-                            *per_query_ref[q_idx].lock().unwrap() = results;
+                            // SAFETY: q_idx is unique per task; slices are disjoint.
+                            unsafe {
+                                let ids_slice = std::slice::from_raw_parts_mut(
+                                    ids_ptr_copy.get().add(q_idx * k), k,
+                                );
+                                let dists_slice = std::slice::from_raw_parts_mut(
+                                    dists_ptr_copy.get().add(q_idx * k), k,
+                                );
+                                for (i, &(id, dist)) in results.iter().take(k).enumerate() {
+                                    ids_slice[i] = id;
+                                    dists_slice[i] = dist;
+                                }
+                            }
                         });
                     }
                 });
             });
-
-            for slot in per_query {
-                for (id, dist) in slot.into_inner().unwrap() {
-                    all_ids.push(id);
-                    all_dists.push(dist);
-                }
-            }
+            // all_ids and all_dists already fully populated by tasks above.
         } else {
             for q_idx in 0..n_queries {
                 let q_start = q_idx * self.dim;
@@ -6788,33 +6821,47 @@ impl HnswIndex {
 
         if n_queries >= NQ_PARALLEL_THRESHOLD {
             eprintln!("[HNSW_NQ] n_queries={n_queries} k={k} ef={ef}");
-            // Parallel path: submit nq tasks to HNSW_NQ_POOL.
-            // install() makes this calling thread temporarily join the pool
-            // (work-stealing), so pool_size + calling_threads ≈ hardware_concurrency.
-            let per_query: Vec<std::sync::Mutex<Vec<(i64, f32)>>> =
-                (0..n_queries).map(|_| std::sync::Mutex::new(vec![])).collect();
-            let per_query_ref = &per_query;
+            // Parallel path: pre-allocate flat output buffers (mirrors native's
+            // p_id[idx*k] / p_dist[idx*k] pattern — zero per-task allocation).
+            all_ids.resize(n_queries * k, -1i64);
+            all_dists.resize(n_queries * k, f32::INFINITY);
+
+            // Wrap raw pointers in a Copy+Send newtype.
+            // SAFETY: each spawned task writes to a disjoint slice [q_idx*k..(q_idx+1)*k].
+            // The pointers are valid for the duration of scope_fifo (all tasks complete
+            // before scope_fifo returns, which is before all_ids/all_dists are dropped).
+            let ids_ptr: SendPtr<i64> = SendPtr(all_ids.as_mut_ptr());
+            let dists_ptr: SendPtr<f32> = SendPtr(all_dists.as_mut_ptr());
+            let ids_ptr_ref: &SendPtr<i64> = &ids_ptr;
+            let dists_ptr_ref: &SendPtr<f32> = &dists_ptr;
 
             HNSW_NQ_POOL.install(|| {
                 rayon::scope_fifo(|s| {
                     for q_idx in 0..n_queries {
+                        let ids_ptr_copy = *ids_ptr_ref;
+                        let dists_ptr_copy = *dists_ptr_ref;
                         s.spawn_fifo(move |_| {
                             let q_start = q_idx * self.dim;
                             let query_vec = &query[q_start..q_start + self.dim];
-                            let mut res = self.search_single_with_bitset_ref(query_vec, ef, k, bitset);
-                            res.truncate(k);
-                            *per_query_ref[q_idx].lock().unwrap() = res;
+                            let res = self.search_single_with_bitset_ref(query_vec, ef, k, bitset);
+                            // SAFETY: q_idx is unique per task; slices are disjoint.
+                            unsafe {
+                                let ids_slice = std::slice::from_raw_parts_mut(
+                                    ids_ptr_copy.get().add(q_idx * k), k,
+                                );
+                                let dists_slice = std::slice::from_raw_parts_mut(
+                                    dists_ptr_copy.get().add(q_idx * k), k,
+                                );
+                                for (i, &(id, dist)) in res.iter().take(k).enumerate() {
+                                    ids_slice[i] = id;
+                                    dists_slice[i] = dist;
+                                }
+                            }
                         });
                     }
                 });
             });
-
-            for slot in per_query {
-                for (id, dist) in slot.into_inner().unwrap() {
-                    all_ids.push(id);
-                    all_dists.push(dist);
-                }
-            }
+            // all_ids and all_dists already fully populated by tasks above.
         } else {
             for q_idx in 0..n_queries {
                 let q_start = q_idx * self.dim;
