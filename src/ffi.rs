@@ -1214,6 +1214,10 @@ impl IndexWrapper {
                 }
             }
             Ok(n_vectors)
+        } else if let Some(ref mut idx) = self.diskann {
+            let n_vectors = vectors.len() / self.dim;
+            idx.add_with_ids(vectors, ids).map_err(|_| CError::Internal)?;
+            Ok(n_vectors)
         } else {
             Err(CError::InvalidArg)
         }
@@ -1301,6 +1305,8 @@ impl IndexWrapper {
         } else if self.sparse_inverted.is_some() || self.sparse_wand.is_some() {
             let _ = vectors;
             Ok(())
+        } else if let Some(ref mut idx) = self.diskann {
+            idx.train(vectors).map_err(|_| CError::Internal)
         } else {
             Err(CError::InvalidArg)
         }
@@ -7189,6 +7195,59 @@ mod tests {
         assert!(result_xor.is_null());
 
         knowhere_bitset_free(a);
+    }
+
+    #[test]
+    fn test_diskann_ffi_add_and_search() {
+        unsafe {
+            let dim = 8usize;
+            let n = 200usize;
+
+            let config = CIndexConfig {
+                index_type: CIndexType::DiskAnn,
+                metric_type: CMetricType::L2,
+                dim,
+                ef_construction: 16,
+                ef_search: 40,
+                ..CIndexConfig::default()
+            };
+            let index = knowhere_create_index(config);
+            assert!(!index.is_null());
+
+            let mut vectors: Vec<f32> = Vec::with_capacity(n * dim);
+            for i in 0..n {
+                for d in 0..dim {
+                    vectors.push(if d == i % dim { 1.0 } else { 0.0 });
+                }
+            }
+            let ids: Vec<i64> = (0..n as i64).collect();
+
+            let err = knowhere_train_index(index as *mut _, vectors.as_ptr(), n, dim);
+            assert_eq!(err, 0, "train must succeed");
+
+            let err = knowhere_add_index(index as *mut _, vectors.as_ptr(), ids.as_ptr(), n, dim);
+            assert_eq!(err, 0, "add must succeed");
+
+            // Query: unit vector at position 0 — nearest should be id=0
+            let query: Vec<f32> = {
+                let mut q = vec![0.0f32; dim];
+                q[0] = 1.0;
+                q
+            };
+            let result = knowhere_search(index, query.as_ptr(), 1, 3, dim);
+            assert!(!result.is_null(), "search must return results");
+            let result_ref = &*result;
+            assert!(result_ref.num_results > 0, "must return at least 1 result");
+            let top_id = *result_ref.ids;
+            assert!(
+                top_id >= 0 && (top_id as usize) < n,
+                "top id must be valid: got {}",
+                top_id
+            );
+
+            knowhere_free_result(result);
+            knowhere_free_index(index as *mut _);
+        }
     }
 
     #[test]
