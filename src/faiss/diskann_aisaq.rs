@@ -2623,6 +2623,13 @@ impl PQFlashIndex {
         if index.config.warm_up {
             index.warm_up_cache();
         }
+        // NoPQ in-memory mode: convert disk-backed DiskStorage to direct array access.
+        // load() always creates storage=Some(DiskStorage) which routes search through
+        // PageCache reads. materialize_storage() populates self.vectors/node_neighbor_ids
+        // and sets storage=None, enabling the same fast path used after add().
+        if index.pq_code_size == 0 {
+            index.materialize_storage()?;
+        }
         Ok(index)
     }
 
