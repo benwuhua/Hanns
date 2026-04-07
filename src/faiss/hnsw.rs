@@ -4345,61 +4345,28 @@ impl HnswIndex {
             .params
             .effective_hnsw_ef_search(self.ef_search, req.nprobe, k);
 
-        const NQ_PARALLEL_THRESHOLD: usize = 4;
-
-        let mut all_ids = Vec::with_capacity(n_queries * k);
-        let mut all_dists = Vec::with_capacity(n_queries * k);
+        let mut all_ids = Vec::new();
+        let mut all_dists = Vec::new();
         let should_bruteforce = self.should_bruteforce_bitset_knn(k, bitset);
 
-        if n_queries >= NQ_PARALLEL_THRESHOLD {
-            let per_query: Vec<Vec<(i64, f32)>> = (0..n_queries)
-                .into_par_iter()
-                .map(|q_idx| {
-                    let q_start = q_idx * self.dim;
-                    let query_vec = &query[q_start..q_start + self.dim];
+        for q_idx in 0..n_queries {
+            let q_start = q_idx * self.dim;
+            let query_vec = &query[q_start..q_start + self.dim];
 
-                    let mut results = if should_bruteforce {
-                        self.brute_force_search(query_vec, k, |_id, idx| {
-                            idx >= bitset.len() || !bitset.get(idx)
-                        })
-                    } else {
-                        self.search_single_with_bitset(query_vec, ef, k, bitset)
-                    };
-                    if should_bruteforce {
-                        self.rerank_sq_results(query_vec, &mut results);
-                    }
-
-                    results.truncate(k);
-                    results
+            let mut results = if should_bruteforce {
+                self.brute_force_search(query_vec, k, |_id, idx| {
+                    idx >= bitset.len() || !bitset.get(idx)
                 })
-                .collect();
-
-            for results in per_query {
-                for (id, dist) in results {
-                    all_ids.push(id);
-                    all_dists.push(dist);
-                }
+            } else {
+                self.search_single_with_bitset(query_vec, ef, k, bitset)
+            };
+            if should_bruteforce {
+                self.rerank_sq_results(query_vec, &mut results);
             }
-        } else {
-            for q_idx in 0..n_queries {
-                let q_start = q_idx * self.dim;
-                let query_vec = &query[q_start..q_start + self.dim];
 
-                let mut results = if should_bruteforce {
-                    self.brute_force_search(query_vec, k, |_id, idx| {
-                        idx >= bitset.len() || !bitset.get(idx)
-                    })
-                } else {
-                    self.search_single_with_bitset(query_vec, ef, k, bitset)
-                };
-                if should_bruteforce {
-                    self.rerank_sq_results(query_vec, &mut results);
-                }
-
-                for (id, dist) in results.into_iter().take(k) {
-                    all_ids.push(id);
-                    all_dists.push(dist);
-                }
+            for (id, dist) in results.into_iter().take(k) {
+                all_ids.push(id);
+                all_dists.push(dist);
             }
         }
 
@@ -6750,38 +6717,16 @@ impl HnswIndex {
             .params
             .effective_hnsw_ef_search(self.ef_search, req.nprobe, k);
 
-        const NQ_PARALLEL_THRESHOLD: usize = 4;
+        let mut all_ids = Vec::new();
+        let mut all_dists = Vec::new();
 
-        let mut all_ids = Vec::with_capacity(n_queries * k);
-        let mut all_dists = Vec::with_capacity(n_queries * k);
-
-        if n_queries >= NQ_PARALLEL_THRESHOLD {
-            let per_query: Vec<Vec<(i64, f32)>> = (0..n_queries)
-                .into_par_iter()
-                .map(|q_idx| {
-                    let q_start = q_idx * self.dim;
-                    let query_vec = &query[q_start..q_start + self.dim];
-                    let mut results = self.search_single_with_bitset_ref(query_vec, ef, k, bitset);
-                    results.truncate(k);
-                    results
-                })
-                .collect();
-
-            for results in per_query {
-                for (id, dist) in results {
-                    all_ids.push(id);
-                    all_dists.push(dist);
-                }
-            }
-        } else {
-            for q_idx in 0..n_queries {
-                let q_start = q_idx * self.dim;
-                let query_vec = &query[q_start..q_start + self.dim];
-                let results = self.search_single_with_bitset_ref(query_vec, ef, k, bitset);
-                for (id, dist) in results.into_iter().take(k) {
-                    all_ids.push(id);
-                    all_dists.push(dist);
-                }
+        for q_idx in 0..n_queries {
+            let q_start = q_idx * self.dim;
+            let query_vec = &query[q_start..q_start + self.dim];
+            let results = self.search_single_with_bitset_ref(query_vec, ef, k, bitset);
+            for (id, dist) in results.into_iter().take(k) {
+                all_ids.push(id);
+                all_dists.push(dist);
             }
         }
 
