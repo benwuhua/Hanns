@@ -11209,7 +11209,7 @@ mod tests {
         // Empty bitset (len=0) — all indices are out-of-range, so nothing is filtered
         let empty_bitset = crate::bitset::BitsetRef::new(&[], 0);
 
-        // 8 queries — exceeds NQ_PARALLEL_THRESHOLD=4, exercises parallel path
+        // 8 queries — will exercise the parallel path once HNSW_NQ_POOL is implemented
         let mut query_batch: Vec<f32> = Vec::new();
         let expected_nearest: Vec<i64> = vec![0, 1, 2, 3, 4, 5, 6, 7]; // nearest to each query
         for i in 0..8usize {
