@@ -79,6 +79,37 @@ At equal parameters on identical hardware, Hanns AISAQ delivers **+20% higher QP
 
 ---
 
+## Milvus Production Integration
+
+Hanns ships as a drop-in replacement for the C++ KnowWhere library inside Milvus. The following numbers are measured end-to-end inside a real Milvus standalone instance against a Cohere Wikipedia-1M collection (768-dim, IP metric), on the same x86 server (`target-cpu=native`).
+
+> **Baseline**: Milvus with native KnowWhere C++ (FAISS backend).
+> **Hanns**: Milvus with knowhere-rs. Same binary, same data, same query workload.
+
+| Metric | Native KnowWhere C++ | Hanns | vs Native |
+|--------|---------------------|-------|-----------|
+| Insert (1M vectors) | 304.6s | 336.8s | −10% (Milvus pipeline, not Hanns) |
+| **Optimize (graph build)** | 854.2s | **336.9s** | **2.53× faster** |
+| **Load (index → memory)** | 1158.9s | **673.7s** | **1.72× faster** |
+| **QPS c=20 (ef=128, k=100)** | ~500 | **1,051** | **2.1× faster** |
+| **QPS c=80 (ef=128, k=100)** | ~800 | **1,042** | **~1.3× faster** |
+| Recall@100 | 0.960 | 0.957 | parity |
+
+Insert is slightly slower — profiling shows that `knowhere_add_index` accounts for only 9.3% of total insert time; the remaining 90.7% is Milvus WAL + segment encoding pipeline, outside Hanns' scope.
+
+**QPS optimization path (April 2026):**
+
+| Round | Change | c=80 QPS |
+|-------|--------|----------|
+| R4 | FFI lazy bitset allocation | 349 |
+| R5 | madvise hugepage on Layer0Slab | 349 |
+| R7 | Private rayon ThreadPool (HNSW_NQ_POOL) + install() | 540 |
+| **R8** | Eliminate BinaryHeap clone + pre-alloc flat output buffer | **1,042** |
+
+R8's 93% gain over R7 came from two allocation-path fixes that mirror how native C++ already works: draining the result heap in-place (`std::mem::take`) instead of cloning it, and writing query results directly to pre-allocated contiguous output slices via raw pointer instead of using per-query `Mutex<Vec>`.
+
+---
+
 ## Why Hanns?
 
 - **Pure Rust**: no C/C++ dependencies, no unsafe FFI wrappers. Full type safety and memory safety.
