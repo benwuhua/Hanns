@@ -1421,6 +1421,11 @@ impl IndexWrapper {
             self.search_sparse_queries(query, self.dim, |sparse_query| {
                 idx.search(sparse_query, top_k, None)
             })
+        } else if let Some(ref idx) = self.diskann {
+            let start = std::time::Instant::now();
+            let result = idx.search_batch(query, top_k).map_err(|_| CError::Internal)?;
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            Ok(ApiSearchResult::new(result.ids, result.distances, elapsed_ms))
         } else {
             Err(CError::InvalidArg)
         }
@@ -1429,6 +1434,9 @@ impl IndexWrapper {
     fn set_ef_search(&mut self, ef_search: usize) -> Result<(), CError> {
         if let Some(ref mut idx) = self.hnsw {
             idx.set_ef_search(ef_search);
+            Ok(())
+        } else if let Some(ref mut idx) = self.diskann {
+            idx.set_search_list_size(ef_search);
             Ok(())
         } else {
             Err(CError::InvalidArg)
