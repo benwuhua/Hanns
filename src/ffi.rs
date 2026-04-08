@@ -132,6 +132,9 @@ pub struct CIndexConfig {
     pub build_dram_budget_gb: f32,
     pub disk_pq_dims: usize,
     pub beamwidth: usize,
+    // IVF-PQ parameters
+    pub pq_m: usize,     // number of sub-quantizers
+    pub pq_nbits: usize, // bits per sub-quantizer (default 8)
 }
 
 impl Default for CIndexConfig {
@@ -155,6 +158,8 @@ impl Default for CIndexConfig {
             build_dram_budget_gb: 0.0,
             disk_pq_dims: 0,
             beamwidth: 8,
+            pq_m: 32,
+            pq_nbits: 8,
         }
     }
 }
@@ -852,6 +857,8 @@ impl IndexWrapper {
                     params: IndexParams {
                         nlist: Some(config.num_clusters.max(1)),
                         nprobe: Some(config.nprobe.max(1)),
+                        m: Some(config.pq_m.max(1)),
+                        nbits_per_idx: Some(if config.pq_nbits > 0 { config.pq_nbits } else { 8 }),
                         ..Default::default()
                     },
                 };

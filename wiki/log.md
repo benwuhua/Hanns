@@ -4,6 +4,26 @@ append-only 时间线。新条目加在顶部。
 
 ---
 
+## 2026-04-08 — IVF-PQ Milvus 集成
+
+**类型**：集成 + bench
+
+**改动**：
+- `src/ffi.rs`：`CIndexConfig` 添加 `pq_m`/`pq_nbits` 字段；`IvfPq` 分支传入 `m`/`nbits_per_idx`
+- 新建 `ivf_pq_rust_node.cpp` shim（读取 Milvus config 中 `m`/`nbits` key）
+- `cabi_bridge.hpp` 同步添加 `pq_m`/`pq_nbits` 字段（repr(C) 顺序一致）
+- `index_factory.h` 路由 `INDEX_FAISS_IVFPQ` → RS，支持 `KNOWHERE_RS_IVFPQ_BYPASS`
+
+**结果（100K×768D IP，m=32，nprobe=64）**：
+- Recall@10 = 0.815（IVF-PQ 有损压缩，正常）
+- RS c=80: **190.4 QPS**，Native c=80: 191.8 QPS → **parity ✅（<1%）**
+
+**结论**：IVF-PQ Milvus 集成成功，recall 和 QPS 与 native 完全一致。Milvus dispatch ceiling ~191 QPS 主导。
+
+→ 详见 [[benchmarks/authority-numbers]] §IVF-PQ Milvus
+
+---
+
 ## 2026-04-08 — IVF-Flat Milvus 集成
 
 **类型**：集成 + bench

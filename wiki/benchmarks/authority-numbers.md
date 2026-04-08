@@ -59,6 +59,23 @@ build: 561s (parallel, M=16, ef_c=200)
 
 build: train 112.7s + add 9.5s = 122.2s
 
+## IVF-PQ — Milvus 并发 QPS（100K×768D, hannsdb-x86, 2026-04-08）
+
+**数据集**：合成归一化 float32，100K × 768D，IP metric
+**Index**：IVF_PQ，nlist=1024，m=32，nbits=8，nprobe=64
+**Recall@10**：0.815（IVF-PQ 有损压缩权衡，m=32 即 24 dims/sub-quantizer）
+**结论**：RS 与 native **parity ✅（<1%）**。上限 ~191 QPS（Milvus dispatch ceiling，同 IVF-Flat 量级）。
+
+### RS vs Native 对比（nprobe=64, m=32, 100K×768D）
+
+| Concurrency | RS QPS | Native QPS | Delta |
+|-------------|--------|------------|-------|
+| c=1  | 38.9 | 39.0 | parity |
+| c=20 | 180.9 | 180.8 | parity |
+| c=80 | **190.4** | **191.8** | **parity ✅** |
+
+---
+
 ## IVF-Flat — Milvus 并发 QPS（100K×768D, hannsdb-x86, 2026-04-08）
 
 **数据集**：合成归一化 float32，100K × 768D，IP metric（Cohere-1M shape）
