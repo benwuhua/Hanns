@@ -127,6 +127,11 @@ pub struct CIndexConfig {
     pub nprobe: usize,
     /// Data type (0 = Float, 100 = Binary, etc.) - matches Milvus VecType enum
     pub data_type: i32,
+    // DiskANN-specific parameters
+    pub pq_code_budget_gb: f32,
+    pub build_dram_budget_gb: f32,
+    pub disk_pq_dims: usize,
+    pub beamwidth: usize,
 }
 
 impl Default for CIndexConfig {
@@ -146,6 +151,10 @@ impl Default for CIndexConfig {
             num_clusters: 256,
             nprobe: 8,
             data_type: 101, // Default to Float (101)
+            pq_code_budget_gb: 0.0,
+            build_dram_budget_gb: 0.0,
+            disk_pq_dims: 0,
+            beamwidth: 8,
         }
     }
 }
@@ -1101,10 +1110,14 @@ impl IndexWrapper {
                 } else {
                     128
                 };
+                let beamwidth = if config.beamwidth > 0 { config.beamwidth } else { 8 };
                 let aisaq_config = AisaqConfig {
                     max_degree,
                     search_list_size,
-                    disk_pq_dims: 0, // in-memory mode, no disk PQ
+                    disk_pq_dims: config.disk_pq_dims,
+                    pq_code_budget_gb: config.pq_code_budget_gb,
+                    build_dram_budget_gb: config.build_dram_budget_gb,
+                    beamwidth,
                     ..AisaqConfig::default()
                 };
                 let diskann = PQFlashIndex::new(aisaq_config, metric, dim).ok()?;
