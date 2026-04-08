@@ -113,3 +113,25 @@ The overhead H=410ms is paid once, amortized over 80 queries:
 1. Measure recall vs brute-force on 1M (need GT generation)
 2. Compare native Milvus DiskANN 1M serial QPS directly (rebuild native binary)
 3. Reduce segment count via bulk-load to see if serial QPS approaches standalone 6K QPS
+
+## 参数对齐修复 (2026-04-08, commits a1e49ba + e231450 + d6eb0f2)
+
+### 问题
+
+DiskANN 参数通道不完整：`pq_code_budget_gb`、`build_dram_budget_gb`、`disk_pq_dims`、`beamwidth`
+四个参数无法从 Milvus 侧传入 RS，且 shim 中 `max_degree`/`search_list_size` fallback 值与
+native knowhere 默认值不匹配。
+
+### 修复内容
+
+| 层 | 文件 | 变更 |
+| --- | --- | --- |
+| Rust FFI | `src/ffi.rs` | `CIndexConfig` 追加 4 个 DiskANN 字段；DiskAnn arm 透传新字段 |
+| C++ ABI | `cabi_bridge.hpp` | 镜像追加 4 个字段，顺序/类型与 Rust 严格对齐 |
+| C++ Shim | `diskann_rust_node.cpp` | 提取 4 个新参数；fallback 修正：`max_degree` 56→48，`search_list_size` 100→128，`beamwidth` 条件赋值→`value_or(8)` |
+
+### 行为影响
+
+- **NoPQ in-memory（当前 benchmark）**：行为不变（`pq_code_budget_gb=0.0` 仍默认，结果与 R2 一致）
+- **PQ disk 模式**：现在可以通过 `pq_code_budget_gb > 0` 启用（之前静默忽略）
+- **`beamwidth` 可控**：用户可从 Milvus index params 设置 beamwidth（之前固定为 RS 默认值 8）
