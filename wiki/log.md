@@ -4,6 +4,29 @@ append-only 时间线。新条目加在顶部。
 
 ---
 
+## 2026-04-08 — KMeans 预分配优化（build time 大逆转）
+
+**类型**：perf optimization
+
+**根因**：`train_parallel()` 每轮迭代（默认 25 次）重新分配：
+- `new_centroids: Vec<f32>[k×dim]` = 3.1MB（k=1024, dim=768）
+- `counts: Vec<usize>[k]`
+- 每个 centroid 单独 `updated: Vec<f32>[dim]` × 1024 次微分配
+
+**修复**：
+1. `assignments`/`new_centroids`/`counts` 移到循环外预分配，循环内 `.fill(0)` 复用
+2. 消除 per-centroid `updated` 分配，in-place 计算归一化
+3. 用 `collect_into_vec` 写回预分配 assignments（保持 rayon 并行）
+
+**结果**（100K×768D Milvus 对比）：
+- IVF_FLAT build: RS 5.5→**3.0s**，Native 3.0→4.5s → **RS 1.5× 更快** ✅
+- IVF_SQ8 build: RS 6.0→**5.5s**，Native 3.0→7.5s → **RS 1.36× 更快** ✅
+- IVF_PQ build: RS 7.0→**3.6s**，Native 3.5→3.0s → parity ✅
+
+从 "RS 比 native 慢 2×" 翻转为 "RS 比 native 快 1.36–1.5×"。
+
+---
+
 ## 2026-04-08 — IVF 系列 Build Time + Recall 完整对比
 
 **类型**：bench

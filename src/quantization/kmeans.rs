@@ -350,71 +350,74 @@ impl KMeans {
         // 简化初始化 (速度优先)
         self.kmeanspp_init(vectors, n);
 
-        let _assignments = vec![0usize; n];
+        // 预分配迭代缓冲区，循环内复用（避免 25× 重复 malloc）
+        let mut assignments = vec![0usize; n];
+        let mut new_centroids = vec![0.0f32; self.k * self.dim];
+        let mut counts = vec![0usize; self.k];
 
         for _iter in 0..self.max_iter {
-            // 并行分配阶段 - 使用 L2 平方距离 (避免 sqrt)
-            let assignments: Vec<usize> = (0..n)
-                .into_par_iter()
-                .map(|i| {
-                    let mut min_dist = f32::MAX;
-                    let mut best_k = 0;
-                    let vec_start = i * self.dim;
-                    let vec_end = vec_start + self.dim;
-                    let vec = &vectors[vec_start..vec_end];
-                    for c in 0..self.k {
-                        let centroid_start = c * self.dim;
-                        let centroid_end = centroid_start + self.dim;
-                        let dist = self.score(vec, &self.centroids[centroid_start..centroid_end]);
-                        if dist < min_dist {
-                            min_dist = dist;
-                            best_k = c;
-                        }
+            // 并行分配阶段 - rayon par_iter，结果写入预分配的 assignments
+            use rayon::prelude::*;
+            (0..n).into_par_iter().map(|i| {
+                let mut min_dist = f32::MAX;
+                let mut best_k = 0;
+                let vec_start = i * self.dim;
+                let vec = &vectors[vec_start..vec_start + self.dim];
+                for c in 0..self.k {
+                    let centroid_start = c * self.dim;
+                    let dist = self.score(vec, &self.centroids[centroid_start..centroid_start + self.dim]);
+                    if dist < min_dist {
+                        min_dist = dist;
+                        best_k = c;
                     }
-                    best_k
-                })
-                .collect();
+                }
+                best_k
+            }).collect_into_vec(&mut assignments);
 
-            // 并行更新阶段 - 使用 parallel iterator 聚合
-            let mut new_centroids = vec![0.0f32; self.k * self.dim];
-            let mut counts = vec![0usize; self.k];
+            // 重置聚合缓冲区（复用，不重新分配）
+            new_centroids.fill(0.0);
+            counts.fill(0);
 
             for i in 0..n {
                 let c = assignments[i];
+                let base = c * self.dim;
+                let vec_start = i * self.dim;
                 for j in 0..self.dim {
-                    new_centroids[c * self.dim + j] += vectors[i * self.dim + j];
+                    new_centroids[base + j] += vectors[vec_start + j];
                 }
                 counts[c] += 1;
             }
 
-            // 计算收敛
+            // 计算收敛（in-place 归一化，消除 per-centroid updated 分配）
             let mut max_shift = 0.0f32;
             for c in 0..self.k {
                 let centroid_start = c * self.dim;
                 let centroid_end = centroid_start + self.dim;
 
                 if counts[c] > 0 {
-                    let mut updated = vec![0.0f32; self.dim];
-                    for j in 0..self.dim {
-                        updated[j] = new_centroids[c * self.dim + j] / counts[c] as f32;
+                    let inv_count = 1.0 / counts[c] as f32;
+                    for j in centroid_start..centroid_end {
+                        new_centroids[j] *= inv_count;
                     }
 
                     // For IP metric: normalize centroids after averaging.
                     if self.metric == KMeansMetric::InnerProduct {
-                        let norm = updated.iter().map(|x| x * x).sum::<f32>().sqrt();
+                        let norm = new_centroids[centroid_start..centroid_end]
+                            .iter().map(|x| x * x).sum::<f32>().sqrt();
                         if norm > 1e-12 {
-                            for x in updated.iter_mut() {
-                                *x /= norm;
+                            for j in centroid_start..centroid_end {
+                                new_centroids[j] /= norm;
                             }
                         }
                     }
 
                     let shift = compute_l2_distance(
                         &self.centroids[centroid_start..centroid_end],
-                        &updated,
+                        &new_centroids[centroid_start..centroid_end],
                     );
                     max_shift = max_shift.max(shift);
-                    self.centroids[centroid_start..centroid_end].copy_from_slice(&updated);
+                    self.centroids[centroid_start..centroid_end]
+                        .copy_from_slice(&new_centroids[centroid_start..centroid_end]);
                 } else {
                     let largest_c = counts
                         .iter()

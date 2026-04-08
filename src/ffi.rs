@@ -857,7 +857,7 @@ impl IndexWrapper {
                     params: IndexParams {
                         nlist: Some(config.num_clusters.max(1)),
                         nprobe: Some(config.nprobe.max(1)),
-                        m: Some(config.pq_m.max(1)),
+                        m: Some(config.pq_m.max(1).min(dim.max(1))),
                         nbits_per_idx: Some(if config.pq_nbits > 0 { config.pq_nbits } else { 8 }),
                         ..Default::default()
                     },

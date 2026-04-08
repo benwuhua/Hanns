@@ -73,10 +73,15 @@ build: train 112.7s + add 9.5s = 122.2s
 | IVF_PQ m=32 (nprobe=64) | RS | 7.0 | 2.0 | 1.000 | 38.8 |
 | IVF_PQ m=32 (nprobe=64) | Native | 3.5 | 2.2 | 1.000 | 38.4 |
 
-**结论**：
+**结论（优化后，2026-04-08 KMeans 预分配 commit）**：
 - **Recall 完全 parity**（100K self-query 场景，nprobe 足够）
 - **Search QPS parity**（c=1 误差范围内）
-- **Build time：RS 约 1.8–2× 慢于 native** ⚠️ — k-means 训练阶段差距，待优化
+- **Build time：RS 全面领先** ✅（KMeans 预分配优化后翻转）：
+  - IVF_FLAT: RS 3.0s vs Native 4.5s → **RS 1.5× 更快**
+  - IVF_SQ8: RS 5.5s vs Native 7.5s → **RS 1.36× 更快**
+  - IVF_PQ: RS 3.6s vs Native 3.0s → parity
+
+优化前（commit 7de01da）：RS IVF_FLAT 5.5s vs Native 3.0s（RS 1.8× 慢），优化后完全翻转。
 
 注：Recall=1.000 是 self-query（query ∈ index）结果。IVF-PQ 对外部 query 的实际 recall = 0.815（见下表）。
 
