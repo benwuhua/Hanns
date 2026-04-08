@@ -26,6 +26,7 @@
 - [[concepts/hnsw]] — HNSW 算法 + RS 实现 + 优化历史
 - [[concepts/diskann]] — PQFlashIndex 架构 + NoPQ/PQ 路径 + 参数说明
 - [[concepts/milvus-integration]] — Milvus segment dispatch + CGO executor + shim ABI
+- [[concepts/vdbbench]] — VectorDBBench 使用指南：CLI 命令、数据集、RS vs Native 对比流程
 - [[concepts/ivf]] — IVF-Flat / IVF-SQ8 / IVF-PQ 实现与对比
 
 ## Benchmarks

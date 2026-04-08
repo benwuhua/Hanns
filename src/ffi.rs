@@ -94,6 +94,9 @@ pub enum CIndexType {
     IvfPq = 17,
     IvfFlat = 18,
     DiskAnn = 19,
+    HnswPcaSq = 20,
+    HnswPcaUsq = 21,
+    DiskAnnPcaUsq = 22,
 }
 
 /// Metric 类型枚举
@@ -135,6 +138,8 @@ pub struct CIndexConfig {
     // IVF-PQ parameters
     pub pq_m: usize,     // number of sub-quantizers
     pub pq_nbits: usize, // bits per sub-quantizer (default 8)
+    // PCA parameters
+    pub pca_dim: usize, // PCA target dimensionality (0 = no PCA)
 }
 
 impl Default for CIndexConfig {
@@ -160,6 +165,7 @@ impl Default for CIndexConfig {
             beamwidth: 8,
             pq_m: 32,
             pq_nbits: 8,
+            pca_dim: 0,
         }
     }
 }
@@ -326,6 +332,9 @@ struct IndexWrapper {
     sparse_wand_cc: Option<crate::faiss::SparseWandIndexCC>,
     minhash_lsh: Option<crate::index::MinHashLSHIndex>,
     diskann: Option<crate::faiss::diskann_aisaq::PQFlashIndex>,
+    hnsw_pca_sq: Option<crate::faiss::HnswPcaSqIndex>,
+    hnsw_pca_usq: Option<crate::faiss::HnswPcaUsqIndex>,
+    diskann_pca_usq: Option<crate::faiss::DiskAnnPcaUsqIndex>,
     dim: usize,
     nprobe: usize,
 }
@@ -449,6 +458,9 @@ impl IndexWrapper {
             CIndexType::SparseWandCc => IndexType::SparseWandCc,
             CIndexType::MinHashLsh => IndexType::MinHashLsh,
             CIndexType::DiskAnn => IndexType::DiskAnn,
+            CIndexType::HnswPcaSq => IndexType::HnswSq,   // PCA+SQ variant
+            CIndexType::HnswPcaUsq => IndexType::HnswSq,  // PCA+USQ variant
+            CIndexType::DiskAnnPcaUsq => IndexType::DiskAnn, // DiskANN+PCA+USQ variant
         };
 
         // Parse data_type from i32 (Milvus VecType enum)
@@ -490,6 +502,9 @@ impl IndexWrapper {
                     sparse_wand_cc: None,
                     minhash_lsh: None,
                     diskann: None,
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: None,
                     dim,
                     nprobe: 8,
                 })
@@ -528,6 +543,9 @@ impl IndexWrapper {
                     sparse_wand_cc: None,
                     minhash_lsh: None,
                     diskann: None,
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: None,
                     dim,
                     nprobe: 8,
                 })
@@ -581,6 +599,9 @@ impl IndexWrapper {
                     sparse_wand_cc: None,
                     minhash_lsh: None,
                     diskann: None,
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: None,
                     dim,
                     nprobe: 8,
                 })
@@ -665,6 +686,9 @@ impl IndexWrapper {
                     sparse_wand_cc: None,
                     minhash_lsh: None,
                     diskann: None,
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: None,
                     dim,
                     nprobe: 8,
                 })
@@ -720,6 +744,9 @@ impl IndexWrapper {
                     sparse_wand_cc: None,
                     minhash_lsh: None,
                     diskann: None,
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: None,
                     dim,
                     nprobe: 8,
                 })
@@ -763,6 +790,9 @@ impl IndexWrapper {
                     sparse_wand_cc: None,
                     minhash_lsh: None,
                     diskann: None,
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: None,
                     dim,
                     nprobe: 8,
                 })
@@ -804,6 +834,9 @@ impl IndexWrapper {
                     sparse_wand_cc: None,
                     minhash_lsh: None,
                     diskann: None,
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: None,
                     dim,
                     nprobe,
                 })
@@ -844,6 +877,9 @@ impl IndexWrapper {
                     sparse_wand_cc: None,
                     minhash_lsh: None,
                     diskann: None,
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: None,
                     dim,
                     nprobe,
                 })
@@ -884,6 +920,9 @@ impl IndexWrapper {
                     sparse_wand_cc: None,
                     minhash_lsh: None,
                     diskann: None,
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: None,
                 })
             }
             CIndexType::BinFlat => {
@@ -908,6 +947,9 @@ impl IndexWrapper {
                     sparse_wand_cc: None,
                     minhash_lsh: None,
                     diskann: None,
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: None,
                     dim,
                     nprobe: 8,
                 })
@@ -947,6 +989,9 @@ impl IndexWrapper {
                         sparse_wand_cc: None,
                         minhash_lsh: None,
                         diskann: None,
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: None,
                         dim,
                         nprobe: 8,
                     })
@@ -986,6 +1031,9 @@ impl IndexWrapper {
                     sparse_wand_cc: None,
                     minhash_lsh: None,
                     diskann: None,
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: None,
                 })
             }
             CIndexType::SparseInverted => {
@@ -1019,6 +1067,9 @@ impl IndexWrapper {
                     sparse_wand_cc: None,
                     minhash_lsh: None,
                     diskann: None,
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: None,
                 })
             }
             CIndexType::SparseWand => {
@@ -1054,6 +1105,9 @@ impl IndexWrapper {
                     sparse_wand_cc: None,
                     minhash_lsh: None,
                     diskann: None,
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: None,
                 })
             }
             CIndexType::SparseWandCc => {
@@ -1094,6 +1148,9 @@ impl IndexWrapper {
                     sparse_wand_cc: Some(sparse_wand_cc),
                     minhash_lsh: None,
                     diskann: None,
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: None,
                 })
             }
             CIndexType::MinHashLsh => {
@@ -1120,6 +1177,9 @@ impl IndexWrapper {
                     sparse_wand_cc: None,
                     minhash_lsh: Some(minhash_lsh),
                     diskann: None,
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: None,
                 })
             }
             CIndexType::DiskAnn => {
@@ -1163,8 +1223,86 @@ impl IndexWrapper {
                     sparse_wand_cc: None,
                     minhash_lsh: None,
                     diskann: Some(diskann),
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: None,
                     dim,
                     nprobe: 8,
+                })
+            }
+            CIndexType::HnswPcaSq => {
+                let pca_dim = if config.pca_dim > 0 { config.pca_dim } else { dim / 2 };
+                let idx = crate::faiss::HnswPcaSqIndex::new(crate::faiss::HnswPcaSqConfig {
+                    dim,
+                    pca_dim,
+                    m: config.ef_construction.min(32).max(4),
+                    ef_construction: config.ef_construction.max(50),
+                    ef_search: config.ef_search.max(10),
+                });
+                Some(Self {
+                    flat: None, hnsw: None, scann: None, hnsw_prq: None,
+                    hnsw_sq: None, hnsw_pq: None, ivf_pq: None,
+                    bin_flat: None, binary_hnsw: None,
+                    ivf_sq8: None, ivf_flat: None, bin_ivf_flat: None,
+                    sparse_inverted: None, sparse_wand: None, sparse_wand_cc: None,
+                    minhash_lsh: None, diskann: None,
+                    hnsw_pca_sq: Some(idx),
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: None,
+                    dim, nprobe: 8,
+                })
+            }
+            CIndexType::HnswPcaUsq => {
+                let pca_dim = if config.pca_dim > 0 { config.pca_dim } else { dim / 2 };
+                let idx = crate::faiss::HnswPcaUsqIndex::new(crate::faiss::HnswPcaUsqConfig {
+                    dim,
+                    pca_dim,
+                    bits_per_dim: 4,
+                    rotation_seed: 42,
+                }).map_err(|_| CError::Internal).ok()?;
+                Some(Self {
+                    flat: None, hnsw: None, scann: None, hnsw_prq: None,
+                    hnsw_sq: None, hnsw_pq: None, ivf_pq: None,
+                    bin_flat: None, binary_hnsw: None,
+                    ivf_sq8: None, ivf_flat: None, bin_ivf_flat: None,
+                    sparse_inverted: None, sparse_wand: None, sparse_wand_cc: None,
+                    minhash_lsh: None, diskann: None,
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: Some(idx),
+                    diskann_pca_usq: None,
+                    dim, nprobe: 8,
+                })
+            }
+            CIndexType::DiskAnnPcaUsq => {
+                use crate::faiss::diskann_aisaq::AisaqConfig;
+                let pca_dim = if config.pca_dim > 0 { config.pca_dim } else { dim / 2 };
+                let max_degree = if config.ef_construction > 0 { config.ef_construction } else { 48 };
+                let search_list_size = if config.ef_search > 0 { config.ef_search } else { 128 };
+                let idx = crate::faiss::DiskAnnPcaUsqIndex::new(dim, metric,
+                    crate::faiss::DiskAnnPcaUsqConfig {
+                        base: AisaqConfig {
+                            max_degree,
+                            search_list_size,
+                            beamwidth: if config.beamwidth > 0 { config.beamwidth } else { 8 },
+                            ..AisaqConfig::default()
+                        },
+                        pca_dim,
+                        bits_per_dim: 4,
+                        rotation_seed: 42,
+                        rerank_k: 64,
+                    }
+                ).map_err(|_| CError::Internal).ok()?;
+                Some(Self {
+                    flat: None, hnsw: None, scann: None, hnsw_prq: None,
+                    hnsw_sq: None, hnsw_pq: None, ivf_pq: None,
+                    bin_flat: None, binary_hnsw: None,
+                    ivf_sq8: None, ivf_flat: None, bin_ivf_flat: None,
+                    sparse_inverted: None, sparse_wand: None, sparse_wand_cc: None,
+                    minhash_lsh: None, diskann: None,
+                    hnsw_pca_sq: None,
+                    hnsw_pca_usq: None,
+                    diskann_pca_usq: Some(idx),
+                    dim, nprobe: 8,
                 })
             }
             _ => None,
@@ -1256,6 +1394,14 @@ impl IndexWrapper {
             let n_vectors = vectors.len() / self.dim;
             idx.add_with_ids(vectors, ids).map_err(|_| CError::Internal)?;
             Ok(n_vectors)
+        } else if let Some(ref mut idx) = self.hnsw_pca_sq {
+            idx.add(vectors, ids).map_err(|_| CError::Internal)
+        } else if let Some(ref mut idx) = self.hnsw_pca_usq {
+            idx.add(vectors, ids).map_err(|_| CError::Internal)
+        } else if let Some(ref mut idx) = self.diskann_pca_usq {
+            let n = vectors.len() / self.dim;
+            idx.build(vectors, n, self.dim).map_err(|_| CError::Internal)?;
+            Ok(n)
         } else {
             Err(CError::InvalidArg)
         }
@@ -1345,6 +1491,16 @@ impl IndexWrapper {
             Ok(())
         } else if let Some(ref mut idx) = self.diskann {
             idx.train(vectors).map_err(|_| CError::Internal)
+        } else if let Some(ref mut idx) = self.hnsw_pca_sq {
+            idx.train(vectors).map_err(|_| CError::Internal)?;
+            Ok(())
+        } else if let Some(ref mut idx) = self.hnsw_pca_usq {
+            idx.train(vectors).map_err(|_| CError::Internal)?;
+            Ok(())
+        } else if let Some(ref mut idx) = self.diskann_pca_usq {
+            // DiskAnnPcaUsq train is done inside build()
+            let _ = vectors;
+            Ok(())
         } else {
             Err(CError::InvalidArg)
         }
@@ -1464,6 +1620,28 @@ impl IndexWrapper {
             let result = idx.search_batch(query, top_k).map_err(|_| CError::Internal)?;
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
             Ok(ApiSearchResult::new(result.ids, result.distances, elapsed_ms))
+        } else if let Some(ref idx) = self.hnsw_pca_sq {
+            let start = std::time::Instant::now();
+            let results = idx.search(query, &req).map_err(|_| CError::Internal)?;
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
+        } else if let Some(ref idx) = self.hnsw_pca_usq {
+            let start = std::time::Instant::now();
+            let results = idx.search(query, &req).map_err(|_| CError::Internal)?;
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
+        } else if let Some(ref idx) = self.diskann_pca_usq {
+            let start = std::time::Instant::now();
+            let results = idx.search(query, top_k).map_err(|_| CError::Internal)?;
+            let mut ids = Vec::with_capacity(top_k);
+            let mut dists = Vec::with_capacity(top_k);
+            for (dist, id) in results.into_iter().take(top_k) {
+                ids.push(id as i64);
+                dists.push(dist);
+            }
+            while ids.len() < top_k { ids.push(-1); dists.push(f32::MAX); }
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            Ok(ApiSearchResult::new(ids, dists, elapsed_ms))
         } else {
             Err(CError::InvalidArg)
         }
