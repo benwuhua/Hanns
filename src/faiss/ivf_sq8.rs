@@ -16,6 +16,26 @@ use crate::index::{
 use crate::quantization::ScalarQuantizer;
 use crate::simd::dot_product_f32;
 
+/// 私有 rayon pool，用于 IVF-SQ8 cluster 并行 scanning。
+/// 镜像 hnsw.rs 的 HNSW_NQ_POOL 模式：CGO executor 线程通过 install() 加入，
+/// 避免全局 rayon pool 过订（80 并发 × nprobe tasks = 640 tasks 争 16 线程）。
+#[cfg(feature = "parallel")]
+const IVF_SQ8_CGO_EXECUTOR_SLOTS: usize = 32;
+
+#[cfg(feature = "parallel")]
+static IVF_SQ8_CLUSTER_POOL: once_cell::sync::Lazy<rayon::ThreadPool> =
+    once_cell::sync::Lazy::new(|| {
+        let hw = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(8);
+        let pool_threads = hw.saturating_sub(IVF_SQ8_CGO_EXECUTOR_SLOTS).max(4);
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(pool_threads)
+            .thread_name(|i| format!("ivfsq8-cluster-{i}"))
+            .build()
+            .expect("failed to build IVF_SQ8_CLUSTER_POOL")
+    });
+
 #[derive(Debug, Clone, Copy)]
 struct SearchHit {
     id: i64,
@@ -374,23 +394,25 @@ impl IvfSq8Index {
             let merged = {
                 use rayon::prelude::*;
                 let dim = self.dim;
-                let partials: Vec<TopKAccumulator> = clusters
-                    .par_iter()
-                    .map_init(
-                        || (vec![0.0f32; dim], vec![0i16; dim]),
-                        |(q_residual_buf, q_precomputed_buf), &cluster_id| {
-                            self.scan_cluster_with_buf(
-                                cluster_id,
-                                query_vec,
-                                k,
-                                q_residual_buf,
-                                q_precomputed_buf,
-                                None,
-                                None,
-                            )
-                        },
-                    )
-                    .collect();
+                let partials: Vec<TopKAccumulator> = IVF_SQ8_CLUSTER_POOL.install(|| {
+                    clusters
+                        .par_iter()
+                        .map_init(
+                            || (vec![0.0f32; dim], vec![0i16; dim]),
+                            |(q_residual_buf, q_precomputed_buf), &cluster_id| {
+                                self.scan_cluster_with_buf(
+                                    cluster_id,
+                                    query_vec,
+                                    k,
+                                    q_residual_buf,
+                                    q_precomputed_buf,
+                                    None,
+                                    None,
+                                )
+                            },
+                        )
+                        .collect()
+                });
                 let mut merged = TopKAccumulator::new(k);
                 for partial in partials {
                     merged.merge(partial);
