@@ -96,3 +96,4 @@ __pycache__/
 # raw native benchmark logs
 benchmark_results/native_logs/
 benchmark_results/native_hnsw_qps_*.log
+wiki/.obsidian/
