@@ -6,11 +6,14 @@ pub mod bin_ivf_flat;
 pub mod binary;
 pub mod binary_hnsw;
 pub mod diskann_aisaq;
+pub mod diskann_pca_usq;
 pub mod diskann_sq;
 pub mod hnsw;
 pub mod hnsw_hvq;
 pub mod hnsw_pq;
 pub mod hnsw_prq;
+pub mod hnsw_pca_sq;
+pub mod hnsw_pca_usq;
 pub mod hnsw_quantized;
 pub mod index;
 pub mod ivf;
@@ -43,9 +46,12 @@ pub use diskann_aisaq::{
     AisaqConfig, AsyncReadEngine, BeamSearchIO, BeamSearchStats, FileGroup, FlashLayout,
     PQFlashIndex, PageCache, PageCacheStats,
 };
+pub use diskann_pca_usq::{DiskAnnPcaUsqConfig, DiskAnnPcaUsqIndex};
 pub use diskann_sq::{DiskAnnSqConfig, DiskAnnSqIndex};
 pub use hnsw::HnswIndex;
 pub use hnsw_hvq::{HnswHvqConfig, HnswHvqIndex};
+pub use hnsw_pca_sq::{HnswPcaSqConfig, HnswPcaSqIndex};
+pub use hnsw_pca_usq::{HnswPcaUsqConfig, HnswPcaUsqIndex};
 pub use hnsw_pq::{HnswPqConfig, HnswPqIndex};
 pub use hnsw_prq::{HnswPrqConfig, HnswPrqIndex};
 pub use hnsw_quantized::{HnswQuantizeConfig, HnswSqIndex};
