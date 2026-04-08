@@ -322,6 +322,7 @@ struct IndexWrapper {
     minhash_lsh: Option<crate::index::MinHashLSHIndex>,
     diskann: Option<crate::faiss::diskann_aisaq::PQFlashIndex>,
     dim: usize,
+    nprobe: usize,
 }
 
 impl IndexWrapper {
@@ -485,6 +486,7 @@ impl IndexWrapper {
                     minhash_lsh: None,
                     diskann: None,
                     dim,
+                    nprobe: 8,
                 })
             }
             CIndexType::Hnsw => {
@@ -522,6 +524,7 @@ impl IndexWrapper {
                     minhash_lsh: None,
                     diskann: None,
                     dim,
+                    nprobe: 8,
                 })
             }
             CIndexType::Scann => {
@@ -574,6 +577,7 @@ impl IndexWrapper {
                     minhash_lsh: None,
                     diskann: None,
                     dim,
+                    nprobe: 8,
                 })
             }
             CIndexType::HnswPrq => {
@@ -657,6 +661,7 @@ impl IndexWrapper {
                     minhash_lsh: None,
                     diskann: None,
                     dim,
+                    nprobe: 8,
                 })
             }
             CIndexType::IvfRabitq => {
@@ -711,6 +716,7 @@ impl IndexWrapper {
                     minhash_lsh: None,
                     diskann: None,
                     dim,
+                    nprobe: 8,
                 })
             }
             CIndexType::HnswPq => {
@@ -753,6 +759,7 @@ impl IndexWrapper {
                     minhash_lsh: None,
                     diskann: None,
                     dim,
+                    nprobe: 8,
                 })
             }
             CIndexType::IvfSq8 => {
@@ -793,6 +800,7 @@ impl IndexWrapper {
                     minhash_lsh: None,
                     diskann: None,
                     dim,
+                    nprobe,
                 })
             }
             CIndexType::IvfFlat => {
@@ -832,6 +840,7 @@ impl IndexWrapper {
                     minhash_lsh: None,
                     diskann: None,
                     dim,
+                    nprobe,
                 })
             }
             CIndexType::IvfPq => {
@@ -863,6 +872,7 @@ impl IndexWrapper {
                     bin_ivf_flat: None,
                     sparse_inverted: None,
                     dim,
+                    nprobe: 8,
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
@@ -892,6 +902,7 @@ impl IndexWrapper {
                     minhash_lsh: None,
                     diskann: None,
                     dim,
+                    nprobe: 8,
                 })
             }
             CIndexType::BinaryHnsw => {
@@ -930,6 +941,7 @@ impl IndexWrapper {
                         minhash_lsh: None,
                         diskann: None,
                         dim,
+                        nprobe: 8,
                     })
                 } else {
                     None
@@ -962,6 +974,7 @@ impl IndexWrapper {
                     bin_ivf_flat: Some(bin_ivf_flat),
                     sparse_inverted: None,
                     dim,
+                    nprobe: 8,
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
@@ -994,6 +1007,7 @@ impl IndexWrapper {
                     bin_ivf_flat: None,
                     sparse_inverted: Some(sparse_inverted),
                     dim,
+                    nprobe: 8,
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: None,
@@ -1028,6 +1042,7 @@ impl IndexWrapper {
                     bin_ivf_flat: None,
                     sparse_inverted: None,
                     dim,
+                    nprobe: 8,
                     sparse_wand: Some(sparse_wand),
                     sparse_wand_cc: None,
                     minhash_lsh: None,
@@ -1067,6 +1082,7 @@ impl IndexWrapper {
                     bin_ivf_flat: None,
                     sparse_inverted: None,
                     dim,
+                    nprobe: 8,
                     sparse_wand: None,
                     sparse_wand_cc: Some(sparse_wand_cc),
                     minhash_lsh: None,
@@ -1092,6 +1108,7 @@ impl IndexWrapper {
                     bin_ivf_flat: None,
                     sparse_inverted: None,
                     dim,
+                    nprobe: 8,
                     sparse_wand: None,
                     sparse_wand_cc: None,
                     minhash_lsh: Some(minhash_lsh),
@@ -1140,6 +1157,7 @@ impl IndexWrapper {
                     minhash_lsh: None,
                     diskann: Some(diskann),
                     dim,
+                    nprobe: 8,
                 })
             }
             _ => None,
@@ -1381,7 +1399,7 @@ impl IndexWrapper {
         } else if let Some(ref idx) = self.ivf_sq8 {
             let req = SearchRequest {
                 top_k,
-                nprobe: 8,
+                nprobe: self.nprobe,
                 filter: None,
                 params: None,
                 radius: None,
@@ -1397,7 +1415,7 @@ impl IndexWrapper {
         } else if let Some(ref idx) = self.ivf_flat {
             let req = SearchRequest {
                 top_k,
-                nprobe: 8,
+                nprobe: self.nprobe,
                 filter: None,
                 params: None,
                 radius: None,
@@ -1450,6 +1468,15 @@ impl IndexWrapper {
             Ok(())
         } else if let Some(ref mut idx) = self.diskann {
             idx.set_search_list_size(ef_search);
+            Ok(())
+        } else {
+            Err(CError::InvalidArg)
+        }
+    }
+
+    fn set_nprobe(&mut self, nprobe: usize) -> Result<(), CError> {
+        if self.ivf_sq8.is_some() || self.ivf_flat.is_some() {
+            self.nprobe = nprobe;
             Ok(())
         } else {
             Err(CError::InvalidArg)
@@ -2545,6 +2572,21 @@ pub extern "C" fn knowhere_set_ef_search(index: *mut std::ffi::c_void, ef_search
     unsafe {
         let wrapper = &mut *(index as *mut IndexWrapper);
         match wrapper.set_ef_search(ef_search) {
+            Ok(()) => CError::Success as i32,
+            Err(err) => err as i32,
+        }
+    }
+}
+
+/// Override IVF search-time nprobe on an existing index handle.
+#[no_mangle]
+pub extern "C" fn knowhere_set_nprobe(index: *mut std::ffi::c_void, nprobe: usize) -> i32 {
+    if index.is_null() || nprobe == 0 {
+        return CError::InvalidArg as i32;
+    }
+    unsafe {
+        let wrapper = &mut *(index as *mut IndexWrapper);
+        match wrapper.set_nprobe(nprobe) {
             Ok(()) => CError::Success as i32,
             Err(err) => err as i32,
         }
