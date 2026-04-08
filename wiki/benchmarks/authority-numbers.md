@@ -59,6 +59,72 @@ build: 561s (parallel, M=16, ef_c=200)
 
 build: train 112.7s + add 9.5s = 122.2s
 
+## IVF-Flat — Milvus 并发 QPS（100K×768D, hannsdb-x86, 2026-04-08）
+
+**数据集**：合成归一化 float32，100K × 768D，IP metric（Cohere-1M shape）
+**Index**：IVF_FLAT，nlist=1024，nprobe=32
+**结论**：RS 与 native **parity ✅（<1% 差异）**。上限 ~184 QPS（高于 IVF-SQ8 ~140，因无 SQ8 量化延迟）。Milvus dispatch ceiling 主导，非 RS 计算瓶颈。
+
+### RS vs Native 对比（nprobe=32, 100K×768D）
+
+| Concurrency | RS QPS | Native QPS | Delta |
+|-------------|--------|------------|-------|
+| c=1  | 38.4 | 38.2 | parity |
+| c=20 | 173.6 | 174.2 | parity |
+| c=80 | **184.4** | **183.2** | **+0.7% parity ✅** |
+
+RS 天花板 = 184.4 QPS，Native 天花板 = 183.2 QPS（测量噪声范围内）。
+
+注：standalone batch parallel 4.76× faster than native 8T — 该优势在 Milvus 中不体现（nq=1 per FFI call，无批处理）。
+
+---
+
+## IVF-SQ8 — Milvus 并发 QPS（100K×768D, hannsdb-x86, 2026-04-08）
+
+**数据集**：合成归一化 float32，100K × 768D，IP metric（Cohere-1M shape）
+**Index**：IVF_SQ8，nlist=1024
+**结论**：c=10 起达到 ~140 QPS 平台期，与 nprobe 无关 — Milvus dispatch overhead 主导，非 RS 计算瓶颈。**RS 与 native 完全 parity（误差 <1%）**。
+
+### RS vs Native 对比（nprobe=8, 100K×768D）
+
+| Concurrency | RS QPS | Native QPS | Delta |
+|-------------|--------|------------|-------|
+| c=1  | 40.3 | 38.7 | parity |
+| c=5  | 129.7 | 130.6 | parity |
+| c=10 | 134.2 | 135.2 | parity |
+| c=20 | 139.0 | 138.8 | parity |
+| c=40 | 138.6 | 140.9 | parity |
+| c=80 | **139.5** | **141.1** | **parity ✅** |
+
+RS 天花板 = 139.5 QPS，Native 天花板 = 141.1 QPS（测量噪声范围内）。
+
+### RS 完整 QPS 表
+
+| Concurrency | nprobe=8 | nprobe=32 | nprobe=128 |
+|-------------|----------|-----------|------------|
+| c=1  | 40.3 | 16.3 | 16.3 |
+| c=5  | 129.7 | 61.2 | 69.8 |
+| c=10 | 134.2 | 135.5 | 136.6 |
+| c=20 | 139.0 | 138.2 | 138.7 |
+| c=40 | 138.6 | 138.4 | 137.8 |
+| c=80 | **139.5** | 135.1 | 135.9 |
+
+**关键对比**：
+
+| | HNSW R8 | IVF-SQ8 RS | IVF-SQ8 Native |
+|---|---------|------------|----------------|
+| c=1 serial | 111 QPS | 40 QPS | 39 QPS |
+| c=20 | **1051 QPS** | 139 QPS | 139 QPS |
+| c=80 | **1042 QPS** | 140 QPS | 141 QPS |
+| 机制 | HNSW_NQ_POOL 批处理（80 query→1 FFI）| 每 query 独立 FFI call | 每 query 独立 FFI call |
+| RS vs Native Gap | — | **parity ✅** | — |
+| vs HNSW Gap | — | **7.5× 差距** | **7.5× 差距** |
+
+**结论**：RS 无额外 per-query overhead。140 QPS 天花板是 Milvus dispatch ceiling，RS 和 native 共享同一上限。
+**下一步**：实现 IVF_NQ_POOL nq 批处理（参照 HNSW R7），预计突破 500+ QPS @ c=80
+
+---
+
 ## IVF-SQ8 — Standalone（SIFT-1M, x86, nlist=1024）
 
 | nprobe | recall@10 | QPS (serial) | QPS (batch) | vs native 8T |

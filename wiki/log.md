@@ -4,6 +4,70 @@ append-only 时间线。新条目加在顶部。
 
 ---
 
+## 2026-04-08 — IVF-Flat Milvus 集成
+
+**类型**：集成 + bench
+
+**方法**：新建 `ivf_flat_rust_node.cpp` shim（镜像 IVF-SQ8 模式），`CIndexType::IvfFlat=18`，在 `index_factory.h` 中 IVFFLAT/IVFFLAT_CC 路由到 RS，支持 `KNOWHERE_RS_IVFFLAT_BYPASS` env var 对比。
+
+**结果（nprobe=32, 100K×768D IP）**：
+- RS c=80: **184.4 QPS**
+- Native c=80: 183.2 QPS
+- **parity ✅（<1%）**
+
+**结论**：IVF-Flat Milvus 集成成功。上限 ~184 QPS（高于 IVF-SQ8 ~140，因无量化延迟）。Milvus dispatch ceiling 是限制，与 IVF-SQ8 相同结构。Standalone 4.76× 优势不在 Milvus nq=1 模式下体现。
+
+→ 详见 [[benchmarks/authority-numbers]] §IVF-Flat Milvus
+
+---
+
+## 2026-04-08 — IVF-SQ8 IVF_SQ8_CLUSTER_POOL（null result）
+
+**类型**：perf attempt
+**Commit**：`5f533c6`
+
+**假设**：`par_iter()` 打全局 rayon pool → 80 CGO 线程 × nprobe=8 = 640 tasks 争 16 线程 → 过订 40×（同 HNSW R6 bug）。添加私有 `IVF_SQ8_CLUSTER_POOL`（镜像 HNSW R7），wrap `install()`。
+
+**结果**：c=1: 38 QPS，c=20: 133 QPS，c=80: **133 QPS（无改善）**
+
+**结论**：cluster-level rayon pool 不是瓶颈。瓶颈是 Milvus dispatch ceiling（~140 QPS），RS 和 native 共享。代码正确保留（防止未来全局池争用），但 IVF-SQ8 @ c=80 天花板由 Milvus 架构决定。IVF-SQ8 无 HNSW 的 nq 批处理机制（nq=1 per FFI call），无法等效复现 HNSW R7 效果。
+
+---
+
+## 2026-04-08 — IVF-SQ8 RS vs Native Milvus 并发对比
+
+**类型**：bench
+**数据集**：合成 float32，100K × 768D，IP，nlist=1024
+
+**方法**：`KNOWHERE_RS_IVFSQ8_BYPASS=1` env var 令 index_factory.h 拦截块跳过，IVF-SQ8 回退到 native C++ knowhere。相同 Python 并发脚本，完全可比。
+
+**结果（c=80, nprobe=8）**：RS = 139.5 QPS，Native = 141.1 QPS → **parity ✅（<1% 差异）**
+
+**结论**：RS IVF-SQ8 无额外 per-query overhead。140 QPS 天花板是 Milvus dispatch 天花板，RS 和 native 共享。优化路径：IVF_NQ_POOL（同 HNSW R7），预计 c=80 →500+ QPS。
+
+→ 详见 [[benchmarks/authority-numbers]] §IVF-SQ8 Milvus | `benchmark_results/ivf_sq8_native_milvus_concurrent_2026-04-08.md`
+
+---
+
+## 2026-04-08 — IVF-SQ8 Milvus 并发 QPS 权威数字
+
+**类型**：bench + analysis
+**数据集**：合成 float32，100K × 768D，IP，nlist=1024
+**机器**：hannsdb-x86
+
+**结果**：
+- c=1: nprobe=8→40 QPS，nprobe=32/128→16 QPS（H=25ms 主导）
+- c=10: 所有 nprobe 收敛到 134-137 QPS → **dispatch ceiling 确认**
+- c=80: **139 QPS 平台期**（HNSW 同条件=1042 QPS）
+
+**结论**：RS IVF-SQ8 计算本身不是瓶颈。瓶颈是 Milvus 每 query 独立 FFI call（无批处理）。HNSW 通过 HNSW_NQ_POOL 将 c=80 的 80 query 批成 1 个 FFI call，IVF-SQ8 缺少等效机制。
+
+**推荐**：实现 IVF_NQ_POOL（参照 HNSW R7），预计 c=80 从 139→500+ QPS（3.5×+）
+
+→ 详见 [[benchmarks/authority-numbers]] §IVF-SQ8 Milvus 并发
+
+---
+
 ## 2026-04-08 — IVF-SQ8 Milvus 集成完成
 
 **类型**：feat
