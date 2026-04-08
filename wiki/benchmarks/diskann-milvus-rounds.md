@@ -84,6 +84,15 @@ c=20/c=80 QPS 正常（批处理摊还 H 开销）。
 Shim fallback 修正（max_degree 56→48，search_list_size 100→128，beamwidth 改为 value_or(8)）。
 NoPQ 行为不变；PQ disk 模式现在可从 Milvus 侧触发。
 
+**端到端验证（20K×128D, hannsdb-x86, 2026-04-08）**：
+
+| 模式 | pq_budget | build | results | top dist | 状态 |
+|------|-----------|-------|---------|----------|------|
+| NoPQ | 0.0 | 1.0s | 10 | 0.3693 | ✅ |
+| PQ | 0.002 | 1.0s | 10 | 0.3693 | ✅ |
+
+两模式召回完全一致，参数通道 ✅ 确认。
+
 ---
 
 ## 相关页面

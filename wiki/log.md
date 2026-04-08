@@ -4,6 +4,27 @@ append-only 时间线。新条目加在顶部。
 
 ---
 
+## 2026-04-08 — IVF-SQ8 Milvus 集成完成
+
+**类型**：feat
+**Commits**：`17d8b90` (Rust FFI) + shim commits `58bda35`, `3d7e6ce`, `0c4b6f5`
+**结果**：
+- `knowhere_set_nprobe` FFI 新增，IVF 搜索路径 nprobe 动态化
+- C++ shim `ivf_sq8_rust_node.cpp` 完整实现（Train/Add/Search/Serialize/Deserialize）
+- Milvus `INDEX_FAISS_IVFSQ8` float32 路径拦截到 RS 实现
+- Smoke test ✅，serial QPS=39（100K×768D，H 开销主导）
+- 等待 Cohere-1M 权威对比（数据未缓存）
+
+---
+
+## 2026-04-08 — DiskANN PQ 参数通道端到端验证
+
+**类型**：验证
+**结果**：NoPQ + PQ(`pq_budget=0.002`) 两模式 Milvus 全链路 OK，top-distance 完全一致 ✅
+→ `pq_code_budget_gb` / `beamwidth` 参数从 pymilvus → C++ shim → Rust FFI 全路径贯通
+
+---
+
 ## 2026-04-08 — DiskANN 参数对齐修复
 
 **类型**：feat + fix
