@@ -59,6 +59,29 @@ build: 561s (parallel, M=16, ef_c=200)
 
 build: train 112.7s + add 9.5s = 122.2s
 
+## IVF 系列 — Build Time + Recall + QPS 完整对比（100K×768D, hannsdb-x86, 2026-04-08）
+
+**数据集**：合成归一化 float32，100K × 768D，IP metric，nlist=1024
+**方法**：每个 index 独立 drop + rebuild，RS 和 Native 各建一次（BYPASS env var），测 build time / load time / recall@10 / c=1 QPS
+
+| Index | Mode | Build(s) | Load(s) | Recall@10 | c=1 QPS |
+|-------|------|---------|---------|-----------|---------|
+| IVF_FLAT (nprobe=32) | RS | 5.5 | 1.8 | 1.000 | 39.4 |
+| IVF_FLAT (nprobe=32) | Native | 3.0 | 1.6 | 1.000 | 40.6 |
+| IVF_SQ8 (nprobe=32) | RS | 6.0 | 1.6 | 1.000 | 40.8 |
+| IVF_SQ8 (nprobe=32) | Native | 3.0 | 2.5 | 1.000 | 37.6 |
+| IVF_PQ m=32 (nprobe=64) | RS | 7.0 | 2.0 | 1.000 | 38.8 |
+| IVF_PQ m=32 (nprobe=64) | Native | 3.5 | 2.2 | 1.000 | 38.4 |
+
+**结论**：
+- **Recall 完全 parity**（100K self-query 场景，nprobe 足够）
+- **Search QPS parity**（c=1 误差范围内）
+- **Build time：RS 约 1.8–2× 慢于 native** ⚠️ — k-means 训练阶段差距，待优化
+
+注：Recall=1.000 是 self-query（query ∈ index）结果。IVF-PQ 对外部 query 的实际 recall = 0.815（见下表）。
+
+---
+
 ## IVF-PQ — Milvus 并发 QPS（100K×768D, hannsdb-x86, 2026-04-08）
 
 **数据集**：合成归一化 float32，100K × 768D，IP metric

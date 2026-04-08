@@ -4,6 +4,23 @@ append-only 时间线。新条目加在顶部。
 
 ---
 
+## 2026-04-08 — IVF 系列 Build Time + Recall 完整对比
+
+**类型**：bench
+
+**方法**：每个 index drop + rebuild，RS vs Native 各建一次，测 build time / recall / QPS。
+
+**发现**：
+- Recall 完全 parity ✅
+- c=1 search QPS parity ✅
+- **Build time：RS ~2× 慢于 native ⚠️**（IVF_FLAT: 5.5s vs 3.0s，IVF_SQ8: 6.0s vs 3.0s，IVF_PQ: 7.0s vs 3.5s）
+
+Build 差距来源：k-means 训练（IVF 聚类）。100K 数据绝对差距小（4s 以内），但 1M 数据可能扩大到 40s 量级。需要后续优化。
+
+→ 详见 [[benchmarks/authority-numbers]] §IVF Build Time
+
+---
+
 ## 2026-04-08 — IVF-PQ Milvus 集成
 
 **类型**：集成 + bench
