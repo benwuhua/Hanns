@@ -1,0 +1,97 @@
+# 权威数字总表
+
+> 来源：hannsdb-x86（Milvus 集成）和 knowhere-x86-hk-proxy（standalone benchmark）。
+> Mac Apple Silicon 数字仅供本地开发参考，不作为权威。
+
+---
+
+## HNSW — Standalone（SIFT-1M, x86, M=16, ef_c=200）
+
+| ef | recall@10 | 单线程 QPS | batch QPS | vs native 8T (15,918) |
+|----|-----------|------------|-----------|----------------------|
+| 60 | 0.9720 | 7,482 | **17,319** | **+8.8%** ✅ |
+| 138 | 0.9945 | 3,578 | **17,517** | **+10.1%** ✅ |
+
+build: 561s (parallel, M=16, ef_c=200)
+
+## HNSW — Milvus（Cohere-1M, hannsdb-x86, R8, 2026-04-07）
+
+| 指标 | native | RS R8 | RS vs native |
+|------|--------|-------|-------------|
+| Insert | 304.6s | 336.8s | +10.6% 慢 |
+| Optimize | 854.2s | **336.9s** | **2.53× 快** ✅ |
+| Load | 1158.9s | **673.7s** | **1.72× 快** ✅ |
+| QPS (c=20) | ~500+ | **1051** | **~2× 快** ✅ |
+| QPS (c=80) | ~800+ | **1042** | **~1.3× 快** ✅ |
+| Recall | 0.960 | 0.957 | parity |
+
+---
+
+## DiskANN / AISAQ — Standalone（SIFT-1M, x86）
+
+| 模式 | QPS | recall@10 | build | 备注 |
+|------|-----|-----------|-------|------|
+| NoPQ 内存 | **6,062** | **0.9941** | 244s | vs native build 1595s (6.5× faster) |
+| NoPQ disk/mmap 冷 | 401 | 0.9941 | 244s | — |
+| NoPQ disk/io_uring | 399 | 0.9941 | 244s | ≈ mmap（per-beam 无额外收益）|
+| PQ32 disk V3 group=8 | **1,063** | 0.9114 | 642s | 236B/node hot sector |
+| PQ32 内存（cache_all） | 2,074 | 0.9146 | ~200s | 非 disk |
+
+## DiskANN — Milvus（1M×768D, hannsdb-x86）
+
+| 指标 | native | RS R1（修复前）| RS R2（修复后）| R2 vs native |
+|------|-------:|---------------:|---------------:|-------------:|
+| Insert | 151.4s | 157.9s | 156.3s | +3% 慢 |
+| Build | 16.09s | 16.1s | 17.1s | +6% 慢 |
+| Serial QPS | **11.44** | 2.4 | **11.2** | **−2%（parity）** ✅ |
+| c=1 QPS | **11.10** | 2.5 | **10.8** | **−3%（parity）** ✅ |
+| c=20 QPS | 12.22 | 12.7 | 12.2 | ≈ parity |
+| c=80 QPS | 12.93 | 13.1 | 12.6 | ≈ parity |
+| Recall | 1.000 | 1.000 | 1.000 | 完全一致 |
+
+---
+
+## IVF-Flat — Standalone（SIFT-1M, x86, nlist=1024）
+
+| nprobe | recall@10 | QPS (serial) | QPS (batch) | vs native |
+|--------|-----------|-------------|------------|-----------|
+| 32 | 0.978 | **2,339** | **3,429** | serial 6.9×; batch **4.76× > native 8T** ✅ |
+
+build: train 112.7s + add 9.5s = 122.2s
+
+## IVF-SQ8 — Standalone（SIFT-1M, x86, nlist=1024）
+
+| nprobe | recall@10 | QPS (serial) | QPS (batch) | vs native 8T |
+|--------|-----------|-------------|------------|-------------|
+| 32 | 0.958 | 5,538 | **11,717** | **1.42× 快** ✅ |
+
+native 8T: 8,278 QPS @ recall=0.952
+
+---
+
+## Cohere-1M Authority（x86, IVF, decode_dot fused）
+
+| Index | nprobe | QPS | recall@10 |
+|-------|--------|-----|-----------|
+| IVF-Flat | 32 | 339 | 0.798 |
+| IVF-SQ8 | 32 | **605** | 0.805 |
+| IVF-SQ8 | 4 | 2,897 | 0.530 |
+
+IVF-SQ8 > IVF-Flat：nprobe=32 时 1.78× 更快，recall 相近。
+
+---
+
+## HNSW Cosine Serial Latency（x86, ef_c=200, 1000 queries）
+
+| 配置 | p50 | p99 |
+|------|-----|-----|
+| M=8, 50K/1536/ef=32 | 3021µs | 3508µs |
+| M=16, 50K/1536/ef=32 | 5456µs | 6073µs |
+
+修复前 HannsDB p99=110ms → 修复后 M=8 p99=3.5ms（**31×** 改善）。
+
+---
+
+## 注：x86 benchmark 环境
+
+→ 详见 [[machines/hannsdb-x86]] 和 [[machines/knowhere-x86]]
