@@ -3,6 +3,7 @@
 //!
 //! Print detailed comparison between ground truth and HNSW search results
 
+mod common;
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 use knowhere_rs::faiss::HnswIndex;
 use rand::Rng;
@@ -46,13 +47,10 @@ fn compute_ground_truth(
     ground_truth
 }
 
-fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
-}
 
 /// L2 distance (not squared) - matches HNSW return format
 fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
-    l2_distance_squared(a, b).sqrt()
+    common::l2_distance_squared(a, b).sqrt()
 }
 
 #[test]
@@ -108,7 +106,7 @@ fn debug_hnsw_recall_detailed() {
 
     // Compute ground truth
     println!("\nComputing ground truth (k={})...", top_k);
-    let ground_truth = compute_ground_truth(&base_data, &query_data, num_queries, dim, top_k);
+    let ground_truth = common::compute_ground_truth(&base_data, &query_data, num_queries, dim, top_k);
 
     // Search with HNSW
     println!("\nSearching with HNSW...");

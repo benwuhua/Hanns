@@ -20,6 +20,7 @@
 //! - `SIFT_NUM_QUERIES`: 查询数量（默认 `100`）
 //! - `SIFT_BASE_SIZE`: base 向量数量（默认 `1000000`）
 
+mod common;
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
 use knowhere_rs::benchmark::average_recall_at_k;
 use knowhere_rs::dataset::load_sift1m_complete;
@@ -65,7 +66,7 @@ fn compute_ground_truth(base: &[f32], queries: &[f32], dim: usize, top_k: usize)
 
         for j in 0..num_base {
             let b = &base[j * dim..(j + 1) * dim];
-            distances.push((j, l2_distance_squared(q, b)));
+            distances.push((j, common::l2_distance_squared(q, b)));
         }
 
         distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
@@ -82,9 +83,6 @@ fn compute_ground_truth(base: &[f32], queries: &[f32], dim: usize, top_k: usize)
     ground_truth
 }
 
-fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
-}
 
 fn benchmark_flat(
     base: &[f32],
@@ -395,7 +393,7 @@ fn bench_sift1m_all_indexes() {
             base_size,
             dataset.num_base()
         );
-        compute_ground_truth(base, queries, dim, TOP_K)
+        common::compute_ground_truth(base, queries, dim, TOP_K)
     } else {
         dataset
             .ground_truth

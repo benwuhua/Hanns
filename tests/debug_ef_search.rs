@@ -1,32 +1,26 @@
 #![cfg(feature = "long-tests")]
+mod common;
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
 use knowhere_rs::faiss::HnswIndex;
 use knowhere_rs::MetricType;
 use rand::Rng;
 use std::collections::HashSet;
 
-fn generate_vectors(n: usize, dim: usize) -> Vec<f32> {
-    let mut rng = rand::thread_rng();
-    (0..n * dim).map(|_| rng.gen::<f32>()).collect()
-}
 
-fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
-}
 
 #[test]
 fn debug_ef_search_test() {
     let n = 10000;
     let dim = 128;
-    let vectors = generate_vectors(n, dim);
-    let query = generate_vectors(1, dim);
+    let vectors = common::generate_vectors(n, dim);
+    let query = common::generate_vectors(1, dim);
 
     // Compute ground truth
     let q = &query[0..dim];
     let mut gt_distances: Vec<(usize, f32)> = (0..n)
         .map(|j| {
             let b = &vectors[j * dim..(j + 1) * dim];
-            (j, l2_distance_squared(q, b))
+            (j, common::l2_distance_squared(q, b))
         })
         .collect();
     gt_distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());

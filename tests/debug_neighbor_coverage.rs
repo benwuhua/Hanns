@@ -1,29 +1,23 @@
 #![cfg(feature = "long-tests")]
+mod common;
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
 use knowhere_rs::faiss::HnswIndex;
 use knowhere_rs::MetricType;
 use rand::Rng;
 
-fn generate_vectors(n: usize, dim: usize) -> Vec<f32> {
-    let mut rng = rand::thread_rng();
-    (0..n * dim).map(|_| rng.gen::<f32>()).collect()
-}
 
-fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
-}
 
 #[test]
 fn debug_neighbor_coverage() {
     let n = 10000;
     let dim = 128;
-    let vectors = generate_vectors(n, dim);
-    let query = generate_vectors(1, dim);
+    let vectors = common::generate_vectors(n, dim);
+    let query = common::generate_vectors(1, dim);
     let q = &query[0..dim];
 
     // Compute ground truth
     let mut gt_distances: Vec<(usize, f32)> = (0..n)
-        .map(|j| (j, l2_distance_squared(q, &vectors[j * dim..(j + 1) * dim])))
+        .map(|j| (j, common::l2_distance_squared(q, &vectors[j * dim..(j + 1) * dim])))
         .collect();
     gt_distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
@@ -60,7 +54,7 @@ fn debug_neighbor_coverage() {
         let vi = &vectors[gt_top10[i] * dim..(gt_top10[i] + 1) * dim];
         for j in 0..10 {
             let vj = &vectors[gt_top10[j] * dim..(gt_top10[j] + 1) * dim];
-            let dist = l2_distance_squared(vi, vj).sqrt();
+            let dist = common::l2_distance_squared(vi, vj).sqrt();
             print!("{:.2}  ", dist);
         }
         println!();
@@ -80,7 +74,7 @@ fn debug_neighbor_coverage() {
 
     // First, find the distance from query to GT rank 1
     let gt1_vec = &vectors[gt_top10[0] * dim..(gt_top10[0] + 1) * dim];
-    let q_to_gt1 = l2_distance_squared(q, gt1_vec).sqrt();
+    let q_to_gt1 = common::l2_distance_squared(q, gt1_vec).sqrt();
     println!("Query to GT rank 1 distance: {:.4}", q_to_gt1);
 
     // Search and check what was found

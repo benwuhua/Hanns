@@ -3,20 +3,18 @@
 /// BUG-001 Summary Test - Quick validation of fixes
 ///
 /// This test validates the key fixes made to improve HNSW recall.
+mod common;
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 use knowhere_rs::faiss::HnswIndex;
 use rand::Rng;
 use std::collections::HashSet;
 
-fn l2_distance_sq(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
-}
 
 fn compute_ground_truth(base: &[f32], query: &[f32], k: usize, dim: usize) -> Vec<(usize, f32)> {
     let mut distances: Vec<(usize, f32)> = base
         .chunks(dim)
         .enumerate()
-        .map(|(idx, vec)| (idx, l2_distance_sq(query, vec)))
+        .map(|(idx, vec)| (idx, common::l2_distance_squared(query, vec)))
         .collect();
 
     distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
@@ -69,7 +67,7 @@ fn test_bug001_summary() {
 
     for q_idx in 0..num_queries {
         let q = &query[q_idx * dim..(q_idx + 1) * dim];
-        let gt = compute_ground_truth(&base, q, top_k, dim);
+        let gt = common::compute_ground_truth(&base, q, top_k, dim);
 
         let req = SearchRequest {
             top_k,

@@ -2,16 +2,13 @@
 //! Mini-Batch K-Means Benchmark
 //! 对比标准 K-Means 和 Mini-Batch K-Means 的训练性能
 
+mod common;
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
 use knowhere_rs::faiss::IvfFlatIndex;
 use knowhere_rs::MetricType;
 use rand::Rng;
 use std::time::Instant;
 
-fn generate_vectors(n: usize, dim: usize) -> Vec<f32> {
-    let mut rng = rand::thread_rng();
-    (0..n * dim).map(|_| rng.gen::<f32>()).collect()
-}
 
 struct TrainResult {
     name: String,
@@ -23,8 +20,8 @@ struct TrainResult {
 
 /// 测试标准 K-Means 训练的 IVF-Flat
 fn test_ivf_flat_standard(n: usize, dim: usize, nlist: usize) -> TrainResult {
-    let vectors = generate_vectors(n, dim);
-    let queries = generate_vectors(100, dim);
+    let vectors = common::generate_vectors(n, dim);
+    let queries = common::generate_vectors(100, dim);
 
     let config = IndexConfig {
         index_type: IndexType::IvfFlat,
@@ -66,8 +63,8 @@ fn test_ivf_flat_standard(n: usize, dim: usize, nlist: usize) -> TrainResult {
 
 /// 测试 Mini-Batch K-Means 训练的 IVF-Flat
 fn test_ivf_flat_mini_batch(n: usize, dim: usize, nlist: usize, batch_size: usize) -> TrainResult {
-    let vectors = generate_vectors(n, dim);
-    let queries = generate_vectors(100, dim);
+    let vectors = common::generate_vectors(n, dim);
+    let queries = common::generate_vectors(100, dim);
 
     let config = IndexConfig {
         index_type: IndexType::IvfFlat,

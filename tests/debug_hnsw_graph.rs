@@ -1,19 +1,16 @@
 #![cfg(feature = "long-tests")]
+mod common;
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType};
 use knowhere_rs::faiss::HnswIndex;
 use knowhere_rs::MetricType;
 use rand::Rng;
 
-fn generate_vectors(n: usize, dim: usize) -> Vec<f32> {
-    let mut rng = rand::thread_rng();
-    (0..n * dim).map(|_| rng.gen::<f32>()).collect()
-}
 
 #[test]
 fn debug_hnsw_graph_stats() {
     let n = 10000;
     let dim = 128;
-    let vectors = generate_vectors(n, dim);
+    let vectors = common::generate_vectors(n, dim);
 
     let config = IndexConfig {
         index_type: IndexType::Hnsw,

@@ -4,6 +4,7 @@
 //! 对比 SIMD 优化与标量实现的距离计算性能
 //! 测试 L2 和 Inner Product 的 SIMD 加速效果
 
+mod common;
 use knowhere_rs::simd::{
     inner_product, ip_batch, ip_batch_4, ip_batch_4_scalar, ip_scalar, l2_batch, l2_batch_4,
     l2_batch_4_scalar, l2_distance, l2_distance_sq, l2_scalar, l2_scalar_sq,
@@ -11,10 +12,6 @@ use knowhere_rs::simd::{
 use rand::Rng;
 use std::time::Instant;
 
-fn generate_vectors(n: usize, dim: usize) -> Vec<f32> {
-    let mut rng = rand::thread_rng();
-    (0..n * dim).map(|_| rng.gen::<f32>()).collect()
-}
 
 /// L2 距离性能对比
 fn bench_l2_distance(dim: usize, iterations: usize) {
@@ -67,21 +64,21 @@ fn bench_l2_distance(dim: usize, iterations: usize) {
 }
 
 /// L2 平方距离性能对比（用于最近邻搜索，避免 sqrt）
-fn bench_l2_distance_sq(dim: usize, iterations: usize) {
+fn bench_l2_distance_squared(dim: usize, iterations: usize) {
     let mut rng = rand::thread_rng();
     let a: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>()).collect();
     let b: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>()).collect();
 
     // Warmup
     for _ in 0..100 {
-        let _ = l2_distance_sq(&a, &b);
+        let _ = common::l2_distance_squared(&a, &b);
         let _ = l2_scalar_sq(&a, &b);
     }
 
     // SIMD
     let start = Instant::now();
     for _ in 0..iterations {
-        let _ = l2_distance_sq(&a, &b);
+        let _ = common::l2_distance_squared(&a, &b);
     }
     let simd_time = start.elapsed();
 
@@ -140,8 +137,8 @@ fn bench_inner_product(dim: usize, iterations: usize) {
 
 /// 批量 L2 距离性能对比
 fn bench_l2_batch(num_queries: usize, num_database: usize, dim: usize) {
-    let queries = generate_vectors(num_queries, dim);
-    let database = generate_vectors(num_database, dim);
+    let queries = common::generate_vectors(num_queries, dim);
+    let database = common::generate_vectors(num_database, dim);
 
     // Warmup
     let _ = l2_batch(&queries, &database, dim);
@@ -181,8 +178,8 @@ fn bench_l2_batch(num_queries: usize, num_database: usize, dim: usize) {
 
 /// 批量 Inner Product 性能对比
 fn bench_ip_batch(num_queries: usize, num_database: usize, dim: usize) {
-    let queries = generate_vectors(num_queries, dim);
-    let database = generate_vectors(num_database, dim);
+    let queries = common::generate_vectors(num_queries, dim);
+    let database = common::generate_vectors(num_database, dim);
 
     // Warmup
     let _ = ip_batch(&queries, &database, dim);
@@ -321,7 +318,7 @@ fn verify_correctness() {
     );
 
     // L2 平方距离验证
-    let l2_sq_simd = l2_distance_sq(&a, &b);
+    let l2_sq_simd = common::l2_distance_squared(&a, &b);
     let l2_sq_scalar = l2_scalar_sq(&a, &b);
     let l2_sq_error = (l2_sq_simd - l2_sq_scalar).abs();
     println!(
@@ -417,7 +414,7 @@ fn test_simd_performance() {
 
     println!();
     for dim in [32, 64, 128, 256, 512, 768] {
-        bench_l2_distance_sq(dim, 100000);
+        bench_common::l2_distance_squared(dim, 100000);
     }
 
     println!();

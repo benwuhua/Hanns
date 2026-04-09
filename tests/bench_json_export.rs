@@ -20,6 +20,7 @@
 //! - `QUICK`: Set to enable quick mode (1000 vectors, 10 queries)
 //! - `DETAILED`: Set to enable detailed mode (50000 vectors, 500 queries)
 
+mod common;
 #[cfg(feature = "long-tests")]
 use knowhere_rs::api::{IndexConfig, IndexParams, SearchRequest};
 #[cfg(feature = "long-tests")]
@@ -77,42 +78,8 @@ fn generate_random_dataset(num_vectors: usize, dim: usize) -> Vec<f32> {
 
 /// Generate ground truth for random dataset (brute-force)
 #[cfg(feature = "long-tests")]
-fn compute_ground_truth(
-    base: &[f32],
-    query: &[f32],
-    num_queries: usize,
-    dim: usize,
-    k: usize,
-) -> Vec<Vec<i32>> {
-    let num_base = base.len() / dim;
-    let mut ground_truth = Vec::with_capacity(num_queries);
-
-    for i in 0..num_queries {
-        let q = &query[i * dim..(i + 1) * dim];
-        let mut distances: Vec<(usize, f32)> = Vec::with_capacity(num_base);
-
-        for j in 0..num_base {
-            let b = &base[j * dim..(j + 1) * dim];
-            let dist = l2_distance_squared(q, b);
-            distances.push((j, dist));
-        }
-
-        distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        let neighbors: Vec<i32> = distances
-            .into_iter()
-            .take(k)
-            .map(|(idx, _)| idx as i32)
-            .collect();
-        ground_truth.push(neighbors);
-    }
-
-    ground_truth
-}
 
 #[cfg(feature = "long-tests")]
-fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
-}
 
 /// Benchmark Flat index
 #[cfg(feature = "long-tests")]
@@ -530,7 +497,7 @@ fn test_json_export() {
     println!("🎯 Computing ground truth...");
     let gt_start = Instant::now();
     let ground_truth =
-        compute_ground_truth(&base, &query, config.num_queries, config.dim, config.k);
+        common::compute_ground_truth(&base, &query, config.num_queries, config.dim, config.k);
     let gt_time = gt_start.elapsed().as_secs_f64();
     println!("  Ground truth computed in {:.2}s", gt_time);
 

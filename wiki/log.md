@@ -4,7 +4,35 @@ append-only 时间线。新条目加在顶部。
 
 ---
 
-## 2026-04-08 — KMeans 预分配优化（build time 大逆转）
+## 2026-04-09 — 代码库清理
+
+**类型**：chore
+
+**操作**：
+1. 删除 14 个零导入模块 + 7 个孤儿文件（共 2,228 行死代码）：once_cell, skiplist, ring, prealloc, arena, atomic_utils, layout, lru_cache, stats, federation, bloom, storage/, annoy, lazy_index, raw, hnsw_safe, ivf_flat_search_v25, faiss_index
+2. 提取测试公共工具到 `tests/common/mod.rs`：`generate_vectors`（12→1）、`l2_distance_squared`（27→1）、`compute_ground_truth`（14→1）
+3. 修复 2 个 diskann disk path 测试（断言与 NoPQ materialize 行为不匹配）
+4. `git filter-repo` 清除历史中的 `target/`（.git 273M→6.4M，−97.7%）
+5. 整理文档：删除 102 个 superpowers 会话产物，归档 11 个历史 docs，清空 memory/
+
+**验证**：663 tests passed / 0 failed
+
+---
+
+## 2026-04-09 — 项目目录结构整理
+
+**类型**：chore
+
+**操作**：
+1. 根目录脚本移入 `scripts/`：`add_scann.py`, `test_*.py`, `build.sh`, `init.sh`, `init.ps1`, `compare_cpp_rust_simd.sh`
+2. `assets/benchmarks/`（5 个 PNG）合并进 `benchmark_results/`，`assets/` 删除
+3. `benchmark_results/` 中 57 个历史 .json 归档到 `archive/`，顶层只保留 4 个 .md 报告 + 5 个 PNG
+4. `feature-list.json`（75K）, `performance_baseline.json` 移入 `benchmark_results/archive/`
+5. 空目录 `memory/` 删除
+
+**根目录文件数**：19 → 7（AGENTS.md, CLAUDE.md, README.md, Cargo.toml, Cargo.lock, build.rs, CMakeLists.txt）
+
+---
 
 **类型**：perf optimization
 

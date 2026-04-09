@@ -13,6 +13,7 @@
 //! - `QUICK`: 启用快速模式 (10K 向量，缩小参数空间)
 //! - `JSON_OUTPUT_DIR`: 自定义输出目录 (默认: benchmark_results/)
 
+mod common;
 use knowhere_rs::api::{IndexConfig, IndexParams, SearchRequest};
 use knowhere_rs::benchmark::{average_recall_at_k, estimate_vector_memory, MemoryTracker};
 use knowhere_rs::faiss::HnswIndex;
@@ -108,33 +109,6 @@ fn generate_gaussian_dataset(n: usize, dim: usize) -> Vec<f32> {
         .collect()
 }
 
-fn compute_ground_truth(
-    base: &[f32],
-    query: &[f32],
-    num_queries: usize,
-    dim: usize,
-    k: usize,
-) -> Vec<Vec<i32>> {
-    let num_base = base.len() / dim;
-    (0..num_queries)
-        .map(|i| {
-            let q = &query[i * dim..(i + 1) * dim];
-            let mut dists: Vec<(usize, f32)> = (0..num_base)
-                .map(|j| {
-                    let b = &base[j * dim..(j + 1) * dim];
-                    let d: f32 = q.iter().zip(b).map(|(a, b)| (a - b).powi(2)).sum();
-                    (j, d)
-                })
-                .collect();
-            dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-            dists
-                .into_iter()
-                .take(k)
-                .map(|(idx, _)| idx as i32)
-                .collect()
-        })
-        .collect()
-}
 
 // ---------------------------------------------------------------------------
 // Benchmark core
@@ -474,7 +448,7 @@ fn test_hnsw_param_optimization() {
     // Ground truth
     println!("计算 ground truth (brute-force)...");
     let gt_start = Instant::now();
-    let ground_truth = compute_ground_truth(&base, &query, cfg.num_queries, cfg.dim, cfg.k);
+    let ground_truth = common::compute_ground_truth(&base, &query, cfg.num_queries, cfg.dim, cfg.k);
     println!("  完成: {:.2}s", gt_start.elapsed().as_secs_f64());
 
     // Parameter sweep

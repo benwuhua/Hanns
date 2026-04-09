@@ -6853,9 +6853,14 @@ mod tests {
         index.save(&dir).unwrap();
         let loaded = PQFlashIndex::load(&dir).unwrap();
 
+        // NoPQ mode: load() materializes vectors into memory for fast access
         assert!(
-            loaded.vectors.is_empty(),
-            "loaded index should use disk-backed path"
+            !loaded.vectors.is_empty(),
+            "NoPQ load should materialize vectors"
+        );
+        assert!(
+            loaded.storage.is_none(),
+            "NoPQ load should clear disk storage after materialization"
         );
         let results = run_batch_search(&loaded, &queries, dim, k);
         assert_eq!(results.ids.len(), nq * k);
@@ -6864,7 +6869,7 @@ mod tests {
         let recall = compute_recall(&results, &gt, k);
         assert!(
             recall >= 0.50,
-            "disk path recall@{k} too low after load: {recall:.4}"
+            "NoPQ load recall@{k} too low after load: {recall:.4}"
         );
         let _ = fs::remove_dir_all(&dir);
     }
@@ -6935,13 +6940,14 @@ mod tests {
         index.save(&dir).unwrap();
         let disk_index = PQFlashIndex::load(&dir).unwrap();
 
+        // NoPQ mode: load() materializes vectors into memory for fast access
         assert!(
-            disk_index.vectors.is_empty(),
-            "disk path should not materialize vectors"
+            !disk_index.vectors.is_empty(),
+            "NoPQ load should materialize vectors"
         );
         assert!(
-            disk_index.storage.is_some(),
-            "disk path should keep disk storage"
+            disk_index.storage.is_none(),
+            "NoPQ load should clear disk storage after materialization"
         );
 
         let results = run_batch_search(&disk_index, &queries, dim, k);

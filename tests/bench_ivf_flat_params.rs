@@ -9,6 +9,7 @@
 //! cargo test --release --test bench_ivf_flat_params -- --nocapture
 //! ```
 
+mod common;
 use knowhere_rs::api::{IndexConfig, IndexParams, SearchRequest};
 use knowhere_rs::faiss::IvfFlatIndex;
 use knowhere_rs::IndexType;
@@ -81,7 +82,7 @@ fn compute_ground_truth(base: &[f32], query: &[f32], dim: usize, k: usize) -> Ve
 
         for j in 0..num_base {
             let b = &base[j * dim..(j + 1) * dim];
-            let dist = l2_distance_sq(q, b);
+            let dist = common::l2_distance_squared(q, b);
             distances.push((j as i64, dist));
         }
 
@@ -93,9 +94,6 @@ fn compute_ground_truth(base: &[f32], query: &[f32], dim: usize, k: usize) -> Ve
     ground_truth
 }
 
-fn l2_distance_sq(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
-}
 
 /// 计算召回率
 fn calculate_recall(results: &[Vec<i64>], ground_truth: &[Vec<i64>], k: usize) -> f64 {
@@ -230,7 +228,7 @@ fn test_ivf_flat_fast_vs_standard() {
 
     let (vectors, _labels) = generate_clustered_vectors(n, dim, num_clusters);
     let (queries, _query_labels) = generate_queries_from_base(&vectors, &_labels, 100);
-    let ground_truth = compute_ground_truth(&vectors, &queries, dim, 100);
+    let ground_truth = common::compute_ground_truth(&vectors, &queries, dim, 100);
 
     // 测试 1: 标准 IVF-Flat (基准)
     println!("📍 测试 1: 标准 IVF-Flat (基准)");
@@ -361,7 +359,7 @@ fn test_kmeans_algorithms_comparison() {
 
     let (vectors, _labels) = generate_clustered_vectors(n, dim, num_clusters);
     let (queries, _query_labels) = generate_queries_from_base(&vectors, &_labels, 100);
-    let ground_truth = compute_ground_truth(&vectors, &queries, dim, 100);
+    let ground_truth = common::compute_ground_truth(&vectors, &queries, dim, 100);
 
     // 测试不同的 k-means 算法
     println!("📍 测试 1: 标准 K-Means");

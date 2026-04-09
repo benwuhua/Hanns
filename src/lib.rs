@@ -3,11 +3,8 @@
 //! A Rust-native vector search engine, designed as a replacement for KnowHere (C++).
 
 pub mod api;
-pub mod arena;
-pub mod atomic_utils;
 pub mod benchmark;
 pub mod bitset;
-pub mod bloom;
 pub mod clustering;
 pub mod codec;
 pub mod comp; // components (bloomfilter, etc.)
@@ -16,26 +13,17 @@ pub mod disk_io;
 pub mod error;
 pub mod executor;
 pub mod faiss;
-pub mod federation;
 pub mod ffi;
 pub mod half; // fp16/bf16 support
 pub mod index;
 pub mod integration;
 pub mod interrupt;
-pub mod layout;
-pub mod lru_cache;
 pub mod memory;
 pub mod metrics;
-pub mod once_cell;
-pub mod prealloc;
 pub mod quantization;
-pub mod ring;
 pub mod search;
 pub mod serialize;
 pub mod simd;
-pub mod skiplist;
-pub mod stats;
-pub mod storage;
 pub mod types;
 pub mod utils;
 pub mod version;

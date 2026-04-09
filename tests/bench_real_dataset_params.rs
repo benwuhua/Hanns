@@ -16,6 +16,7 @@
 //! 3. 对比随机数据集结论是否适用
 //! 4. 识别真实数据集上的最佳参数配置
 
+mod common;
 use knowhere_rs::api::{IndexConfig, IndexParams, SearchRequest};
 use knowhere_rs::benchmark::average_recall_at_k;
 use knowhere_rs::faiss::HnswIndex;
@@ -53,41 +54,7 @@ struct RealDatasetResult {
 }
 
 /// Ground truth computation
-fn compute_ground_truth(
-    base: &[f32],
-    query: &[f32],
-    num_queries: usize,
-    dim: usize,
-    k: usize,
-) -> Vec<Vec<i32>> {
-    let num_base = base.len() / dim;
-    let mut ground_truth = Vec::with_capacity(num_queries);
 
-    for i in 0..num_queries {
-        let q = &query[i * dim..(i + 1) * dim];
-        let mut distances: Vec<(usize, f32)> = Vec::with_capacity(num_base);
-
-        for j in 0..num_base {
-            let b = &base[j * dim..(j + 1) * dim];
-            let dist = l2_distance_squared(q, b);
-            distances.push((j, dist));
-        }
-
-        distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        let neighbors: Vec<i32> = distances
-            .into_iter()
-            .take(k)
-            .map(|(idx, _)| idx as i32)
-            .collect();
-        ground_truth.push(neighbors);
-    }
-
-    ground_truth
-}
-
-fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
-}
 
 /// Load SIFT1M dataset from file
 /// Expected format: base vectors (1M x 128 f32), query vectors (10K x 128 f32), ground truth (10K x 100 i32)

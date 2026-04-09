@@ -205,4 +205,4 @@ IVF-SQ8 > IVF-Flat：nprobe=32 时 1.78× 更快，recall 相近。
 
 ## 注：x86 benchmark 环境
 
-→ 详见 [[machines/hannsdb-x86]] 和 [[machines/knowhere-x86]]
+→ 详见 [[machines/hannsdb-x86]]

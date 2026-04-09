@@ -1,6 +1,5 @@
 //! Faiss binding layer
 
-pub mod annoy;
 pub mod bin_flat;
 pub mod bin_ivf_flat;
 pub mod binary;
@@ -26,10 +25,8 @@ pub mod ivf_sq8;
 pub mod ivf_sq_cc;
 pub mod ivf_turboquant;
 pub mod ivfpq;
-pub mod lazy_index;
 pub mod mem_index;
 pub mod pq_simd;
-pub mod raw;
 pub mod rhtsdg;
 pub mod scann;
 pub mod sparse;

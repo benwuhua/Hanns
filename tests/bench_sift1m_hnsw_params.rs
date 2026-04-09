@@ -14,6 +14,7 @@
 //! - `SIFT_NUM_QUERIES`: 查询数量（默认: 100）
 //! - `SIFT_BASE_SIZE`: base 向量数量（默认: 100000，全部 100 万太慢）
 
+mod common;
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
 use knowhere_rs::benchmark::{
     average_recall_at_k, estimate_hnsw_overhead, estimate_vector_memory, MemoryTracker,
@@ -53,7 +54,7 @@ fn compute_ground_truth(base: &[f32], queries: &[f32], dim: usize, top_k: usize)
 
         for j in 0..num_base {
             let b = &base[j * dim..(j + 1) * dim];
-            let dist = l2_distance_squared(q, b);
+            let dist = common::l2_distance_squared(q, b);
             distances.push((j, dist));
         }
 
@@ -70,9 +71,6 @@ fn compute_ground_truth(base: &[f32], queries: &[f32], dim: usize, top_k: usize)
     ground_truth
 }
 
-fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
-}
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -359,7 +357,7 @@ fn test_sift1m_hnsw_params() {
             base_size
         );
         let query_subset = &query[..num_queries * dim];
-        compute_ground_truth(base, query_subset, dim, 100)
+        common::compute_ground_truth(base, query_subset, dim, 100)
     } else {
         dataset
             .ground_truth

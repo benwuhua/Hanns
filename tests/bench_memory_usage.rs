@@ -18,6 +18,7 @@
 //! - Recall@10 for accuracy comparison
 //! - Memory efficiency (MB per 100K vectors)
 
+mod common;
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
 use knowhere_rs::benchmark::{
     average_recall_at_k, estimate_hnsw_overhead, estimate_ivf_overhead, estimate_vector_memory,
@@ -53,42 +54,8 @@ fn generate_random_dataset(num_vectors: usize, dim: usize) -> Vec<f32> {
 }
 
 /// Generate ground truth for random dataset (brute-force L2 distance)
-fn compute_ground_truth(
-    base: &[f32],
-    query: &[f32],
-    num_queries: usize,
-    dim: usize,
-    k: usize,
-) -> Vec<Vec<i32>> {
-    let num_base = base.len() / dim;
-    let mut ground_truth = Vec::with_capacity(num_queries);
-
-    for i in 0..num_queries {
-        let q = &query[i * dim..(i + 1) * dim];
-        let mut distances: Vec<(usize, f32)> = Vec::with_capacity(num_base);
-
-        for j in 0..num_base {
-            let b = &base[j * dim..(j + 1) * dim];
-            let dist = l2_distance_squared(q, b);
-            distances.push((j, dist));
-        }
-
-        distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        let neighbors: Vec<i32> = distances
-            .into_iter()
-            .take(k)
-            .map(|(idx, _)| idx as i32)
-            .collect();
-        ground_truth.push(neighbors);
-    }
-
-    ground_truth
-}
 
 /// Calculate L2 distance squared between two vectors
-fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
-}
 
 /// Memory benchmark result for a single index type
 struct MemoryBenchmarkResult {
@@ -488,7 +455,7 @@ fn test_memory_usage_small() {
 
     // Compute ground truth (this takes time but only done once)
     println!("Computing ground truth (brute-force)...");
-    let ground_truth = compute_ground_truth(&base, &query, NUM_QUERIES, DIM, TOP_K);
+    let ground_truth = common::compute_ground_truth(&base, &query, NUM_QUERIES, DIM, TOP_K);
     println!("Ground truth computed for {} queries", NUM_QUERIES);
 
     // Run benchmarks

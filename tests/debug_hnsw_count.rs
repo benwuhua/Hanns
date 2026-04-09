@@ -2,13 +2,11 @@
 /// Debug test for HNSW search results count
 ///
 /// This test checks if search_layer returns enough candidates.
+mod common;
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 use knowhere_rs::faiss::HnswIndex;
 use rand::Rng;
 
-fn l2_distance_sq(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
-}
 
 #[test]
 fn test_hnsw_search_count() {
@@ -83,7 +81,7 @@ fn test_hnsw_search_count() {
     let mut gt_distances: Vec<(usize, f32)> = base
         .chunks(dim)
         .enumerate()
-        .map(|(idx, vec)| (idx, l2_distance_sq(&query, vec)))
+        .map(|(idx, vec)| (idx, common::l2_distance_squared(&query, vec)))
         .collect();
     gt_distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 

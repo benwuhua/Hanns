@@ -9,6 +9,7 @@
 //! cargo test --release --test debug_hnsw_m_param -- --nocapture
 //! ```
 
+mod common;
 use knowhere_rs::api::{IndexConfig, IndexParams, SearchRequest};
 use knowhere_rs::faiss::HnswIndex;
 use knowhere_rs::IndexType;
@@ -33,41 +34,7 @@ fn generate_gaussian_dataset(num_vectors: usize, dim: usize) -> Vec<f32> {
 }
 
 /// Compute ground truth using brute-force
-fn compute_ground_truth(
-    base: &[f32],
-    query: &[f32],
-    num_queries: usize,
-    dim: usize,
-    k: usize,
-) -> Vec<Vec<i32>> {
-    let num_base = base.len() / dim;
-    let mut ground_truth = Vec::with_capacity(num_queries);
 
-    for i in 0..num_queries {
-        let q = &query[i * dim..(i + 1) * dim];
-        let mut distances: Vec<(usize, f32)> = Vec::with_capacity(num_base);
-
-        for j in 0..num_base {
-            let b = &base[j * dim..(j + 1) * dim];
-            let dist = l2_distance_squared(q, b);
-            distances.push((j, dist));
-        }
-
-        distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        let neighbors: Vec<i32> = distances
-            .into_iter()
-            .take(k)
-            .map(|(idx, _)| idx as i32)
-            .collect();
-        ground_truth.push(neighbors);
-    }
-
-    ground_truth
-}
-
-fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
-}
 
 /// Calculate recall@k
 fn calculate_recall(results: &[Vec<i64>], ground_truth: &[Vec<i32>], k: usize) -> f64 {
@@ -207,7 +174,7 @@ fn test_debug_m_parameter() {
     // Compute ground truth
     println!("🎯 Computing ground truth (brute-force)...");
     let gt_start = Instant::now();
-    let ground_truth = compute_ground_truth(&base, &query, NUM_QUERIES, DIM, K);
+    let ground_truth = common::compute_ground_truth(&base, &query, NUM_QUERIES, DIM, K);
     let gt_time = gt_start.elapsed().as_secs_f64();
     println!("  Ground truth computed in {:.2}s", gt_time);
 
@@ -351,7 +318,7 @@ fn test_debug_m_with_varying_ef() {
     let query = generate_gaussian_dataset(NUM_QUERIES, DIM);
 
     // Compute ground truth
-    let ground_truth = compute_ground_truth(&base, &query, NUM_QUERIES, DIM, K);
+    let ground_truth = common::compute_ground_truth(&base, &query, NUM_QUERIES, DIM, K);
 
     // Test all combinations
     let mut results: Vec<(usize, usize, f64)> = Vec::new(); // (m, ef_search, recall_at_10)

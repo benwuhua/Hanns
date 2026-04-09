@@ -4,6 +4,7 @@
 //!
 //! 包含距离验证功能，确保搜索结果质量
 
+mod common;
 use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
 use knowhere_rs::benchmark::average_recall_at_k;
 use knowhere_rs::faiss::{HnswIndex, IvfFlatIndex, MemIndex as FlatIndex};
@@ -11,47 +12,9 @@ use knowhere_rs::MetricType;
 use rand::Rng;
 use std::time::Instant;
 
-fn generate_vectors(n: usize, dim: usize) -> Vec<f32> {
-    let mut rng = rand::thread_rng();
-    (0..n * dim).map(|_| rng.gen::<f32>()).collect()
-}
 
 /// Compute ground truth for random dataset (brute-force)
-fn compute_ground_truth(
-    base: &[f32],
-    query: &[f32],
-    num_queries: usize,
-    dim: usize,
-    k: usize,
-) -> Vec<Vec<i32>> {
-    let num_base = base.len() / dim;
-    let mut ground_truth = Vec::with_capacity(num_queries);
 
-    for i in 0..num_queries {
-        let q = &query[i * dim..(i + 1) * dim];
-        let mut distances: Vec<(usize, f32)> = Vec::with_capacity(num_base);
-
-        for j in 0..num_base {
-            let b = &base[j * dim..(j + 1) * dim];
-            let dist = l2_distance_squared(q, b);
-            distances.push((j, dist));
-        }
-
-        distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        let neighbors: Vec<i32> = distances
-            .into_iter()
-            .take(k)
-            .map(|(idx, _)| idx as i32)
-            .collect();
-        ground_truth.push(neighbors);
-    }
-
-    ground_truth
-}
-
-fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
-}
 
 struct PerfResult {
     name: String,
@@ -68,11 +31,11 @@ struct PerfResult {
 }
 
 fn test_flat_index(n: usize, dim: usize) -> PerfResult {
-    let vectors = generate_vectors(n, dim);
-    let queries = generate_vectors(100, dim);
+    let vectors = common::generate_vectors(n, dim);
+    let queries = common::generate_vectors(100, dim);
 
     // Compute ground truth for recall calculation (k=100 for comprehensive recall)
-    let ground_truth = compute_ground_truth(&vectors, &queries, 100, dim, 100);
+    let ground_truth = common::compute_ground_truth(&vectors, &queries, 100, dim, 100);
 
     let config = IndexConfig {
         index_type: IndexType::Flat,
@@ -139,11 +102,11 @@ fn test_flat_index(n: usize, dim: usize) -> PerfResult {
 }
 
 fn test_hnsw_index(n: usize, dim: usize) -> PerfResult {
-    let vectors = generate_vectors(n, dim);
-    let queries = generate_vectors(100, dim);
+    let vectors = common::generate_vectors(n, dim);
+    let queries = common::generate_vectors(100, dim);
 
     // Compute ground truth for recall calculation (k=100 for comprehensive recall)
-    let ground_truth = compute_ground_truth(&vectors, &queries, 100, dim, 100);
+    let ground_truth = common::compute_ground_truth(&vectors, &queries, 100, dim, 100);
 
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
@@ -216,11 +179,11 @@ fn test_hnsw_index(n: usize, dim: usize) -> PerfResult {
 }
 
 fn test_ivf_flat_index(n: usize, dim: usize) -> PerfResult {
-    let vectors = generate_vectors(n, dim);
-    let queries = generate_vectors(100, dim);
+    let vectors = common::generate_vectors(n, dim);
+    let queries = common::generate_vectors(100, dim);
 
     // Compute ground truth for recall calculation (k=100 for comprehensive recall)
-    let ground_truth = compute_ground_truth(&vectors, &queries, 100, dim, 100);
+    let ground_truth = common::compute_ground_truth(&vectors, &queries, 100, dim, 100);
 
     let nlist = ((n as f64).sqrt() as i32).max(1);
     let config = IndexConfig {
@@ -294,11 +257,11 @@ fn test_ivf_flat_index(n: usize, dim: usize) -> PerfResult {
 }
 
 fn test_ivf_flat_index_fast(n: usize, dim: usize) -> PerfResult {
-    let vectors = generate_vectors(n, dim);
-    let queries = generate_vectors(100, dim);
+    let vectors = common::generate_vectors(n, dim);
+    let queries = common::generate_vectors(100, dim);
 
     // Compute ground truth for recall calculation (k=100 for comprehensive recall)
-    let ground_truth = compute_ground_truth(&vectors, &queries, 100, dim, 100);
+    let ground_truth = common::compute_ground_truth(&vectors, &queries, 100, dim, 100);
 
     let nlist = ((n as f64).sqrt() as i32).max(1);
     // 使用快速构建配置
@@ -571,11 +534,11 @@ fn test_hnsw_adaptive_ef(
     adaptive_k: f64,
     top_k: usize,
 ) -> PerfResult {
-    let vectors = generate_vectors(n, dim);
-    let queries = generate_vectors(100, dim);
+    let vectors = common::generate_vectors(n, dim);
+    let queries = common::generate_vectors(100, dim);
 
     // Compute ground truth for recall calculation
-    let ground_truth = compute_ground_truth(&vectors, &queries, 100, dim, 100);
+    let ground_truth = common::compute_ground_truth(&vectors, &queries, 100, dim, 100);
 
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
