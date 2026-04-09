@@ -1,4 +1,4 @@
-# Wiki Schema — knowhere-rs
+# Wiki Schema — hanns
 
 > LLM 维护的项目知识库。人类负责 ingest 触发；LLM 负责写作、更新、交叉链接。
 
@@ -28,7 +28,7 @@ wiki/
 
 **一句话定义**：...
 
-## 在 knowhere-rs 中的实现
+## 在 hanns 中的实现
 ...
 
 ## 关键参数
@@ -120,7 +120,7 @@ LLM 操作：
 
 ### Query（问题 → wiki）
 
-触发词：任何「knowhere-rs 的 X 是什么」「为什么 Y」类问题
+触发词：任何「hanns 的 X 是什么」「为什么 Y」类问题
 
 LLM 操作：
 1. 读 index.md 确定相关页面

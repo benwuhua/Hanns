@@ -29,8 +29,8 @@
 ### API 使用示例
 
 ```rust
-use knowhere_rs::api::{IndexConfig, IndexType, MetricType, IndexParams, SearchRequest};
-use knowhere_rs::faiss::IvfFlatCcIndex;
+use hanns::api::{IndexConfig, IndexType, MetricType, IndexParams, SearchRequest};
+use hanns::faiss::IvfFlatCcIndex;
 
 // 创建配置
 let config = IndexConfig {

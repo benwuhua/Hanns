@@ -4,18 +4,18 @@
 //! 1. OPQ + PQ achieves R@10 > 50% on SIFT1M-like data
 //! 2. Residual PQ improves recall by > 20% over standard PQ
 
-use knowhere_rs::quantization::{
+use hanns::quantization::{
     PQConfig, ProductQuantizer, ResidualPQConfig, ResidualProductQuantizer,
 };
 
 #[cfg(feature = "long-tests")]
-use knowhere_rs::api::SearchRequest;
+use hanns::api::SearchRequest;
 #[cfg(feature = "long-tests")]
-use knowhere_rs::faiss::{IvfOpqConfig, IvfOpqIndex};
+use hanns::faiss::{IvfOpqConfig, IvfOpqIndex};
 #[cfg(feature = "long-tests")]
-use knowhere_rs::quantization::OPQConfig;
+use hanns::quantization::OPQConfig;
 #[cfg(feature = "long-tests")]
-use knowhere_rs::quantization::OptimizedProductQuantizer;
+use hanns::quantization::OptimizedProductQuantizer;
 #[cfg(feature = "long-tests")]
 use rand::rngs::StdRng;
 #[cfg(feature = "long-tests")]

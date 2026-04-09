@@ -2,7 +2,7 @@
 //! 验证 OPT-034 优化后的 RaBitQ 召回率
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use knowhere_rs::{
+use hanns::{
     faiss::IvfFlatIndex, IndexConfig, IndexType, IvfRaBitqConfig, IvfRaBitqIndex, MetricType,
     SearchRequest,
 };

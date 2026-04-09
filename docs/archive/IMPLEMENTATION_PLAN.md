@@ -1,4 +1,4 @@
-# Knowhere-RS 实现计划
+# Hanns 实现计划
 
 基于与 C++ Knowhere 的差距分析，本文档详细规划实现路径。
 

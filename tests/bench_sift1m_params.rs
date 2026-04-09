@@ -9,14 +9,14 @@
 //! cargo test --test bench_sift1m_params --release -- --nocapture
 //! ```
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
-use knowhere_rs::benchmark::{
+use hanns::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
+use hanns::benchmark::{
     average_recall_at_k, estimate_hnsw_overhead, estimate_ivf_overhead, estimate_vector_memory,
     MemoryTracker,
 };
-use knowhere_rs::dataset::{load_sift1m_complete, SiftDataset};
-use knowhere_rs::faiss::{HnswIndex, IvfFlatIndex, IvfPqIndex, IvfSq8Index, MemIndex as FlatIndex};
-use knowhere_rs::MetricType;
+use hanns::dataset::{load_sift1m_complete, SiftDataset};
+use hanns::faiss::{HnswIndex, IvfFlatIndex, IvfPqIndex, IvfSq8Index, MemIndex as FlatIndex};
+use hanns::MetricType;
 
 use std::env;
 use std::fs::File;
@@ -139,7 +139,7 @@ fn bench_hnsw(dataset: &SiftDataset, nq: usize) -> Vec<ParamResult> {
             index_type: IndexType::Hnsw,
             dim: dataset.dim(),
             metric_type: MetricType::L2,
-            data_type: knowhere_rs::api::DataType::Float,
+            data_type: hanns::api::DataType::Float,
             params: IndexParams {
                 m: Some(32),
                 ef_construction: Some(400),
@@ -220,7 +220,7 @@ fn bench_ivf_flat(dataset: &SiftDataset, nq: usize) -> Vec<ParamResult> {
             index_type: IndexType::IvfFlat,
             dim: dataset.dim(),
             metric_type: MetricType::L2,
-            data_type: knowhere_rs::api::DataType::Float,
+            data_type: hanns::api::DataType::Float,
             params: IndexParams {
                 nlist: Some(nlist),
                 nprobe: Some(nprobe),
@@ -301,7 +301,7 @@ fn bench_ivf_pq(dataset: &SiftDataset, nq: usize) -> Vec<ParamResult> {
             index_type: IndexType::IvfPq,
             dim: dataset.dim(),
             metric_type: MetricType::L2,
-            data_type: knowhere_rs::api::DataType::Float,
+            data_type: hanns::api::DataType::Float,
             params: IndexParams {
                 nlist: Some(nlist),
                 nprobe: Some(nprobe),
@@ -385,7 +385,7 @@ fn bench_ivf_sq8(dataset: &SiftDataset, nq: usize) -> Vec<ParamResult> {
             index_type: IndexType::IvfSq8,
             dim: dataset.dim(),
             metric_type: MetricType::L2,
-            data_type: knowhere_rs::api::DataType::Float,
+            data_type: hanns::api::DataType::Float,
             params: IndexParams {
                 nlist: Some(nlist),
                 nprobe: Some(nprobe),

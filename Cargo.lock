@@ -547,6 +547,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanns"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "bytemuck",
+ "chrono",
+ "clap",
+ "criterion",
+ "cxx",
+ "cxx-build",
+ "hdf5",
+ "hdrhistogram",
+ "io-uring",
+ "jni",
+ "libc",
+ "memmap2",
+ "nalgebra",
+ "ndarray",
+ "numpy",
+ "once_cell",
+ "parking_lot 0.12.5",
+ "prometheus-client",
+ "pyo3",
+ "rand",
+ "rayon",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "tracing-subscriber",
+ "wide",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -775,42 +811,6 @@ checksum = "b49715b7073f385ba4bc528e5747d02e66cb39c6146efb66b781f131f0fb399c"
 dependencies = [
  "once_cell",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "knowhere-rs"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bincode",
- "bytemuck",
- "chrono",
- "clap",
- "criterion",
- "cxx",
- "cxx-build",
- "hdf5",
- "hdrhistogram",
- "io-uring",
- "jni",
- "libc",
- "memmap2",
- "nalgebra",
- "ndarray",
- "numpy",
- "once_cell",
- "parking_lot 0.12.5",
- "prometheus-client",
- "pyo3",
- "rand",
- "rayon",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tracing",
- "tracing-subscriber",
- "wide",
 ]
 
 [[package]]

@@ -11,8 +11,8 @@
 //! Expected speedup: 4-8x (from 24.5s to 3-6s for 100K vectors)
 //! Target: 100K vectors build time < 3s
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::hnsw::HnswIndex;
+use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::faiss::hnsw::HnswIndex;
 use rand::Rng;
 use std::time::Instant;
 
@@ -27,7 +27,7 @@ fn bench_hnsw_serial(n: usize, dim: usize, m: usize, ef_construction: usize) -> 
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim,
         params: IndexParams {
             m: Some(m),
@@ -63,7 +63,7 @@ fn bench_hnsw_parallel(
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim,
         params: IndexParams {
             m: Some(m),
@@ -319,7 +319,7 @@ fn test_hnsw_parallel_error_handling() {
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim: 128,
         params: IndexParams {
             m: Some(16),
@@ -382,7 +382,7 @@ fn test_hnsw_parallel_api_compatibility() {
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim: 64,
         params: IndexParams {
             m: Some(16),
@@ -470,7 +470,7 @@ fn test_hnsw_batch_size_optimization() {
     let _config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim: 128,
         params: IndexParams {
             m: Some(16),
@@ -516,7 +516,7 @@ fn test_hnsw_parallel_performance_target() {
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim: 128,
         params: IndexParams {
             m: Some(16),

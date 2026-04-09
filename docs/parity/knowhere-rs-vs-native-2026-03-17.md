@@ -1,4 +1,4 @@
-# Knowhere-RS vs Native Knowhere (2026-03-17)
+# Hanns vs Native Knowhere (2026-03-17)
 
 ## Scope and compare lanes
 

@@ -1,11 +1,11 @@
 fn main() {
     #[cfg(feature = "metrics")]
     {
-        use knowhere_rs::api::{
+        use hanns::api::{
             DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest,
         };
-        use knowhere_rs::faiss::HnswIndex;
-        use knowhere_rs::metrics::{gather_metrics, init_metrics};
+        use hanns::faiss::HnswIndex;
+        use hanns::metrics::{gather_metrics, init_metrics};
 
         let _ = init_metrics();
 

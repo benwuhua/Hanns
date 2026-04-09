@@ -10,8 +10,8 @@ use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
 
-use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::{IvfFlatIndex, IvfSq8Index};
+use hanns::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::faiss::{IvfFlatIndex, IvfSq8Index};
 use rayon::prelude::*;
 
 const TOP_K: usize = 10;

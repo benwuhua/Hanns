@@ -1,4 +1,4 @@
-use knowhere_rs::api::{validate_index_config, DataType, IndexType, MetricType};
+use hanns::api::{validate_index_config, DataType, IndexType, MetricType};
 
 macro_rules! legal_case {
     ($name:ident, $index:expr, $dtype:expr, $metric:expr) => {

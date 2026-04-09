@@ -4,8 +4,8 @@ use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::{
+use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::faiss::{
     IvfUsqConfig, IvfUsqIndex, IvfFlatIndex, IvfPqIndex,
 };
 use rayon::prelude::*;
@@ -136,7 +136,7 @@ fn make_pq_config(dim: usize, nlist: usize, nprobe: usize, m: usize, nbits: usiz
         index_type: IndexType::IvfPq,
         metric_type: MetricType::Ip,
         dim,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),
@@ -251,7 +251,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 index_type: IndexType::IvfFlat,
                 metric_type: MetricType::Ip,
                 dim: dim,
-                data_type: knowhere_rs::api::DataType::Float,
+                data_type: hanns::api::DataType::Float,
                 params: IndexParams {
                     nlist: Some(NLIST),
                     nprobe: Some(NPROBES[0]),

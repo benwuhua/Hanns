@@ -1,17 +1,17 @@
 #[cfg(feature = "hdf5")]
-use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, SearchRequest};
+use hanns::api::{DataType, IndexConfig, IndexParams, IndexType, SearchRequest};
 #[cfg(feature = "hdf5")]
-use knowhere_rs::benchmark::{average_recall_at_k, confidence_from_recall};
+use hanns::benchmark::{average_recall_at_k, confidence_from_recall};
 #[cfg(feature = "hdf5")]
-use knowhere_rs::bitset::BitsetView;
+use hanns::bitset::BitsetView;
 #[cfg(feature = "hdf5")]
-use knowhere_rs::dataset::load_hdf5_dataset;
+use hanns::dataset::load_hdf5_dataset;
 #[cfg(feature = "hdf5")]
-use knowhere_rs::faiss::hnsw::HnswCandidateSearchProfileReport;
+use hanns::faiss::hnsw::HnswCandidateSearchProfileReport;
 #[cfg(feature = "hdf5")]
-use knowhere_rs::faiss::HnswIndex;
+use hanns::faiss::HnswIndex;
 #[cfg(feature = "hdf5")]
-use knowhere_rs::MetricType;
+use hanns::MetricType;
 #[cfg(feature = "hdf5")]
 use rayon::prelude::*;
 #[cfg(feature = "hdf5")]
@@ -1039,7 +1039,7 @@ fn run() {
             confidence,
             confidence_explanation,
             runtime_seconds,
-            source: "knowhere_rs_hnsw_hdf5".to_string(),
+            source: "hanns_hnsw_hdf5".to_string(),
         }],
     };
 

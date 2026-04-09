@@ -1,13 +1,13 @@
 // PQ 诊断测试 - 快速验证修复方案
 
 #[cfg(feature = "long-tests")]
-use knowhere_rs::api::{IndexConfig, IndexType, MetricType, SearchRequest};
+use hanns::api::{IndexConfig, IndexType, MetricType, SearchRequest};
 #[cfg(feature = "long-tests")]
-use knowhere_rs::faiss::IvfPqIndex;
+use hanns::faiss::IvfPqIndex;
 #[cfg(feature = "long-tests")]
-use knowhere_rs::quantization::{PQConfig, ProductQuantizer};
-use knowhere_rs::quantization::{ResidualPQConfig, ResidualProductQuantizer};
-use knowhere_rs::simd::{l2_distance, l2_distance_sq};
+use hanns::quantization::{PQConfig, ProductQuantizer};
+use hanns::quantization::{ResidualPQConfig, ResidualProductQuantizer};
+use hanns::simd::{l2_distance, l2_distance_sq};
 
 #[cfg(feature = "long-tests")]
 fn main() {

@@ -1,7 +1,7 @@
 //! Example: Basic vector search with KnowHere RS
 
-use knowhere_rs::api::{IndexConfig, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::MemIndex;
+use hanns::api::{IndexConfig, IndexType, MetricType, SearchRequest};
+use hanns::faiss::MemIndex;
 
 fn main() {
     // Create index

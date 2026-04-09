@@ -1,4 +1,4 @@
-# Log — knowhere-rs
+# Log — hanns
 
 append-only 时间线。新条目加在顶部。
 
@@ -80,7 +80,7 @@ Build 差距来源：k-means 训练（IVF 聚类）。100K 数据绝对差距小
 - `src/ffi.rs`：`CIndexConfig` 添加 `pq_m`/`pq_nbits` 字段；`IvfPq` 分支传入 `m`/`nbits_per_idx`
 - 新建 `ivf_pq_rust_node.cpp` shim（读取 Milvus config 中 `m`/`nbits` key）
 - `cabi_bridge.hpp` 同步添加 `pq_m`/`pq_nbits` 字段（repr(C) 顺序一致）
-- `index_factory.h` 路由 `INDEX_FAISS_IVFPQ` → RS，支持 `KNOWHERE_RS_IVFPQ_BYPASS`
+- `index_factory.h` 路由 `INDEX_FAISS_IVFPQ` → RS，支持 `HANNS_IVFPQ_BYPASS`
 
 **结果（100K×768D IP，m=32，nprobe=64）**：
 - Recall@10 = 0.815（IVF-PQ 有损压缩，正常）
@@ -96,7 +96,7 @@ Build 差距来源：k-means 训练（IVF 聚类）。100K 数据绝对差距小
 
 **类型**：集成 + bench
 
-**方法**：新建 `ivf_flat_rust_node.cpp` shim（镜像 IVF-SQ8 模式），`CIndexType::IvfFlat=18`，在 `index_factory.h` 中 IVFFLAT/IVFFLAT_CC 路由到 RS，支持 `KNOWHERE_RS_IVFFLAT_BYPASS` env var 对比。
+**方法**：新建 `ivf_flat_rust_node.cpp` shim（镜像 IVF-SQ8 模式），`CIndexType::IvfFlat=18`，在 `index_factory.h` 中 IVFFLAT/IVFFLAT_CC 路由到 RS，支持 `HANNS_IVFFLAT_BYPASS` env var 对比。
 
 **结果（nprobe=32, 100K×768D IP）**：
 - RS c=80: **184.4 QPS**
@@ -127,7 +127,7 @@ Build 差距来源：k-means 训练（IVF 聚类）。100K 数据绝对差距小
 **类型**：bench
 **数据集**：合成 float32，100K × 768D，IP，nlist=1024
 
-**方法**：`KNOWHERE_RS_IVFSQ8_BYPASS=1` env var 令 index_factory.h 拦截块跳过，IVF-SQ8 回退到 native C++ knowhere。相同 Python 并发脚本，完全可比。
+**方法**：`HANNS_IVFSQ8_BYPASS=1` env var 令 index_factory.h 拦截块跳过，IVF-SQ8 回退到 native C++ knowhere。相同 Python 并发脚本，完全可比。
 
 **结果（c=80, nprobe=8）**：RS = 139.5 QPS，Native = 141.1 QPS → **parity ✅（<1% 差异）**
 

@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 use std::fs;
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::{IvfPqIndex, MemIndex};
-use knowhere_rs::quantization::pq::{PQConfig, ProductQuantizer};
+use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::faiss::{IvfPqIndex, MemIndex};
+use hanns::quantization::pq::{PQConfig, ProductQuantizer};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -42,7 +42,7 @@ fn compute_gt_top10(
         .map(|i| {
             let q = &queries[i * DIM..(i + 1) * DIM];
             let res = gt_index.search(q, &req)?;
-            Ok::<Vec<i64>, knowhere_rs::api::KnowhereError>(res.ids)
+            Ok::<Vec<i64>, hanns::api::KnowhereError>(res.ids)
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(gt_top10)
@@ -102,7 +102,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cfg = IndexConfig {
             index_type: IndexType::IvfPq,
             metric_type: MetricType::L2,
-            data_type: knowhere_rs::api::DataType::Float,
+            data_type: hanns::api::DataType::Float,
             dim: DIM,
             params: IndexParams {
                 nlist: Some(NLIST),
@@ -133,7 +133,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cfg = IndexConfig {
             index_type: IndexType::IvfPq,
             metric_type: MetricType::L2,
-            data_type: knowhere_rs::api::DataType::Float,
+            data_type: hanns::api::DataType::Float,
             dim: DIM,
             params: IndexParams {
                 nlist: Some(NLIST),

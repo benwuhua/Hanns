@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 use std::fs;
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::{AisaqConfig, MemIndex, PQFlashIndex};
+use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::faiss::{AisaqConfig, MemIndex, PQFlashIndex};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde_json::json;
@@ -98,7 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let disk_cfg = IndexConfig {
             index_type: IndexType::DiskAnn,
             metric_type: MetricType::L2,
-            data_type: knowhere_rs::api::DataType::Float,
+            data_type: hanns::api::DataType::Float,
             dim,
             params,
         };

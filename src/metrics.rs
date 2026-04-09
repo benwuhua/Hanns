@@ -422,7 +422,7 @@ mod tests {
     }
 }
 
-// Optional Prometheus metrics for knowhere-rs operations.
+// Optional Prometheus metrics for hanns operations.
 // Enable with `--features metrics`.
 
 #[cfg(feature = "metrics")]

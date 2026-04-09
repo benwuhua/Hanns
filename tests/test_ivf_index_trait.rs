@@ -1,8 +1,8 @@
-use knowhere_rs::api::{MetricType, SearchRequest};
-use knowhere_rs::faiss::ivf_usq::{IvfUsqConfig, IvfUsqIndex};
-use knowhere_rs::faiss::ivf_usq::{IvfUsqAnnIterator};
+use hanns::api::{MetricType, SearchRequest};
+use hanns::faiss::ivf_usq::{IvfUsqConfig, IvfUsqIndex};
+use hanns::faiss::ivf_usq::{IvfUsqAnnIterator};
 
-use knowhere_rs::index::Index;
+use hanns::index::Index;
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};

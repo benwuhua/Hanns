@@ -1,4 +1,4 @@
-use knowhere_rs::{pick_refine_index, MetricType, RefineType};
+use hanns::{pick_refine_index, MetricType, RefineType};
 
 #[test]
 fn test_refine_type_creation() {

@@ -3,7 +3,7 @@
 //! 对比单线程 vs 并行版本的性能差异
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use knowhere_rs::clustering::elkan_kmeans::{ElkanKMeans, ElkanKMeansConfig};
+use hanns::clustering::elkan_kmeans::{ElkanKMeans, ElkanKMeansConfig};
 use rand::Rng;
 
 /// 生成带簇结构的测试数据

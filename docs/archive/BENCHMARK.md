@@ -166,7 +166,7 @@ IVF-Flat       890.12       234.56        4263        0.920        0.965        
 
 The `compare_benchmark.py` script automatically:
 
-1. Runs Rust knowhere-rs benchmarks
+1. Runs Rust hanns benchmarks
 2. Attempts to run C++ knowhere benchmarks (if available)
 3. Generates comparison reports with:
    - Performance ratios (Rust QPS / C++ QPS)

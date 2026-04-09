@@ -21,11 +21,11 @@
 //! - `SIFT_BASE_SIZE`: base 向量数量（默认 `1000000`）
 
 mod common;
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
-use knowhere_rs::benchmark::average_recall_at_k;
-use knowhere_rs::dataset::load_sift1m_complete;
-use knowhere_rs::faiss::{HnswIndex, IvfFlatIndex, IvfPqIndex, MemIndex as FlatIndex};
-use knowhere_rs::MetricType;
+use hanns::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
+use hanns::benchmark::average_recall_at_k;
+use hanns::dataset::load_sift1m_complete;
+use hanns::faiss::{HnswIndex, IvfFlatIndex, IvfPqIndex, MemIndex as FlatIndex};
+use hanns::MetricType;
 use std::env;
 use std::fs::File;
 use std::io::Write;
@@ -139,7 +139,7 @@ fn benchmark_hnsw(
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             m: Some(m),
             ef_construction: Some(ef_construction),
@@ -196,7 +196,7 @@ fn benchmark_ivf_flat(
         index_type: IndexType::IvfFlat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),
@@ -253,7 +253,7 @@ fn benchmark_ivf_pq(
         index_type: IndexType::IvfPq,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),

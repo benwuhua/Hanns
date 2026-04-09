@@ -4,9 +4,9 @@
 //! 公平对比：使用相同的数据集、相同的 HNSW 参数 (M, ef_construction, ef_search)
 //! 对比指标：QPS、召回率、内存占用、构建时间
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
-use knowhere_rs::dataset::{load_deep1m_complete, load_sift1m_complete};
-use knowhere_rs::faiss::HnswIndex;
+use hanns::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
+use hanns::dataset::{load_deep1m_complete, load_sift1m_complete};
+use hanns::faiss::HnswIndex;
 use std::path::Path;
 use std::time::Instant;
 
@@ -93,8 +93,8 @@ fn run_rust_benchmark(
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         dim,
-        metric_type: knowhere_rs::MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        metric_type: hanns::MetricType::L2,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::hnsw(ef_construction, ef_search, m as f32),
     };
 

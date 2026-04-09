@@ -148,7 +148,7 @@ benchmark_runner.run([task], task_label="milvus-rs-hnsw")
 ## RS vs Native 对比流程
 
 1. **RS 版**：默认路由（不带 BYPASS env var）
-2. **Native 版**：重启 Milvus 带 `KNOWHERE_RS_HNSW_BYPASS=1` 等环境变量
+2. **Native 版**：重启 Milvus 带 `HANNS_HNSW_BYPASS=1` 等环境变量
 3. 对比同一 case 下 Load time / QPS / Recall
 
 ```bash
@@ -157,7 +157,7 @@ ssh hannsdb-x86 'cd /data/work/VectorDBBench && DATASET_LOCAL_DIR=/data/work/dat
 
 # Native（需要重启 Milvus + BYPASS）
 ssh hannsdb-x86 'pkill -f "milvus run" || true; sleep 5'
-ssh hannsdb-x86 'KNOWHERE_RS_HNSW_BYPASS=1 nohup bash /data/work/milvus-rs-integ/milvus-src/scripts/knowhere-rs-shim/start_standalone_remote.sh > /tmp/milvus_native.log 2>&1 &'
+ssh hannsdb-x86 'HANNS_HNSW_BYPASS=1 nohup bash /data/work/milvus-rs-integ/milvus-src/scripts/hanns-shim/start_standalone_remote.sh > /tmp/milvus_native.log 2>&1 &'
 sleep 30
 
 ssh hannsdb-x86 'cd /data/work/VectorDBBench && DATASET_LOCAL_DIR=/data/work/datasets .venv/bin/python3 -m vectordb_bench.cli.cli MilvusHNSW --uri http://localhost:19530 --m 16 --ef-construction 200 --ef-search 128 --case-id Performance768D1M --db-label native-hnsw 2>&1 | tee /tmp/vdb_native.log'

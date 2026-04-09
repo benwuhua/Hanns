@@ -15,7 +15,7 @@ This run used a clean native knowhere build from:
 Milvus standalone was restarted after replacing the runtime `libknowhere.so` and
 `libmilvus-common.so` symlinks under `cmake_build/lib/`. Runtime verification via
 `/proc/<pid>/maps` showed Milvus loading the native libraries from
-`internal/core/cmake_build_native_fresh/lib/`, and no `libknowhere_rs.so` was present.
+`internal/core/cmake_build_native_fresh/lib/`, and no `libhanns.so` was present.
 
 ## Setup
 

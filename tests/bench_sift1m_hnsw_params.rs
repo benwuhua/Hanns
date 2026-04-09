@@ -15,13 +15,13 @@
 //! - `SIFT_BASE_SIZE`: base 向量数量（默认: 100000，全部 100 万太慢）
 
 mod common;
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
-use knowhere_rs::benchmark::{
+use hanns::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
+use hanns::benchmark::{
     average_recall_at_k, estimate_hnsw_overhead, estimate_vector_memory, MemoryTracker,
 };
-use knowhere_rs::dataset::load_sift1m_complete;
-use knowhere_rs::faiss::HnswIndex;
-use knowhere_rs::MetricType;
+use hanns::dataset::load_sift1m_complete;
+use hanns::faiss::HnswIndex;
+use hanns::MetricType;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs::File;
@@ -110,7 +110,7 @@ fn benchmark_hnsw_params(
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             m: Some(m),
             ef_construction: Some(ef_construction),

@@ -2,13 +2,13 @@
 //!
 //! 目的：找出为什么不同数据分布导致性能差异 5-10 倍
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType};
-use knowhere_rs::faiss::IvfPqIndex;
+use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType};
+use hanns::faiss::IvfPqIndex;
 
 #[cfg(feature = "long-tests")]
-use knowhere_rs::api::SearchRequest;
+use hanns::api::SearchRequest;
 #[cfg(feature = "long-tests")]
-use knowhere_rs::faiss::IvfFlatIndex;
+use hanns::faiss::IvfFlatIndex;
 #[cfg(feature = "long-tests")]
 use rand::{rngs::StdRng, Rng, SeedableRng};
 #[cfg(feature = "long-tests")]
@@ -43,7 +43,7 @@ fn analyze_distribution(name: &str, data: &[f32], dim: usize) {
     let config = IndexConfig {
         index_type: IndexType::IvfFlat,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim,
         params: IndexParams::ivf(NLIST, NPROBE),
     };
@@ -110,7 +110,7 @@ fn ivfpq_coarse_clusters_stay_populated_for_separated_data() {
     let config = IndexConfig {
         index_type: IndexType::IvfPq,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim,
         params: IndexParams {
             nlist: Some(nlist),

@@ -1,13 +1,13 @@
-# knowhere-rs vs knowhere (C++) 全面评估报告
+# hanns vs knowhere (C++) 全面评估报告
 
 **日期**: 2026-03-20
-**目标**: 评估 knowhere-rs 作为 knowhere C++ 的生产级平替方案的当前差距，并制定后续计划
+**目标**: 评估 hanns 作为 knowhere C++ 的生产级平替方案的当前差距，并制定后续计划
 
 ---
 
 ## 一、总体评估结论
 
-knowhere-rs 已在 **HNSW 核心路径上取得绝对性能优势**（x86 权威基准 2.099x），但要实现**全面生产级平替**，在索引覆盖度、GPU 支持、真实数据验证、生态集成等方面仍存在显著差距。
+hanns 已在 **HNSW 核心路径上取得绝对性能优势**（x86 权威基准 2.099x），但要实现**全面生产级平替**，在索引覆盖度、GPU 支持、真实数据验证、生态集成等方面仍存在显著差距。
 
 | 维度 | 完成度 | 说明 |
 |------|--------|------|
@@ -26,7 +26,7 @@ knowhere-rs 已在 **HNSW 核心路径上取得绝对性能优势**（x86 权威
 
 ### 2.1 密集向量索引
 
-| 索引类型 | C++ knowhere | Rust knowhere-rs | 差距评估 |
+| 索引类型 | C++ knowhere | Rust hanns | 差距评估 |
 |----------|-------------|-----------------|----------|
 | **Flat** | ✅ fp32/fp16/bf16/int8/bin | ✅ 完整 | 对等 |
 | **HNSW** | ✅ 成熟，基于 hnswlib | ✅ **领先** 2.099x | **Rust 领先** |
@@ -46,7 +46,7 @@ knowhere-rs 已在 **HNSW 核心路径上取得绝对性能优势**（x86 权威
 
 ### 2.2 GPU 索引（C++ 独有）
 
-| GPU 索引类型 | C++ knowhere | Rust knowhere-rs | 说明 |
+| GPU 索引类型 | C++ knowhere | Rust hanns | 说明 |
 |-------------|-------------|-----------------|------|
 | GPU_FAISS_FLAT | ✅ | ❌ | CUDA |
 | GPU_FAISS_IVF_FLAT | ✅ | ❌ | CUDA |
@@ -318,7 +318,7 @@ knowhere C++ 的 SIMD 覆盖范围更广（6 种架构 vs 4 种），但 ARM SVE
 根据实际需求决定 GPU 策略。完成生产加固，进入灰度部署。
 
 ### 定位建议
-knowhere-rs 最合理的定位是 **"CPU-first 高性能向量搜索引擎"**：
+hanns 最合理的定位是 **"CPU-first 高性能向量搜索引擎"**：
 - 在 HNSW 这一最常用索引上已有 **2x 性能优势**
 - CPU 路径全覆盖后可作为 Milvus 的 **非 GPU 节点默认引擎**
 - GPU 场景通过 FFI 桥接 C++ knowhere，无需重新实现

@@ -1,4 +1,4 @@
-use knowhere_rs::quantization::usq::*;
+use hanns::quantization::usq::*;
 
 fn make_data(n: usize, dim: usize) -> (Vec<f32>, Vec<i64>) {
     let data: Vec<f32> = (0..n * dim).map(|i| (i as f32 * 0.13).sin()).collect();
@@ -287,7 +287,7 @@ fn test_layout_fastscan_block_size() {
 /// Both use 4-bit quantization, dim=128, n=500 vectors, 10 queries.
 #[test]
 fn test_usq_recall_parity_vs_hvq() {
-    use knowhere_rs::quantization::hvq::{HvqConfig, HvqQuantizer};
+    use hanns::quantization::hvq::{HvqConfig, HvqQuantizer};
 
     let dim = 128;
     let n = 500;

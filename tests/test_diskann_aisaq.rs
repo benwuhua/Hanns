@@ -3,9 +3,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
-use knowhere_rs::bitset::BitsetView;
-use knowhere_rs::faiss::diskann_aisaq::AisaqConfig;
-use knowhere_rs::{MetricType, PQFlashIndex, SearchResult};
+use hanns::bitset::BitsetView;
+use hanns::faiss::diskann_aisaq::AisaqConfig;
+use hanns::{MetricType, PQFlashIndex, SearchResult};
 use tempfile::tempdir;
 
 fn block_on<F: Future>(future: F) -> F::Output {

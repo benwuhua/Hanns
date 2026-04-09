@@ -1,4 +1,4 @@
-# knowhere-rs Issue Tracker
+# hanns Issue Tracker
 
 **最后更新**: 2026-03-24 | **来源**: 25 个独立 ISSUE-*.md 文件合并
 
@@ -120,7 +120,7 @@
 **严重程度**: P2 | **日期**: 2026-03-24
 
 **观测**:
-- zvec 比 HannsDB（即 knowhere-rs HNSW）快 **1.81x**
+- zvec 比 HannsDB（即 hanns HNSW）快 **1.81x**
 - 参数完全相同（zvec=FP32, M=16）
 - HannsDB 延迟分布均匀（mean≈p99 0.65ms）；zvec 双峰分布（快路+慢路）
 

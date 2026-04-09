@@ -16,18 +16,18 @@
 //! ```
 
 #[cfg(feature = "long-tests")]
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
+use hanns::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
 #[cfg(feature = "long-tests")]
-use knowhere_rs::benchmark::{average_recall_at_k, BenchmarkResult};
+use hanns::benchmark::{average_recall_at_k, BenchmarkResult};
 #[cfg(feature = "long-tests")]
-use knowhere_rs::dataset::{
+use hanns::dataset::{
     load_deep1m_complete, load_gist1m_complete, load_sift1m_complete, DeepDataset, GistDataset,
     SiftDataset,
 };
 #[cfg(feature = "long-tests")]
-use knowhere_rs::faiss::{HnswIndex, IvfFlatIndex, MemIndex as FlatIndex};
+use hanns::faiss::{HnswIndex, IvfFlatIndex, MemIndex as FlatIndex};
 #[cfg(feature = "long-tests")]
-use knowhere_rs::MetricType;
+use hanns::MetricType;
 use serde_json::Value;
 #[cfg(feature = "long-tests")]
 use std::env;
@@ -234,7 +234,7 @@ fn benchmark_flat(dataset: &UnifiedDataset, num_queries: usize) -> BenchmarkResu
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -304,7 +304,7 @@ fn benchmark_hnsw(dataset: &UnifiedDataset, num_queries: usize) -> BenchmarkResu
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),
@@ -383,7 +383,7 @@ fn benchmark_ivf_flat(dataset: &UnifiedDataset, num_queries: usize) -> Benchmark
         index_type: IndexType::IvfFlat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),

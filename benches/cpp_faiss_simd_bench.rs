@@ -9,7 +9,7 @@
 //! - 不同向量维度 (128/960) 下的表现
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use knowhere_rs::simd;
+use hanns::simd;
 
 /// 生成测试向量
 fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {

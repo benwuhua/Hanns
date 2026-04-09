@@ -1,10 +1,10 @@
-use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType};
-use knowhere_rs::benchmark::average_recall_at_k;
-use knowhere_rs::bitset::BitsetView;
-use knowhere_rs::dataset::Dataset;
-use knowhere_rs::faiss::{AisaqConfig, PQFlashIndex};
-use knowhere_rs::index::Index;
-use knowhere_rs::MetricType;
+use hanns::api::{DataType, IndexConfig, IndexParams, IndexType};
+use hanns::benchmark::average_recall_at_k;
+use hanns::bitset::BitsetView;
+use hanns::dataset::Dataset;
+use hanns::faiss::{AisaqConfig, PQFlashIndex};
+use hanns::index::Index;
+use hanns::MetricType;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::Serialize;

@@ -1,4 +1,4 @@
-# Knowhere-RS Development Roadmap (Non-GPU)
+# Hanns Development Roadmap (Non-GPU)
 
 Last updated: 2026-03-17
 
@@ -96,7 +96,7 @@ Any claimed completion must update all three files coherently.
 
 Objective:
 
-- Move beyond entry-level parity closure and make `knowhere-rs` a production-grade non-GPU replacement for native knowhere.
+- Move beyond entry-level parity closure and make `hanns` a production-grade non-GPU replacement for native knowhere.
 - Put first-priority engineering effort into the core implementation paths that actually determine competitiveness: `DISKANN / HNSW / IVF / PQ`.
 - Prove not only contract stability, but also at least one clear non-GPU performance advantage over native knowhere on a credible core path.
 

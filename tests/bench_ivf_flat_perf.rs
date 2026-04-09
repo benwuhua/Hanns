@@ -6,10 +6,10 @@
 //! - nlist=100, nprobe=100
 //! - 3 runs average
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
-use knowhere_rs::benchmark::average_recall_at_k;
-use knowhere_rs::faiss::{IvfFlatIndex, MemIndex as FlatIndex};
-use knowhere_rs::MetricType;
+use hanns::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
+use hanns::benchmark::average_recall_at_k;
+use hanns::faiss::{IvfFlatIndex, MemIndex as FlatIndex};
+use hanns::MetricType;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::time::Instant;
 
@@ -67,7 +67,7 @@ fn run_once(nbase: usize, seed: u64) -> RunResult {
         index_type: IndexType::IvfFlat,
         dim: DIM,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::ivf(NLIST, NPROBE),
     };
 

@@ -9,9 +9,9 @@ use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
 
-use knowhere_rs::api::{MetricType, SearchRequest};
-use knowhere_rs::faiss::ivf_turboquant::TurboQuantEncoding;
-use knowhere_rs::faiss::{IvfTurboQuantConfig, IvfTurboQuantIndex};
+use hanns::api::{MetricType, SearchRequest};
+use hanns::faiss::ivf_turboquant::TurboQuantEncoding;
+use hanns::faiss::{IvfTurboQuantConfig, IvfTurboQuantIndex};
 use rayon::prelude::*;
 
 const DEFAULT_DATA_DIR: &str = "/data/work/datasets/wikipedia-cohere-1m";

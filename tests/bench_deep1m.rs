@@ -14,14 +14,14 @@
 //! - query.fvecs: 10K query vectors (96D)
 //! - groundtruth.ivecs: 10K x 100 ground truth neighbors
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
-use knowhere_rs::benchmark::{
+use hanns::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
+use hanns::benchmark::{
     average_recall_at_k, estimate_hnsw_overhead, estimate_ivf_overhead, estimate_vector_memory,
     BenchmarkResult, DistanceValidationReport, MemoryTracker,
 };
-use knowhere_rs::dataset::{load_deep1m_complete, DeepDataset};
-use knowhere_rs::faiss::{HnswIndex, IvfFlatIndex, MemIndex as FlatIndex};
-use knowhere_rs::MetricType;
+use hanns::dataset::{load_deep1m_complete, DeepDataset};
+use hanns::faiss::{HnswIndex, IvfFlatIndex, MemIndex as FlatIndex};
+use hanns::MetricType;
 use std::env;
 use std::time::Instant;
 
@@ -66,7 +66,7 @@ fn benchmark_flat(dataset: &DeepDataset, num_queries: usize) -> BenchmarkResult 
         index_type: IndexType::Flat,
         dim: dataset.dim(),
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -159,7 +159,7 @@ fn benchmark_hnsw(dataset: &DeepDataset, num_queries: usize) -> BenchmarkResult 
         index_type: IndexType::Hnsw,
         dim: dataset.dim(),
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             m: Some(32),
             ef_construction: Some(400),
@@ -261,7 +261,7 @@ fn benchmark_ivf_flat(dataset: &DeepDataset, num_queries: usize) -> BenchmarkRes
         index_type: IndexType::IvfFlat,
         dim: dataset.dim(),
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),

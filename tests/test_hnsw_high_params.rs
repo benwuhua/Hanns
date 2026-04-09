@@ -1,6 +1,6 @@
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::HnswIndex;
-use knowhere_rs::index::Index;
+use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::faiss::HnswIndex;
+use hanns::index::Index;
 use tempfile::NamedTempFile;
 
 fn build_high_param_index(vectors: &[f32], dim: usize, m: usize, ef: usize) -> HnswIndex {
@@ -8,7 +8,7 @@ fn build_high_param_index(vectors: &[f32], dim: usize, m: usize, ef: usize) -> H
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::hnsw(m, ef, 0.5),
     };
 
@@ -52,7 +52,7 @@ fn test_hnsw_high_params_preserve_persistence_and_raw_vector_contract() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::hnsw(48, 600, 0.5),
     };
     let mut restored = HnswIndex::new(&config).expect("restored hnsw should build");

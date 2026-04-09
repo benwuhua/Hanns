@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::time::Instant;
 
-use knowhere_rs::quantization::{KMeans, ScalarQuantizer};
+use hanns::quantization::{KMeans, ScalarQuantizer};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 

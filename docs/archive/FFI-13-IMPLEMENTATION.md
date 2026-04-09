@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document summarizes the implementation of interrupt/cancellation support for knowhere-rs, allowing external cancellation of long-running search or training operations.
+This document summarizes the implementation of interrupt/cancellation support for hanns, allowing external cancellation of long-running search or training operations.
 
 ## Implementation Details
 

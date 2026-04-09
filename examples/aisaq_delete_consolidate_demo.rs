@@ -1,5 +1,5 @@
-use knowhere_rs::api::MetricType;
-use knowhere_rs::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
+use hanns::api::MetricType;
+use hanns::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::collections::HashSet;

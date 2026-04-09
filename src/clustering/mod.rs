@@ -1,4 +1,4 @@
-//! Clustering algorithms for knowhere-rs
+//! Clustering algorithms for hanns
 //!
 //! This module provides various clustering algorithms optimized for large-scale vector indexing.
 

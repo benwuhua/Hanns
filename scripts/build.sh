@@ -3,7 +3,7 @@
 
 set -e
 
-echo "=== Building knowhere-rs ==="
+echo "=== Building hanns ==="
 
 # 检查 Rust
 if ! command -v cargo &> /dev/null; then
@@ -22,12 +22,12 @@ cargo build --$BUILD_TYPE
 # 静态库位置
 LIB_PATH="target/$BUILD_TYPE"
 
-if [ -f "$LIB_PATH/libknowhere_rs.rlib" ]; then
-    echo "Static lib: $LIB_PATH/libknowhere_rs.rlib"
+if [ -f "$LIB_PATH/libhanns.rlib" ]; then
+    echo "Static lib: $LIB_PATH/libhanns.rlib"
 fi
 
-if [ -f "$LIB_PATH/libknowhere_rs.so" ]; then
-    echo "Shared lib: $LIB_PATH/libknowhere_rs.so"
+if [ -f "$LIB_PATH/libhanns.so" ]; then
+    echo "Shared lib: $LIB_PATH/libhanns.so"
 fi
 
 echo "=== Build complete ==="

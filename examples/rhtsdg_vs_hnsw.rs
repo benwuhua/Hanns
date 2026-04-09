@@ -3,9 +3,9 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::dataset::load_sift1m_complete;
-use knowhere_rs::faiss::{HnswIndex, RhtsdgIndex};
+use hanns::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::dataset::load_sift1m_complete;
+use hanns::faiss::{HnswIndex, RhtsdgIndex};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -91,7 +91,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         args.top_k,
         rhtsdg.recall_at_k
     );
-    if env_var_truthy("KNOWHERE_RS_RHTSDG_TRACE") {
+    if env_var_truthy("HANNS_RHTSDG_TRACE") {
         eprintln!("rhtsdg_trace={:?}", trace_summary);
     }
 
@@ -196,13 +196,13 @@ fn resolve_sift_dir(explicit: Option<&Path>) -> Option<PathBuf> {
     }
     candidates.push(PathBuf::from("./data/sift"));
     candidates.push(PathBuf::from("./data/sift1m"));
-    candidates.push(PathBuf::from("/data/work/knowhere-rs-src/data/sift"));
-    candidates.push(PathBuf::from("/data/work/knowhere-rs-src/data/sift1m"));
+    candidates.push(PathBuf::from("/data/work/hanns-src/data/sift"));
+    candidates.push(PathBuf::from("/data/work/hanns-src/data/sift1m"));
     candidates.push(PathBuf::from(
-        "/data/work/knowhere-rs-integ/knowhere-rs/data/sift",
+        "/data/work/hanns-integ/hanns/data/sift",
     ));
     candidates.push(PathBuf::from(
-        "/data/work/knowhere-rs-integ/knowhere-rs/data/sift1m",
+        "/data/work/hanns-integ/hanns/data/sift1m",
     ));
 
     candidates

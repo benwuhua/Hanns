@@ -1,9 +1,9 @@
 #![cfg(feature = "long-tests")]
 
 mod common;
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
-use knowhere_rs::faiss::HnswIndex;
-use knowhere_rs::MetricType;
+use hanns::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
+use hanns::faiss::HnswIndex;
+use hanns::MetricType;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -33,7 +33,7 @@ fn debug_graph_connectivity() {
             index_type: IndexType::Hnsw,
             dim,
             metric_type: MetricType::L2,
-            data_type: knowhere_rs::api::DataType::Float,
+            data_type: hanns::api::DataType::Float,
             params: IndexParams {
                 m: Some(m),
                 ef_construction: Some(400),

@@ -11,13 +11,13 @@
 //! ```
 
 use hdrhistogram::Histogram;
-use knowhere_rs::api::{IndexConfig, IndexParams, SearchRequest};
-use knowhere_rs::benchmark::{
+use hanns::api::{IndexConfig, IndexParams, SearchRequest};
+use hanns::benchmark::{
     average_recall_at_k, estimate_vector_memory, DistanceValidationReport, MemoryTracker,
 };
-use knowhere_rs::faiss::{HnswIndex, IvfFlatIndex, MemIndex as FlatIndex};
-use knowhere_rs::IndexType;
-use knowhere_rs::MetricType;
+use hanns::faiss::{HnswIndex, IvfFlatIndex, MemIndex as FlatIndex};
+use hanns::IndexType;
+use hanns::MetricType;
 use rand::Rng;
 use rayon::prelude::*;
 use std::sync::Arc;
@@ -56,7 +56,7 @@ fn generate_ground_truth(base: &[f32], queries: &[f32], dim: usize, top_k: usize
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -104,7 +104,7 @@ fn benchmark_flat_throughput(
         index_type: IndexType::Flat,
         dim: DIM,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -215,7 +215,7 @@ fn benchmark_hnsw_throughput(
         index_type: IndexType::Hnsw,
         dim: DIM,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::hnsw(16, 200, 0.5),
     };
 
@@ -327,7 +327,7 @@ fn benchmark_ivf_flat_throughput(
         index_type: IndexType::IvfFlat,
         dim: DIM,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::ivf(100, 20),
     };
 

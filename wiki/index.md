@@ -1,4 +1,4 @@
-# knowhere-rs Wiki — Index
+# hanns Wiki — Index
 
 > LLM 维护。最后更新：2026-04-09。
 

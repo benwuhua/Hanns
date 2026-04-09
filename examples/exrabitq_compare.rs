@@ -4,8 +4,8 @@ use std::env;
 use std::error::Error;
 use std::time::Instant;
 
-use knowhere_rs::api::{MetricType, SearchRequest};
-use knowhere_rs::faiss::{IvfUsqConfig, IvfUsqIndex};
+use hanns::api::{MetricType, SearchRequest};
+use hanns::faiss::{IvfUsqConfig, IvfUsqIndex};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 

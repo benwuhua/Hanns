@@ -2,10 +2,10 @@
 //!
 //! # Python 使用示例
 //! ```python
-//! import knowhere_rs
+//! import hanns
 //!
 //! # 创建索引
-//! index = knowhere_rs.Index(
+//! index = hanns.Index(
 //!     index_type="hnsw",
 //!     dimension=128,
 //!     metric_type="l2"
@@ -24,7 +24,7 @@
 //!
 //! # 序列化
 //! index.save("index.bin")
-//! index2 = knowhere_rs.Index.load("index.bin")
+//! index2 = hanns.Index.load("index.bin")
 //! ```
 #![allow(clippy::useless_conversion)]
 
@@ -572,8 +572,8 @@ impl PySearchResult {
 
 /// Python 模块 (PyO3 0.22 API)
 #[pymodule]
-#[pyo3(name = "knowhere_rs")]
-fn knowhere_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+#[pyo3(name = "hanns")]
+fn hanns(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyIndex>()?;
     m.add_class::<PySearchResult>()?;
 

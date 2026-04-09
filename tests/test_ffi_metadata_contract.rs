@@ -5,7 +5,7 @@
 //!
 //!     cargo test --test test_ffi_metadata_contract
 
-use knowhere_rs::ffi::*;
+use hanns::ffi::*;
 
 #[test]
 fn test_ffi_abi_metadata_contract() {

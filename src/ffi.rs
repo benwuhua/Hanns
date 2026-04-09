@@ -55,8 +55,8 @@ use crate::faiss::{HnswIndex, IvfFlatIndex, IvfPqIndex, MemIndex, ScaNNConfig, S
 use crate::index::Index;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-const FFI_FORCE_SERIAL_HNSW_ADD_ENV: &str = "KNOWHERE_RS_FFI_FORCE_SERIAL_HNSW_ADD";
-const FFI_ENABLE_PARALLEL_HNSW_ADD_ENV: &str = "KNOWHERE_RS_FFI_ENABLE_PARALLEL_HNSW_ADD";
+const FFI_FORCE_SERIAL_HNSW_ADD_ENV: &str = "HANNS_FFI_FORCE_SERIAL_HNSW_ADD";
+const FFI_ENABLE_PARALLEL_HNSW_ADD_ENV: &str = "HANNS_FFI_ENABLE_PARALLEL_HNSW_ADD";
 
 /// C API 错误码
 #[repr(i32)]
@@ -2712,7 +2712,7 @@ pub extern "C" fn knowhere_search(
             index.search(query_slice, top_k)
         };
 
-        if std::env::var_os("KNOWHERE_RS_TRACE_SEARCH").is_some() {
+        if std::env::var_os("HANNS_TRACE_SEARCH").is_some() {
             eprintln!(
                 "TRACE_SEARCH nq={} elapsed_us={}",
                 count,
@@ -5413,7 +5413,7 @@ mod tests {
         knowhere_free_vector_result(vector_result);
 
         let path = std::env::temp_dir().join(format!(
-            "knowhere_rs_sparse_inverted_{}.bin",
+            "hanns_sparse_inverted_{}.bin",
             std::process::id()
         ));
         let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
@@ -5611,7 +5611,7 @@ mod tests {
         );
 
         let path = std::env::temp_dir().join(format!(
-            "knowhere_rs_scann_persistence_{}.bin",
+            "hanns_scann_persistence_{}.bin",
             std::process::id()
         ));
         let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
@@ -5693,7 +5693,7 @@ mod tests {
         );
 
         let path = std::env::temp_dir().join(format!(
-            "knowhere_rs_ivfpq_persistence_{}.bin",
+            "hanns_ivfpq_persistence_{}.bin",
             std::process::id()
         ));
         let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
@@ -5728,7 +5728,7 @@ mod tests {
         assert!(!flat.is_null());
 
         let path = std::env::temp_dir().join(format!(
-            "knowhere_rs_empty_persistence_{}.bin",
+            "hanns_empty_persistence_{}.bin",
             std::process::id()
         ));
         std::fs::write(&path, []).unwrap();

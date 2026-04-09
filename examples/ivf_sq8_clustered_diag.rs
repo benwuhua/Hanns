@@ -1,5 +1,5 @@
-use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::IvfSq8Index;
+use hanns::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::faiss::IvfSq8Index;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 

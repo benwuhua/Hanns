@@ -14,11 +14,11 @@
 //! - `JSON_OUTPUT_DIR`: 自定义输出目录 (默认: benchmark_results/)
 
 mod common;
-use knowhere_rs::api::{IndexConfig, IndexParams, SearchRequest};
-use knowhere_rs::benchmark::{average_recall_at_k, estimate_vector_memory, MemoryTracker};
-use knowhere_rs::faiss::HnswIndex;
-use knowhere_rs::IndexType;
-use knowhere_rs::MetricType;
+use hanns::api::{IndexConfig, IndexParams, SearchRequest};
+use hanns::benchmark::{average_recall_at_k, estimate_vector_memory, MemoryTracker};
+use hanns::faiss::HnswIndex;
+use hanns::IndexType;
+use hanns::MetricType;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -131,7 +131,7 @@ fn benchmark_single(
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             m: Some(m),
             ef_construction: Some(ef_construction),

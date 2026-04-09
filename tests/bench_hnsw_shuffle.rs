@@ -18,10 +18,10 @@
 //! cargo test --release --test bench_hnsw_shuffle -- --nocapture
 //! ```
 
-use knowhere_rs::api::{IndexConfig, IndexParams, SearchRequest};
-use knowhere_rs::faiss::HnswIndex;
-use knowhere_rs::IndexType;
-use knowhere_rs::MetricType;
+use hanns::api::{IndexConfig, IndexParams, SearchRequest};
+use hanns::faiss::HnswIndex;
+use hanns::IndexType;
+use hanns::MetricType;
 use rand::prelude::*;
 use std::time::Instant;
 
@@ -117,7 +117,7 @@ fn benchmark_shuffle_build() {
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim: DIM,
         params,
     };

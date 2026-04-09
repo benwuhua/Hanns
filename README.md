@@ -84,7 +84,7 @@ At equal parameters on identical hardware, Hanns AISAQ delivers **+20% higher QP
 Hanns ships as a drop-in replacement for the C++ KnowWhere library inside Milvus. The following numbers are measured end-to-end inside a real Milvus standalone instance against a Cohere Wikipedia-1M collection (768-dim, IP metric), on the same x86 server (`target-cpu=native`).
 
 > **Baseline**: Milvus with native KnowWhere C++ (FAISS backend).
-> **Hanns**: Milvus with knowhere-rs. Same binary, same data, same query workload.
+> **Hanns**: Milvus with hanns. Same binary, same data, same query workload.
 
 | Metric | Native KnowWhere C++ | Hanns | vs Native |
 |--------|---------------------|-------|-----------|

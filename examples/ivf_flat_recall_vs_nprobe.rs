@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::fs;
 use std::time::Instant;
 
-use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::{IvfFlatIndex, MemIndex};
+use hanns::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::faiss::{IvfFlatIndex, MemIndex};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -63,7 +63,7 @@ fn run() -> Result<Vec<SweepRow>, Box<dyn std::error::Error>> {
         .map(|i| {
             let q = &recall_queries[i * DIM..(i + 1) * DIM];
             let gt = gt_index.search(q, &gt_req)?;
-            Ok::<Vec<i64>, knowhere_rs::api::KnowhereError>(gt.ids)
+            Ok::<Vec<i64>, hanns::api::KnowhereError>(gt.ids)
         })
         .collect::<Result<Vec<_>, _>>()?;
 

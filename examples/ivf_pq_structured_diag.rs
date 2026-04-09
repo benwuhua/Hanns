@@ -1,6 +1,6 @@
-use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::IvfPqIndex;
-use knowhere_rs::quantization::pq::{PQConfig, ProductQuantizer};
+use hanns::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::faiss::IvfPqIndex;
+use hanns::quantization::pq::{PQConfig, ProductQuantizer};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 

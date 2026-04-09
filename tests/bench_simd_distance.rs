@@ -5,7 +5,7 @@
 //! 测试 L2 和 Inner Product 的 SIMD 加速效果
 
 mod common;
-use knowhere_rs::simd::{
+use hanns::simd::{
     inner_product, ip_batch, ip_batch_4, ip_batch_4_scalar, ip_scalar, l2_batch, l2_batch_4,
     l2_batch_4_scalar, l2_distance, l2_distance_sq, l2_scalar, l2_scalar_sq,
 };

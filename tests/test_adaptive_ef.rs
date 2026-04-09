@@ -10,11 +10,11 @@
 //! ```
 
 mod common;
-use knowhere_rs::api::{IndexConfig, IndexParams, SearchRequest};
-use knowhere_rs::benchmark::average_recall_at_k;
-use knowhere_rs::faiss::HnswIndex;
-use knowhere_rs::IndexType;
-use knowhere_rs::MetricType;
+use hanns::api::{IndexConfig, IndexParams, SearchRequest};
+use hanns::benchmark::average_recall_at_k;
+use hanns::faiss::HnswIndex;
+use hanns::IndexType;
+use hanns::MetricType;
 use rand::Rng;
 use std::time::Instant;
 
@@ -54,7 +54,7 @@ fn build_hnsw_index(
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             m: Some(m),
             ef_construction: Some(ef_construction),
@@ -291,7 +291,7 @@ fn test_adaptive_ef_different_top_k() {
 
 #[test]
 fn test_adaptive_ef_config_api() {
-    use knowhere_rs::api::IndexConfig;
+    use hanns::api::IndexConfig;
 
     println!("\n╔═══════════════════════════════════════════════════════════╗");
     println!("║     OPT-030: 自适应 ef 配置 API 测试                      ║");
@@ -301,7 +301,7 @@ fn test_adaptive_ef_config_api() {
         index_type: IndexType::Hnsw,
         dim: 128,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),
@@ -318,7 +318,7 @@ fn test_adaptive_ef_config_api() {
         index_type: IndexType::Hnsw,
         dim: 128,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),

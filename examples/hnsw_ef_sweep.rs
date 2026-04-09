@@ -1,13 +1,13 @@
-use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::dataset::load_sift1m_complete;
-use knowhere_rs::faiss::HnswIndex;
+use hanns::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::dataset::load_sift1m_complete;
+use hanns::faiss::HnswIndex;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::env;
 use std::fs;
 use std::time::Instant;
 
-const DEFAULT_SIFT_PATH: &str = "/data/work/knowhere-rs-src/data/sift1m";
+const DEFAULT_SIFT_PATH: &str = "/data/work/hanns-src/data/sift1m";
 const NUM_QUERIES: usize = 1000;
 const TOP_K: usize = 10;
 const RECALL_K: usize = 10;

@@ -141,7 +141,7 @@ fn recall_gated_baseline_matches_final_core_path_classification() {
 }
 
 #[cfg(feature = "long-tests")]
-use knowhere_rs::benchmark::{
+use hanns::benchmark::{
     generate_recall_gated_baseline_report, DEFAULT_OUTPUT_PATH, RECALL_GATE,
 };
 

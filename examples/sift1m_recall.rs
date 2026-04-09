@@ -2,9 +2,9 @@ use std::fs::File;
 use std::io::{Read, Result as IoResult};
 use std::time::Instant;
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::{IvfFlatIndex, IvfPqIndex, IvfSq8Index};
-use knowhere_rs::quantization::pq::{PQConfig, ProductQuantizer};
+use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::faiss::{IvfFlatIndex, IvfPqIndex, IvfSq8Index};
+use hanns::quantization::pq::{PQConfig, ProductQuantizer};
 
 const DEFAULT_SIFT_ROOT: &str = "/data/work/datasets/sift-1m";
 const DEFAULT_TRAIN_SIZE: usize = 100_000;

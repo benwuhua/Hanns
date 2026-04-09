@@ -1,9 +1,9 @@
 #![cfg(feature = "long-tests")]
 //! 诊断 IVF-Flat 召回率问题
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
-use knowhere_rs::faiss::{IvfFlatIndex, MemIndex as FlatIndex};
-use knowhere_rs::MetricType;
+use hanns::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
+use hanns::faiss::{IvfFlatIndex, MemIndex as FlatIndex};
+use hanns::MetricType;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 const DIM: usize = 128;
@@ -35,7 +35,7 @@ fn diagnose_ivf_recall() {
                 index_type: IndexType::IvfFlat,
                 dim: DIM,
                 metric_type: MetricType::L2,
-                data_type: knowhere_rs::api::DataType::Float,
+                data_type: hanns::api::DataType::Float,
                 params: IndexParams::ivf(nlist, nprobe),
             };
 

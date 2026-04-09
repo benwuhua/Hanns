@@ -1,6 +1,6 @@
 use clap::Parser;
-use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType};
-use knowhere_rs::faiss::HnswIndex;
+use hanns::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType};
+use hanns::faiss::HnswIndex;
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;

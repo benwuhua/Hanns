@@ -1,5 +1,5 @@
-use knowhere_rs::api::{DataType, IndexConfig, IndexParams, SearchRequest};
-use knowhere_rs::{HnswIndex, IndexType, MetricType};
+use hanns::api::{DataType, IndexConfig, IndexParams, SearchRequest};
+use hanns::{HnswIndex, IndexType, MetricType};
 
 const DIM: usize = 32;
 

@@ -1,8 +1,8 @@
 //! MinHash-LSH Integration Tests
 
-use knowhere_rs::bitset::BitsetView;
-use knowhere_rs::comp::bloomfilter::BloomFilter;
-use knowhere_rs::index::minhash_lsh::{KVPair, MinHashLSHIndex, MinHashLSHResultHandler};
+use hanns::bitset::BitsetView;
+use hanns::comp::bloomfilter::BloomFilter;
+use hanns::index::minhash_lsh::{KVPair, MinHashLSHIndex, MinHashLSHResultHandler};
 
 #[test]
 fn test_minhash_lsh_build_and_save() {

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""测试 knowhere-rs Python 绑定"""
+"""测试 hanns Python 绑定"""
 
 import numpy as np
-import knowhere_rs
+import hanns
 
-print(f"knowhere_rs version: {knowhere_rs.__version__}")
+print(f"hanns version: {hanns.__version__}")
 
 # 测试 1: 创建 Flat 索引
 print("\n=== Test 1: Flat Index ===")
-index = knowhere_rs.Index(
+index = hanns.Index(
     index_type="flat",
     dimension=128,
     metric_type="l2"
@@ -17,7 +17,7 @@ print(f"Created Flat index, dimension: {index.dimension()}, type: {index.index_t
 
 # 测试 2: 创建 HNSW 索引
 print("\n=== Test 2: HNSW Index ===")
-hnsw = knowhere_rs.Index(
+hnsw = hanns.Index(
     index_type="hnsw",
     dimension=128,
     metric_type="l2",
@@ -62,14 +62,14 @@ print(f"File size: {os.path.getsize('/tmp/test_hnsw.bin')} bytes")
 print("\n=== Test 6: Error Handling ===")
 try:
     # 无效索引类型
-    invalid = knowhere_rs.Index("invalid", 128, "l2")
+    invalid = hanns.Index("invalid", 128, "l2")
     print("ERROR: Should have raised exception for invalid index type")
 except ValueError as e:
     print(f"✓ Caught invalid index type: {e}")
 
 try:
     # 无效度量类型
-    invalid = knowhere_rs.Index("flat", 128, "invalid")
+    invalid = hanns.Index("flat", 128, "invalid")
     print("ERROR: Should have raised exception for invalid metric type")
 except ValueError as e:
     print(f"✓ Caught invalid metric type: {e}")
@@ -84,7 +84,7 @@ except ValueError as e:
 
 # 测试 7: IVF-PQ 索引
 print("\n=== Test 7: IVF-PQ Index ===")
-ivf_pq = knowhere_rs.Index(
+ivf_pq = hanns.Index(
     index_type="ivf_pq",
     dimension=128,
     metric_type="l2",
@@ -114,7 +114,7 @@ assert os.path.exists("/tmp/test_ivf_pq.bin"), "IVF-PQ index file not created"
 
 # 测试 8: load() 反序列化 - Flat
 print("\n=== Test 8: Load Flat Index ===")
-flat = knowhere_rs.Index(
+flat = hanns.Index(
     index_type="flat",
     dimension=128,
     metric_type="l2"
@@ -124,7 +124,7 @@ flat.add(vectors, ids)
 flat.save("/tmp/test_flat.bin")
 
 # 加载 Flat 索引
-flat_loaded = knowhere_rs.Index.load("/tmp/test_flat.bin")
+flat_loaded = hanns.Index.load("/tmp/test_flat.bin")
 print(f"Loaded Flat index, count: {flat_loaded.count()}, type: {flat_loaded.index_type()}")
 assert flat_loaded.count() == 100, f"Expected count 100, got {flat_loaded.count()}"
 assert flat_loaded.index_type() == "flat", f"Expected type 'flat', got {flat_loaded.index_type()}"
@@ -137,7 +137,7 @@ print(f"✓ Flat index load test passed")
 
 # 测试 9: load() 反序列化 - HNSW
 print("\n=== Test 9: Load HNSW Index ===")
-hnsw_loaded = knowhere_rs.Index.load("/tmp/test_hnsw.bin")
+hnsw_loaded = hanns.Index.load("/tmp/test_hnsw.bin")
 print(f"Loaded HNSW index, count: {hnsw_loaded.count()}, type: {hnsw_loaded.index_type()}")
 assert hnsw_loaded.count() == 100, f"Expected count 100, got {hnsw_loaded.count()}"
 assert hnsw_loaded.index_type() == "hnsw", f"Expected type 'hnsw', got {hnsw_loaded.index_type()}"
@@ -150,7 +150,7 @@ print(f"✓ HNSW index load test passed")
 
 # 测试 10: load() 反序列化 - IVF-PQ
 print("\n=== Test 10: Load IVF-PQ Index ===")
-ivf_pq_loaded = knowhere_rs.Index.load("/tmp/test_ivf_pq.bin")
+ivf_pq_loaded = hanns.Index.load("/tmp/test_ivf_pq.bin")
 print(f"Loaded IVF-PQ index, count: {ivf_pq_loaded.count()}, type: {ivf_pq_loaded.index_type()}")
 assert ivf_pq_loaded.count() == 100, f"Expected count 100, got {ivf_pq_loaded.count()}"
 assert ivf_pq_loaded.index_type() == "ivf_pq", f"Expected type 'ivf_pq', got {ivf_pq_loaded.index_type()}"

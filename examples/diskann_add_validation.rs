@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use std::fs;
 use std::hash::{Hash, Hasher};
 
-use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::{AisaqConfig, PQFlashIndex};
+use hanns::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::faiss::{AisaqConfig, PQFlashIndex};
 
 const N: usize = 2000;
 const DIM: usize = 64;

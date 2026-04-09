@@ -4,7 +4,7 @@ use std::env;
 use std::fs::File;
 use std::io::Read;
 
-use knowhere_rs::quantization::pq::{PQConfig, ProductQuantizer};
+use hanns::quantization::pq::{PQConfig, ProductQuantizer};
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::Rng;
 

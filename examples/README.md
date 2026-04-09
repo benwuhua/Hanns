@@ -1,4 +1,4 @@
-# knowhere-rs-non-gpu-production Examples
+# hanns-non-gpu-production Examples
 
 Runnable examples for completed user-facing features.
 

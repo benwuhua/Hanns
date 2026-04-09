@@ -1,4 +1,4 @@
-use knowhere_rs::faiss::rhtsdg::{run_local_screen_fixture_for_test, RhtsdgIndex};
+use hanns::faiss::rhtsdg::{run_local_screen_fixture_for_test, RhtsdgIndex};
 
 fn small_grid_fixture() -> (RhtsdgIndex, Vec<f32>, Vec<Vec<u32>>) {
     let vectors = vec![

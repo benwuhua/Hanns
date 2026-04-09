@@ -1,6 +1,6 @@
 // BUG-006: Test to verify HNSW recall improvement after heuristic fix
-use knowhere_rs::api::{IndexConfig, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::HnswIndex;
+use hanns::api::{IndexConfig, IndexType, MetricType, SearchRequest};
+use hanns::faiss::HnswIndex;
 
 fn generate_random_data(n: usize, dim: usize) -> Vec<f32> {
     use rand::Rng;
@@ -28,7 +28,7 @@ fn test_hnsw_recall_after_heuristic_fix() {
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim,
         params: Default::default(),
     };

@@ -3,9 +3,9 @@
 //! 对比标准 K-Means 和 Mini-Batch K-Means 的训练性能
 
 mod common;
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
-use knowhere_rs::faiss::IvfFlatIndex;
-use knowhere_rs::MetricType;
+use hanns::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
+use hanns::faiss::IvfFlatIndex;
+use hanns::MetricType;
 use rand::Rng;
 use std::time::Instant;
 
@@ -27,7 +27,7 @@ fn test_ivf_flat_standard(n: usize, dim: usize, nlist: usize) -> TrainResult {
         index_type: IndexType::IvfFlat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::ivf(nlist, 10),
     };
 
@@ -70,7 +70,7 @@ fn test_ivf_flat_mini_batch(n: usize, dim: usize, nlist: usize, batch_size: usiz
         index_type: IndexType::IvfFlat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::ivf_mini_batch(nlist, 10, batch_size, 100, 1e-4),
     };
 

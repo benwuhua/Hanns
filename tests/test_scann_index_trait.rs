@@ -2,9 +2,9 @@
 //!
 //! Verify that ScaNN implements the full Index trait lifecycle and advanced interfaces.
 
-use knowhere_rs::dataset::Dataset;
-use knowhere_rs::faiss::scann::{ScaNNConfig, ScaNNIndex};
-use knowhere_rs::index::Index;
+use hanns::dataset::Dataset;
+use hanns::faiss::scann::{ScaNNConfig, ScaNNIndex};
+use hanns::index::Index;
 
 fn create_test_scann_config() -> ScaNNConfig {
     ScaNNConfig::new(2, 16, 10) // num_partitions, num_centroids, reorder_k
@@ -54,7 +54,7 @@ fn test_scann_index_trait_lifecycle() {
     assert_eq!(result.ids.len(), result.distances.len());
 
     // Search with bitset (all zeros = no filtering)
-    let bitset = knowhere_rs::bitset::BitsetView::new(100);
+    let bitset = hanns::bitset::BitsetView::new(100);
     let result_filtered = Index::search_with_bitset(&index, &query, 5, &bitset).unwrap();
     assert!(
         result_filtered.ids.len() >= 5,

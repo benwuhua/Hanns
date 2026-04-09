@@ -10,10 +10,10 @@
 //! cargo test --release --test bench_opt003_ivf_performance -- --nocapture
 //! ```
 
-use knowhere_rs::api::{IndexConfig, IndexParams, SearchRequest};
-use knowhere_rs::faiss::{IvfFlatIndex, IvfPqIndex};
-use knowhere_rs::IndexType;
-use knowhere_rs::MetricType;
+use hanns::api::{IndexConfig, IndexParams, SearchRequest};
+use hanns::faiss::{IvfFlatIndex, IvfPqIndex};
+use hanns::IndexType;
+use hanns::MetricType;
 use std::time::Instant;
 
 /// 生成随机测试数据

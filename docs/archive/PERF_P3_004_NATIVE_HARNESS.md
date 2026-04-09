@@ -18,7 +18,7 @@ See also `docs/PERF_P3_005_NATIVE_VS_RS.md` for the up-to-date blocker chain.
 
 ## Goal
 
-把 `clustered_l2 + HNSW` 的 native knowhere 侧 benchmark 入口收敛成一个**可重复执行、可映射到 knowhere-rs schema** 的最小 runbook；如果本轮仍不能直接跑通，则必须把 blocker 缩成具体依赖/补丁目标，而不是停留在“native harness unavailable”的宽泛表述。
+把 `clustered_l2 + HNSW` 的 native knowhere 侧 benchmark 入口收敛成一个**可重复执行、可映射到 hanns schema** 的最小 runbook；如果本轮仍不能直接跑通，则必须把 blocker 缩成具体依赖/补丁目标，而不是停留在“native harness unavailable”的宽泛表述。
 
 ## Current conclusion
 
@@ -92,7 +92,7 @@ ssh root@knowhere-x86-hk-proxy '
 - Native configure log: `/data/work/knowhere-native-logs/configure.log`
 - Native build log: `/data/work/knowhere-native-logs/build.log`
 - Native gtest listing log: `/data/work/knowhere-native-logs/gtest_list.log`（仅当 build 成功时生成）
-- knowhere-rs candidate-path artifact: `benchmark_results/cross_dataset_sampling.json`
+- hanns candidate-path artifact: `benchmark_results/cross_dataset_sampling.json`
 - Field-mapping helper: `src/bin/native_benchmark_qps_parser.rs`
 
 ## Verified result from this round
@@ -113,7 +113,7 @@ Probe 已验证以下事实：
   thread_num =  8, elapse =  0.050s, VPS = 2000.000
 ```
 
-映射到 knowhere-rs 同方法学的字段约定如下：
+映射到 hanns 同方法学的字段约定如下：
 
 - `R@=` → `recall_at_10`
 - `VPS` → `qps`

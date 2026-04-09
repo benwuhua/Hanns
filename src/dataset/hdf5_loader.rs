@@ -14,7 +14,7 @@
 //! Requires `hdf5` feature to be enabled:
 //! ```toml
 //! [dependencies]
-//! knowhere-rs = { version = "0.1", features = ["hdf5"] }
+//! hanns = { version = "0.1", features = ["hdf5"] }
 //! ```
 //!
 //! And HDF5 C library installed on your system:
@@ -114,7 +114,7 @@ impl Hdf5Dataset {
 ///
 /// # Example
 /// ```no_run
-/// use knowhere_rs::dataset::load_hdf5_dataset;
+/// use hanns::dataset::load_hdf5_dataset;
 ///
 /// let dataset = load_hdf5_dataset("glove-100.hdf5").unwrap();
 /// println!("Train: {}, Test: {}", dataset.num_train(), dataset.num_test());

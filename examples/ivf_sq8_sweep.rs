@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::fs;
 use std::time::Instant;
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::{IvfSq8Index, MemIndex};
+use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::faiss::{IvfSq8Index, MemIndex};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ivf_cfg = IndexConfig {
         index_type: IndexType::IvfSq8,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim: DIM,
         params: IndexParams::ivf(NLIST, 8),
     };
@@ -74,7 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|i| {
             let q = &recall_queries[i * DIM..(i + 1) * DIM];
             let res = gt_index.search(q, &gt_req)?;
-            Ok::<Vec<i64>, knowhere_rs::api::KnowhereError>(res.ids)
+            Ok::<Vec<i64>, hanns::api::KnowhereError>(res.ids)
         })
         .collect::<Result<Vec<_>, _>>()?;
 

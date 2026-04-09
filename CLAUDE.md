@@ -6,7 +6,7 @@ This file provides guidance to Claude Code when working with this repository.
 
 ## Project Goal
 
-**knowhere-rs is a production-grade Rust replacement for Milvus KnowHere (C++), with absolute performance advantage on core CPU paths.**
+**Hanns is the active Rust ANN repository and current production-grade replacement track for Milvus KnowHere (C++), with absolute performance advantage on core CPU paths.**
 
 Not just parity — leadership. The target is measurably faster than native C++ at equal recall, on real-world authority hardware (x86, not just Apple Silicon).
 
@@ -39,23 +39,23 @@ At the start of each session (when user says "继续" or similar):
 3. Check `TASK_QUEUE.md` for next task
 4. If working with Codex: invoke `claude-codex-collab` skill
 
-**Next task**: AISAQ-CAP-001 (exact rerank stage — post-beam raw float re-sort)
+**Next task**: PCA-MILVUS-001（把 HNSW-PCA-SQ / HNSW-PCA-USQ / DiskANN-PCA-USQ 在 FFI + Milvus + hannsdb-x86 路径上真正跑通，并拿到首轮 baseline/variant 对比结果）
 
 ---
 
 ## Environment
 
 ### Local
-- Repo: `/Users/ryan/.openclaw/workspace-builder/knowhere-rs`
-- tmux session: `knowhere-rs` — pane 0.0 = Codex, pane 0.1 = Claude
+- Repo: `/Users/ryan/Code/vectorDB/Hanns`
+- tmux session: `Hanns` — pane 0.0 = Codex, pane 0.1 = Claude
 
 ### Remote x86 (Authority Machine)
 - SSH: `knowhere-x86-hk-proxy` (configured in `~/.ssh/config`)
 - Proxy script: `/Users/ryan/Code/knowhere/scripts/remote/socks5_proxy.py`
-- Source: `/data/work/knowhere-rs-src`
-- Build cache: `/data/work/knowhere-rs-target`
+- Source: `/data/work/hanns-src`
+- Build cache: `/data/work/hanns-target`
 - Cargo: `~/.cargo/bin/cargo` (1.94.0)
-- Run benchmark: `ssh knowhere-x86-hk-proxy "cd /data/work/knowhere-rs-src && CARGO_TARGET_DIR=/data/work/knowhere-rs-target ~/.cargo/bin/cargo run --example benchmark --release 2>&1"`
+- Run benchmark: `ssh knowhere-x86-hk-proxy "cd /data/work/hanns-src && CARGO_TARGET_DIR=/data/work/hanns-target ~/.cargo/bin/cargo run --example benchmark --release 2>&1"`
 
 ### Reference Codebases
 - Native knowhere C++: `/Users/ryan/Code/knowhere/src/index/diskann/diskann.cc`
@@ -79,9 +79,9 @@ SUBAGENT TASK — skip all skill loading, brainstorming, and design reviews. Pro
 **完成后**: 写入 /tmp/codex_status.txt，格式：DONE: <结果>
 EOF
 
-tmux send-keys -t knowhere-rs:0.0 "$(cat /tmp/codex_task.txt)" Tab
-tmux send-keys -t knowhere-rs:0.0 "" Enter
-sleep 3 && tmux capture-pane -t knowhere-rs:0.0 -p | tail -5  # 确认显示 "• Working"
+tmux send-keys -t hanns:0.0 "$(cat /tmp/codex_task.txt)" Tab
+tmux send-keys -t hanns:0.0 "" Enter
+sleep 3 && tmux capture-pane -t hanns:0.0 -p | tail -5  # 确认显示 "• Working"
 ```
 
 **关键**: Tab 排队 + Enter 执行。只发 Enter = 换行不提交。
@@ -160,7 +160,7 @@ All benchmarks use **synthetic random float32 vectors, dim=128, L2 metric** (see
 
 ```bash
 # Full benchmark (takes 5-10 min)
-ssh knowhere-x86-hk-proxy "cd /data/work/knowhere-rs-src && CARGO_TARGET_DIR=/data/work/knowhere-rs-target ~/.cargo/bin/cargo run --example benchmark --release 2>&1"
+ssh knowhere-x86-hk-proxy "cd /data/work/hanns-src && CARGO_TARGET_DIR=/data/work/hanns-target ~/.cargo/bin/cargo run --example benchmark --release 2>&1"
 
 # Quick sanity check (10K only, fast)
 # Currently not separated — full benchmark.rs runs all tiers in sequence

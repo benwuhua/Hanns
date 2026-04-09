@@ -3,7 +3,7 @@
 //! This example demonstrates how to use the interrupt mechanism to cancel
 //! long-running search or build operations.
 
-use knowhere_rs::{index::minhash_lsh::MinHashLSHIndex, Interrupt};
+use hanns::{index::minhash_lsh::MinHashLSHIndex, Interrupt};
 
 fn main() {
     println!("=== KnowHere RS Interrupt Example ===\n");

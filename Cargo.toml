@@ -1,5 +1,5 @@
 [package]
-name = "knowhere-rs"
+name = "hanns"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
@@ -51,7 +51,7 @@ anyhow = "1.0"
 io-uring = { version = "0.6", optional = true }
 
 [lib]
-name = "knowhere_rs"
+name = "hanns"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]

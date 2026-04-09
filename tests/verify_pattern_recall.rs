@@ -3,10 +3,10 @@
 //!
 //! 目的：确认 Pattern 数据是否因向量重复导致虚假的高性能
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
-use knowhere_rs::benchmark::average_recall_at_k;
-use knowhere_rs::faiss::{IvfFlatIndex, MemIndex as FlatIndex};
-use knowhere_rs::MetricType;
+use hanns::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
+use hanns::benchmark::average_recall_at_k;
+use hanns::faiss::{IvfFlatIndex, MemIndex as FlatIndex};
+use hanns::MetricType;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 const DIM: usize = 128;
@@ -49,7 +49,7 @@ fn test_recall(name: &str, _nbase: usize, data: &[f32], queries: &[f32]) {
     let ivf_cfg = IndexConfig {
         index_type: IndexType::IvfFlat,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim,
         params: IndexParams::ivf(NLIST, NPROBE),
     };

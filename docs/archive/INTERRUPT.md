@@ -1,6 +1,6 @@
 # Interrupt/Cancellation Support
 
-This document describes the interrupt/cancellation mechanism implemented in knowhere-rs, allowing external cancellation of long-running search or training operations.
+This document describes the interrupt/cancellation mechanism implemented in hanns, allowing external cancellation of long-running search or training operations.
 
 ## Overview
 
@@ -16,7 +16,7 @@ The interrupt system provides:
 ### Basic Usage
 
 ```rust
-use knowhere_rs::Interrupt;
+use hanns::Interrupt;
 
 // Create a new interrupt flag
 let interrupt = Interrupt::new();
@@ -67,7 +67,7 @@ let clone = interrupt.clone();
 Use the `check_interrupt!` macro for concise interrupt checking:
 
 ```rust
-use knowhere_rs::check_interrupt;
+use hanns::check_interrupt;
 
 fn long_operation(interrupt: &Interrupt) -> Result<()> {
     for i in 0..1000 {
@@ -115,7 +115,7 @@ void knowhere_interrupt_free(CInterrupt interrupt);
 ### C Example
 
 ```c
-#include <knowhere_rs.h>
+#include <hanns.h>
 
 int main() {
     // Create interrupt
@@ -140,7 +140,7 @@ int main() {
 ### MinHash-LSH Example
 
 ```rust
-use knowhere_rs::{Interrupt, index::minhash_lsh::MinHashLSHIndex};
+use hanns::{Interrupt, index::minhash_lsh::MinHashLSHIndex};
 
 let mut index = MinHashLSHIndex::new();
 let data: Vec<u8> = vec![/* ... */];
@@ -183,7 +183,7 @@ The `Interrupt` struct is designed for safe concurrent use:
 - **Send + Sync** - Safe to share across threads
 
 ```rust
-use knowhere_rs::Interrupt;
+use hanns::Interrupt;
 use std::thread;
 
 let interrupt = Interrupt::new();
@@ -211,7 +211,7 @@ handle.join().unwrap();
 Interrupted operations return `KnowhereError::Interrupted`:
 
 ```rust
-use knowhere_rs::error::KnowhereError;
+use hanns::error::KnowhereError;
 
 match operation() {
     Ok(result) => { /* Success */ }

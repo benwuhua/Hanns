@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use clap::{Parser, Subcommand};
-use knowhere_rs::api::{IndexConfig, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::MemIndex;
+use hanns::api::{IndexConfig, IndexType, MetricType, SearchRequest};
+use hanns::faiss::MemIndex;
 use once_cell::sync::Lazy;
 
 #[derive(Parser)]

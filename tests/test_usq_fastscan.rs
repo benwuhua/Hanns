@@ -1,4 +1,4 @@
-use knowhere_rs::quantization::usq::*;
+use hanns::quantization::usq::*;
 
 fn make_data(n: usize, dim: usize) -> (Vec<f32>, Vec<i64>) {
     let data: Vec<f32> = (0..n * dim).map(|i| (i as f32 * 0.13).sin()).collect();

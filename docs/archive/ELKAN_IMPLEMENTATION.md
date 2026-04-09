@@ -72,8 +72,8 @@ pub fn ivf_elkan(nlist: usize, nprobe: usize, max_iter: usize, tol: f32, seed: u
 ## 使用示例
 
 ```rust
-use knowhere_rs::api::{IndexConfig, IndexType, MetricType, IndexParams};
-use knowhere_rs::faiss::IvfFlatIndex;
+use hanns::api::{IndexConfig, IndexType, MetricType, IndexParams};
+use hanns::faiss::IvfFlatIndex;
 
 // 创建使用 Elkan k-means 的 IVF-Flat 索引
 let config = IndexConfig {

@@ -2,7 +2,7 @@
 
 **提交来源**: HannsDB 集成测试 (2026-03-23)
 **场景**: 50K 向量 / 1536 维 / cosine / ef_search=32 / serial 搜索
-**当前现象**: HannsDB (via knowhere-rs) p99=110ms vs zvec (C++ HNSW) p99=0.6ms，同算法差距 ~185x
+**当前现象**: HannsDB (via hanns) p99=110ms vs zvec (C++ HNSW) p99=0.6ms，同算法差距 ~185x
 
 ---
 
@@ -152,13 +152,13 @@ VectorDBBench Python
   └─ hannsdb_py::PyCollection::query()
        └─ hannsdb_core::db::search_with_ef()
             └─ hannsdb_index::KnowhereHnswIndex::search()
-                 └─ knowhere_rs::HnswIndex::search()          ← 入口分配 (ALLOC-001)
+                 └─ hanns::HnswIndex::search()          ← 入口分配 (ALLOC-001)
                       └─ search_single()                       ← scratch 分配 (SCRATCH-001)
                            └─ distance_to_idx_cosine_dispatch() ← q_norm 重算 (QNORM-001)
 ```
 
 当前 HannsDB p99=110ms 的估算构成（无 profiler，代码推断）：
-- HNSW 图搜索本体（knowhere-rs cosine）：~70–90ms
+- HNSW 图搜索本体（hanns cosine）：~70–90ms
 - Python binding / PyDoc 构造：~8–15ms
 - wrapper/mapping/lock：~8–20ms
 

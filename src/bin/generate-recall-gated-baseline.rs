@@ -1,5 +1,5 @@
 use clap::Parser;
-use knowhere_rs::benchmark::{generate_recall_gated_baseline_report, DEFAULT_OUTPUT_PATH};
+use hanns::benchmark::{generate_recall_gated_baseline_report, DEFAULT_OUTPUT_PATH};
 
 #[derive(Parser, Debug)]
 #[command(name = "generate-recall-gated-baseline")]

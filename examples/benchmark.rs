@@ -4,9 +4,9 @@ use std::fs::File;
 use std::io::Read;
 use std::time::Instant;
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
-use knowhere_rs::faiss::{HnswIndex, IvfPqIndex, IvfSq8Index, MemIndex};
+use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
+use hanns::faiss::{HnswIndex, IvfPqIndex, IvfSq8Index, MemIndex};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -67,7 +67,7 @@ fn benchmark_hnsw_index() {
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim: DIM,
         params,
     };
@@ -126,7 +126,7 @@ fn benchmark_ivfpq_index() {
     let config = IndexConfig {
         index_type: IndexType::IvfPq,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim: DIM,
         params,
     };
@@ -191,7 +191,7 @@ fn benchmark_ivfpq_100k() {
     let config = IndexConfig {
         index_type: IndexType::IvfPq,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim: DIM,
         params,
     };
@@ -267,7 +267,7 @@ fn benchmark_ivf_sq8() {
     let cfg = IndexConfig {
         index_type: IndexType::IvfSq8,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim: DIM,
         params,
     };
@@ -393,7 +393,7 @@ fn benchmark_ivf_sq8_1m() {
     let cfg = IndexConfig {
         index_type: IndexType::IvfSq8,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim: DIM,
         params,
     };
@@ -495,7 +495,7 @@ fn benchmark_ivf_sq8_1m() {
         let cfg2 = IndexConfig {
             index_type: IndexType::IvfSq8,
             metric_type: MetricType::L2,
-            data_type: knowhere_rs::api::DataType::Float,
+            data_type: hanns::api::DataType::Float,
             dim: DIM,
             params: params2,
         };
@@ -549,7 +549,7 @@ fn benchmark_diskann_index() {
     let config = IndexConfig {
         index_type: IndexType::DiskAnn,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim: DIM,
         params: IndexParams::default(),
     };
@@ -655,7 +655,7 @@ fn benchmark_diskann() {
     let config = IndexConfig {
         index_type: IndexType::DiskAnn,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim: DIM,
         params: IndexParams {
             max_degree: Some(48),
@@ -868,7 +868,7 @@ fn benchmark_diskann_100k() {
     let config = IndexConfig {
         index_type: IndexType::DiskAnn,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim: DIM,
         params: IndexParams {
             max_degree: Some(48),
@@ -921,7 +921,7 @@ fn benchmark_diskann_1m() {
     let config = IndexConfig {
         index_type: IndexType::DiskAnn,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim: DIM,
         params: IndexParams {
             max_degree: Some(48),
@@ -1167,7 +1167,7 @@ fn benchmark_hnsw_1m() {
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim: DIM,
         params: IndexParams {
             m: Some(16),

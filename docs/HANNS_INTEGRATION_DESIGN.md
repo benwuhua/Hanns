@@ -1,18 +1,18 @@
 # HANNS Feature Integration Design
 
 > 版本: 2026-03-19
-> 作者: knowhere-rs builder session
+> 作者: hanns builder session
 > 参考: HANNS (knowhere-2.3.1 增强版) 设计文档
 
 ---
 
 ## 概述
 
-HANNS 在 knowhere C++ 上实现了六项核心增强。本文档描述如何将这些特性以 Rust 原生方式集成进 knowhere-rs，并在每个模块标注与原始设计的关键差异和修正。
+HANNS 在 knowhere C++ 上实现了六项核心增强。本文档描述如何将这些特性以 Rust 原生方式集成进 hanns，并在每个模块标注与原始设计的关键差异和修正。
 
 ### 特性全景
 
-| 特性 | HANNS 实现 | knowhere-rs 路径 | 优先级 |
+| 特性 | HANNS 实现 | hanns 路径 | 优先级 |
 |------|-----------|-----------------|--------|
 | Thread-local Visited Pool | `VisitedPool` + generation counter | `src/search/visited_pool.rs` | P0 |
 | IO Cutting | `IoCuttingState` 比例早停 | `src/search/io_cutting.rs` | P0 |
@@ -398,7 +398,7 @@ search(query, k):
 
 ## 5. HVQ Quantizer
 
-> **前置条件**：需要 HANNS 实际 SIFT-1M recall 数字（m=8/16/32 + 各 nbits）才能判断 HVQ 是否值得在 knowhere-rs 实现。目前为 P2 设计备忘，不开发。
+> **前置条件**：需要 HANNS 实际 SIFT-1M recall 数字（m=8/16/32 + 各 nbits）才能判断 HVQ 是否值得在 hanns 实现。目前为 P2 设计备忘，不开发。
 
 ### 5.1 算法概述
 

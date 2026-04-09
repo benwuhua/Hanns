@@ -165,7 +165,7 @@ fn cross_dataset_sampling_matches_final_core_path_classification() {
 }
 
 #[cfg(feature = "long-tests")]
-use knowhere_rs::benchmark::{generate_cross_dataset_artifact, CROSS_DATASET_OUTPUT_PATH};
+use hanns::benchmark::{generate_cross_dataset_artifact, CROSS_DATASET_OUTPUT_PATH};
 
 #[cfg(feature = "long-tests")]
 #[test]

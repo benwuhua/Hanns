@@ -3,7 +3,7 @@
 //! Editing these assertions no longer triggers recompilation of the PQ module.
 //! Run: cargo test --test test_pq
 
-use knowhere_rs::quantization::{PQConfig, ProductQuantizer};
+use hanns::quantization::{PQConfig, ProductQuantizer};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 

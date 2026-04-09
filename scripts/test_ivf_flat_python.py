@@ -3,16 +3,16 @@
 import numpy as np
 
 try:
-    import knowhere_rs
-    print("✅ knowhere_rs imported successfully")
+    import hanns
+    print("✅ hanns imported successfully")
 except ImportError:
-    print("❌ knowhere_rs not installed, run: maturin develop --release")
+    print("❌ hanns not installed, run: maturin develop --release")
     exit(1)
 
 # Test 1: Create IVF-Flat index
 print("\n📝 Test 1: Create IVF-Flat index")
 try:
-    index = knowhere_rs.Index(
+    index = hanns.Index(
         index_type="ivf_flat",
         dimension=128,
         metric_type="l2",
@@ -63,7 +63,7 @@ try:
     index.save("test_ivf_flat.bin")
     print("✅ Index saved to test_ivf_flat.bin")
     
-    index2 = knowhere_rs.Index.load("test_ivf_flat.bin")
+    index2 = hanns.Index.load("test_ivf_flat.bin")
     print(f"✅ Index loaded: {index2.index_type()}, count={index2.count()}")
 except Exception as e:
     print(f"❌ Save/load failed: {e}")

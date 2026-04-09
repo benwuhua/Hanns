@@ -1,9 +1,9 @@
 #[cfg(feature = "long-tests")]
-use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, SearchRequest};
+use hanns::api::{DataType, IndexConfig, IndexParams, IndexType, SearchRequest};
 #[cfg(feature = "long-tests")]
-use knowhere_rs::faiss::{hnsw::HnswParallelBuildProfileReport, HnswIndex};
+use hanns::faiss::{hnsw::HnswParallelBuildProfileReport, HnswIndex};
 #[cfg(feature = "long-tests")]
-use knowhere_rs::MetricType;
+use hanns::MetricType;
 #[cfg(feature = "long-tests")]
 use serde_json::json;
 #[cfg(feature = "long-tests")]

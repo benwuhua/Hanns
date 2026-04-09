@@ -1,5 +1,5 @@
-use knowhere_rs::api::SearchRequest;
-use knowhere_rs::faiss::ivf_opq::{IvfOpqConfig, IvfOpqIndex};
+use hanns::api::SearchRequest;
+use hanns::faiss::ivf_opq::{IvfOpqConfig, IvfOpqIndex};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 

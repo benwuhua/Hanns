@@ -1,6 +1,6 @@
 # Milvus 集成架构
 
-**一句话定义**：knowhere-rs 通过 C++ shim 集成进 Milvus，替换 knowhere C++ 共享库，暴露相同 `IndexNode` 接口。
+**一句话定义**：hanns 通过 C++ shim 集成进 Milvus，替换 knowhere C++ 共享库，暴露相同 `IndexNode` 接口。
 
 ---
 

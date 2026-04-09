@@ -10,10 +10,10 @@
 //! ```
 
 mod common;
-use knowhere_rs::api::{IndexConfig, IndexParams, SearchRequest};
-use knowhere_rs::faiss::IvfFlatIndex;
-use knowhere_rs::IndexType;
-use knowhere_rs::MetricType;
+use hanns::api::{IndexConfig, IndexParams, SearchRequest};
+use hanns::faiss::IvfFlatIndex;
+use hanns::IndexType;
+use hanns::MetricType;
 use rand::Rng;
 use std::time::Instant;
 
@@ -152,7 +152,7 @@ fn benchmark_ivf_flat_config(
         index_type: IndexType::IvfFlat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params,
     };
 

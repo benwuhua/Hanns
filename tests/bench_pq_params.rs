@@ -3,9 +3,9 @@
 //!
 //! 测试不同 pq_m/pq_k 组合对 PQ 量化器性能的影响，识别最佳配置。
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::benchmark::recall_at_k;
-use knowhere_rs::faiss::{IvfPqIndex, MemIndex as FlatIndex};
+use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::benchmark::recall_at_k;
+use hanns::faiss::{IvfPqIndex, MemIndex as FlatIndex};
 use rand::Rng;
 use std::time::Instant;
 
@@ -29,7 +29,7 @@ fn compute_ground_truth(
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
     let mut flat_index = FlatIndex::new(&config).expect("Flat index creation failed");
@@ -87,7 +87,7 @@ fn run_pq_benchmark(
         index_type: IndexType::IvfPq,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),

@@ -1,5 +1,5 @@
 use clap::Parser;
-use knowhere_rs::benchmark::{generate_cross_dataset_artifact, CROSS_DATASET_OUTPUT_PATH};
+use hanns::benchmark::{generate_cross_dataset_artifact, CROSS_DATASET_OUTPUT_PATH};
 
 #[derive(Parser, Debug)]
 #[command(name = "generate-cross-dataset-sampling")]

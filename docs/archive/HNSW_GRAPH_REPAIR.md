@@ -52,8 +52,8 @@ std::vector<tableint> findUnreachableVectors() {
 ## 使用示例
 
 ```rust
-use knowhere_rs::api::{IndexConfig, IndexType, MetricType};
-use knowhere_rs::faiss::hnsw::HnswIndex;
+use hanns::api::{IndexConfig, IndexType, MetricType};
+use hanns::faiss::hnsw::HnswIndex;
 
 // 创建索引配置
 let config = IndexConfig {
@@ -146,9 +146,9 @@ test result: ok. 15 passed; 0 failed
 3. 当前实现使用顺序修复而非并行（可以后续优化）
 
 ## 文件位置
-- 实现：`/Users/ryan/.openclaw/workspace-builder/knowhere-rs/src/faiss/hnsw.rs`
+- 实现：`/Users/ryan/.openclaw/workspace-builder/hanns/src/faiss/hnsw.rs`
 - 测试：同文件中的 `#[cfg(test)] mod tests`
-- 文档：`/Users/ryan/.openclaw/workspace-builder/knowhere-rs/HNSW_GRAPH_REPAIR.md`
+- 文档：`/Users/ryan/.openclaw/workspace-builder/hanns/HNSW_GRAPH_REPAIR.md`
 
 ## 后续优化
 1. 使用 rayon 并行修复不可达向量

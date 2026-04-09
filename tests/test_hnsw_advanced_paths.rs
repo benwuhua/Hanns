@@ -10,11 +10,11 @@
 //! cargo test --test test_hnsw_advanced_paths -- --nocapture
 //! ```
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
-use knowhere_rs::dataset::Dataset;
-use knowhere_rs::faiss::HnswIndex;
-use knowhere_rs::index::Index;
-use knowhere_rs::MetricType;
+use hanns::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
+use hanns::dataset::Dataset;
+use hanns::faiss::HnswIndex;
+use hanns::index::Index;
+use hanns::MetricType;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tempfile::NamedTempFile;
@@ -36,7 +36,7 @@ fn test_hnsw_get_vector_by_ids() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -103,7 +103,7 @@ fn test_hnsw_get_vector_by_ids_errors() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -145,7 +145,7 @@ fn test_hnsw_ann_iterator() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -197,7 +197,7 @@ fn test_hnsw_serialize_deserialize() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -268,7 +268,7 @@ fn test_hnsw_range_search() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -307,7 +307,7 @@ fn test_hnsw_build_quality_signals_survive_save_load() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),

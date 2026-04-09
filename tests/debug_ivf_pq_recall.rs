@@ -5,9 +5,9 @@
 //!
 //! 运行: cargo test --release --test debug_ivf_pq_recall -- --nocapture
 
-use knowhere_rs::api::{IndexConfig, IndexParams, SearchRequest};
-use knowhere_rs::faiss::IvfPqIndex;
-use knowhere_rs::{IndexType, MetricType};
+use hanns::api::{IndexConfig, IndexParams, SearchRequest};
+use hanns::faiss::IvfPqIndex;
+use hanns::{IndexType, MetricType};
 
 fn generate_random_vectors(n: usize, dim: usize) -> Vec<f32> {
     use rand::Rng;

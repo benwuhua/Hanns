@@ -1,6 +1,6 @@
-use knowhere_rs::api::{DataType, IndexConfig, IndexParams};
-use knowhere_rs::faiss::HnswIndex;
-use knowhere_rs::{IndexType, MetricType};
+use hanns::api::{DataType, IndexConfig, IndexParams};
+use hanns::faiss::HnswIndex;
+use hanns::{IndexType, MetricType};
 
 fn generate_vectors(num_vectors: usize, dim: usize) -> Vec<f32> {
     let mut vectors = Vec::with_capacity(num_vectors * dim);

@@ -9,14 +9,14 @@
 //! cargo test --test bench_distance_validation -- --nocapture
 //! ```
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
-use knowhere_rs::benchmark::{
+use hanns::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
+use hanns::benchmark::{
     average_recall_at_k, distance_statistics, validate_distance_monotonicity,
     validate_l2_distances, DistanceValidationReport,
 };
-use knowhere_rs::dataset::{load_sift1m_complete, SiftDataset};
-use knowhere_rs::faiss::{HnswIndex, IvfFlatIndex, MemIndex as FlatIndex};
-use knowhere_rs::MetricType;
+use hanns::dataset::{load_sift1m_complete, SiftDataset};
+use hanns::faiss::{HnswIndex, IvfFlatIndex, MemIndex as FlatIndex};
+use hanns::MetricType;
 use std::env;
 use std::time::Instant;
 
@@ -57,7 +57,7 @@ fn benchmark_flat_validation(dataset: &SiftDataset, num_queries: usize, top_k: u
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -145,7 +145,7 @@ fn benchmark_hnsw_validation(dataset: &SiftDataset, num_queries: usize, top_k: u
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::hnsw(16, 64, 0.5),
     };
 
@@ -215,7 +215,7 @@ fn benchmark_ivf_flat_validation(dataset: &SiftDataset, num_queries: usize, top_
         index_type: IndexType::IvfFlat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::ivf(256, 20),
     };
 
@@ -327,7 +327,7 @@ fn test_distance_validation_unit() {
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
 

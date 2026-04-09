@@ -90,7 +90,7 @@ Benchmark_float_qps.
 - `benchmark/hdf5/benchmark_float_qps.cpp` 中 `set_ann_test_name("sift-128-euclidean")`
 - `benchmark/prepare.sh` 也默认准备 `sift-128-euclidean.hdf5`
 
-因此当前 native benchmark methodology 仍是 HDF5/ANN-benchmark 风格，不是 knowhere-rs 侧 Phase-5 计划里的 `clustered_l2` synthetic sampling。
+因此当前 native benchmark methodology 仍是 HDF5/ANN-benchmark 风格，不是 hanns 侧 Phase-5 计划里的 `clustered_l2` synthetic sampling。
 
 ### 3. 真实执行失败已缩成具体 blocker
 
@@ -105,9 +105,9 @@ Benchmark_float_qps.
 - harness 已可运行
 - **但缺少可用于本任务口径的 fixture**
 
-## 与 knowhere-rs 基线的当前关系
+## 与 hanns 基线的当前关系
 
-knowhere-rs 侧已有 `clustered_l2 / HNSW` 可用 artifact：
+hanns 侧已有 `clustered_l2 / HNSW` 可用 artifact：
 
 - `benchmark_results/cross_dataset_sampling.json`
 - 行：`dataset=clustered_l2`、`index=HNSW`
@@ -210,7 +210,7 @@ target_link_libraries(knowhere PRIVATE ${KNOWHERE_LINKER_LIBS})
 
 1. **Preferred：** 在 native side 为 `benchmark_float_qps` 增加最小 `clustered_l2` synthetic dataset adapter，直接复用现有 header/thread log schema。
 2. **更前置的工程前提：** 先把 `index_node.h` 的 public facade 与内部并行/runtime 依赖拆开；否则 `benchmark_float_qps` 这类 consumer 仍会被迫继承 `milvus-common/folly` 依赖链，PUBLIC/PRIVATE split 只会不断暴露下一个 leak 点。
-3. **Fallback：** 若短期只能走 HDF5，则至少先补齐 native side 的可下载 fixture 与参数固定口径，然后把 knowhere-rs 也切到同一数据集/metric/profile 做首条对照；但这会偏离当前 Phase-5 已选中的 `clustered_l2` 路线。
+3. **Fallback：** 若短期只能走 HDF5，则至少先补齐 native side 的可下载 fixture 与参数固定口径，然后把 hanns 也切到同一数据集/metric/profile 做首条对照；但这会偏离当前 Phase-5 已选中的 `clustered_l2` 路线。
 
 在完成上述任一项之前，本任务应保持 `exec_blocked`，而不是虚报已形成 leadership verdict。
 

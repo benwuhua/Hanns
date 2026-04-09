@@ -42,7 +42,7 @@ fn milvus_cohere1m_compare_artifact_locks_fairness_contract() {
     assert_eq!(rows.len(), 2, "comparison artifact must contain exactly two rows");
 
     let native = find_row(rows, "milvus-native-knowhere");
-    let rs = find_row(rows, "milvus-knowhere-rs");
+    let rs = find_row(rows, "milvus-hanns");
 
     assert!(native["qps"].as_f64().unwrap() > 0.0);
     assert!(native["recall"].as_f64().unwrap() > 0.0);
@@ -59,7 +59,7 @@ fn milvus_cohere1m_compare_artifact_locks_fairness_contract() {
     assert!(
         rs["source_result"]
             .as_str()
-            .is_some_and(|path| path.contains("knowhere-rs"))
+            .is_some_and(|path| path.contains("hanns"))
     );
 }
 
@@ -74,23 +74,23 @@ fn milvus_cohere1m_compare_artifact_locks_current_regression_shape() {
         .expect("ratios must be encoded as an object");
 
     let native = find_row(rows, "milvus-native-knowhere");
-    let rs = find_row(rows, "milvus-knowhere-rs");
+    let rs = find_row(rows, "milvus-hanns");
 
     assert!(
         rs["insert_duration"].as_f64().unwrap() < native["insert_duration"].as_f64().unwrap(),
-        "knowhere-rs lane should currently insert faster than native in this benchmark"
+        "hanns lane should currently insert faster than native in this benchmark"
     );
     assert!(
         rs["load_duration"].as_f64().unwrap() > native["load_duration"].as_f64().unwrap(),
-        "knowhere-rs lane should currently load slower than native in this benchmark"
+        "hanns lane should currently load slower than native in this benchmark"
     );
     assert!(
         rs["qps"].as_f64().unwrap() < native["qps"].as_f64().unwrap(),
-        "knowhere-rs lane should currently deliver lower QPS than native in this benchmark"
+        "hanns lane should currently deliver lower QPS than native in this benchmark"
     );
     assert!(
         rs["recall"].as_f64().unwrap() > native["recall"].as_f64().unwrap(),
-        "knowhere-rs lane should currently deliver higher recall than native in this benchmark"
+        "hanns lane should currently deliver higher recall than native in this benchmark"
     );
 
     assert!(ratios["rs_over_native_qps"].as_f64().unwrap() < 1.0);

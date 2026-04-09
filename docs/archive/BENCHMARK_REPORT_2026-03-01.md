@@ -34,7 +34,7 @@
 ## 对比 C++ knowhere
 
 ### C++ Faiss 实现
-| 特性 | C++ Faiss | Rust knowhere-rs |
+| 特性 | C++ Faiss | Rust hanns |
 |------|-----------|------------------|
 | 并行化 | OpenMP | rayon |
 | GPU 支持 | ✅ 是 | ❌ 待实现 |

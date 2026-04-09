@@ -5,7 +5,7 @@
 //!
 //! # Example
 //! ```rust
-//! use knowhere_rs::interrupt::Interrupt;
+//! use hanns::interrupt::Interrupt;
 //!
 //! fn run_operation(interrupt: &Interrupt) -> Result<(), &'static str> {
 //!     // In a long-running operation

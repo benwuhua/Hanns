@@ -3,8 +3,8 @@ use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
 
-use knowhere_rs::api::MetricType;
-use knowhere_rs::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
+use hanns::api::MetricType;
+use hanns::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
 
 const BASE_PATH: &str = "/data/work/datasets/sift-1m/base.fbin";
 const QUERY_PATH: &str = "/data/work/datasets/sift-1m/query.fbin";

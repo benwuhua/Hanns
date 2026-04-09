@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::fs;
 use std::time::Instant;
 
-use knowhere_rs::api::{IndexConfig, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::{MemIndex, ScaNNConfig, ScaNNIndex};
+use hanns::api::{IndexConfig, IndexType, MetricType, SearchRequest};
+use hanns::faiss::{MemIndex, ScaNNConfig, ScaNNIndex};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -62,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|i| {
             let q = &recall_queries[i * DIM..(i + 1) * DIM];
             let gt = gt_index.search(q, &gt_req)?;
-            Ok::<Vec<i64>, knowhere_rs::api::KnowhereError>(gt.ids)
+            Ok::<Vec<i64>, hanns::api::KnowhereError>(gt.ids)
         })
         .collect::<Result<Vec<_>, _>>()?;
 

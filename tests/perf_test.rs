@@ -1,14 +1,14 @@
 #![cfg(feature = "long-tests")]
-//! knowhere-rs 性能测试
+//! hanns 性能测试
 //! 对比不同索引类型的性能
 //!
 //! 包含距离验证功能，确保搜索结果质量
 
 mod common;
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
-use knowhere_rs::benchmark::average_recall_at_k;
-use knowhere_rs::faiss::{HnswIndex, IvfFlatIndex, MemIndex as FlatIndex};
-use knowhere_rs::MetricType;
+use hanns::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
+use hanns::benchmark::average_recall_at_k;
+use hanns::faiss::{HnswIndex, IvfFlatIndex, MemIndex as FlatIndex};
+use hanns::MetricType;
 use rand::Rng;
 use std::time::Instant;
 
@@ -41,7 +41,7 @@ fn test_flat_index(n: usize, dim: usize) -> PerfResult {
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -112,7 +112,7 @@ fn test_hnsw_index(n: usize, dim: usize) -> PerfResult {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             m: Some(32),                // OPT-029: M=16→32 for better graph connectivity
             ef_construction: Some(400), // OPT-029: Higher ef_construction for better graph quality
@@ -190,7 +190,7 @@ fn test_ivf_flat_index(n: usize, dim: usize) -> PerfResult {
         index_type: IndexType::IvfFlat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist as usize),
             nprobe: Some(10),
@@ -269,7 +269,7 @@ fn test_ivf_flat_index_fast(n: usize, dim: usize) -> PerfResult {
         index_type: IndexType::IvfFlat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::ivf_flat_fast(nlist as usize, 10),
     };
 
@@ -544,7 +544,7 @@ fn test_hnsw_adaptive_ef(
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             m: Some(16),
             ef_construction: Some(200),

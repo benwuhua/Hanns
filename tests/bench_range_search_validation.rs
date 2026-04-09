@@ -9,13 +9,13 @@
 //! cargo test --test bench_range_search_validation -- --nocapture
 //! ```
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType};
-use knowhere_rs::benchmark::{
+use hanns::api::{IndexConfig, IndexParams, IndexType};
+use hanns::benchmark::{
     check_distance_in_scope_range, distance_statistics, validate_l2_distances,
 };
-use knowhere_rs::dataset::{load_sift1m_complete, SiftDataset};
-use knowhere_rs::faiss::MemIndex as FlatIndex;
-use knowhere_rs::MetricType;
+use hanns::dataset::{load_sift1m_complete, SiftDataset};
+use hanns::faiss::MemIndex as FlatIndex;
+use hanns::MetricType;
 use std::env;
 use std::time::Instant;
 
@@ -97,7 +97,7 @@ fn benchmark_flat_range_validation(
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -224,7 +224,7 @@ fn test_range_search_validation_unit() {
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -327,7 +327,7 @@ fn test_range_search_radius_monotonicity() {
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
 

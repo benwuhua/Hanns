@@ -1,9 +1,9 @@
 #![cfg(feature = "long-tests")]
 mod common;
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
-use knowhere_rs::benchmark::average_recall_at_k;
-use knowhere_rs::faiss::{HnswIndex, MemIndex as FlatIndex};
-use knowhere_rs::MetricType;
+use hanns::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
+use hanns::benchmark::average_recall_at_k;
+use hanns::faiss::{HnswIndex, MemIndex as FlatIndex};
+use hanns::MetricType;
 use rand::Rng;
 
 
@@ -27,7 +27,7 @@ fn debug_hnsw_perf_test() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             m: Some(32),
             ef_construction: Some(400),
@@ -68,7 +68,7 @@ fn debug_hnsw_perf_test() {
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
 

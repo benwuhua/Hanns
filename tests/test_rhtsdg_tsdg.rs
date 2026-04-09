@@ -1,7 +1,7 @@
-use knowhere_rs::faiss::rhtsdg::tsdg::{
+use hanns::faiss::rhtsdg::tsdg::{
     stage1_prune_neighbors, stage2_filter_neighbors, DistanceBackend, DistanceMatrix,
 };
-use knowhere_rs::MetricType;
+use hanns::MetricType;
 
 fn line_with_off_axis_escape_fixture() -> DistanceMatrix<'static> {
     let points = vec![
@@ -59,7 +59,7 @@ fn l2_distance_matrix_prefers_simd_ptr_kernel_while_non_l2_uses_fallback() {
     let ip_matrix = DistanceMatrix::from_points_with_metric(
         2,
         Box::leak(ip_points.into_boxed_slice()),
-        knowhere_rs::MetricType::Ip,
+        hanns::MetricType::Ip,
     );
 
     assert_eq!(l2_matrix.distance_backend(), DistanceBackend::L2FastPath);

@@ -87,8 +87,8 @@ pub struct IndexParams {
 ### 通过配置启用并行构建
 
 ```rust
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType};
-use knowhere_rs::faiss::hnsw::HnswIndex;
+use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType};
+use hanns::faiss::hnsw::HnswIndex;
 
 let config = IndexConfig {
     index_type: IndexType::Hnsw,

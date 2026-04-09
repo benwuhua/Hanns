@@ -87,7 +87,7 @@ Same as fvecs, but with i32 integers instead of f32 floats.
 ## API Usage
 
 ```rust
-use knowhere_rs::dataset::{load_sift1m_complete, SiftDataset};
+use hanns::dataset::{load_sift1m_complete, SiftDataset};
 
 // Load complete dataset
 let dataset: SiftDataset = load_sift1m_complete("./data/sift")?;
@@ -98,6 +98,6 @@ let query_vectors = dataset.query.vectors(); // 10K x 128D
 let ground_truth = &dataset.ground_truth;    // 10K x 100
 
 // Calculate recall
-use knowhere_rs::benchmark::average_recall_at_k;
+use hanns::benchmark::average_recall_at_k;
 let recall = average_recall_at_k(&results, &ground_truth, 10);
 ```

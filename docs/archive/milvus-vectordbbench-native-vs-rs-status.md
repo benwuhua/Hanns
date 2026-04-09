@@ -1,4 +1,4 @@
-# Milvus + knowhere-rs vs Native VectorDBBench Status
+# Milvus + hanns vs Native VectorDBBench Status
 
 As of 2026-04-03.
 
@@ -6,7 +6,7 @@ This document summarizes the current single-host authority environment,
 benchmark method, measured progress, and remaining problems for comparing:
 
 - Milvus + native knowhere
-- Milvus + knowhere-rs
+- Milvus + hanns
 
 The current authority host is `hannsdb-x86`.
 
@@ -14,7 +14,7 @@ The current authority host is `hannsdb-x86`.
 
 This is the Milvus-integrated benchmark track, not the standalone Rust HNSW
 benchmark track. The purpose is to compare native Milvus/knowhere against
-Milvus with `knowhere-rs` under the same VectorDBBench workload.
+Milvus with `hanns` under the same VectorDBBench workload.
 
 The main active debugging lane has been:
 
@@ -32,8 +32,8 @@ All acceptance evidence is taken from the existing remote x86 host only.
 
 - Host: `hannsdb-x86`
 - Milvus integration repo: `/data/work/milvus-rs-integ/milvus-src`
-- knowhere-rs integration checkout: `/data/work/milvus-rs-integ/knowhere-rs`
-- Rust target dir: `/data/work/milvus-rs-integ/knowhere-rs-target`
+- hanns integration checkout: `/data/work/milvus-rs-integ/hanns`
+- Rust target dir: `/data/work/milvus-rs-integ/hanns-target`
 - VectorDBBench repo: `/data/work/VectorDBBench`
 - Milvus runtime root: `/data/work/milvus-rs-integ/milvus-var`
 - Main Milvus log:
@@ -49,7 +49,7 @@ Do not hand-roll standalone startup. Use:
 
 ```bash
 cd /data/work/milvus-rs-integ/milvus-src
-scripts/knowhere-rs-shim/start_standalone_remote.sh
+scripts/hanns-shim/start_standalone_remote.sh
 ```
 
 That wrapper is the canonical entrypoint because it already carries:
@@ -60,12 +60,12 @@ That wrapper is the canonical entrypoint because it already carries:
 - runtime root under `/data/work/milvus-rs-integ/milvus-var`
 - health wait on `http://127.0.0.1:9091/healthz`
 
-### Canonical knowhere-rs Rebuild
+### Canonical hanns Rebuild
 
 ```bash
-cd /data/work/milvus-rs-integ/knowhere-rs
+cd /data/work/milvus-rs-integ/hanns
 source "$HOME/.cargo/env" >/dev/null 2>&1 || true
-CARGO_TARGET_DIR=/data/work/milvus-rs-integ/knowhere-rs-target cargo build --release --lib
+CARGO_TARGET_DIR=/data/work/milvus-rs-integ/hanns-target cargo build --release --lib
 ```
 
 ## Benchmark Method
@@ -85,7 +85,7 @@ For native vs rs comparisons, keep these fixed:
 Only the backend is allowed to change:
 
 - native Milvus/knowhere
-- Milvus + `knowhere-rs`
+- Milvus + `hanns`
 
 ## Canonical VectorDBBench Entry Points
 
@@ -142,7 +142,7 @@ Takeaways:
   while segment replacement was still in progress.
 - Buffered I/O alone did not close the search throughput gap to native.
 - **2026-04-05**: Parallel build enabled via correct env var
-  (`KNOWHERE_RS_FFI_ENABLE_PARALLEL_HNSW_ADD=1`). Previous attempts used wrong
+  (`HANNS_FFI_ENABLE_PARALLEL_HNSW_ADD=1`). Previous attempts used wrong
   env var name (`FFI_ENABLE_PARALLEL_HNSW_ADD_ENV`) and ran serial build
   unknowingly, taking 88+ minutes. With correct var, optimize=559s (was
   serial >5400s). QPS=284 vs native 848 = 3x gap. Gap is in Milvus FFI
@@ -281,7 +281,7 @@ resolves to `max(128, 8, 20) = 128`. **ef=128 is correctly used.**
 
 ### Architecture Differences
 
-| Aspect | Native (faiss) | RS (knowhere-rs) |
+| Aspect | Native (faiss) | RS (hanns) |
 |--------|---------------|------------------|
 | Storage | vectors in continuous `codes[]`, neighbors in separate `hnsw.neighbors[]` | interleaved slab: `[count\|neighbors\|vector]` per node |
 | Vector stride | dim × 4B = 3072B (pure vector) | (1 + M×2 + dim) × 4B = 3204B (metadata mixed in) |

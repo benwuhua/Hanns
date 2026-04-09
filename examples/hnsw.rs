@@ -1,7 +1,7 @@
 //! Example: HNSW vector search with KnowHere RS
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::HnswIndex;
+use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::faiss::HnswIndex;
 
 fn main() {
     // Create HNSW index
@@ -9,7 +9,7 @@ fn main() {
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim: 4,
         params,
     };

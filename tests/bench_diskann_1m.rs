@@ -11,11 +11,11 @@
 //! - `SIFT_BASE_SIZE`: base 向量数量（默认 `1000000`）
 
 #[cfg(feature = "long-tests")]
-use knowhere_rs::api::{MetricType, SearchResult};
+use hanns::api::{MetricType, SearchResult};
 #[cfg(feature = "long-tests")]
-use knowhere_rs::benchmark::average_recall_at_k;
+use hanns::benchmark::average_recall_at_k;
 #[cfg(feature = "long-tests")]
-use knowhere_rs::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
+use hanns::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
 use serde_json::Value;
 #[cfg(feature = "long-tests")]
 use std::env;
@@ -98,7 +98,7 @@ fn load_sift1m_subset(base_size: usize) -> Option<(Vec<f32>, Vec<f32>, usize)> {
 
     // Load base vectors (subset)
     let mut base_reader = BufReader::new(File::open(&base_file).ok()?);
-    let base_full = knowhere_rs::dataset::read_fvecs(&mut base_reader).ok()?;
+    let base_full = hanns::dataset::read_fvecs(&mut base_reader).ok()?;
 
     // Determine dimension by reading first 4 bytes
     let mut dim_reader = BufReader::new(File::open(&base_file).ok()?);
@@ -112,7 +112,7 @@ fn load_sift1m_subset(base_size: usize) -> Option<(Vec<f32>, Vec<f32>, usize)> {
 
     // Load query vectors
     let mut query_reader = BufReader::new(File::open(&query_file).ok()?);
-    let queries = knowhere_rs::dataset::read_fvecs(&mut query_reader).ok()?;
+    let queries = hanns::dataset::read_fvecs(&mut query_reader).ok()?;
 
     Some((base, queries, dim))
 }

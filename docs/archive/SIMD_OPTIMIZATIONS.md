@@ -72,7 +72,7 @@ For compatibility with existing code using `&[u64]`:
 ## Usage Examples
 
 ```rust
-use knowhere_rs::bitset::{
+use hanns::bitset::{
     test_batch_auto, 
     count_zero_batch_auto,
     test_batch_fallback,

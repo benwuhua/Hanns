@@ -4,8 +4,8 @@
 //! Purpose: Fast performance validation (avoid running full bench_opt003)
 //! Usage: cargo test --release --test quick_ivf_perf -- --nocapture
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::ivf_flat::IvfFlatIndex;
+use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::faiss::ivf_flat::IvfFlatIndex;
 use std::time::Instant;
 
 fn generate_random_vectors(n: usize, dim: usize) -> Vec<f32> {
@@ -31,7 +31,7 @@ fn test_ivf_flat_quick_perf_50k() {
     let config = IndexConfig {
         index_type: IndexType::IvfFlat,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim,
         params: IndexParams::ivf(nlist, nprobe),
     };
@@ -116,7 +116,7 @@ fn test_ivf_flat_quick_perf_10k() {
     let config = IndexConfig {
         index_type: IndexType::IvfFlat,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim,
         params: IndexParams::ivf(nlist, nprobe),
     };

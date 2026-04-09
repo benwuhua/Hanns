@@ -8,9 +8,9 @@
 //! 2. 分析压缩比与精度损失的关系
 //! 3. 识别不同场景下的最佳量化配置
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::benchmark::recall::recall_at_k;
-use knowhere_rs::faiss::{IvfPqIndex, IvfSq8Index, MemIndex as FlatIndex};
+use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::benchmark::recall::recall_at_k;
+use hanns::faiss::{IvfPqIndex, IvfSq8Index, MemIndex as FlatIndex};
 use rand::Rng;
 use std::time::Instant;
 
@@ -37,7 +37,7 @@ fn run_flat_bench(
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -103,7 +103,7 @@ fn run_sq8_bench(
         index_type: IndexType::IvfSq8,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),
@@ -178,7 +178,7 @@ fn run_pq_bench(
         index_type: IndexType::IvfPq,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             nlist: Some(nlist),
             nprobe: Some(nprobe),
@@ -324,7 +324,7 @@ fn bench_quantization_accuracy() {
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
     let mut flat_index = FlatIndex::new(&flat_config).expect("Flat index failed");

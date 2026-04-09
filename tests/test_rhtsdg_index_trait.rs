@@ -1,8 +1,8 @@
-use knowhere_rs::api::{DataType, IndexConfig, IndexType, MetricType};
-use knowhere_rs::bitset::BitsetView;
-use knowhere_rs::dataset::Dataset;
-use knowhere_rs::faiss::RhtsdgIndex;
-use knowhere_rs::index::Index;
+use hanns::api::{DataType, IndexConfig, IndexType, MetricType};
+use hanns::bitset::BitsetView;
+use hanns::dataset::Dataset;
+use hanns::faiss::RhtsdgIndex;
+use hanns::index::Index;
 use tempfile::NamedTempFile;
 
 fn rhtsdg_fixture() -> (IndexConfig, Dataset, Dataset) {

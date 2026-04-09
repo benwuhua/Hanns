@@ -1,14 +1,14 @@
-use knowhere_rs::api::IndexParams;
-use knowhere_rs::bitset::BitsetView;
-use knowhere_rs::faiss::HnswIndex;
-use knowhere_rs::{IndexConfig, IndexType, MetricType, SearchRequest};
+use hanns::api::IndexParams;
+use hanns::bitset::BitsetView;
+use hanns::faiss::HnswIndex;
+use hanns::{IndexConfig, IndexType, MetricType, SearchRequest};
 
 fn build_fixture() -> HnswIndex {
     let config = IndexConfig {
         index_type: IndexType::Hnsw,
         metric_type: MetricType::L2,
         dim: 4,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             ef_search: Some(16),
             ..Default::default()

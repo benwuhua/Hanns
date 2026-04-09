@@ -29,37 +29,37 @@ ensure_local_command() {
 }
 
 load_remote_config() {
-    local env_file="${KNOWHERE_RS_REMOTE_ENV:-${DEFAULT_ENV_FILE}}"
+    local env_file="${HANNS_REMOTE_ENV:-${DEFAULT_ENV_FILE}}"
     if [[ -f "${env_file}" ]]; then
         # shellcheck disable=SC1090
         source "${env_file}"
     fi
 
-    REMOTE_HOST="${KNOWHERE_RS_REMOTE_HOST:-${REMOTE_HOST:-}}"
-    REMOTE_USER="${KNOWHERE_RS_REMOTE_USER:-${REMOTE_USER:-root}}"
-    REMOTE_PORT="${KNOWHERE_RS_REMOTE_PORT:-${REMOTE_PORT:-22}}"
-    REMOTE_WORK_ROOT="${KNOWHERE_RS_REMOTE_WORK_ROOT:-${REMOTE_WORK_ROOT:-/data/work}}"
+    REMOTE_HOST="${HANNS_REMOTE_HOST:-${REMOTE_HOST:-}}"
+    REMOTE_USER="${HANNS_REMOTE_USER:-${REMOTE_USER:-root}}"
+    REMOTE_PORT="${HANNS_REMOTE_PORT:-${REMOTE_PORT:-22}}"
+    REMOTE_WORK_ROOT="${HANNS_REMOTE_WORK_ROOT:-${REMOTE_WORK_ROOT:-/data/work}}"
     # Do not inherit generic repo/build/log directories from the shared knowhere/PiPNN remote env.
-    # knowhere-rs must always use its own isolated remote workspace unless explicitly overridden
-    # with KNOWHERE_RS_* variables.
-    REMOTE_REPO_DIR="${KNOWHERE_RS_REMOTE_REPO_DIR:-${REMOTE_WORK_ROOT}/knowhere-rs-src}"
-    REMOTE_TARGET_DIR="${KNOWHERE_RS_REMOTE_TARGET_DIR:-${REMOTE_WORK_ROOT}/knowhere-rs-target}"
-    REMOTE_LOG_DIR="${KNOWHERE_RS_REMOTE_LOG_DIR:-${REMOTE_WORK_ROOT}/knowhere-rs-logs}"
-    REMOTE_NATIVE_REPO_DIR="${KNOWHERE_RS_REMOTE_NATIVE_REPO_DIR:-${REMOTE_WORK_ROOT}/knowhere-native-src}"
-    REMOTE_NATIVE_BUILD_DIR="${KNOWHERE_RS_REMOTE_NATIVE_BUILD_DIR:-${REMOTE_WORK_ROOT}/knowhere-native-build-benchmark}"
-    REMOTE_NATIVE_LOG_DIR="${KNOWHERE_RS_REMOTE_NATIVE_LOG_DIR:-${REMOTE_WORK_ROOT}/knowhere-native-logs}"
-    DEFAULT_BRANCH="${KNOWHERE_RS_DEFAULT_BRANCH:-$(git -C "${REPO_ROOT}" branch --show-current 2>/dev/null || printf 'main')}"
-    DEFAULT_BUILD_TYPE="${KNOWHERE_RS_DEFAULT_BUILD_TYPE:-Release}"
-    REMOTE_REPO_URL="${KNOWHERE_RS_REMOTE_REPO_URL:-$(git -C "${REPO_ROOT}" remote get-url origin 2>/dev/null || true)}"
-    REMOTE_NATIVE_REPO_URL="${KNOWHERE_RS_REMOTE_NATIVE_REPO_URL:-https://github.com/zilliztech/knowhere.git}"
-    REMOTE_NATIVE_DEFAULT_BRANCH="${KNOWHERE_RS_REMOTE_NATIVE_DEFAULT_BRANCH:-${DEFAULT_BRANCH:-main}}"
-    REMOTE_CARGO_ENV_FILE="${KNOWHERE_RS_REMOTE_CARGO_ENV_FILE:-${REMOTE_CARGO_ENV_FILE:-\$HOME/.cargo/env}}"
-    REMOTE_RUSTUP_TOOLCHAIN="${KNOWHERE_RS_REMOTE_RUSTUP_TOOLCHAIN:-${REMOTE_RUSTUP_TOOLCHAIN:-}}"
-    SSH_IDENTITY_FILE="$(expand_path "${KNOWHERE_RS_SSH_IDENTITY_FILE:-${SSH_IDENTITY_FILE:-}}")"
+    # hanns must always use its own isolated remote workspace unless explicitly overridden
+    # with HANNS_* variables.
+    REMOTE_REPO_DIR="${HANNS_REMOTE_REPO_DIR:-${REMOTE_WORK_ROOT}/hanns-src}"
+    REMOTE_TARGET_DIR="${HANNS_REMOTE_TARGET_DIR:-${REMOTE_WORK_ROOT}/hanns-target}"
+    REMOTE_LOG_DIR="${HANNS_REMOTE_LOG_DIR:-${REMOTE_WORK_ROOT}/hanns-logs}"
+    REMOTE_NATIVE_REPO_DIR="${HANNS_REMOTE_NATIVE_REPO_DIR:-${REMOTE_WORK_ROOT}/knowhere-native-src}"
+    REMOTE_NATIVE_BUILD_DIR="${HANNS_REMOTE_NATIVE_BUILD_DIR:-${REMOTE_WORK_ROOT}/knowhere-native-build-benchmark}"
+    REMOTE_NATIVE_LOG_DIR="${HANNS_REMOTE_NATIVE_LOG_DIR:-${REMOTE_WORK_ROOT}/knowhere-native-logs}"
+    DEFAULT_BRANCH="${HANNS_DEFAULT_BRANCH:-$(git -C "${REPO_ROOT}" branch --show-current 2>/dev/null || printf 'main')}"
+    DEFAULT_BUILD_TYPE="${HANNS_DEFAULT_BUILD_TYPE:-Release}"
+    REMOTE_REPO_URL="${HANNS_REMOTE_REPO_URL:-$(git -C "${REPO_ROOT}" remote get-url origin 2>/dev/null || true)}"
+    REMOTE_NATIVE_REPO_URL="${HANNS_REMOTE_NATIVE_REPO_URL:-https://github.com/zilliztech/knowhere.git}"
+    REMOTE_NATIVE_DEFAULT_BRANCH="${HANNS_REMOTE_NATIVE_DEFAULT_BRANCH:-${DEFAULT_BRANCH:-main}}"
+    REMOTE_CARGO_ENV_FILE="${HANNS_REMOTE_CARGO_ENV_FILE:-${REMOTE_CARGO_ENV_FILE:-\$HOME/.cargo/env}}"
+    REMOTE_RUSTUP_TOOLCHAIN="${HANNS_REMOTE_RUSTUP_TOOLCHAIN:-${REMOTE_RUSTUP_TOOLCHAIN:-}}"
+    SSH_IDENTITY_FILE="$(expand_path "${HANNS_SSH_IDENTITY_FILE:-${SSH_IDENTITY_FILE:-}}")"
 
-    # Native baseline must never point back to the knowhere-rs repository.
+    # Native baseline must never point back to the hanns repository.
     if [[ -n "${REMOTE_REPO_URL:-}" ]] && [[ "${REMOTE_NATIVE_REPO_URL}" == "${REMOTE_REPO_URL}" ]]; then
-        echo "invalid remote native repo url: native baseline must use official knowhere, not knowhere-rs" >&2
+        echo "invalid remote native repo url: native baseline must use official knowhere, not hanns" >&2
         exit 1
     fi
 }
@@ -74,7 +74,7 @@ require_remote_config() {
         fi
     done
     if [[ "${missing}" -ne 0 ]]; then
-        echo "load a config file via KNOWHERE_RS_REMOTE_ENV or ${DEFAULT_ENV_FILE}" >&2
+        echo "load a config file via HANNS_REMOTE_ENV or ${DEFAULT_ENV_FILE}" >&2
         exit 1
     fi
 }

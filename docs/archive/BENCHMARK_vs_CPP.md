@@ -1,7 +1,7 @@
-# Knowhere-RS vs C++ Knowhere 性能对比报告
+# Hanns vs C++ Knowhere 性能对比报告
 
 **日期**: 2026-03-04 13:32
-**版本**: knowhere-rs 0.3.7 vs knowhere 2.5+
+**版本**: hanns 0.3.7 vs knowhere 2.5+
 
 ---
 

@@ -3,7 +3,7 @@ import unittest
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-REPORT_PATH = REPO_ROOT / "docs" / "parity" / "knowhere-rs-vs-native-2026-03-17.md"
+REPORT_PATH = REPO_ROOT / "docs" / "parity" / "hanns-vs-native-2026-03-17.md"
 
 
 class ParityReportLockTests(unittest.TestCase):

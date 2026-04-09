@@ -129,13 +129,13 @@ HnswPcaUsq 和 DiskAnnPcaUsq 类似。
 **Step 1: rsync 到 hannsdb-x86**
 ```bash
 rsync -az --exclude=target --exclude='data/' \
-  /Users/ryan/.openclaw/workspace-builder/knowhere-rs/ \
-  hannsdb-x86:/data/work/milvus-rs-integ/knowhere-rs/
+  /Users/ryan/Code/vectorDB/Hanns/ \
+  hannsdb-x86:/data/work/milvus-rs-integ/hanns/
 ```
 
-**Step 2: 远端编译 knowhere-rs**
+**Step 2: 远端编译 hanns**
 ```bash
-ssh hannsdb-x86 'cd /data/work/milvus-rs-integ/knowhere-rs && CARGO_TARGET_DIR=/data/work/milvus-rs-integ/knowhere-rs-target ~/.cargo/bin/cargo build --release 2>&1 | tail -10'
+ssh hannsdb-x86 'cd /data/work/milvus-rs-integ/hanns && CARGO_TARGET_DIR=/data/work/milvus-rs-integ/hanns-target ~/.cargo/bin/cargo build --release 2>&1 | tail -10'
 ```
 
 **Step 3: 重建 Milvus shim**
@@ -146,7 +146,7 @@ ssh hannsdb-x86 'cd /data/work/milvus-rs-integ/milvus-src/build && make -j8 2>&1
 **Step 4: 重启 Milvus**
 ```bash
 ssh hannsdb-x86 'pkill -f "milvus run" || true; sleep 5'
-ssh hannsdb-x86 'cd /data/work/milvus-rs-integ && nohup bash /data/work/milvus-rs-integ/milvus-src/scripts/knowhere-rs-shim/start_standalone_remote.sh > /tmp/milvus_restart.log 2>&1 &'
+ssh hannsdb-x86 'cd /data/work/milvus-rs-integ && nohup bash /data/work/milvus-rs-integ/milvus-src/scripts/hanns-shim/start_standalone_remote.sh > /tmp/milvus_restart.log 2>&1 &'
 sleep 30 && ssh hannsdb-x86 'curl -s http://127.0.0.1:9091/healthz'
 ```
 

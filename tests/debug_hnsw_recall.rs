@@ -4,8 +4,8 @@
 //! Print detailed comparison between ground truth and HNSW search results
 
 mod common;
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::HnswIndex;
+use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::faiss::HnswIndex;
 use rand::Rng;
 use std::collections::HashSet;
 use std::time::Instant;
@@ -89,7 +89,7 @@ fn debug_hnsw_recall_detailed() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             m: Some(m),
             ef_construction: Some(ef_construction),

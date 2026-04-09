@@ -21,11 +21,11 @@ curl -L -O https://ann-benchmarks.com/sift-128-euclidean.hdf5
 
 ### 方式 2：使用现有的 HDF5 文件
 
-如果你已经有 HDF5 格式的数据集，可以使用 knowhere-rs 的 HDF5 加载器：
+如果你已经有 HDF5 格式的数据集，可以使用 hanns 的 HDF5 加载器：
 
 ```rust
 #[cfg(feature = "hdf5")]
-use knowhere_rs::dataset::load_hdf5_dataset;
+use hanns::dataset::load_hdf5_dataset;
 
 let dataset = load_hdf5_dataset("sift-128-euclidean.hdf5")?;
 ```

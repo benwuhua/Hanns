@@ -1,4 +1,4 @@
-//! Component modules for knowhere-rs
+//! Component modules for hanns
 //!
 //! Reusable components like Bloom Filter, etc.
 

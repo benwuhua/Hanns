@@ -7,8 +7,8 @@ replacement checks on `hannsdb-x86`.
 
 - Host: `hannsdb-x86`
 - Milvus integration repo: `/data/work/milvus-rs-integ/milvus-src`
-- knowhere-rs integration checkout: `/data/work/milvus-rs-integ/knowhere-rs`
-- Rust release target dir: `/data/work/milvus-rs-integ/knowhere-rs-target`
+- hanns integration checkout: `/data/work/milvus-rs-integ/hanns`
+- Rust release target dir: `/data/work/milvus-rs-integ/hanns-target`
 - VectorDBBench repo: `/data/work/VectorDBBench`
 - Milvus runtime root: `/data/work/milvus-rs-integ/milvus-var`
 
@@ -22,11 +22,11 @@ Do not hand-roll:
 
 Use the checked-in remote wrapper:
 
-- `/data/work/milvus-rs-integ/milvus-src/scripts/knowhere-rs-shim/start_standalone_remote.sh`
+- `/data/work/milvus-rs-integ/milvus-src/scripts/hanns-shim/start_standalone_remote.sh`
 
 That wrapper sources:
 
-- `/data/work/milvus-rs-integ/milvus-src/scripts/knowhere-rs-shim/remote_env.sh`
+- `/data/work/milvus-rs-integ/milvus-src/scripts/hanns-shim/remote_env.sh`
 
 It is the canonical entrypoint because it already carries:
 
@@ -41,14 +41,14 @@ It is the canonical entrypoint because it already carries:
 On `hannsdb-x86`:
 
 ```bash
-cd /data/work/milvus-rs-integ/knowhere-rs
+cd /data/work/milvus-rs-integ/hanns
 source "$HOME/.cargo/env" >/dev/null 2>&1 || true
-CARGO_TARGET_DIR=/data/work/milvus-rs-integ/knowhere-rs-target cargo build --release --lib
+CARGO_TARGET_DIR=/data/work/milvus-rs-integ/hanns-target cargo build --release --lib
 ```
 
 Expected artifact:
 
-- `/data/work/milvus-rs-integ/knowhere-rs-target/release/libknowhere_rs.so`
+- `/data/work/milvus-rs-integ/hanns-target/release/libhanns.so`
 
 ## Canonical Standalone Restart
 
@@ -56,7 +56,7 @@ On `hannsdb-x86`:
 
 ```bash
 cd /data/work/milvus-rs-integ/milvus-src
-scripts/knowhere-rs-shim/start_standalone_remote.sh
+scripts/hanns-shim/start_standalone_remote.sh
 ```
 
 Expected success output:
@@ -102,17 +102,17 @@ Known reference results:
 - native Cohere 1M:
   - `/data/work/VectorDBBench/vectordb_bench/results/Milvus/result_20260330_milvus-native-knowhere-hnsw-cohere1m-20260330_milvus.json`
 - rs Cohere 1M:
-  - `/data/work/VectorDBBench/vectordb_bench/results/Milvus/result_20260401_milvus-knowhere-rs-hnsw-cohere1m-20260330_milvus.json`
+  - `/data/work/VectorDBBench/vectordb_bench/results/Milvus/result_20260401_milvus-hanns-hnsw-cohere1m-20260330_milvus.json`
 
 ## Recommended Session Order
 
 1. `bash init.sh`
 2. Sync or edit the Milvus integration checkout:
-   - `/data/work/milvus-rs-integ/knowhere-rs`
+   - `/data/work/milvus-rs-integ/hanns`
 3. Rebuild the Rust library:
-   - `CARGO_TARGET_DIR=/data/work/milvus-rs-integ/knowhere-rs-target cargo build --release --lib`
+   - `CARGO_TARGET_DIR=/data/work/milvus-rs-integ/hanns-target cargo build --release --lib`
 4. Restart standalone only through:
-   - `/data/work/milvus-rs-integ/milvus-src/scripts/knowhere-rs-shim/start_standalone_remote.sh`
+   - `/data/work/milvus-rs-integ/milvus-src/scripts/hanns-shim/start_standalone_remote.sh`
 5. Run the required native or rs lane by the checked-in VectorDBBench script.
 6. Read authority evidence only from:
    - `/data/work/milvus-rs-integ/milvus-var/logs/standalone-stage1.log`

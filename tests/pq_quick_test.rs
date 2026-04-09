@@ -1,7 +1,7 @@
 #![cfg(feature = "long-tests")]
 //! Quick performance test for PQ improvements
 
-use knowhere_rs::quantization::{OPQConfig, OptimizedProductQuantizer, PQConfig, ProductQuantizer};
+use hanns::quantization::{OPQConfig, OptimizedProductQuantizer, PQConfig, ProductQuantizer};
 use rand::rngs::StdRng;
 use rand::Rng;
 use rand::SeedableRng;

@@ -62,7 +62,7 @@ export CARGO_TARGET_DIR="${target_dir}"
 mkdir -p "${log_dir}"
 log_file="${log_dir}/test_${run_id}.log"
 status_file="${log_dir}/test_${run_id}.status"
-lock_file="${log_dir}/knowhere-rs-test.lock"
+lock_file="${log_dir}/hanns-test.lock"
 
 if [[ -n "${command_override}" ]]; then
     test_cmd="${command_override}"
@@ -86,7 +86,7 @@ cleanup() {
 }
 exec 9>"${TEST_LOCK_FILE}"
 flock -n 9 || {
-    printf "status=conflict\nrun_id=%s\nfinished_at=%s\nmessage=another knowhere-rs remote test is still active\n" \
+    printf "status=conflict\nrun_id=%s\nfinished_at=%s\nmessage=another hanns remote test is still active\n" \
         "${TEST_RUN_ID}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"${TEST_STATUS_FILE}"
     exit 91
 }
@@ -108,7 +108,7 @@ printf "status=running\nrun_id=%s\nstarted_at=%s\n" \
     echo "[test] cwd=$(pwd)"
     echo "[test] command=${TEST_COMMAND}"
     echo "[test] started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    runner_script="$(mktemp /tmp/knowhere-rs-test-run.XXXXXX.sh)"
+    runner_script="$(mktemp /tmp/hanns-test-run.XXXXXX.sh)"
     cat >"${runner_script}" <<RUNNER
 #!/usr/bin/env bash
 set -euo pipefail

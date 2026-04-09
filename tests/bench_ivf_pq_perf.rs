@@ -5,9 +5,9 @@
 //! Target: QPS vs C++, R@10 >= 90%
 
 #[cfg(feature = "long-tests")]
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 #[cfg(feature = "long-tests")]
-use knowhere_rs::faiss::ivfpq::IvfPqIndex;
+use hanns::faiss::ivfpq::IvfPqIndex;
 use serde_json::Value;
 use std::fs;
 #[cfg(feature = "long-tests")]
@@ -69,7 +69,7 @@ fn test_ivf_pq_perf_50k() {
     let config = IndexConfig {
         index_type: IndexType::IvfPq,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim,
         params: IndexParams {
             nlist: Some(nlist),
@@ -169,7 +169,7 @@ fn test_ivf_pq_perf_10k() {
     let config = IndexConfig {
         index_type: IndexType::IvfPq,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim,
         params: IndexParams {
             nlist: Some(nlist),

@@ -73,7 +73,7 @@ type DistanceToIdxFn = fn(&HnswIndex, &[f32], usize) -> f32;
 const MAX_LAYERS: usize = 16;
 const HNSW_SEARCH_KNN_BF_FILTER_THRESHOLD: f32 = 0.93;
 const HNSW_SEARCH_BF_TOPK_THRESHOLD: f32 = 0.5;
-const HNSW_PARALLEL_BATCH_SIZE_CAP_ENV: &str = "KNOWHERE_RS_HNSW_PARALLEL_BATCH_SIZE_CAP";
+const HNSW_PARALLEL_BATCH_SIZE_CAP_ENV: &str = "HANNS_HNSW_PARALLEL_BATCH_SIZE_CAP";
 
 thread_local! {
     static HNSW_SEARCH_SCRATCH_TLS: RefCell<SearchScratch> = RefCell::new(SearchScratch::new());
@@ -143,7 +143,7 @@ enum X86PrefetchHint {
 fn x86_prefetch_hint() -> X86PrefetchHint {
     static PREFETCH_HINT: OnceLock<X86PrefetchHint> = OnceLock::new();
     *PREFETCH_HINT.get_or_init(|| {
-        let raw = std::env::var("KNOWHERE_RS_X86_PREFETCH_HINT")
+        let raw = std::env::var("HANNS_X86_PREFETCH_HINT")
             .ok()
             .map(|value| value.trim().to_ascii_lowercase());
         match raw.as_deref() {
@@ -8792,7 +8792,7 @@ mod tests {
     fn invalid_tmpdir_path(label: &str) -> OsString {
         std::env::temp_dir()
             .join(format!(
-                "knowhere_rs_invalid_tmpdir_{}_{}_{}",
+                "hanns_invalid_tmpdir_{}_{}_{}",
                 label,
                 std::process::id(),
                 std::time::SystemTime::now()

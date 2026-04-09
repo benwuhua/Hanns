@@ -9,8 +9,8 @@ use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
 
-use knowhere_rs::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::IvfPqIndex;
+use hanns::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::faiss::IvfPqIndex;
 
 const DEFAULT_DATA_DIR: &str = "/data/work/datasets/wikipedia-cohere-1m";
 const TOP_K: usize = 10;

@@ -230,7 +230,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("knowhere-rs-sift-loader-{nanos}"))
+        std::env::temp_dir().join(format!("hanns-sift-loader-{nanos}"))
     }
 
     #[test]

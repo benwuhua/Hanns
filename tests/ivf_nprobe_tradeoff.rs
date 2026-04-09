@@ -2,14 +2,14 @@
 //!
 //! 对比不同 nprobe 下的召回率和 QPS
 
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType};
-use knowhere_rs::faiss::IvfPqIndex;
-use knowhere_rs::MetricType;
+use hanns::api::{IndexConfig, IndexParams, IndexType};
+use hanns::faiss::IvfPqIndex;
+use hanns::MetricType;
 
 #[cfg(feature = "long-tests")]
-use knowhere_rs::api::SearchRequest;
+use hanns::api::SearchRequest;
 #[cfg(feature = "long-tests")]
-use knowhere_rs::faiss::{IvfFlatIndex, MemIndex as FlatIndex};
+use hanns::faiss::{IvfFlatIndex, MemIndex as FlatIndex};
 #[cfg(feature = "long-tests")]
 use rand::{rngs::StdRng, Rng, SeedableRng};
 #[cfg(feature = "long-tests")]
@@ -38,7 +38,7 @@ fn ivfpq_nprobe_expands_coarse_probe_order() {
     let config = IndexConfig {
         index_type: IndexType::IvfPq,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         dim,
         params: IndexParams {
             nlist: Some(3),
@@ -103,7 +103,7 @@ fn ivf_flat_nprobe_recall_tradeoff() {
         index_type: IndexType::IvfFlat,
         dim: DIM,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::ivf(NLIST, 1), // nprobe will be set in search
     };
 

@@ -2,8 +2,8 @@
 //!
 //! 对比 k-means++ 初始化和标准随机初始化的性能和质量
 
-use knowhere_rs::clustering::{KMeansPlusPlus, KMeansPlusPlusConfig};
-use knowhere_rs::quantization::KMeans;
+use hanns::clustering::{KMeansPlusPlus, KMeansPlusPlusConfig};
+use hanns::quantization::KMeans;
 use std::time::Instant;
 
 fn generate_clustered_data(n_clusters: usize, dim: usize, points_per_cluster: usize) -> Vec<f32> {

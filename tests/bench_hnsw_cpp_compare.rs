@@ -9,15 +9,15 @@
 //! 运行：cargo test --release --test bench_hnsw_cpp_compare -- --nocapture
 
 #[cfg(feature = "long-tests")]
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
+use hanns::api::{IndexConfig, IndexParams, IndexType, SearchRequest};
 #[cfg(feature = "long-tests")]
-use knowhere_rs::benchmark::average_recall_at_k;
+use hanns::benchmark::average_recall_at_k;
 #[cfg(feature = "long-tests")]
-use knowhere_rs::dataset::{load_sift1m_complete, SiftDataset};
+use hanns::dataset::{load_sift1m_complete, SiftDataset};
 #[cfg(feature = "long-tests")]
-use knowhere_rs::faiss::HnswIndex;
+use hanns::faiss::HnswIndex;
 #[cfg(feature = "long-tests")]
-use knowhere_rs::MetricType;
+use hanns::MetricType;
 use serde_json::Value;
 #[cfg(feature = "long-tests")]
 use std::env;
@@ -157,7 +157,7 @@ fn load_dataset_with_subset(max_vectors: Option<usize>) -> Option<SiftDataset> {
                     );
 
                     // 重建 SiftDataset
-                    use knowhere_rs::dataset::Dataset;
+                    use hanns::dataset::Dataset;
                     return Some(SiftDataset {
                         base: Dataset::from_vectors(base, dim),
                         query: Dataset::from_vectors(query, dim),
@@ -219,7 +219,7 @@ fn run_hnsw_benchmark(
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             m: Some(m),
             ef_construction: Some(ef_construction),
@@ -406,7 +406,7 @@ fn test_hnsw_quick_compare() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             m: Some(m),
             ef_construction: Some(ef_construction),

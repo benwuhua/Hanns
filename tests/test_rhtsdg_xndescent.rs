@@ -1,6 +1,6 @@
-use knowhere_rs::faiss::rhtsdg::neighbor::{Neighbor, NeighborStatus, Neighborhood};
-use knowhere_rs::faiss::rhtsdg::RhtsdgIndex;
-use knowhere_rs::faiss::rhtsdg::xndescent::{XNDescentBuilder, XNDescentConfig};
+use hanns::faiss::rhtsdg::neighbor::{Neighbor, NeighborStatus, Neighborhood};
+use hanns::faiss::rhtsdg::RhtsdgIndex;
+use hanns::faiss::rhtsdg::xndescent::{XNDescentBuilder, XNDescentConfig};
 
 #[test]
 fn insert_neighbor_dedupes_and_keeps_best_k() {

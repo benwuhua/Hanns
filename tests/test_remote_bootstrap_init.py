@@ -23,12 +23,12 @@ class InitShInjectionTests(unittest.TestCase):
             env_file.write_text(
                 textwrap.dedent(
                     """
-                    KNOWHERE_RS_REMOTE_HOST=dummy-host
-                    KNOWHERE_RS_REMOTE_USER=dummy-user
-                    KNOWHERE_RS_REMOTE_PORT=22
-                    KNOWHERE_RS_REMOTE_REPO_DIR=/tmp/knowhere-rs-src
-                    KNOWHERE_RS_REMOTE_TARGET_DIR=/tmp/knowhere-rs-target
-                    KNOWHERE_RS_REMOTE_LOG_DIR=/tmp/knowhere-rs-logs
+                    HANNS_REMOTE_HOST=dummy-host
+                    HANNS_REMOTE_USER=dummy-user
+                    HANNS_REMOTE_PORT=22
+                    HANNS_REMOTE_REPO_DIR=/tmp/hanns-src
+                    HANNS_REMOTE_TARGET_DIR=/tmp/hanns-target
+                    HANNS_REMOTE_LOG_DIR=/tmp/hanns-logs
                     """
                 ).strip()
                 + "\n",
@@ -47,9 +47,9 @@ class InitShInjectionTests(unittest.TestCase):
             probe_stub.chmod(0o755)
 
             env = os.environ.copy()
-            env["KNOWHERE_RS_REMOTE_ENV"] = str(env_file)
-            env["KNOWHERE_RS_INIT_SYNC_CMD"] = f"bash {sync_stub} {sync_marker}"
-            env["KNOWHERE_RS_INIT_PROBE_CMD"] = f"bash {probe_stub} {probe_marker}"
+            env["HANNS_REMOTE_ENV"] = str(env_file)
+            env["HANNS_INIT_SYNC_CMD"] = f"bash {sync_stub} {sync_marker}"
+            env["HANNS_INIT_PROBE_CMD"] = f"bash {probe_stub} {probe_marker}"
 
             result = subprocess.run(
                 ["bash", str(INIT_SH)],
@@ -64,7 +64,7 @@ class InitShInjectionTests(unittest.TestCase):
                 0,
                 msg=f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}",
             )
-            self.assertIn("=== knowhere-rs remote bootstrap ===", result.stdout)
+            self.assertIn("=== hanns remote bootstrap ===", result.stdout)
             self.assertIn("probe_override_ok", result.stdout)
             self.assertTrue(sync_marker.exists(), "sync override was not executed")
             self.assertTrue(probe_marker.exists(), "probe override was not executed")

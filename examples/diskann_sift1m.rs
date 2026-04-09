@@ -15,8 +15,8 @@ use std::io::{BufReader, ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use knowhere_rs::api::MetricType;
-use knowhere_rs::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
+use hanns::api::MetricType;
+use hanns::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
 
 const TOP_K: usize = 10;
 const RECALL_QUERIES: usize = 1_000;

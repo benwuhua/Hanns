@@ -22,16 +22,16 @@
 
 mod common;
 #[cfg(feature = "long-tests")]
-use knowhere_rs::api::{IndexConfig, IndexParams, SearchRequest};
+use hanns::api::{IndexConfig, IndexParams, SearchRequest};
 #[cfg(feature = "long-tests")]
-use knowhere_rs::benchmark::average_recall_at_k;
-use knowhere_rs::benchmark::BenchmarkResult;
+use hanns::benchmark::average_recall_at_k;
+use hanns::benchmark::BenchmarkResult;
 #[cfg(feature = "long-tests")]
-use knowhere_rs::faiss::{HnswIndex, IvfFlatIndex, MemIndex as FlatIndex};
+use hanns::faiss::{HnswIndex, IvfFlatIndex, MemIndex as FlatIndex};
 #[cfg(feature = "long-tests")]
-use knowhere_rs::IndexType;
+use hanns::IndexType;
 #[cfg(feature = "long-tests")]
-use knowhere_rs::MetricType;
+use hanns::MetricType;
 #[cfg(feature = "long-tests")]
 use rand::Rng;
 #[cfg(feature = "long-tests")]
@@ -96,7 +96,7 @@ fn benchmark_flat(
         index_type: IndexType::Flat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::default(),
     };
 
@@ -163,7 +163,7 @@ fn benchmark_hnsw(
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::hnsw(16, 64, 0.5),
     };
 
@@ -236,7 +236,7 @@ fn benchmark_ivf_flat(
         index_type: IndexType::IvfFlat,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::ivf(nlist as usize, nprobe as usize),
     };
 
@@ -440,7 +440,7 @@ fn test_json_export_contract_fast_lane() {
         k: 10,
     };
     let output_dir = std::env::temp_dir().join(format!(
-        "knowhere_rs_json_export_contract_{}",
+        "hanns_json_export_contract_{}",
         std::process::id()
     ));
     let output_path = write_json_report(

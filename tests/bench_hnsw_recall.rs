@@ -10,11 +10,11 @@
 //! ```
 
 mod common;
-use knowhere_rs::api::{IndexConfig, IndexParams, SearchRequest};
-use knowhere_rs::benchmark::average_recall_at_k;
-use knowhere_rs::faiss::HnswIndex;
-use knowhere_rs::IndexType;
-use knowhere_rs::MetricType;
+use hanns::api::{IndexConfig, IndexParams, SearchRequest};
+use hanns::benchmark::average_recall_at_k;
+use hanns::faiss::HnswIndex;
+use hanns::IndexType;
+use hanns::MetricType;
 use rand::Rng;
 use std::time::Instant;
 
@@ -63,7 +63,7 @@ fn benchmark_hnsw_ef_search(
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams {
             m: Some(32),                    // OPT-021: M=32 for excellent connectivity
             ef_construction: Some(600),     // High ef_construction for better graph

@@ -4,7 +4,7 @@
  * This example demonstrates how to use the KnowHere interrupt C API
  * to cancel long-running operations from C/C++ code.
  * 
- * Compile: gcc -o interrupt_example interrupt_example.c -lknowhere_rs
+ * Compile: gcc -o interrupt_example interrupt_example.c -lhanns
  */
 
 #include <stdio.h>
@@ -13,7 +13,7 @@
 #include <stdint.h>
 
 // Forward declarations of C API functions
-// These would normally be in a header file (knowhere_rs.h)
+// These would normally be in a header file (hanns.h)
 typedef void* CInterrupt;
 
 // Create a new interrupt flag (not interrupted)

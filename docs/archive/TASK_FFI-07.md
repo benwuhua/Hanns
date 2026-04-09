@@ -1,7 +1,7 @@
 # FFI-07: GetVectorByIds C API 实现
 
 ## 任务描述
-为 knowhere-rs 添加 GetVectorByIds 功能的 C API 绑定
+为 hanns 添加 GetVectorByIds 功能的 C API 绑定
 
 ## C++ 参考实现
 

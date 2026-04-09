@@ -4,8 +4,8 @@
 ///
 /// This test validates the key fixes made to improve HNSW recall.
 mod common;
-use knowhere_rs::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use knowhere_rs::faiss::HnswIndex;
+use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
+use hanns::faiss::HnswIndex;
 use rand::Rng;
 use std::collections::HashSet;
 
@@ -41,7 +41,7 @@ fn test_bug001_summary() {
         index_type: IndexType::Hnsw,
         dim,
         metric_type: MetricType::L2,
-        data_type: knowhere_rs::api::DataType::Float,
+        data_type: hanns::api::DataType::Float,
         params: IndexParams::hnsw(64, 400, 0.5), // M=64, ef_construction=400
     };
 

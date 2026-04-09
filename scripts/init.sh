@@ -13,10 +13,10 @@ ensure_local_command rsync
 load_remote_config
 require_remote_config REMOTE_HOST REMOTE_USER REMOTE_REPO_DIR REMOTE_TARGET_DIR REMOTE_LOG_DIR
 
-SYNC_CMD_OVERRIDE="${KNOWHERE_RS_INIT_SYNC_CMD:-}"
-PROBE_CMD_OVERRIDE="${KNOWHERE_RS_INIT_PROBE_CMD:-}"
+SYNC_CMD_OVERRIDE="${HANNS_INIT_SYNC_CMD:-}"
+PROBE_CMD_OVERRIDE="${HANNS_INIT_PROBE_CMD:-}"
 
-echo "=== knowhere-rs remote bootstrap ==="
+echo "=== hanns remote bootstrap ==="
 print_config_summary
 
 echo "=== syncing workspace to remote authority ==="

@@ -1,7 +1,7 @@
 # OPT-012: SIMD 距离计算优化报告
 
 ## 目标
-优化 knowhere-rs 的距离计算性能，使用 SIMD (AVX2/AVX512/NEON) 加速 L2 和 Inner Product 距离计算。
+优化 hanns 的距离计算性能，使用 SIMD (AVX2/AVX512/NEON) 加速 L2 和 Inner Product 距离计算。
 
 ## 工作完成情况
 
@@ -191,7 +191,7 @@ l2_scalar(a, b)  // 标量回退
 
 ✅ **OPT-012 任务完成**
 
-knowhere-rs 的距离计算 SIMD 优化已经完整实现并经过验证：
+hanns 的距离计算 SIMD 优化已经完整实现并经过验证：
 - L2 距离：AVX2/AVX-512/NEON/SSE 全支持
 - Inner Product：AVX2/AVX-512/NEON/SSE全支持
 - 批量计算：Batch-4 优化已实现

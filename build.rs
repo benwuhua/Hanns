@@ -1,4 +1,4 @@
-//! Build script for knowhere-rs with Faiss support
+//! Build script for hanns with Faiss support
 #[cfg(feature = "faiss-cxx")]
 fn first_existing_include<'a>(paths: &'a [&'a str]) -> Option<&'a str> {
     paths
