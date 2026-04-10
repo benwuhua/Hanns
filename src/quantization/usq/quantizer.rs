@@ -1,6 +1,39 @@
+use std::cell::RefCell;
+
 use super::config::UsqConfig;
 use super::rotator::UsqRotator;
 use crate::quantization::turboquant::packed::pack_codes;
+
+/// Per-thread scratch buffers reused across encode() calls to eliminate hot-path allocations.
+struct EncodeWorkspace {
+    residual: Vec<f32>,
+    rotated: Vec<f32>,
+    o_hat: Vec<f32>,
+    codes: Vec<u16>,
+    sign_codes: Vec<u16>,
+}
+
+impl EncodeWorkspace {
+    fn ensure(&mut self, padded_dim: usize) {
+        if self.residual.len() < padded_dim {
+            self.residual.resize(padded_dim, 0.0);
+            self.rotated.resize(padded_dim, 0.0);
+            self.o_hat.resize(padded_dim, 0.0);
+            self.codes.resize(padded_dim, 0);
+            self.sign_codes.resize(padded_dim, 0);
+        }
+    }
+}
+
+thread_local! {
+    static ENCODE_WS: RefCell<EncodeWorkspace> = RefCell::new(EncodeWorkspace {
+        residual: Vec::new(),
+        rotated: Vec::new(),
+        o_hat: Vec::new(),
+        codes: Vec::new(),
+        sign_codes: Vec::new(),
+    });
+}
 
 /// Output of a single vector encoding pass.
 #[derive(Clone, Debug)]
@@ -93,25 +126,31 @@ impl UsqQuantizer {
             "vector length must equal dim"
         );
 
-        // 1. Center and pad to padded_dim.
         let padded_dim = self.config.padded_dim();
-        let mut residual = vec![0.0f32; padded_dim];
-        for i in 0..self.config.dim {
-            residual[i] = vector[i] - self.centroid[i];
-        }
-        // Dimensions beyond config.dim remain 0 (already zeroed).
+        let norm_sq = vector.iter().map(|x| x * x).sum::<f32>();
 
-        // 2. Rotate.
-        let rotated = self.rotator.rotate(&residual);
+        ENCODE_WS.with(|cell| {
+            let ws = &mut *cell.borrow_mut();
+            ws.ensure(padded_dim);
 
-        // 3. Encode the already-rotated residual.
-        let mut encoded = self.encode_rotated(&rotated);
+            // 1. Center and pad to padded_dim (padding dims stay 0).
+            for i in 0..self.config.dim {
+                ws.residual[i] = vector[i] - self.centroid[i];
+            }
+            for i in self.config.dim..padded_dim {
+                ws.residual[i] = 0.0;
+            }
 
-        // 4. Override norm_sq with the original vector's ||x||².
-        //    encode_rotated stores ||residual||² but L2 distance needs ||x||².
-        encoded.norm_sq = vector.iter().map(|x| x * x).sum();
+            // 2. Rotate into ws.rotated (no allocation).
+            self.rotator.rotate_into(&ws.residual[..padded_dim], &mut ws.rotated[..padded_dim]);
 
-        encoded
+            // 3. Encode the already-rotated residual using workspace buffers.
+            let mut encoded = self.encode_rotated_ws(ws, padded_dim);
+
+            // 4. Override norm_sq: encode_rotated stores ||residual||², L2 needs ||x||².
+            encoded.norm_sq = norm_sq;
+            encoded
+        })
     }
 
     /// Encode an already-rotated residual of length padded_dim.
@@ -123,43 +162,57 @@ impl UsqQuantizer {
             padded_dim,
             "rotated length must equal padded_dim"
         );
+        ENCODE_WS.with(|cell| {
+            let ws = &mut *cell.borrow_mut();
+            ws.ensure(padded_dim);
+            ws.rotated[..padded_dim].copy_from_slice(rotated);
+            self.encode_rotated_ws(ws, padded_dim)
+        })
+    }
 
-        // 4. Compute norm and normalize to unit sphere.
+    /// Core encode logic operating on pre-allocated workspace buffers.
+    /// `ws.rotated[..padded_dim]` must be filled by the caller.
+    fn encode_rotated_ws(&self, ws: &mut EncodeWorkspace, padded_dim: usize) -> UsqEncoded {
+        let rotated = &ws.rotated[..padded_dim];
+
+        // Compute norm and normalize into ws.o_hat.
         let norm_sq: f32 = rotated.iter().map(|x| x * x).sum();
         let norm = norm_sq.sqrt();
-        let o_hat: Vec<f32> = if norm > 1e-12 {
-            rotated.iter().map(|x| x / norm).collect()
+        if norm > 1e-12 {
+            let inv = 1.0 / norm;
+            for (o, r) in ws.o_hat[..padded_dim].iter_mut().zip(rotated.iter()) {
+                *o = r * inv;
+            }
         } else {
-            rotated.to_vec()
+            ws.o_hat[..padded_dim].copy_from_slice(rotated);
+        }
+        let o_hat = &ws.o_hat[..padded_dim];
+
+        // Quantize into ws.codes.
+        let (_ip, qed_length) = if self.config.nbits >= 4 {
+            self.greedy_quantize_into(o_hat, 6, &mut ws.codes[..padded_dim])
+        } else {
+            self.fast_quantize_into(o_hat, &mut ws.codes[..padded_dim])
         };
 
-        // 5. Quantize.
-        let (codes, _ip, qed_length) = if self.config.nbits >= 4 {
-            self.greedy_quantize(&o_hat, 6)
-        } else {
-            self.fast_quantize(&o_hat)
-        };
-
-        // 6. Compute per-vector metadata.
-        let vmax = Self::unit_vmax(&o_hat);
+        // Per-vector metadata.
+        let vmax = Self::unit_vmax(o_hat);
         let quant_quality = qed_length.sqrt().max(1e-12);
 
-        // 7. Pack B-bit codes.
-        let mut packed_bits =
-            Vec::with_capacity((padded_dim * self.config.nbits as usize).div_ceil(8));
-        pack_codes(&codes, self.config.nbits, &mut packed_bits);
+        // Pack B-bit codes (output Vec must be allocated — it's returned to caller).
+        let code_bytes = (padded_dim * self.config.nbits as usize).div_ceil(8);
+        let mut packed_bits = Vec::with_capacity(code_bytes);
+        pack_codes(&ws.codes[..padded_dim], self.config.nbits, &mut packed_bits);
 
-        // 8. 1-bit sign codes.
+        // 1-bit sign codes (output Vec must be allocated — it's returned to caller).
         let sign_bits = if self.config.nbits == 1 {
-            // Same data.
             packed_bits.clone()
         } else {
-            let sign_codes: Vec<u16> = o_hat
-                .iter()
-                .map(|&v| if v >= 0.0 { 1u16 } else { 0u16 })
-                .collect();
+            for (s, &o) in ws.sign_codes[..padded_dim].iter_mut().zip(o_hat.iter()) {
+                *s = if o >= 0.0 { 1u16 } else { 0u16 };
+            }
             let mut sb = Vec::with_capacity(padded_dim / 8);
-            pack_codes(&sign_codes, 1, &mut sb);
+            pack_codes(&ws.sign_codes[..padded_dim], 1, &mut sb);
             sb
         };
 
@@ -380,12 +433,14 @@ impl UsqQuantizer {
     }
 
     /// Greedy refinement quantizer for `nbits >= 4`.
-    /// Returns `(codes, ip, qed_length)`.
-    fn greedy_quantize(&self, o_hat: &[f32], nrefine: usize) -> (Vec<u16>, f32, f32) {
+    /// Writes quantized codes into `codes` (caller-owned, no allocation).
+    /// Returns `(ip, qed_length)`.
+    fn greedy_quantize_into(&self, o_hat: &[f32], nrefine: usize, codes: &mut [u16]) -> (f32, f32) {
         debug_assert!(
             o_hat.len() % 64 == 0,
             "o_hat must be padded to multiple of 64"
         );
+        debug_assert_eq!(codes.len(), o_hat.len());
         let dim = o_hat.len();
         let nbits = self.config.nbits;
         let vmax = Self::unit_vmax(o_hat);
@@ -394,10 +449,9 @@ impl UsqQuantizer {
 
         let dequant = |code: u16| code as f32 * scale + offset;
 
-        let mut codes: Vec<u16> = o_hat
-            .iter()
-            .map(|&x| Self::quantize_scalar(x, scale, offset, nbits) as u16)
-            .collect();
+        for (c, &x) in codes[..dim].iter_mut().zip(o_hat.iter()) {
+            *c = Self::quantize_scalar(x, scale, offset, nbits) as u16;
+        }
 
         let mut ip: f32 = codes
             .iter()
@@ -479,12 +533,13 @@ impl UsqQuantizer {
         }
 
         let _ = vmax;
-        (codes, ip, qed_length)
+        (ip, qed_length)
     }
 
     /// Threshold-sweep quantizer for `nbits < 4` (ExRaBitQ style).
-    /// Returns `(codes, ip, qed_length)`.
-    fn fast_quantize(&self, o_hat: &[f32]) -> (Vec<u16>, f32, f32) {
+    /// Writes quantized codes into `codes` (caller-owned, no allocation).
+    /// Returns `(ip, qed_length)`.
+    fn fast_quantize_into(&self, o_hat: &[f32], codes: &mut [u16]) -> (f32, f32) {
         debug_assert!(
             o_hat.len() % 64 == 0,
             "o_hat must be padded to multiple of 64"
@@ -512,8 +567,8 @@ impl UsqQuantizer {
 
         let max_abs = abs_o.iter().cloned().fold(0.0f32, f32::max);
         if max_abs < 1e-12 {
-            let codes = vec![half_levels; dim];
-            return (codes, 0.0, 0.0);
+            codes[..dim].fill(half_levels);
+            return (0.0, 0.0);
         }
 
         // Build and sort critical-value events.
@@ -574,22 +629,20 @@ impl UsqQuantizer {
         let scale = vmax / half_levels_f.max(1.0);
         let ip = scale * best_sum_xc;
         let qed_length = scale * scale * best_sum_sq;
-        let mut codes = Vec::with_capacity(dim);
         for i in 0..dim {
             let magnitude = if abs_o[i] > 1e-12 {
                 ((best_t * abs_o[i] + 0.5).floor() as u16).min(max_level[i])
             } else {
                 0
             };
-            let code = if non_negative[i] {
+            codes[i] = if non_negative[i] {
                 half_levels + magnitude
             } else {
                 half_levels - magnitude
             };
-            codes.push(code);
         }
 
-        (codes, ip, qed_length)
+        (ip, qed_length)
     }
 
     /// Compute scale/offset for dequantization.
