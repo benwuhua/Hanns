@@ -970,6 +970,7 @@ impl IndexWrapper {
         match &mut self.kind {
             IndexKind::Hnsw(idx) => { idx.set_ef_search(ef_search); Ok(()) }
             IndexKind::DiskAnn(idx) => { idx.set_search_list_size(ef_search); Ok(()) }
+            IndexKind::DiskAnnPcaUsq(_) => Ok(()),
             _ => Err(CError::InvalidArg),
         }
     }
@@ -1073,6 +1074,29 @@ impl IndexWrapper {
                 let bitset_view = crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_len);
                 idx.search_batch_with_bitset(query_slice, top_k, &bitset_view).ok()?
             }
+            IndexKind::DiskAnnPcaUsq(idx) => {
+                if dim == 0 || query_slice.len() % dim != 0 {
+                    return None;
+                }
+                let start = std::time::Instant::now();
+                let num_queries = query_slice.len() / dim;
+                let mut ids = Vec::with_capacity(num_queries * top_k);
+                let mut distances = Vec::with_capacity(num_queries * top_k);
+                for query in query_slice.chunks_exact(dim) {
+                    let row = idx.search(query, top_k).ok()?;
+                    let row_len = row.len().min(top_k);
+                    for (dist, id) in row.into_iter().take(top_k) {
+                        ids.push(if id == u32::MAX { -1 } else { id as i64 });
+                        distances.push(dist);
+                    }
+                    for _ in row_len..top_k {
+                        ids.push(-1);
+                        distances.push(f32::MAX);
+                    }
+                }
+                let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                ApiSearchResult::new(ids, distances, elapsed_ms)
+            }
             _ => {
                 eprintln!("search_with_bitset not supported for this index type");
                 return None;
@@ -1110,6 +1134,7 @@ impl IndexWrapper {
             IndexKind::SparseWand(idx) => idx.n_rows(),
             IndexKind::SparseWandCc(idx) => idx.n_rows(),
             IndexKind::MinHashLsh(idx) => idx.count(),
+            IndexKind::DiskAnnPcaUsq(idx) => idx.count(),
             _ => 0,
         }
     }
@@ -1126,6 +1151,7 @@ impl IndexWrapper {
             IndexKind::SparseInverted(idx) => idx.is_trained(),
             IndexKind::SparseWand(idx) => idx.is_trained(),
             IndexKind::MinHashLsh(idx) => idx.is_trained(),
+            IndexKind::DiskAnnPcaUsq(_) => true,
             _ => self.count() > 0,
         }
     }
@@ -1149,6 +1175,7 @@ impl IndexWrapper {
             IndexKind::SparseWand(idx) => idx.size(),
             IndexKind::SparseWandCc(idx) => idx.size(),
             IndexKind::MinHashLsh(idx) => idx.memory_usage(),
+            IndexKind::DiskAnnPcaUsq(idx) => idx.count() * idx.proj_dim() * 4,
             _ => 0,
         }
     }
@@ -1543,6 +1570,7 @@ impl IndexWrapper {
                 self.serialize_sparse_payload(payload)
             }
             IndexKind::Scann(_) => Err(CError::NotImplemented),
+            IndexKind::DiskAnnPcaUsq(_) => Err(CError::NotImplemented),
             _ => Err(CError::InvalidArg),
         }
     }
@@ -1592,6 +1620,7 @@ impl IndexWrapper {
                 Ok(())
             }
             IndexKind::Scann(_) => Err(CError::NotImplemented),
+            IndexKind::DiskAnnPcaUsq(_) => Err(CError::NotImplemented),
             _ => Err(CError::InvalidArg),
         }
     }
@@ -1611,6 +1640,7 @@ impl IndexWrapper {
             IndexKind::IvfPq(idx) => idx.save(path).map_err(|_| CError::Internal),
             IndexKind::MinHashLsh(idx) => idx.save(path.to_str().unwrap()).map_err(|_| CError::Internal),
             IndexKind::DiskAnn(idx) => idx.save(path).map(|_| ()).map_err(|_| CError::Internal),
+            IndexKind::DiskAnnPcaUsq(idx) => idx.save(path).map_err(|_| CError::Internal),
             _ => Err(CError::InvalidArg),
         }
     }
@@ -1634,6 +1664,10 @@ impl IndexWrapper {
             IndexKind::MinHashLsh(idx) => idx.load(path.to_str().unwrap()).map_err(|_| CError::Internal),
             IndexKind::DiskAnn(idx) => {
                 *idx = crate::faiss::diskann_aisaq::PQFlashIndex::load(path).map_err(|_| CError::Internal)?;
+                Ok(())
+            }
+            IndexKind::DiskAnnPcaUsq(idx) => {
+                *idx = crate::faiss::DiskAnnPcaUsqIndex::load(path).map_err(|_| CError::Internal)?;
                 Ok(())
             }
             _ => Err(CError::InvalidArg),
@@ -6511,5 +6545,66 @@ mod tests {
             "DiskANN index creation must return non-null"
         );
         unsafe { knowhere_free_index(index as *mut _) };
+    }
+
+    #[test]
+    fn test_diskann_pca_usq_ffi_file_roundtrip_and_bitset_entry() {
+        use std::ffi::CString;
+
+        let tmp_dir = std::env::temp_dir().join(format!(
+            "diskann_pca_usq_ffi_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        let path_c = CString::new(tmp_dir.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let dim = 8usize;
+            let n = 32usize;
+            let config = CIndexConfig {
+                index_type: CIndexType::DiskAnnPcaUsq,
+                metric_type: CMetricType::L2,
+                dim,
+                pca_dim: 4,
+                ef_construction: 12,
+                ef_search: 24,
+                ..CIndexConfig::default()
+            };
+
+            let index = knowhere_create_index(config.clone());
+            assert!(!index.is_null());
+
+            let vectors: Vec<f32> = (0..n * dim).map(|i| i as f32 * 0.25).collect();
+            let ids: Vec<i64> = (0..n as i64).collect();
+
+            assert_eq!(knowhere_train_index(index, vectors.as_ptr(), n, dim), 0);
+            assert_eq!(knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), n, dim), 0);
+            assert_eq!(knowhere_get_index_count(index), n);
+            assert_eq!(knowhere_get_index_size(index), n * 4 * 4);
+            assert_eq!(knowhere_set_ef_search(index, 48), 0);
+            assert_eq!(knowhere_save_index(index, path_c.as_ptr()), 0);
+
+            let loaded = knowhere_create_index(config);
+            assert!(!loaded.is_null());
+            assert_eq!(knowhere_load_index(loaded, path_c.as_ptr()), 0);
+            assert_eq!(knowhere_get_index_count(loaded), n);
+
+            let bitset = knowhere_bitset_create(n);
+            assert!(!bitset.is_null());
+            knowhere_bitset_set(bitset, 0, true);
+
+            let query = &vectors[..dim];
+            let result = knowhere_search_with_bitset(loaded, query.as_ptr(), 1, 5, dim, bitset);
+            assert!(!result.is_null());
+            let result_ref = &*result;
+            assert_eq!(result_ref.num_results, 5);
+
+            knowhere_free_result(result);
+            knowhere_bitset_free(bitset);
+            knowhere_free_index(loaded);
+            knowhere_free_index(index);
+        }
+
+        let _ = std::fs::remove_dir_all(tmp_dir);
     }
 }

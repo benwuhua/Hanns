@@ -222,6 +222,88 @@ impl DiskAnnPcaUsqIndex {
 
         Ok(())
     }
+
+    pub fn load(dir: &Path) -> Result<Self> {
+        let graph_path = dir.join("diskann_graph.bin");
+        let meta_path = dir.join("diskann_pca_usq.meta");
+        let inner = PQFlashIndex::load(&graph_path)?;
+        let mut f = File::open(meta_path)?;
+
+        let mut magic = [0u8; 6];
+        f.read_exact(&mut magic)?;
+        if &magic != b"DAPUSQ" {
+            return Err(KnowhereError::Codec(
+                "invalid DiskAnnPcaUsqIndex magic".to_string(),
+            ));
+        }
+
+        let version = read_u32(&mut f)?;
+        if version != 1 {
+            return Err(KnowhereError::Codec(format!(
+                "unsupported DiskAnnPcaUsqIndex version {version}"
+            )));
+        }
+
+        let metric_type = metric_from_u32(read_u64(&mut f)? as u32)?;
+        let n = read_u64(&mut f)? as usize;
+        let d_in = read_u64(&mut f)? as usize;
+        let d_proj = read_u64(&mut f)? as usize;
+        let pca_dim = read_u64(&mut f)? as usize;
+        let bits_per_dim = read_u8(&mut f)?;
+        let rotation_seed = read_u64(&mut f)?;
+        let rerank_k = read_u64(&mut f)? as usize;
+        let pca = read_pca_transform(&mut f)?;
+
+        let mut quantizer = UsqQuantizer::new(
+            UsqConfig::new(d_proj, bits_per_dim)
+                .map_err(|e| KnowhereError::Codec(format!("USQ config error: {e}")))?
+                .with_seed(rotation_seed),
+        );
+
+        if read_u8(&mut f)? != 0 {
+            let centroid = read_vec_f32(&mut f)?;
+            if centroid.len() != d_proj {
+                return Err(KnowhereError::Codec(format!(
+                    "invalid centroid length: expected {d_proj}, got {}",
+                    centroid.len()
+                )));
+            }
+            quantizer.set_centroid(&centroid);
+        }
+
+        let code_count = read_u64(&mut f)? as usize;
+        let mut codes = Vec::with_capacity(code_count);
+        for _ in 0..code_count {
+            let packed_bits = read_vec_u8(&mut f)?;
+            let sign_bits = read_vec_u8(&mut f)?;
+            codes.push(UsqEncoded {
+                packed_bits,
+                sign_bits,
+                norm: read_f32(&mut f)?,
+                norm_sq: read_f32(&mut f)?,
+                vmax: read_f32(&mut f)?,
+                quant_quality: read_f32(&mut f)?,
+            });
+        }
+
+        Ok(Self {
+            inner,
+            metric_type,
+            quantizer,
+            codes,
+            pca,
+            n,
+            d_in,
+            d_proj,
+            config: DiskAnnPcaUsqConfig {
+                base: AisaqConfig::default(),
+                pca_dim,
+                bits_per_dim,
+                rotation_seed,
+                rerank_k,
+            },
+        })
+    }
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -234,9 +316,64 @@ fn metric_to_u32(m: MetricType) -> u32 {
     }
 }
 
+fn metric_from_u32(metric: u32) -> Result<MetricType> {
+    match metric {
+        0 => Ok(MetricType::L2),
+        1 => Ok(MetricType::Cosine),
+        other => Err(KnowhereError::Codec(format!(
+            "unknown DiskAnnPcaUsq metric type tag {other}"
+        ))),
+    }
+}
+
+fn read_u8(f: &mut impl Read) -> Result<u8> {
+    let mut b = [0u8; 1];
+    f.read_exact(&mut b)
+        .map_err(|e| KnowhereError::Codec(e.to_string()))?;
+    Ok(b[0])
+}
+
+fn read_u32(f: &mut impl Read) -> Result<u32> {
+    let mut b = [0u8; 4];
+    f.read_exact(&mut b)
+        .map_err(|e| KnowhereError::Codec(e.to_string()))?;
+    Ok(u32::from_le_bytes(b))
+}
+
 fn write_u64(f: &mut impl Write, v: u64) -> Result<()> {
     f.write_all(&v.to_le_bytes())
         .map_err(|e| KnowhereError::Codec(e.to_string()))
+}
+
+fn read_u64(f: &mut impl Read) -> Result<u64> {
+    let mut b = [0u8; 8];
+    f.read_exact(&mut b)
+        .map_err(|e| KnowhereError::Codec(e.to_string()))?;
+    Ok(u64::from_le_bytes(b))
+}
+
+fn read_f32(f: &mut impl Read) -> Result<f32> {
+    let mut b = [0u8; 4];
+    f.read_exact(&mut b)
+        .map_err(|e| KnowhereError::Codec(e.to_string()))?;
+    Ok(f32::from_le_bytes(b))
+}
+
+fn read_vec_f32(f: &mut impl Read) -> Result<Vec<f32>> {
+    let len = read_u64(f)? as usize;
+    let mut values = Vec::with_capacity(len);
+    for _ in 0..len {
+        values.push(read_f32(f)?);
+    }
+    Ok(values)
+}
+
+fn read_vec_u8(f: &mut impl Read) -> Result<Vec<u8>> {
+    let len = read_u64(f)? as usize;
+    let mut values = vec![0u8; len];
+    f.read_exact(&mut values)
+        .map_err(|e| KnowhereError::Codec(e.to_string()))?;
+    Ok(values)
 }
 
 fn write_pca_transform(f: &mut impl Write, pca: Option<&PcaTransform>) -> Result<()> {
@@ -262,15 +399,30 @@ fn write_pca_transform(f: &mut impl Write, pca: Option<&PcaTransform>) -> Result
     Ok(())
 }
 
+fn read_pca_transform(f: &mut impl Read) -> Result<Option<PcaTransform>> {
+    if read_u8(f)? == 0 {
+        return Ok(None);
+    }
+
+    Ok(Some(PcaTransform {
+        d_in: read_u64(f)? as usize,
+        d_out: read_u64(f)? as usize,
+        mean: read_vec_f32(f)?,
+        components: read_vec_f32(f)?,
+    }))
+}
+
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{thread_rng, Rng};
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+    use tempfile::tempdir;
 
     fn make_data(n: usize, d: usize) -> Vec<f32> {
-        let mut rng = thread_rng();
+        let mut rng = StdRng::seed_from_u64(42);
         (0..n * d).map(|_| rng.gen::<f32>()).collect()
     }
 
@@ -300,6 +452,46 @@ mod tests {
 
         let query = make_data(1, dim);
         let results = idx.search(&query, 5).expect("search failed");
+        assert_eq!(results.len(), 5);
+    }
+
+    #[test]
+    fn test_diskann_pca_usq_save_load_roundtrip() {
+        let dim = 16usize;
+        let n = 64usize;
+        let data = make_data(n, dim);
+        let dir = tempdir().expect("tempdir failed");
+
+        let config = DiskAnnPcaUsqConfig {
+            base: AisaqConfig {
+                max_degree: 16,
+                search_list_size: 32,
+                ..Default::default()
+            },
+            pca_dim: 8,
+            bits_per_dim: 4,
+            rotation_seed: 7,
+            rerank_k: 24,
+        };
+
+        let mut idx =
+            DiskAnnPcaUsqIndex::new(dim, MetricType::L2, config.clone()).expect("new failed");
+        idx.build(&data, n, dim).expect("build failed");
+        idx.save(dir.path()).expect("save failed");
+
+        let loaded = DiskAnnPcaUsqIndex::load(dir.path()).expect("load failed");
+        assert_eq!(loaded.count(), idx.count());
+        assert_eq!(loaded.orig_dim(), idx.orig_dim());
+        assert_eq!(loaded.proj_dim(), idx.proj_dim());
+        assert_eq!(loaded.config.pca_dim, config.pca_dim);
+        assert_eq!(loaded.config.bits_per_dim, config.bits_per_dim);
+        assert_eq!(loaded.config.rotation_seed, config.rotation_seed);
+        assert_eq!(loaded.config.rerank_k, config.rerank_k);
+        assert_eq!(loaded.quantizer.centroid(), idx.quantizer.centroid());
+        assert_eq!(loaded.codes.len(), idx.codes.len());
+
+        let query = &data[..dim];
+        let results = loaded.search(query, 5).expect("search failed");
         assert_eq!(results.len(), 5);
     }
 }
