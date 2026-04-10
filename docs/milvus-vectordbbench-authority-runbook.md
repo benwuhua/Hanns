@@ -22,11 +22,11 @@ Do not hand-roll:
 
 Use the checked-in remote wrapper:
 
-- `/data/work/milvus-rs-integ/milvus-src/scripts/hanns-shim/start_standalone_remote.sh`
+- `/data/work/milvus-rs-integ/milvus-src/scripts/knowhere-rs-shim/start_standalone_remote.sh`
 
 That wrapper sources:
 
-- `/data/work/milvus-rs-integ/milvus-src/scripts/hanns-shim/remote_env.sh`
+- `/data/work/milvus-rs-integ/milvus-src/scripts/knowhere-rs-shim/remote_env.sh`
 
 It is the canonical entrypoint because it already carries:
 
@@ -56,7 +56,7 @@ On `hannsdb-x86`:
 
 ```bash
 cd /data/work/milvus-rs-integ/milvus-src
-scripts/hanns-shim/start_standalone_remote.sh
+scripts/knowhere-rs-shim/start_standalone_remote.sh
 ```
 
 Expected success output:
@@ -112,7 +112,7 @@ Known reference results:
 3. Rebuild the Rust library:
    - `CARGO_TARGET_DIR=/data/work/milvus-rs-integ/hanns-target cargo build --release --lib`
 4. Restart standalone only through:
-   - `/data/work/milvus-rs-integ/milvus-src/scripts/hanns-shim/start_standalone_remote.sh`
+   - `/data/work/milvus-rs-integ/milvus-src/scripts/knowhere-rs-shim/start_standalone_remote.sh`
 5. Run the required native or rs lane by the checked-in VectorDBBench script.
 6. Read authority evidence only from:
    - `/data/work/milvus-rs-integ/milvus-var/logs/standalone-stage1.log`

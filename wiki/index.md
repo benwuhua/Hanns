@@ -1,6 +1,6 @@
 # hanns Wiki — Index
 
-> LLM 维护。最后更新：2026-04-09。
+> LLM 维护。最后更新：2026-04-10。
 
 **项目目标**：Rust 实现的 Milvus KnowHere，在核心 CPU 路径上全面超越原生 C++。
 
@@ -10,7 +10,7 @@
 
 | Index | 状态 | 关键指标 |
 |-------|------|---------|
-| HNSW | ✅ **LEADING** | Milvus c=80: 1042 QPS vs native ~800 (+30%); standalone batch: 17,814 vs native 15,918 (+11.9%) |
+| HNSW | ✅ **LEADING** | Milvus c=80: 1042 QPS vs native ~800 (+30%); standalone batch: 17,814 vs native 15,918 (+11.9%); **vs Lance: search 1.6× faster (Cohere-1M)** |
 | HNSW-PCA-SQ / HNSW-PCA-USQ | 🔄 **集成中** | FFI 接通，待 Milvus 验证 |
 | DiskANN (Milvus) | ✅ **PARITY** | serial 11.2 vs native 11.4 QPS (−2%，误差范围内) |
 | DiskANN-PCA-USQ | 🔄 **集成中** | FFI 接通，待 Milvus 验证 |
@@ -48,6 +48,7 @@
 ## Machines
 
 - [[machines/hannsdb-x86]] — 权威 benchmark 机器：路径、Milvus 启动、构建命令
+- [[machines/knowhere-x86-hk-proxy]] — 辅助 x86 机器：HannsDB standalone + Zvec VDBB 对比
 
 ---
 

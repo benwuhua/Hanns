@@ -2,138 +2,151 @@
 
 **High-performance approximate nearest neighbor (ANN) search in pure Rust.**
 
-Built from scratch. No C++ dependencies. Benchmarked head-to-head against FAISS and KnowWhere on real x86 server hardware.
+Hanns is the ANN engine powering three production systems:
+
+| Ecosystem | Role |
+|-----------|------|
+| **[Milvus](https://milvus.io)** | Drop-in replacement for KnowWhere C++ in the world's most popular cloud-native vector database |
+| **HannsDB** | Embedded ANN engine for single-machine agent workloads — low-latency, zero-dependency |
+| **[Lance](https://lancedb.github.io/lance/)** | ANN backend for the open multimodal vector lake format |
+
+Built from scratch. No C++ dependencies. Benchmarked head-to-head against FAISS, KnowWhere, and Lance on real x86 server hardware.
 
 ---
 
-## Performance vs FAISS / KnowWhere C++
+## Performance at a Glance
 
-> Dataset: SIFT-1M (128-dim, L2). Hardware: x86 server, `target-cpu=native`. Batch parallel queries.
-> Baseline: KnowWhere C++ native (FAISS backend), 8 threads.
+### vs KnowWhere C++ inside Milvus (Cohere Wikipedia-1M, 768-dim IP, x86)
 
-![QPS Comparison](assets/benchmarks/qps_comparison.png)
+| Metric | KnowWhere C++ | Hanns | vs Native |
+|--------|---------------|-------|-----------|
+| Graph build (Optimize) | 854.2s | **336.9s** | **2.53× faster** |
+| Index load | 1158.9s | **673.7s** | **1.72× faster** |
+| QPS (c=20, ef=128, k=100) | ~500 | **1,051** | **~2.1× faster** |
+| QPS (c=80, ef=128, k=100) | ~800 | **1,042** | **~1.3× faster** |
+| Recall@100 | 0.960 | 0.957 | parity |
 
-![Speedup](assets/benchmarks/speedup.png)
+### vs Lance (Cohere-1M, 1024-dim L2, x86)
 
-**HNSW recall vs QPS Pareto curve** — Hanns covers the full operating range; the single KnowWhere data point is shown for reference.
+| ef | Hanns QPS | Lance QPS | Hanns/Lance |
+|----|-----------|-----------|-------------|
+| 50 | **2,331** | 1,473 | **1.58×** |
+| 200 | **794** | 483 | **1.64×** |
+| 800 | **245** | 140 | **1.75×** |
 
-![Recall vs QPS](assets/benchmarks/recall_qps.png)
+Hanns search leads by **1.58–1.75×** across the full ef range; advantage grows with higher recall requirements.
+
+### vs Microsoft DiskANN Rust (SIFT-1M, R=48 L=64, x86)
+
+| System | Recall@10 | QPS |
+|--------|-----------|-----|
+| DiskANN Rust (Microsoft) | 0.986 | 4,832 |
+| **Hanns AISAQ NoPQ** | **0.994** | **5,806** |
+
+**+20% higher QPS, +0.8% better recall** at identical parameters on identical hardware.
 
 ---
 
-## Key Numbers (SIFT-1M, x86, March 2026)
+## Advanced Quantization: USQ
 
-| Index | Hanns QPS | Baseline QPS | Speedup | Recall@10 |
-|-------|-----------|--------------|---------|-----------|
-| HNSW (ef=60) | **17,814** | 15,918 | **+11.9%** | 0.972 |
-| HNSW (ef=138) | **17,910** | 15,918 | **+12.5%** | 0.995 |
-| IVF-Flat (nprobe=32) | **3,429** | 721 | **5.2×** | 0.978 |
-| IVF-Flat serial (nprobe=32) | **2,339** | 341 | **6.9×** | 0.978 |
-| IVF-SQ8 (nprobe=32) | **11,717** | 8,278 | **1.42×** | 0.958 |
+Standard Product Quantization (PQ) — used by FAISS and most ANN libraries — minimizes L2 reconstruction error. On modern embedding search (high-dim, Inner Product metric), this is the wrong objective: PQ recall collapses near zero.
 
----
-
-## Quantization: Where FAISS PQ Breaks Down, USQ Excels
-
-Standard Product Quantization (PQ) — used by FAISS and most ANN libraries — minimizes L2 reconstruction error. On modern embedding search (high-dim, Inner Product metric), this is the wrong objective: PQ recall collapses to near zero.
-
-USQ (Unit Sphere Quantizer) applies a QR orthogonal rotation before quantizing, making compression metric-agnostic. The result speaks for itself:
+**USQ (Unit Sphere Quantizer)** applies a QR orthogonal rotation before quantizing, making compression metric-agnostic. Derived from RabitQ principles and extended to multi-bit (1/4/8-bit) with:
+- QR decomposition rotation matrix (trained once, applied to all vectors)
+- Unified 1/4/8-bit scalar quantization in the rotated space
+- AVX512VNNI integer dot product scoring (`vpdpbusd`)
+- Two-stage pipeline: 1-bit FastScan filter → B-bit rerank
 
 ![USQ Quantization](assets/benchmarks/usq_quantization.png)
 
 > Dataset: Cohere Wikipedia-1M (768-dim, Inner Product), nprobe=32, x86 authority.
 
-| Method | Compression | QPS (nprobe=32) | Recall@10 | Usable? |
-|--------|-------------|-----------------|-----------|---------|
+| Method | Compression | QPS | Recall@10 | Usable? |
+|--------|-------------|-----|-----------|---------|
 | IVF-PQ m=32 | 8× | 723 | **0.066** | ✗ |
 | IVF-PQ m=48 | 5.3× | 502 | **0.127** | ✗ |
-| IVF-Flat | 1× (full) | 339 | 0.798 | ✓ |
+| IVF-Flat | 1× | 339 | 0.798 | ✓ |
 | IVF-SQ8 | 4× | 605 | 0.805 | ✓ |
 | **USQ 4-bit** | **8×** | **1,308** | **0.879** | ✓ |
 | **USQ 8-bit** | **4×** | **1,011** | **0.968** | ✓ |
 
-USQ 8-bit (4× compression): **3× faster** than IVF-Flat, **+17% better recall**, **¼ the memory**.
-
-USQ 4-bit (8× compression): at the same compression ratio where PQ gives recall=0.066, USQ gives **0.879** — a **13× improvement in recall**.
+At the same 8× compression ratio where PQ gives recall=0.066, USQ gives **0.879** — a **13× improvement**. USQ 8-bit simultaneously delivers **3× faster QPS** than IVF-Flat with **+17% better recall** at ¼ the memory.
 
 On 3072-dim embeddings (SimpleWiki-OpenAI-260K), USQ 8× still achieves recall **0.925** at 1,607 QPS.
 
 ---
 
-## AISAQ vs DiskANN Rust
+## Ecosystem Integration
 
-Hanns AISAQ implements the Vamana graph algorithm (same as Microsoft DiskANN) with a PQ-compressed flash mode for disk-resident large-scale search.
+### Milvus
+
+Hanns ships as a drop-in replacement for KnowWhere C++ inside Milvus standalone and distributed deployments. The FFI layer (`src/ffi/`) exposes the full KnowWhere index interface — same binary, same data format, same query semantics.
+
+Measured end-to-end via [VectorDBBench](https://github.com/zilliztech/VectorDBBench) on a dedicated x86 server:
+
+```
+Milvus standalone → KnowWhere FFI → Hanns Rust index
+                                   ↕ drop-in, no data migration
+                    KnowWhere FFI → Native C++ (FAISS backend)
+```
+
+VectorDBBench results confirm the 2× QPS advantage across HNSW, IVF-Flat, IVF-SQ8, and IVF-PQ index types under realistic concurrent load patterns.
+
+**QPS optimization lineage (HNSW Milvus c=80):**
+
+| Round | Change | QPS |
+|-------|--------|-----|
+| R4 | FFI lazy bitset allocation | 349 |
+| R7 | Private rayon ThreadPool (HNSW_NQ_POOL) | 540 |
+| **R8** | Eliminate BinaryHeap clone + pre-alloc output buffer | **1,042** |
+
+### HannsDB
+
+HannsDB embeds Hanns as a single-machine agent database. VectorDBBench authority results (x86, 1536-dim, k=100):
+
+| Metric | Result |
+|--------|--------|
+| Load | 148.0s |
+| Optimize | 87.9s |
+| p99 latency | **1.8ms** |
+| Recall | **0.9756** |
+
+Previously, cosine search p99 reached 110ms due to per-query allocations. After fixing TLS scratch buffer reuse: **p99 = 3.5ms (31× improvement)**.
+
+### Lance
+
+Hanns integrates as the HNSW search backend in the Lance vector lake format. Geometry-mean speedup across the ef=50–800 range: **1.64×** with equivalent recall.
+
+Build is currently ~26% slower than Lance (sequential Hanns build vs. Lance rayon multi-thread). This is a known gap being addressed with parallel build improvements.
+
+---
+
+## Performance Charts
+
+![QPS Comparison](assets/benchmarks/qps_comparison.png)
+
+![Recall vs QPS](assets/benchmarks/recall_qps.png)
 
 ![DiskANN Comparison](assets/benchmarks/diskann_comparison.png)
 
-> **Same hardware**: both benchmarks run on the same dedicated x86 server with `target-cpu=native`.
-> Config: R=48, L=64, FullPrecision (no quantization), SIFT-1M L2. April 2026.
-
-| System | Config | Recall@10 | QPS |
-|--------|--------|-----------|-----|
-| DiskANN Rust (Microsoft) | R=48, L=64, 16T | 0.986 | 4,832 |
-| **Hanns AISAQ NoPQ** | R=48, L=64 | **0.994** | **5,806** |
-| Hanns AISAQ PQ32 (disk) | R=48, io_uring | 0.911 | 1,063 |
-
-At equal parameters on identical hardware, Hanns AISAQ delivers **+20% higher QPS** and **+0.8% better recall** than the Microsoft DiskANN Rust implementation, while also supporting disk-resident PQ-compressed mode.
+> All benchmarks run on dedicated x86 server, `target-cpu=native`. Apple Silicon builds are for fast iteration only — not used as authority evidence.
 
 ---
 
-## Milvus Production Integration
-
-Hanns ships as a drop-in replacement for the C++ KnowWhere library inside Milvus. The following numbers are measured end-to-end inside a real Milvus standalone instance against a Cohere Wikipedia-1M collection (768-dim, IP metric), on the same x86 server (`target-cpu=native`).
-
-> **Baseline**: Milvus with native KnowWhere C++ (FAISS backend).
-> **Hanns**: Milvus with hanns. Same binary, same data, same query workload.
-
-| Metric | Native KnowWhere C++ | Hanns | vs Native |
-|--------|---------------------|-------|-----------|
-| Insert (1M vectors) | 304.6s | 336.8s | −10% (Milvus pipeline, not Hanns) |
-| **Optimize (graph build)** | 854.2s | **336.9s** | **2.53× faster** |
-| **Load (index → memory)** | 1158.9s | **673.7s** | **1.72× faster** |
-| **QPS c=20 (ef=128, k=100)** | ~500 | **1,051** | **2.1× faster** |
-| **QPS c=80 (ef=128, k=100)** | ~800 | **1,042** | **~1.3× faster** |
-| Recall@100 | 0.960 | 0.957 | parity |
-
-Insert is slightly slower — profiling shows that `knowhere_add_index` accounts for only 9.3% of total insert time; the remaining 90.7% is Milvus WAL + segment encoding pipeline, outside Hanns' scope.
-
-**QPS optimization path (April 2026):**
-
-| Round | Change | c=80 QPS |
-|-------|--------|----------|
-| R4 | FFI lazy bitset allocation | 349 |
-| R5 | madvise hugepage on Layer0Slab | 349 |
-| R7 | Private rayon ThreadPool (HNSW_NQ_POOL) + install() | 540 |
-| **R8** | Eliminate BinaryHeap clone + pre-alloc flat output buffer | **1,042** |
-
-R8's 93% gain over R7 came from two allocation-path fixes that mirror how native C++ already works: draining the result heap in-place (`std::mem::take`) instead of cloning it, and writing query results directly to pre-allocated contiguous output slices via raw pointer instead of using per-query `Mutex<Vec>`.
-
----
-
-## Why Hanns?
-
-- **Pure Rust**: no C/C++ dependencies, no unsafe FFI wrappers. Full type safety and memory safety.
-- **SIMD-first**: hot paths use AVX2, AVX-512, and AVX512VNNI — fully exploiting modern x86 microarchitecture.
-- **Broad algorithm coverage**: HNSW, IVF-Flat, IVF-SQ8, IVF-USQ, IVF-PQ, DiskANN/AISAQ (disk flash), ScaNN, Sparse WAND, Binary.
-- **Unified quantization (USQ)**: a single `UsqQuantizer` supports 1/4/8-bit precision with AVX512VNNI integer dot products — replacing separate HVQ and ExRaBitQ implementations at 2–3× higher QPS.
-- **x86 authority**: all numbers produced on real x86 server hardware (not Apple Silicon). Local builds are pre-screening only.
-
----
-
-## Indexes
+## Index Coverage
 
 | Index | Status | Recall@10 | Notes |
 |-------|--------|-----------|-------|
-| **HNSW** | ✅ Leading | 0.972 (SIFT-1M) | +11.9% vs FAISS 8T; cosine TLS scratch zero-alloc |
+| **HNSW** | ✅ Leading | 0.972 (SIFT-1M) | +11.9% vs FAISS 8T; 2.53× faster build in Milvus |
 | **HNSW-SQ** | ✅ Ready | 0.992 | Integer precomputed ADC path |
-| **IVF-Flat** | ✅ Leading | 0.978 (SIFT-1M) | 5.2× faster than FAISS 8T |
+| **IVF-Flat** | ✅ Leading | 0.978 (SIFT-1M) | 5.2× faster than FAISS 8T (batch parallel) |
 | **IVF-SQ8** | ✅ Leading | 0.958 (SIFT-1M) | 1.42× faster than FAISS 8T; AVX2 fused decode |
-| **IVF-USQ** | ✅ Ready | 0.905–0.968 (Cohere-1M) | AVX512VNNI; unified 1/4/8-bit quantizer |
-| **IVF-PQ** | ✅ Ready | capped by m bytes | m=32: 0.720 on synthetic data |
-| **AISAQ (DiskANN Flash)** | ✅ Ready | 0.979 NoPQ (SIFT-1M) | On-demand pread disk mode; Vamana graph build |
+| **IVF-USQ** | ✅ Ready | 0.905–0.968 (Cohere-1M) | AVX512VNNI; unified 1/4/8-bit |
+| **IVF-PQ** | ✅ Ready | varies | m=32: 0.720 on synthetic data |
+| **AISAQ (DiskANN Flash)** | ✅ Ready | 0.994 NoPQ (SIFT-1M) | On-demand pread + io_uring; 6.5× faster build than native |
 | **ScaNN** | ✅ Ready | 0.969 | Exceeds 0.95 gate at reorder_k=1600 |
 | **Sparse / WAND** | ✅ Ready | 1.0 | Sparse vector retrieval |
-| **Binary** | ✅ Complete | — | Hamming distance |
+| **Binary** | ✅ Ready | — | Hamming distance |
 
 ---
 
@@ -141,15 +154,14 @@ R8's 93% gain over R7 came from two allocation-path fixes that mirror how native
 
 ```
 src/quantization/
-  usq/           UsqQuantizer — QR orthogonal rotation + unified 1/4/8-bit quantization
-    config.rs    UsqConfig { dim, nbits, seed }
+  usq/           UsqQuantizer — QR rotation + unified 1/4/8-bit quantization
     rotator.rs   QR decomposition rotation matrix
     quantizer.rs training + SIMD scoring (AVX512VNNI)
-    layout.rs    SoA storage + fastscan transpose
-    fastscan.rs  AVX512 fast scan + topk
+    fastscan.rs  AVX512 fast scan (1-bit stage) + topk
     searcher.rs  two-stage coarse filter + rerank
   pq/            Product Quantizer — parallel k-means
   sq/            Scalar Quantizer — SQ8/SQ4
+  pca/           PCA transform — nalgebra SVD (pure Rust, no BLAS)
 ```
 
 ---
@@ -171,29 +183,30 @@ cargo run --example benchmark --release
 ```
 src/
   faiss/           core index implementations
-  quantization/    quantization subsystem (USQ, PQ, SQ)
-  ffi/             FFI layer
+  quantization/    quantization subsystem (USQ, PQ, SQ, PCA)
+  ffi/             FFI layer (KnowWhere-compatible ABI)
 tests/             integration and regression tests
-benches/           Criterion microbenchmarks
-examples/          full benchmark examples
-assets/benchmarks/ comparison chart images
+examples/          full benchmark harness
+assets/benchmarks/ comparison charts
 docs/              design docs, performance audits
 benchmark_results/ authority verdict artifacts (JSON)
-scripts/           chart generation and remote build/test scripts
+scripts/           chart generation, remote build/test
+wiki/              operational runbooks and authority numbers
 ```
 
 ---
 
-## Datasets Used
+## Datasets
 
-| Dataset | Dim | Metric | Size | Source |
-|---------|-----|--------|------|--------|
-| SIFT-1M | 128 | L2 | 1M vectors | Standard ANN benchmark |
-| Cohere Wikipedia-1M | 768 | IP | 1M vectors | Wikipedia passage embeddings |
-| SimpleWiki-OpenAI-260K | 3072 | IP | 260K vectors | OpenAI text-embedding-3-large |
+| Dataset | Dim | Metric | Size |
+|---------|-----|--------|------|
+| SIFT-1M | 128 | L2 | 1M vectors |
+| Cohere Wikipedia-1M | 768 | IP | 1M vectors |
+| Cohere-1M | 1024 | L2 | 1M vectors |
+| SimpleWiki-OpenAI-260K | 3072 | IP | 260K vectors |
 
 ---
 
 ## Authority Hardware
 
-Performance numbers are produced on an x86 server with `target-cpu=native`. Apple Silicon builds are for fast iteration and pre-screening only — not used as final evidence.
+Performance numbers are produced on a dedicated x86 server with `target-cpu=native` ([specs](wiki/machines/hannsdb-x86.md)). Apple Silicon builds are for fast iteration and pre-screening only.

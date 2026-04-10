@@ -14,6 +14,27 @@
 
 build: 561s (parallel, M=16, ef_c=200)
 
+## HNSW — vs Lance（Cohere-1M, ecs-hk-1b, 2026-04-10）
+
+**数据集**：1,000,000 × 1024d, L2, K=10, 100 queries
+**配置**：M=16, ef_construction=200
+
+| ef | Hanns recall | Hanns QPS | Lance recall | Lance QPS | Hanns/Lance |
+|----|-------------|-----------|-------------|-----------|-------------|
+| 50 | 0.9950 | **2,331** | 0.9960 | 1,473 | **1.58×** |
+| 100 | 0.9950 | **1,433** | 0.9970 | 897 | **1.60×** |
+| 200 | 0.9950 | **794** | 0.9970 | 483 | **1.64×** |
+| 400 | 0.9960 | **443** | 0.9990 | 261 | **1.70×** |
+| 800 | 0.9960 | **245** | 1.0000 | 140 | **1.75×** |
+
+**Build**：Hanns 129.63s (64T parallel) vs Lance **96.45s** (rayon multi-T) → Lance build 快 26%
+**Search**：Hanns 几何平均 **1.64× 更快**（0.61 geometric mean reciprocal）
+
+**结论**：
+- Hanns search 全面领先（1.58-1.75×），优势随 ef 增大而扩大
+- Lance build 快 26%（Hanns serial_fraction 18% 瓶颈）
+- 两者 recall 均极高，Lance 在高 ef 时 recall 略高（1.000 vs 0.996）
+
 ## HNSW — Milvus（Cohere-1M, hannsdb-x86, R8, 2026-04-07）
 
 | 指标 | native | RS R8 | RS vs native |

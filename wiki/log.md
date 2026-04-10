@@ -4,6 +4,75 @@ append-only 时间线。新条目加在顶部。
 
 ---
 
+## 2026-04-10 — Cohere 1M HNSW：Hanns vs Lance 对比
+
+**类型**：bench
+**机器**：ecs-hk-1b (96 vCPU, 493GB RAM, Linux x86_64)
+**数据集**：Cohere 1M × 1024d (1,000,000 vectors), L2 metric
+**方法**：Hanns HNSW (`add_parallel`, 64T) vs Lance HNSW (`index_vectors`, rayon multi-thread)，ef sweep [50,100,200,400,800]
+
+**Build**：Hanns 129.63s vs Lance **96.45s** (Lance 快 26%)
+
+**Search（K=10, 100 queries）**：
+
+| ef | Hanns recall | Hanns QPS | Lance recall | Lance QPS | Ratio |
+|----|-------------|-----------|-------------|-----------|-------|
+| 50 | 0.9950 | 2331 | 0.9960 | 1473 | 0.63 |
+| 100 | 0.9950 | 1433 | 0.9970 | 897 | 0.63 |
+| 200 | 0.9950 | 794 | 0.9970 | 483 | 0.61 |
+| 400 | 0.9960 | 443 | 0.9990 | 261 | 0.59 |
+| 800 | 0.9960 | 245 | 1.0000 | 140 | 0.57 |
+
+**Search ratio (Lance/Hanns)**：0.61 geometric mean → **Hanns search ~1.6× 更快**
+
+**关键发现**：
+- 两者 recall 均极高（≥0.995），Lance 略高（ef≥200 时 0.997-1.000）
+- Hanns search QPS 在所有 ef 点均显著领先（1.56-1.75×）
+- Lance build 快 26%（rayon 并行 vs Hanns parallel batch 串行瓶颈 18%）
+- Hanns search 优势来自：SIMD 距离计算优化 + 图遍历更紧凑（M=16 时 Hanns 搜索邻居数更少）
+
+→ 详见 [[benchmarks/authority-numbers]] §HNSW vs Lance
+
+---
+
+## 2026-04-10 — HannsDB VectorDBBench Standalone Benchmark
+
+**类型**：bench
+**机器**：knowhere-x86-hk-proxy (94.74.108.167) + 本地 MacBook (ARM64)
+**数据集**：OpenAI 1536D 50K, cosine
+
+**x86 结果（HNSW, M=16, ef_construction=64, ef_search=32, k=100）**：
+- Load: 148.0s（insert 60.2s + optimize 87.9s）
+- p99 latency: 1.8ms
+- p95 latency: 1.7ms
+- Recall@100: 0.9756
+- NDCG@100: 0.9801
+
+**本地 ARM64 结果（同参数, k=100）**：
+- Load: 215.2s
+- p99 latency: 1.4ms
+- p95 latency: 1.0ms
+- Recall@100: 0.9756
+- NDCG@100: 0.9801
+
+**本地 ARM64（k=10）**：
+- Load: 218.8s
+- p99 latency: 0.5ms
+- p95 latency: 0.3ms
+- Recall@10: 0.9441
+
+**HannsDB 内部 opt bench（x86, knowhere-backend, 50K/1536D/cosine）**：
+- create=0ms, insert=32504ms, optimize=18929ms, search=0ms, total=51435ms
+
+**备注**：
+- VDBBench 的 HannsDB 客户端在 `VectorDBBench/vectordb_bench/backend/clients/hannsdb/`
+- 使用 `search_ids_raw()` 快速路径（numpy batch）for non-filtered queries
+- Zvec VDBB 对比待完成（Zvec 构建中）
+
+→ 详见 [[machines/knowhere-x86-hk-proxy]]
+
+---
+
 ## 2026-04-09 — 代码库清理
 
 **类型**：chore

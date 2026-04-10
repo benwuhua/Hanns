@@ -157,7 +157,7 @@ ssh hannsdb-x86 'cd /data/work/VectorDBBench && DATASET_LOCAL_DIR=/data/work/dat
 
 # Native（需要重启 Milvus + BYPASS）
 ssh hannsdb-x86 'pkill -f "milvus run" || true; sleep 5'
-ssh hannsdb-x86 'HANNS_HNSW_BYPASS=1 nohup bash /data/work/milvus-rs-integ/milvus-src/scripts/hanns-shim/start_standalone_remote.sh > /tmp/milvus_native.log 2>&1 &'
+ssh hannsdb-x86 'HANNS_HNSW_BYPASS=1 bash /data/work/milvus-rs-integ/milvus-src/scripts/knowhere-rs-shim/start_standalone_remote.sh'
 sleep 30
 
 ssh hannsdb-x86 'cd /data/work/VectorDBBench && DATASET_LOCAL_DIR=/data/work/datasets .venv/bin/python3 -m vectordb_bench.cli.cli MilvusHNSW --uri http://localhost:19530 --m 16 --ef-construction 200 --ef-search 128 --case-id Performance768D1M --db-label native-hnsw 2>&1 | tee /tmp/vdb_native.log'
@@ -188,6 +188,60 @@ export DATASET_LOCAL_DIR=/data/work/datasets
 - **数据集目录**：必须设 `DATASET_LOCAL_DIR=/data/work/datasets`，否则会从 S3 下载
 - **Milvus 必须在运行**：`curl -s http://127.0.0.1:9091/healthz` 确认
 - **每个 case 会重建 collection**：`--drop-old=True`（默认行为）
+- **pydantic 必须 <2**：VDBBench 使用 pydantic v1 API（`@validator` 的 `field`/`config` 参数）
+
+---
+
+## HannsDB Standalone VDBB
+
+HannsDB 作为嵌入式数据库（不依赖 Milvus），可直接用 VDBBench 对比性能。
+
+### 客户端代码
+
+`VectorDBBench/vectordb_bench/backend/clients/hannsdb/`：
+- `cli.py` — click 命令注册（命令名：`hannsdb`，小写）
+- `config.py` — `HannsdbConfig`（path 参数）+ `HannsdbHNSWIndexConfig`（M/ef_construction/ef_search）
+- `hannsdb.py` — 实际的 insert/optimize/search 逻辑
+  - 使用 `search_ids_raw()` 快速路径（numpy batch）for non-filtered queries
+  - 使用 `collection.query()` for filtered queries
+
+### 运行命令
+
+```bash
+cd /data/work/VectorDBBench
+PYTHONPATH=. python3 -c "
+import vectordb_bench.backend.clients.hannsdb.cli
+from vectordb_bench.cli.cli import cli
+import sys
+sys.argv = [
+    'vectordbbench',
+    'hannsdb',
+    '--path', '/tmp/hannsdb-vdbb-1536d50k',
+    '--case-type', 'Performance1536D50K',
+    '--k', '100',
+    '--m', '16',
+    '--ef-construction', '64',
+    '--ef-search', '32',
+    '--skip-search-concurrent',
+    '--db-label', 'hannsdb-x86-hnsw-k100',
+]
+cli()
+"
+```
+
+### 权威结果（2026-04-10）
+
+| 机器 | k | Load(s) | Optimize(s) | p99(ms) | p95(ms) | Recall | NDCG |
+|------|---|---------|-------------|---------|---------|--------|------|
+| x86 (94.74.108.167) | 100 | 148.0 | 87.9 | 1.8 | 1.7 | 0.9756 | 0.9801 |
+| ARM64 MacBook | 100 | 215.2 | — | 1.4 | 1.0 | 0.9756 | 0.9801 |
+| ARM64 MacBook | 10 | 218.8 | — | 0.5 | 0.3 | 0.9441 | — |
+
+---
+
+## Zvec VDBB（待完成）
+
+Zvec VDBB 客户端在 `VectorDBBench/vectordb_bench/backend/clients/zvec/`。Zvec 构建需要 CMake ≥3.26 且 thirdparty 子模块完整。
 
 ---
 

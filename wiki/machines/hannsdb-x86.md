@@ -24,10 +24,10 @@
 | hanns build cache | `/data/work/milvus-rs-integ/hanns-target/` |
 | Milvus 源码 | `/data/work/milvus-rs-integ/milvus-src/` |
 | Milvus 二进制 | `/data/work/milvus-rs-integ/milvus-src/bin/milvus` |
-| RS shim 源码 | `milvus-src/internal/core/thirdparty/hanns-shim/` |
-| shim ABI header | `hanns-shim/src/cabi_bridge.hpp` |
-| DiskANN shim | `hanns-shim/src/diskann_rust_node.cpp` |
-| HNSW shim | `hanns-shim/src/hnsw_rust_node.cpp` |
+| RS shim 源码 | `milvus-src/internal/core/thirdparty/knowhere-rs-shim/` |
+| shim ABI header | `knowhere-rs-shim/src/cabi_bridge.hpp` |
+| DiskANN shim | `knowhere-rs-shim/src/diskann_rust_node.cpp` |
+| HNSW shim | `knowhere-rs-shim/src/hnsw_rust_node.cpp` |
 | SIFT-1M 数据 | `/data/work/datasets/sift-1m/`（base.fbin, query.fbin, gt.ibin）|
 | VectorDBBench venv | `/data/work/VectorDBBench/.venv/bin/python3` |
 
@@ -46,7 +46,7 @@ ssh hannsdb-x86 'cd /data/work/milvus-rs-integ/hanns && \
 ### Milvus shim 重建
 
 ```bash
-ssh hannsdb-x86 'cd /data/work/milvus-rs-integ/milvus-src/build && make -j8 2>&1 | tail -20'
+ssh hannsdb-x86 'cd /data/work/milvus-rs-integ/milvus-src/cmake_build && make -j8 knowhere 2>&1 | tail -20'
 ```
 
 ### Milvus 重启（保留数据）
@@ -55,8 +55,7 @@ ssh hannsdb-x86 'cd /data/work/milvus-rs-integ/milvus-src/build && make -j8 2>&1
 ssh hannsdb-x86 'pkill -f "milvus run" || true; sleep 3'
 ssh hannsdb-x86 'cd /data/work/milvus-rs-integ && \
   MILVUS_RS_RESET_RUNTIME_STATE=false \
-  nohup bash /data/work/milvus-rs-integ/milvus-src/scripts/hanns-shim/start_standalone_remote.sh \
-  > /tmp/milvus_restart.log 2>&1 &'
+  bash /data/work/milvus-rs-integ/milvus-src/scripts/knowhere-rs-shim/start_standalone_remote.sh
 sleep 30 && ssh hannsdb-x86 'curl -s http://127.0.0.1:9091/healthz'
 ```
 
@@ -86,7 +85,7 @@ rsync -az --exclude=target --exclude='data/' \
 ## shim git 仓库
 
 ```bash
-ssh hannsdb-x86 'cd /data/work/milvus-rs-integ/milvus-src/internal/core/thirdparty/hanns-shim && git log --oneline -5'
+ssh hannsdb-x86 'cd /data/work/milvus-rs-integ/milvus-src/internal/core/thirdparty/knowhere-rs-shim && git log --oneline -5'
 ```
 
 ---
