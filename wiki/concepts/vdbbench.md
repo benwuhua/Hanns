@@ -74,7 +74,7 @@ DATASET_LOCAL_DIR=/data/work/datasets \
 .venv/bin/python3 -m vectordb_bench.cli.cli MilvusDISKANN \
   --uri http://localhost:19530 \
   --db-label milvus-rs-diskann \
-  --search-list 100 \
+  --search-list 200 \
   2>&1 | tee /tmp/vdb_diskann_rs.log
 ```
 
