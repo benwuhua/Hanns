@@ -239,9 +239,52 @@ cli()
 
 ---
 
-## Zvec VDBB（待完成）
+## Zvec VDBB
 
-Zvec VDBB 客户端在 `VectorDBBench/vectordb_bench/backend/clients/zvec/`。Zvec 构建需要 CMake ≥3.26 且 thirdparty 子模块完整。
+Zvec VDBB 客户端在 `VectorDBBench/vectordb_bench/backend/clients/zvec/`：
+- `cli.py` — click 命令注册（命令名：`zvec`，小写）
+- 默认 HNSW 参数：M=50, ef_construction=500, ef_search=300
+- 构建需要 CMake ≥3.26 且 thirdparty 子模块完整
+
+### 运行命令
+
+```bash
+cd /data/work/VectorDBBench
+PYTHONPATH=. python3 -c "
+import vectordb_bench.backend.clients.zvec.cli
+from vectordb_bench.cli.cli import cli
+import sys
+sys.argv = [
+    'vectordbbench',
+    'zvec',
+    '--path', '/tmp/zvec-vdbb-1536d50k',
+    '--case-type', 'Performance1536D50K',
+    '--k', '100',
+    '--m', '16',
+    '--ef-construction', '64',
+    '--ef-search', '32',
+    '--skip-search-concurrent',
+    '--db-label', 'zvec-x86-hnsw-k100',
+]
+cli()
+"
+```
+
+### Zvec 权威结果（2026-04-10, x86）
+
+| k | Load(s) | p99(ms) | p95(ms) | Recall | NDCG |
+|---|---------|---------|---------|--------|------|
+| 100 | 13.8 | 2.0 | 1.3 | 0.9286 | 0.941 |
+
+### HannsDB vs Zvec 对比（同机器, HNSW M=16 ef=32 k=100）
+
+| 指标 | HannsDB | Zvec | 分析 |
+|------|---------|------|------|
+| Load | 148.0s | 13.8s | Zvec 10.7× 快（C++ 原生 + Arrow 列存）|
+| p99 | 1.8ms | 2.0ms | 持平 |
+| p95 | 1.7ms | 1.3ms | 持平 |
+| Recall@100 | **0.9756** | 0.9286 | HannsDB +5.1%（HNSW 图质量更高）|
+| NDCG@100 | **0.9801** | 0.941 | HannsDB +4.2% |
 
 ---
 

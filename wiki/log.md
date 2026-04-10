@@ -4,6 +4,24 @@ append-only 时间线。新条目加在顶部。
 
 ---
 
+## 2026-04-10 — IndexWrapper Option-soup 重构（IndexKind 枚举）
+
+**类型**：refactor
+**文件**：`src/ffi.rs`
+
+将 `IndexWrapper` 的 20 个 `Option<ConcreteType>` 字段（永远只有 1 个 `Some`）替换为单一 `enum IndexKind` 枚举变体。
+
+**变更要点**：
+- `new()` 工厂函数从 ~890 行缩减至 ~250 行（消除每个变体需要设 19 个 `None` 的样板）
+- 所有方法 dispatch 从 `if let Some(ref idx) = self.flat { ... } else if ...` 改为 `match &self.kind { IndexKind::Flat(idx) => ... }`
+- `knowhere_search_with_bitset` 内联 ~150 行 dispatch 提取为 `IndexWrapper::search_with_bitset()` 方法
+- `search()` 新增 `query_dim` 参数，修复稀疏索引处理大维度 query 时的 bug
+- `SparseWandCc` 在 `search()` 中补充了遗漏的分支
+
+**净效果**：`src/ffi.rs` 7613 → 5846 行（减少 ~1100 行），663 个 lib 测试全部通过。
+
+---
+
 ## 2026-04-10 — Cohere 1M HNSW：Hanns vs Lance 对比
 
 **类型**：bench
@@ -64,10 +82,20 @@ append-only 时间线。新条目加在顶部。
 **HannsDB 内部 opt bench（x86, knowhere-backend, 50K/1536D/cosine）**：
 - create=0ms, insert=32504ms, optimize=18929ms, search=0ms, total=51435ms
 
-**备注**：
-- VDBBench 的 HannsDB 客户端在 `VectorDBBench/vectordb_bench/backend/clients/hannsdb/`
-- 使用 `search_ids_raw()` 快速路径（numpy batch）for non-filtered queries
-- Zvec VDBB 对比待完成（Zvec 构建中）
+**HannsDB vs Zvec VDBB 对比（同机器, 同参数）**：
+
+| 指标 | HannsDB | Zvec | 比值 |
+|------|---------|------|------|
+| Load | 148.0s | 13.8s | Zvec 10.7× 快 |
+| p99 | 1.8ms | 2.0ms | 持平 |
+| p95 | 1.7ms | 1.3ms | 持平 |
+| Recall@100 | **0.9756** | 0.9286 | HannsDB +5.1% |
+| NDCG@100 | **0.9801** | 0.941 | HannsDB +4.2% |
+
+**关键发现**：
+- Zvec load 极快（C++ 原生 + Arrow 列存），但 recall 明显低
+- HannsDB 同参数下 ANN 质量（recall/NDCG）显著更高
+- Search latency 两者持平
 
 → 详见 [[machines/knowhere-x86-hk-proxy]]
 
