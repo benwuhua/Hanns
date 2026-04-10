@@ -78,31 +78,44 @@ On 3072-dim embeddings (SimpleWiki-OpenAI-260K), USQ 8× still achieves recall *
 
 ## Ecosystem Integration
 
-### Milvus
-
-Hanns ships as a drop-in replacement for KnowWhere C++ inside Milvus standalone and distributed deployments. The FFI layer (`src/ffi/`) exposes the full KnowWhere index interface — same binary, same data format, same query semantics.
-
-Measured end-to-end via [VectorDBBench](https://github.com/zilliztech/VectorDBBench) on a dedicated x86 server:
+Hanns ships as three distinct integration surfaces from a single codebase:
 
 ```
-Milvus standalone → KnowWhere FFI → Hanns Rust index
-                                   ↕ drop-in, no data migration
-                    KnowWhere FFI → Native C++ (FAISS backend)
+crate-type = ["staticlib", "cdylib", "rlib"]
+     │               │              │
+  Milvus C ABI    Python/JNI    HannsDB / Lance (native Rust)
 ```
 
-VectorDBBench results confirm the 2× QPS advantage across HNSW, IVF-Flat, IVF-SQ8, and IVF-PQ index types under realistic concurrent load patterns.
+### Milvus — C ABI drop-in
 
-**QPS optimization lineage (HNSW Milvus c=80):**
+**Integration method**: `src/ffi.rs` exposes 31 `#[no_mangle] extern "C"` functions that mirror the KnowWhere C++ API exactly (`knowhere_create_index`, `knowhere_add_index`, `knowhere_search`, `knowhere_search_with_bitset`, …). Milvus links against the compiled `staticlib`/`cdylib` with zero source changes — same data format, same query semantics, same bitset filtering interface.
 
-| Round | Change | QPS |
-|-------|--------|-----|
+```
+Milvus standalone
+  └─ KnowWhere shim (C++)
+       └─ dlopen libhanns.so   ← same ABI as native KnowWhere
+            └─ IndexWrapper::dispatch → HnswIndex / IvfSq8Index / PQFlashIndex / …
+```
+
+The `IndexWrapper` is the central dispatch struct — a single `IndexKind` enum that routes all C API calls to the correct Rust index type at zero overhead (no vtable, no allocation on the hot path).
+
+VectorDBBench end-to-end results confirm **2× QPS** across HNSW, IVF-Flat, IVF-SQ8, and IVF-PQ under realistic concurrent load:
+
+| Round | Change | QPS (c=80) |
+|-------|--------|------------|
 | R4 | FFI lazy bitset allocation | 349 |
 | R7 | Private rayon ThreadPool (HNSW_NQ_POOL) | 540 |
 | **R8** | Eliminate BinaryHeap clone + pre-alloc output buffer | **1,042** |
 
-### HannsDB
+### HannsDB — native Rust crate
 
-HannsDB embeds Hanns as a single-machine agent database. VectorDBBench authority results (x86, 1536-dim, k=100):
+**Integration method**: HannsDB adds Hanns as a Cargo dependency and uses index types directly:
+
+```rust
+use hanns::{HnswIndex, IvfFlatIndex, IvfUsqIndex};
+```
+
+No FFI boundary, no serialization overhead. HannsDB wraps index instances in its own `VectorIndexBackend` trait and handles persistence, collection management, and the VectorDBBench client layer. VectorDBBench authority results (x86, 1536-dim, k=100):
 
 | Metric | Result |
 |--------|--------|
@@ -113,11 +126,22 @@ HannsDB embeds Hanns as a single-machine agent database. VectorDBBench authority
 
 Previously, cosine search p99 reached 110ms due to per-query allocations. After fixing TLS scratch buffer reuse: **p99 = 3.5ms (31× improvement)**.
 
-### Lance
+### Lance — native Rust trait impl
 
-Hanns integrates as the HNSW search backend in the Lance vector lake format. Geometry-mean speedup across the ef=50–800 range: **1.64×** with equivalent recall.
+**Integration method**: Lance defines an `IvfSubIndex` trait for pluggable ANN backends. Hanns implements it for `HnswIndex`, letting Lance's vector lake query engine call Hanns search directly in-process:
 
-Build is currently ~26% slower than Lance (sequential Hanns build vs. Lance rayon multi-thread). This is a known gap being addressed with parallel build improvements.
+```rust
+// in Lance repo
+impl IvfSubIndex for hanns::HnswIndex { … }
+```
+
+No serialization boundary, no IPC. Geometry-mean speedup across ef=50–800: **1.64×** with equivalent recall. Build is ~26% slower (Lance uses rayon parallel build; Hanns parallel build improvement is in progress).
+
+### Python / JVM bindings
+
+**Python** (`feature = "python"`): PyO3 bindings in `src/python/` expose `HnswIndex`, `IvfFlatIndex`, `IvfPqIndex`, `IvfUsqIndex`, `MemIndex` as native Python classes.
+
+**JVM / Android** (`feature = "jni-bindings"`): JNI bindings in `src/jni/` expose the same index set via `@NativeMethod` for Java/Kotlin callers.
 
 ---
 
