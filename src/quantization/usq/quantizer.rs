@@ -66,6 +66,7 @@ pub struct UsqQueryState {
 /// Unified scalar quantizer: center → pad → rotate → normalize → quantize.
 ///
 /// Replaces the equivalent logic duplicated across HVQ and ExRaBitQ.
+#[derive(Clone)]
 pub struct UsqQuantizer {
     config: UsqConfig,
     rotator: UsqRotator,
@@ -142,7 +143,8 @@ impl UsqQuantizer {
             }
 
             // 2. Rotate into ws.rotated (no allocation).
-            self.rotator.rotate_into(&ws.residual[..padded_dim], &mut ws.rotated[..padded_dim]);
+            self.rotator
+                .rotate_into(&ws.residual[..padded_dim], &mut ws.rotated[..padded_dim]);
 
             // 3. Encode the already-rotated residual using workspace buffers.
             let mut encoded = self.encode_rotated_ws(ws, padded_dim);
