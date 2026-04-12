@@ -137,6 +137,25 @@ impl IvfSubIndex for hanns::HnswIndex { … }
 
 No serialization boundary, no IPC. Geometry-mean speedup across ef=50–800: **1.64×** with equivalent recall. Build is ~26% slower (Lance uses rayon parallel build; Hanns parallel build improvement is in progress).
 
+Lance also wires Hanns-backed `IVF_USQ` behind `cfg(feature = "hanns")` in the vector builder / IVF stack, which is what powers the 1B large-top (`k=10,000`) runs below.
+
+**1B large-top capability** (`PCA-512`, cosine, 5 × 194M shards, x86 ECS):
+
+| Tier | Hanns-backed Lance config | Recall@10K | Mean latency | What it demonstrates |
+|------|----------------------------|------------|--------------|----------------------|
+| DRAM | `IVF_USQ` 4-bit `np=256 rf=2` | 0.934 | **957ms** | Best sub-0.95 local-storage point; slightly faster than Lance `IVF_RQ` at the same recall band |
+| DRAM | `IVF_USQ` 8-bit `np=256 rf=1` | 0.973 | 1,826ms | Practical high-recall point, but the 8-bit auxiliary index is too large to be a clear DRAM default |
+| SSD | `IVF_USQ` 4-bit `np=256 rf=2` | 0.934 | **964ms** | Near-DRAM latency on cold NVMe |
+| OBS | `IVF_USQ` 4-bit `np=256 rf=1` | 0.803 | **6,555ms** | Lowest-latency remote-storage frontier point |
+| OBS | `IVF_USQ` 8-bit `np=256 rf=1` | 0.973 | **7,710ms** | Collapses the old 0.81-0.96 OBS gap; faster than Lance `IVF_SQ` (`10,518ms`) and much faster than Lance `IVF_RQ rf=2` (`19,306ms`) while also improving recall |
+| OBS | `IVF_USQ` 8-bit `np=1024 rf=1` | 0.9949 | **21,312ms** | Best sub-0.995 remote point |
+
+At the extreme high-recall end, Lance + Hanns reaches **0.9967 recall@10K** on OBS at `np=1024 rf=2` in **27,988ms**. Build is already production-scale as well: the 5-shard `IVF_USQ` 8-bit index finishes in about **57 min** with **117GB auxiliary.idx per shard** (about **1.3TB** peak temp space).
+
+The practical reading of these numbers is simple:
+- On **OBS / remote object storage**, Hanns-backed `IVF_USQ` is the key Lance large-top enabler.
+- On **DRAM / SSD**, 4-bit USQ gives Lance strong sub-0.95 points, while 8-bit USQ trades much larger index size for higher recall.
+
 ### Python / JVM bindings
 
 **Python** (`feature = "python"`): PyO3 bindings in `src/python/` expose `HnswIndex`, `IvfFlatIndex`, `IvfPqIndex`, `IvfUsqIndex`, `MemIndex` as native Python classes.
