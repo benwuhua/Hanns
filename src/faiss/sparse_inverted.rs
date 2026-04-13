@@ -356,7 +356,7 @@ impl SparseInvertedIndex {
         );
     }
 
-    pub(crate) fn serialize_to_bytes(&self) -> Result<Vec<u8>, IndexError> {
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, IndexError> {
         let snapshot = SparseInvertedSnapshot {
             version: SPARSE_INVERTED_SNAPSHOT_VERSION,
             index: self.clone(),
@@ -364,7 +364,7 @@ impl SparseInvertedIndex {
         bincode::serialize(&snapshot).map_err(|e| IndexError::Unsupported(e.to_string()))
     }
 
-    pub(crate) fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, IndexError> {
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, IndexError> {
         let snapshot: SparseInvertedSnapshot =
             bincode::deserialize(bytes).map_err(|e| IndexError::Unsupported(e.to_string()))?;
         if snapshot.version != SPARSE_INVERTED_SNAPSHOT_VERSION {

@@ -54,14 +54,19 @@ impl SparseWandIndex {
         self.inner.size()
     }
 
-    pub(crate) fn serialize_to_bytes(&self) -> Result<Vec<u8>, IndexError> {
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, IndexError> {
         self.inner.serialize_to_bytes()
     }
 
-    pub(crate) fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, IndexError> {
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, IndexError> {
         Ok(Self {
             inner: SparseInvertedIndex::deserialize_from_bytes(bytes)?,
         })
+    }
+
+    /// 设置 BM25 参数
+    pub fn set_bm25_params(&mut self, k1: f32, b: f32, avgdl: f32) {
+        self.inner.set_bm25_params(k1, b, avgdl);
     }
 }
 

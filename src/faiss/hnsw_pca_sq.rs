@@ -116,7 +116,7 @@ impl HnswPcaSqIndex {
         // PCA: present flag + components
         if let Some(pca) = &self.pca {
             f.write_all(&[1u8])?; // has_pca
-            // mean
+                                  // mean
             f.write_all(&(pca.mean.len() as u32).to_le_bytes())?;
             for &v in &pca.mean {
                 f.write_all(&v.to_le_bytes())?;
@@ -143,9 +143,7 @@ impl HnswPcaSqIndex {
         Ok(())
     }
 
-    pub fn load(
-        path: &std::path::Path,
-    ) -> std::result::Result<Self, Box<dyn std::error::Error>> {
+    pub fn load(path: &std::path::Path) -> std::result::Result<Self, Box<dyn std::error::Error>> {
         use std::io::{Error, ErrorKind, Read};
 
         let bytes = std::fs::read(path)?;

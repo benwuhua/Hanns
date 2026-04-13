@@ -182,7 +182,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
 
     if base_dim == 0 || base_dim != query_dim {
-        return Err(format!("dim mismatch: base_dim={} query_dim={}", base_dim, query_dim).into());
+        return Err(format!(
+            "dim mismatch: base_dim={} query_dim={}",
+            base_dim, query_dim
+        )
+        .into());
     }
     if gt_n != query_n {
         return Err(format!("gt rows {} != query rows {}", gt_n, query_n).into());
@@ -218,7 +222,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         let build_start = Instant::now();
         index.train(train)?;
         index.add(&base, None)?;
-        println!("build: m={} build_s={:.2}", m, build_start.elapsed().as_secs_f64());
+        println!(
+            "build: m={} build_s={:.2}",
+            m,
+            build_start.elapsed().as_secs_f64()
+        );
 
         for &nprobe in &NPROBE_SWEEP {
             let recall = measure_recall(
@@ -229,7 +237,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 nprobe,
             )?;
             let qps = measure_qps(&index, &queries, base_dim, nprobe, qps_queries)?;
-            println!("m={} nprobe={} recall={:.3} qps={:.0}", m, nprobe, recall, qps);
+            println!(
+                "m={} nprobe={} recall={:.3} qps={:.0}",
+                m, nprobe, recall, qps
+            );
         }
     }
 

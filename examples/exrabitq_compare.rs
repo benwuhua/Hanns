@@ -140,7 +140,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .with_nprobe(nprobe.max(1))
         .with_rotation_seed(29)
         .with_rerank_k(rerank_k.max(top_k))
-        .with_high_accuracy_scan(use_high_accuracy);    let mut index = IvfUsqIndex::new(config);
+        .with_high_accuracy_scan(use_high_accuracy);
+    let mut index = IvfUsqIndex::new(config);
     let build_start = Instant::now();
     index.train(&base[..train_n * dim])?;
     index.add(&base, Some(&ids))?;
@@ -175,11 +176,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
     println!(
         "{:<12} {:>4} {:>6} {:>7} {:>10.2} {:>10.4} {:>12.1}",
-        if use_high_accuracy {
-            "USQ-HA"
-        } else {
-            "USQ"
-        },
+        if use_high_accuracy { "USQ-HA" } else { "USQ" },
         bits,
         nlist,
         nprobe,

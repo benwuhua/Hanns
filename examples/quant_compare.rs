@@ -5,9 +5,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
-use hanns::faiss::{
-    IvfUsqConfig, IvfUsqIndex, IvfFlatIndex, IvfPqIndex,
-};
+use hanns::faiss::{IvfFlatIndex, IvfPqIndex, IvfUsqConfig, IvfUsqIndex};
 use rayon::prelude::*;
 
 const DEFAULT_DATA_DIR: &str = "/data/work/datasets/wikipedia-cohere-1m";
@@ -186,7 +184,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         vec!["8x"]
     };
-    let data_dir_str = if args.len() > 3 { &args[3] } else { DEFAULT_DATA_DIR };
+    let data_dir_str = if args.len() > 3 {
+        &args[3]
+    } else {
+        DEFAULT_DATA_DIR
+    };
     let data_dir = Path::new(data_dir_str);
 
     let base_path = data_dir.join("base.fbin");
@@ -194,7 +196,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Try gt.cosine.ibin first, fall back to gt.ibin
     let gt_path = {
         let cosine = data_dir.join("gt.cosine.ibin");
-        if cosine.exists() { cosine } else { data_dir.join("gt.ibin") }
+        if cosine.exists() {
+            cosine
+        } else {
+            data_dir.join("gt.ibin")
+        }
     };
 
     if !base_path.exists() || !query_path.exists() || !gt_path.exists() {

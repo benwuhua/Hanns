@@ -444,8 +444,7 @@ mod tests {
             rerank_k: 16,
         };
 
-        let mut idx =
-            DiskAnnPcaUsqIndex::new(dim, MetricType::L2, config).expect("new failed");
+        let mut idx = DiskAnnPcaUsqIndex::new(dim, MetricType::L2, config).expect("new failed");
         idx.build(&data, n, dim).expect("build failed");
         assert_eq!(idx.count(), n);
         assert_eq!(idx.proj_dim(), 8);

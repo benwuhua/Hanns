@@ -198,12 +198,8 @@ fn resolve_sift_dir(explicit: Option<&Path>) -> Option<PathBuf> {
     candidates.push(PathBuf::from("./data/sift1m"));
     candidates.push(PathBuf::from("/data/work/hanns-src/data/sift"));
     candidates.push(PathBuf::from("/data/work/hanns-src/data/sift1m"));
-    candidates.push(PathBuf::from(
-        "/data/work/hanns-integ/hanns/data/sift",
-    ));
-    candidates.push(PathBuf::from(
-        "/data/work/hanns-integ/hanns/data/sift1m",
-    ));
+    candidates.push(PathBuf::from("/data/work/hanns-integ/hanns/data/sift"));
+    candidates.push(PathBuf::from("/data/work/hanns-integ/hanns/data/sift1m"));
 
     candidates
         .into_iter()

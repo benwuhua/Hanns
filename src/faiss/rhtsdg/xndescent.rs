@@ -158,28 +158,31 @@ impl XNDescentBuilder {
 
         let seed_degree = self.config.k.min(num_points - 1).max(1);
         let candidate_budget = seed_degree.saturating_mul(8).max(32).min(num_points - 1);
-        self.graph.par_iter().enumerate().for_each(|(node, neighborhood)| {
-            let candidates = if candidate_budget >= num_points - 1 {
-                (0..num_points)
-                    .filter(|&candidate| candidate != node)
-                    .map(|candidate| candidate as u32)
-                    .collect::<Vec<_>>()
-            } else {
-                sample_candidate_ids(node, num_points, candidate_budget)
-            };
-            let mut ranked = candidates
-                .into_iter()
-                .map(|neighbor| {
-                    let dist = self.distance(node, neighbor as usize);
-                    (neighbor, dist)
-                })
-                .collect::<Vec<_>>();
-            ranked.sort_by(|lhs, rhs| lhs.1.total_cmp(&rhs.1).then_with(|| lhs.0.cmp(&rhs.0)));
+        self.graph
+            .par_iter()
+            .enumerate()
+            .for_each(|(node, neighborhood)| {
+                let candidates = if candidate_budget >= num_points - 1 {
+                    (0..num_points)
+                        .filter(|&candidate| candidate != node)
+                        .map(|candidate| candidate as u32)
+                        .collect::<Vec<_>>()
+                } else {
+                    sample_candidate_ids(node, num_points, candidate_budget)
+                };
+                let mut ranked = candidates
+                    .into_iter()
+                    .map(|neighbor| {
+                        let dist = self.distance(node, neighbor as usize);
+                        (neighbor, dist)
+                    })
+                    .collect::<Vec<_>>();
+                ranked.sort_by(|lhs, rhs| lhs.1.total_cmp(&rhs.1).then_with(|| lhs.0.cmp(&rhs.0)));
 
-            for (neighbor, dist) in ranked.into_iter().take(seed_degree) {
-                neighborhood.insert(neighbor, dist, NeighborStatus::New);
-            }
-        });
+                for (neighbor, dist) in ranked.into_iter().take(seed_degree) {
+                    neighborhood.insert(neighbor, dist, NeighborStatus::New);
+                }
+            });
     }
 
     fn local_join(&self) -> usize {

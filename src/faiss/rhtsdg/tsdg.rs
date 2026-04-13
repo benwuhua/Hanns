@@ -48,7 +48,9 @@ impl<'a> DistanceMatrix<'a> {
         let point_count = points.len() / dim;
         if let Some(node_ids) = node_ids {
             assert!(
-                node_ids.iter().all(|&node_id| (node_id as usize) < point_count),
+                node_ids
+                    .iter()
+                    .all(|&node_id| (node_id as usize) < point_count),
                 "node_ids must reference valid point indices"
             );
         }
@@ -58,7 +60,8 @@ impl<'a> DistanceMatrix<'a> {
             points,
             node_ids,
             metric,
-            l2_distance_sq_ptr_kernel: (metric == MetricType::L2).then(simd::l2_distance_sq_ptr_kernel),
+            l2_distance_sq_ptr_kernel: (metric == MetricType::L2)
+                .then(simd::l2_distance_sq_ptr_kernel),
         }
     }
 

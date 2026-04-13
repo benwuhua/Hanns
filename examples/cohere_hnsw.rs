@@ -137,7 +137,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     println!("=== Cohere 1M HNSW ef-sweep ===");
-    println!("data_dir={} M={} metric={:?}", data_dir.display(), hnsw_m, metric_type);
+    println!(
+        "data_dir={} M={} metric={:?}",
+        data_dir.display(),
+        hnsw_m,
+        metric_type
+    );
 
     let t_load = Instant::now();
     let (base_n, base_dim, base) = read_fbin(&base_path)?;
@@ -146,12 +151,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     let gt = rows_i32(&gt_flat, gt_k);
     println!(
         "loaded: base_n={} query_n={} gt_n={} dim={} gt_k={} (load {:.2}s)",
-        base_n, query_n, gt_n, base_dim, gt_k,
+        base_n,
+        query_n,
+        gt_n,
+        base_dim,
+        gt_k,
         t_load.elapsed().as_secs_f64()
     );
 
     if base_dim == 0 || base_dim != query_dim {
-        return Err(format!("dim mismatch: base_dim={} query_dim={}", base_dim, query_dim).into());
+        return Err(format!(
+            "dim mismatch: base_dim={} query_dim={}",
+            base_dim, query_dim
+        )
+        .into());
     }
     if gt_n != query_n {
         return Err(format!("gt rows {} != query rows {}", gt_n, query_n).into());
@@ -163,7 +176,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let qps_n = SINGLE_QPS_QUERIES.min(query_n);
     let eval_n = query_n.min(gt.len());
 
-    let mut hnsw_params = IndexParams::hnsw(HNSW_EF_CONSTRUCTION, EF_SWEEP[0], HNSW_LEVEL_MULTIPLIER);
+    let mut hnsw_params =
+        IndexParams::hnsw(HNSW_EF_CONSTRUCTION, EF_SWEEP[0], HNSW_LEVEL_MULTIPLIER);
     hnsw_params.m = Some(hnsw_m);
     let hnsw_cfg = IndexConfig {
         index_type: IndexType::Hnsw,

@@ -6,12 +6,16 @@
 use rand::Rng;
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::Path;
 
 use crate::api::MetricType;
 use crate::quantization::usq::{UsqConfig, UsqEncoded, UsqQuantizer, UsqQueryState};
 
 const MAX_LAYERS: usize = 16;
 const USQ_TRAIN_SEED: u64 = 42;
+const HNSWHVQ_MAGIC: &[u8; 8] = b"HNSWHVQ0";
 
 #[derive(Clone, Debug)]
 pub struct HnswHvqConfig {
@@ -260,6 +264,245 @@ impl HnswHvqIndex {
 
     pub fn is_trained(&self) -> bool {
         self.trained
+    }
+
+    pub fn save(&self, path: &Path) -> crate::api::Result<()> {
+        let mut file = File::create(path)?;
+
+        file.write_all(HNSWHVQ_MAGIC)?;
+        file.write_all(&(self.config.dim as u32).to_le_bytes())?;
+        file.write_all(&(self.config.m as u32).to_le_bytes())?;
+        file.write_all(&(self.config.m_max0 as u32).to_le_bytes())?;
+        file.write_all(&(self.config.ef_construction as u32).to_le_bytes())?;
+        file.write_all(&(self.config.ef_search as u32).to_le_bytes())?;
+        file.write_all(&[self.config.nbits])?;
+        let metric_tag = match self.config.metric_type {
+            MetricType::L2 => 0u8,
+            MetricType::Ip => 1u8,
+            MetricType::Cosine => 2u8,
+            MetricType::Hamming => 3u8,
+        };
+        file.write_all(&[metric_tag])?;
+        file.write_all(&(self.entry_point.unwrap_or(usize::MAX) as u64).to_le_bytes())?;
+        file.write_all(&(self.max_level as u32).to_le_bytes())?;
+        file.write_all(&self.next_id.to_le_bytes())?;
+        file.write_all(&self.level_multiplier.to_le_bytes())?;
+        file.write_all(&[u8::from(self.trained)])?;
+
+        let centroid = self.quantizer.centroid();
+        file.write_all(&(centroid.len() as u64).to_le_bytes())?;
+        for &v in centroid {
+            file.write_all(&v.to_le_bytes())?;
+        }
+
+        file.write_all(&(self.node_info.len() as u64).to_le_bytes())?;
+        for node in &self.node_info {
+            file.write_all(&(node.max_layer as u32).to_le_bytes())?;
+            file.write_all(&(node.layer_neighbors.len() as u32).to_le_bytes())?;
+            for (neighbors, scores) in node
+                .layer_neighbors
+                .iter()
+                .zip(node.layer_neighbor_scores.iter())
+            {
+                file.write_all(&(neighbors.len() as u32).to_le_bytes())?;
+                for (&neighbor, &score) in neighbors.iter().zip(scores.iter()) {
+                    file.write_all(&(neighbor as u64).to_le_bytes())?;
+                    file.write_all(&score.to_le_bytes())?;
+                }
+            }
+
+            file.write_all(&(node.encoded.packed_bits.len() as u32).to_le_bytes())?;
+            file.write_all(&node.encoded.packed_bits)?;
+            file.write_all(&(node.encoded.sign_bits.len() as u32).to_le_bytes())?;
+            file.write_all(&node.encoded.sign_bits)?;
+            file.write_all(&node.encoded.norm.to_le_bytes())?;
+            file.write_all(&node.encoded.norm_sq.to_le_bytes())?;
+            file.write_all(&node.encoded.vmax.to_le_bytes())?;
+            file.write_all(&node.encoded.quant_quality.to_le_bytes())?;
+        }
+
+        file.write_all(&(self.ids.len() as u64).to_le_bytes())?;
+        for &id in &self.ids {
+            file.write_all(&id.to_le_bytes())?;
+        }
+
+        Ok(())
+    }
+
+    pub fn load(path: &Path) -> crate::api::Result<Self> {
+        let mut file = File::open(path)?;
+
+        let mut magic = [0u8; 8];
+        file.read_exact(&mut magic)?;
+        if &magic != HNSWHVQ_MAGIC {
+            return Err(crate::api::KnowhereError::Codec(
+                "invalid HNSWHVQ magic".to_string(),
+            ));
+        }
+
+        let mut u32_buf = [0u8; 4];
+        let mut u64_buf = [0u8; 8];
+        let mut i64_buf = [0u8; 8];
+        let mut f32_buf = [0u8; 4];
+        let mut f64_buf = [0u8; 8];
+
+        file.read_exact(&mut u32_buf)?;
+        let dim = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut u32_buf)?;
+        let m = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut u32_buf)?;
+        let m_max0 = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut u32_buf)?;
+        let ef_construction = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut u32_buf)?;
+        let ef_search = u32::from_le_bytes(u32_buf) as usize;
+
+        let mut one = [0u8; 1];
+        file.read_exact(&mut one)?;
+        let nbits = one[0];
+        file.read_exact(&mut one)?;
+        let metric_type = match one[0] {
+            0 => MetricType::L2,
+            1 => MetricType::Ip,
+            2 => MetricType::Cosine,
+            3 => MetricType::Hamming,
+            other => {
+                return Err(crate::api::KnowhereError::Codec(format!(
+                    "unknown HNSWHVQ metric type tag {other}"
+                )))
+            }
+        };
+
+        file.read_exact(&mut u64_buf)?;
+        let entry_raw = u64::from_le_bytes(u64_buf) as usize;
+        let entry_point = if entry_raw == usize::MAX {
+            None
+        } else {
+            Some(entry_raw)
+        };
+
+        file.read_exact(&mut u32_buf)?;
+        let max_level = u32::from_le_bytes(u32_buf) as usize;
+        file.read_exact(&mut i64_buf)?;
+        let next_id = i64::from_le_bytes(i64_buf);
+        file.read_exact(&mut f64_buf)?;
+        let level_multiplier = f64::from_le_bytes(f64_buf);
+        file.read_exact(&mut one)?;
+        let trained = one[0] != 0;
+
+        file.read_exact(&mut u64_buf)?;
+        let centroid_len = u64::from_le_bytes(u64_buf) as usize;
+        let mut centroid = vec![0.0f32; centroid_len];
+        for value in &mut centroid {
+            file.read_exact(&mut f32_buf)?;
+            *value = f32::from_le_bytes(f32_buf);
+        }
+
+        let config = HnswHvqConfig {
+            dim,
+            m,
+            m_max0,
+            ef_construction,
+            ef_search,
+            nbits,
+            metric_type,
+        };
+
+        let mut quantizer = UsqQuantizer::new(
+            UsqConfig::new(config.dim, config.nbits)
+                .expect("valid config")
+                .with_seed(USQ_TRAIN_SEED),
+        );
+        if centroid_len == dim {
+            quantizer.set_centroid(&centroid);
+        }
+
+        file.read_exact(&mut u64_buf)?;
+        let node_count = u64::from_le_bytes(u64_buf) as usize;
+        let mut node_info = Vec::with_capacity(node_count);
+        for _ in 0..node_count {
+            file.read_exact(&mut u32_buf)?;
+            let max_layer_node = u32::from_le_bytes(u32_buf) as usize;
+            file.read_exact(&mut u32_buf)?;
+            let layer_count = u32::from_le_bytes(u32_buf) as usize;
+            let mut layer_neighbors = Vec::with_capacity(layer_count);
+            let mut layer_neighbor_scores = Vec::with_capacity(layer_count);
+            for _ in 0..layer_count {
+                file.read_exact(&mut u32_buf)?;
+                let neighbor_count = u32::from_le_bytes(u32_buf) as usize;
+                let mut neighbors = Vec::with_capacity(neighbor_count);
+                let mut scores = Vec::with_capacity(neighbor_count);
+                for _ in 0..neighbor_count {
+                    file.read_exact(&mut u64_buf)?;
+                    let neighbor = u64::from_le_bytes(u64_buf) as usize;
+                    file.read_exact(&mut f32_buf)?;
+                    let score = f32::from_le_bytes(f32_buf);
+                    neighbors.push(neighbor);
+                    scores.push(score);
+                }
+                layer_neighbors.push(neighbors);
+                layer_neighbor_scores.push(scores);
+            }
+
+            file.read_exact(&mut u32_buf)?;
+            let packed_len = u32::from_le_bytes(u32_buf) as usize;
+            let mut packed_bits = vec![0u8; packed_len];
+            file.read_exact(&mut packed_bits)?;
+
+            file.read_exact(&mut u32_buf)?;
+            let sign_len = u32::from_le_bytes(u32_buf) as usize;
+            let mut sign_bits = vec![0u8; sign_len];
+            file.read_exact(&mut sign_bits)?;
+
+            file.read_exact(&mut f32_buf)?;
+            let norm = f32::from_le_bytes(f32_buf);
+            file.read_exact(&mut f32_buf)?;
+            let norm_sq = f32::from_le_bytes(f32_buf);
+            file.read_exact(&mut f32_buf)?;
+            let vmax = f32::from_le_bytes(f32_buf);
+            file.read_exact(&mut f32_buf)?;
+            let quant_quality = f32::from_le_bytes(f32_buf);
+
+            node_info.push(UsqNodeInfo {
+                max_layer: max_layer_node,
+                layer_neighbors,
+                layer_neighbor_scores,
+                encoded: UsqEncoded {
+                    packed_bits,
+                    sign_bits,
+                    norm,
+                    norm_sq,
+                    vmax,
+                    quant_quality,
+                },
+            });
+        }
+
+        file.read_exact(&mut u64_buf)?;
+        let ids_len = u64::from_le_bytes(u64_buf) as usize;
+        let mut ids = vec![0i64; ids_len];
+        for id in &mut ids {
+            file.read_exact(&mut i64_buf)?;
+            *id = i64::from_le_bytes(i64_buf);
+        }
+        let id_to_idx = ids
+            .iter()
+            .enumerate()
+            .map(|(idx, &id)| (id, idx))
+            .collect::<HashMap<_, _>>();
+
+        Ok(Self {
+            config,
+            quantizer,
+            node_info,
+            ids,
+            id_to_idx,
+            entry_point,
+            max_level,
+            trained,
+            level_multiplier,
+            next_id,
+        })
     }
 
     fn insert_node(&mut self, idx: usize, vector: &[f32], node_level: usize) {
@@ -586,5 +829,54 @@ mod tests {
 
         let recall = hits as f32 / total.max(1) as f32;
         assert!(recall >= 0.5, "expected recall >= 0.5, got {recall}");
+    }
+
+    #[test]
+    fn test_hnsw_hvq_save_load_roundtrip() {
+        let dim = 16usize;
+        let n = 100usize;
+        let top_k = 5usize;
+
+        let mut rng = StdRng::seed_from_u64(23);
+        let data = normalize_rows(
+            &(0..n * dim)
+                .map(|_| rng.gen_range(-1.0f32..1.0))
+                .collect::<Vec<_>>(),
+            dim,
+        );
+        let query = normalize_rows(
+            &(0..dim)
+                .map(|_| rng.gen_range(-1.0f32..1.0))
+                .collect::<Vec<_>>(),
+            dim,
+        );
+
+        let config = HnswHvqConfig {
+            dim,
+            m: 16,
+            m_max0: 32,
+            ef_construction: 100,
+            ef_search: 64,
+            nbits: 4,
+            metric_type: MetricType::Ip,
+        };
+
+        let mut index = HnswHvqIndex::new(config);
+        index.train(&data, n);
+        index.add(&data, n);
+        let before = index.search(&query, top_k);
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("hnsw_hvq.bin");
+        index.save(&path).expect("save hnsw_hvq");
+
+        let loaded = HnswHvqIndex::load(&path).expect("load hnsw_hvq");
+        let after = loaded.search(&query, top_k);
+
+        assert_eq!(after.len(), top_k);
+        assert_eq!(
+            before.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            after.iter().map(|(id, _)| *id).collect::<Vec<_>>()
+        );
     }
 }

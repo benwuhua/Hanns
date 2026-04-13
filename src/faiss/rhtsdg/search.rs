@@ -528,7 +528,15 @@ impl RhtsdgIndex {
         let mut current = self.entry_point;
         for layer in (1..self.layer_graphs.len()).rev() {
             if let Some((best, _)) = self
-                .search_layer(query, &[current], 1, layer, bitset, counters, track_counters)
+                .search_layer(
+                    query,
+                    &[current],
+                    1,
+                    layer,
+                    bitset,
+                    counters,
+                    track_counters,
+                )
                 .into_iter()
                 .next()
             {
@@ -621,7 +629,8 @@ impl RhtsdgIndex {
                     }
 
                     if batch_len == 4 {
-                        let dists = unsafe { self.l2_distance_to_4_nodes(query.as_ptr(), batch_ids) };
+                        let dists =
+                            unsafe { self.l2_distance_to_4_nodes(query.as_ptr(), batch_ids) };
                         record_batch4(counters, track_counters);
                         for lane in 0..4 {
                             consider_neighbor(
@@ -1064,7 +1073,13 @@ fn build_hierarchy_with_trace(
 ) -> (Vec<Vec<Vec<u32>>>, Vec<usize>, usize, u32, RhtsdgBuildTrace) {
     let num_points = vectors.len() / dim;
     if num_points == 0 {
-        return (vec![Vec::new()], Vec::new(), 0, 0, RhtsdgBuildTrace::default());
+        return (
+            vec![Vec::new()],
+            Vec::new(),
+            0,
+            0,
+            RhtsdgBuildTrace::default(),
+        );
     }
     if num_points == 1 {
         return (
