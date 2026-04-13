@@ -46,6 +46,24 @@ build: 561s (parallel, M=16, ef_c=200)
 | QPS (c=80) | ~800+ | **1042** | **~1.3× 快** ✅ |
 | Recall | 0.960 | 0.957 | parity |
 
+## Cohere-1M PCA / SQ / IVF-SQ8 — Milvus（hannsdb-x86, 2026-04-10）
+
+| Index | Config | Load(s) | QPS | Recall | p99(s) | 结论 |
+|------|--------|--------:|----:|------:|------:|------|
+| HNSW baseline | M=16, efC=200, ef=128 | 6186.8944 | 166.8374 | 0.9352 | 0.0108 | 成功 |
+| HNSW-PCA-USQ | M=16, efC=200, ef=128 | 8088.0279 | 173.9785 | 0.9445 | 0.0103 | 成功 |
+| HNSW-SQ | M=16, efC=200, ef=128, SQ8 refine=FP32 | 6101.9038 | **198.6828** | **0.9474** | **0.0099** | 成功 |
+| IVF-SQ8 | nlist=1024, nprobe=64 | **984.2313** | 8.0383 | 1.0000 | 0.6117 | 成功，但吞吐很低 |
+| DiskANN-PCA-USQ (invalid) | search_list=100, k=100 | 1606.5581* | 0.0 | 0.0 | 0.0 | 失败：`search_list_size(100) should be larger than k(100)` |
+| DiskANN-PCA-USQ (valid) | search_list=128, k=100 | 239.1671 | 8.1176 | 1.0000 | 1.2366 | 成功 |
+
+补充：
+- HNSW-PCA-USQ 并发 QPS：c=20 173.9785，c=80 173.4274。
+- HNSW-SQ 并发 QPS：c=20 198.6828，c=80 198.5188。
+- IVF-SQ8 并发 QPS：c=20 8.0383，c=80 6.0994；serial recall=1.0，但 serial p99=0.6117s，明显不适合该 workload。
+- DiskANN-PCA-USQ(valid) 并发 QPS：c=20 8.1176，c=80 6.6291；recall=1.0，但吞吐和时延都很差。
+- `*` DiskANN-PCA-USQ 的旧失败样本中，load 已完成（insert 159.0386s + optimize 1447.5195s），但搜索阶段因参数约束失败，未产出有效 QPS/Recall。
+
 ---
 
 ## DiskANN / AISAQ — Standalone（SIFT-1M, x86）

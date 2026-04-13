@@ -4,6 +4,38 @@ append-only 时间线。新条目加在顶部。
 
 ---
 
+## 2026-04-10 — Milvus Cohere-1M：PCA / SQ / IVF-SQ8 benchmark 更新
+
+**类型**：bench
+**机器**：hannsdb-x86
+**数据集**：Cohere-MEDIUM-1M，768D，COSINE，k=100
+
+**结果摘要**：
+- HNSW baseline：load 6186.8944s，QPS 166.8374，recall 0.9352，p99 0.0108s
+- HNSW-PCA-USQ：load 8088.0279s，QPS 173.9785，recall 0.9445，p99 0.0103s
+- HNSW-SQ（SQ8 + FP32 refine）：load 6101.9038s，QPS 198.6828，recall 0.9474，p99 0.0099s
+- IVF-SQ8（nlist=1024, nprobe=64）：load 984.2313s，QPS 8.0383，recall 1.0000，p99 0.6117s
+
+**失败项**：
+- DiskANN-PCA-USQ：第一次用 `search_list=100, k=100` 运行，load 已完成（insert 159.0386s + optimize 1447.5195s），但搜索失败。
+- 根因：Milvus QueryNode 参数校验触发：`search_list_size(100) should be larger than k(100)`。
+- 后续 VectorDBBench 在空结果上做 percentile，又触发 `IndexError: index -1 is out of bounds for axis 0 with size 0`。
+
+**补充复测（2026-04-10 晚）**：
+- 用合法参数 `search_list=128, k=100` 重新跑通 DiskANN-PCA-USQ。
+- 结果：load 239.1671s，QPS 8.1176，recall 1.0000，p99 1.2366s。
+- 结论：问题确实是参数非法，不是 DiskANN-PCA-USQ 主流程完全不可用；但即使跑通，当前性能也明显弱于 HNSW-SQ / HNSW-PCA-USQ。
+
+**结论**：
+- 在这批 1M Milvus 集成 benchmark 中，**HNSW-SQ 当前综合表现最好**（QPS / recall / p99 都优于 baseline 与 HNSW-PCA-USQ）。
+- HNSW-PCA-USQ 没有退化，QPS 比 baseline 略高（173.98 vs 166.84），recall 也更高（0.9445 vs 0.9352），但 build/optimize 时间更长。
+- IVF-SQ8 的 build/load 明显更快，但搜索吞吐极低，不适合当前目标 workload。
+- DiskANN-PCA-USQ 必须保证 `search_list > k`；修正后可跑通，但当前性能不具备竞争力。
+
+→ 详见 [[benchmarks/authority-numbers]] 新增 2026-04-10 小节。
+
+---
+
 ## 2026-04-10 — IndexWrapper Option-soup 重构（IndexKind 枚举）
 
 **类型**：refactor
