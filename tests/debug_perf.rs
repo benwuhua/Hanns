@@ -6,9 +6,6 @@ use hanns::faiss::{HnswIndex, MemIndex as FlatIndex};
 use hanns::MetricType;
 use rand::Rng;
 
-
-
-
 #[test]
 fn debug_hnsw_perf_test() {
     let n = 10000;

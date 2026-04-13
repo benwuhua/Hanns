@@ -9,7 +9,6 @@ use hanns::faiss::HnswIndex;
 use rand::Rng;
 use std::collections::HashSet;
 
-
 fn compute_ground_truth(base: &[f32], query: &[f32], k: usize, dim: usize) -> Vec<(usize, f32)> {
     let mut distances: Vec<(usize, f32)> = base
         .chunks(dim)

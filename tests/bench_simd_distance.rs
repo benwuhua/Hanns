@@ -12,7 +12,6 @@ use hanns::simd::{
 use rand::Rng;
 use std::time::Instant;
 
-
 /// L2 距离性能对比
 fn bench_l2_distance(dim: usize, iterations: usize) {
     let mut rng = rand::thread_rng();

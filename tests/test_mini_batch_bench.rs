@@ -9,7 +9,6 @@ use hanns::MetricType;
 use rand::Rng;
 use std::time::Instant;
 
-
 struct TrainResult {
     name: String,
     train_time_ms: f64,

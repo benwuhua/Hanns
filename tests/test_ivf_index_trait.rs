@@ -1,6 +1,6 @@
 use hanns::api::{MetricType, SearchRequest};
+use hanns::faiss::ivf_usq::IvfUsqAnnIterator;
 use hanns::faiss::ivf_usq::{IvfUsqConfig, IvfUsqIndex};
-use hanns::faiss::ivf_usq::{IvfUsqAnnIterator};
 
 use hanns::index::Index;
 

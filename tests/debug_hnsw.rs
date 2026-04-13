@@ -5,8 +5,6 @@ use hanns::faiss::HnswIndex;
 use hanns::MetricType;
 use rand::Rng;
 
-
-
 #[test]
 fn debug_hnsw_recall() {
     let n = 1000;

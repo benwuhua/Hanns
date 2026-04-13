@@ -7,8 +7,6 @@ use hanns::MetricType;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-
-
 #[test]
 fn debug_graph_connectivity() {
     let n = 4000;
@@ -20,7 +18,10 @@ fn debug_graph_connectivity() {
     let mut gt_distances: Vec<(usize, f32)> = (0..n)
         .map(|j| {
             let start = j * dim;
-            (j, common::l2_distance_squared(q, &vectors[start..start + dim]))
+            (
+                j,
+                common::l2_distance_squared(q, &vectors[start..start + dim]),
+            )
         })
         .collect();
     gt_distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());

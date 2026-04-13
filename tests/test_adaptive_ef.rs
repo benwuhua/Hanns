@@ -30,8 +30,6 @@ fn generate_gaussian_dataset(num_vectors: usize, dim: usize) -> Vec<f32> {
     data
 }
 
-
-
 struct AdaptiveEfResult {
     top_k: usize,
     adaptive_k: f64,

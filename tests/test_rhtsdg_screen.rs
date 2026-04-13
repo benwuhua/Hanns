@@ -107,32 +107,24 @@ fn search_trace_reports_layer0_and_upper_layer_work_separately() {
 #[test]
 fn search_prunes_dominated_frontier_candidates_once_ef_is_saturated() {
     let vectors = vec![
-        5.0, 0.0,  //
-        0.0, 0.0,  //
+        5.0, 0.0, //
+        0.0, 0.0, //
         50.0, 0.0, //
         60.0, 0.0, //
         70.0, 0.0, //
     ];
-    let layer0 = vec![
-        vec![1, 2, 3, 4],
-        vec![0],
-        vec![0],
-        vec![0],
-        vec![0],
-    ];
+    let layer0 = vec![vec![1, 2, 3, 4], vec![0], vec![0], vec![0], vec![0]];
 
     let index = RhtsdgIndex::new_for_tests(2, vectors, layer0, 0);
     let trace = index.search_trace_for_test(&[0.0, 0.0], 1, 1);
 
     assert_eq!(trace.results, vec![1]);
     assert_eq!(
-        trace.visited,
-        5,
+        trace.visited, 5,
         "search should still mark dominated neighbors as seen to avoid repeated distance work"
     );
     assert_eq!(
-        trace.frontier_pops,
-        2,
+        trace.frontier_pops, 2,
         "search should avoid pushing dominated neighbors onto the frontier once ef is saturated"
     );
     assert_eq!(trace.batch4_calls, 1);
@@ -142,18 +134,12 @@ fn search_prunes_dominated_frontier_candidates_once_ef_is_saturated() {
 fn search_trace_uses_batch4_l2_distance_when_four_neighbors_are_available() {
     let vectors = vec![
         10.0, 0.0, //
-        0.0, 0.0,  //
-        1.0, 0.0,  //
-        2.0, 0.0,  //
-        3.0, 0.0,  //
+        0.0, 0.0, //
+        1.0, 0.0, //
+        2.0, 0.0, //
+        3.0, 0.0, //
     ];
-    let layer0 = vec![
-        vec![1, 2, 3, 4],
-        vec![0],
-        vec![0],
-        vec![0],
-        vec![0],
-    ];
+    let layer0 = vec![vec![1, 2, 3, 4], vec![0], vec![0], vec![0], vec![0]];
 
     let index = RhtsdgIndex::new_for_tests(2, vectors, layer0, 0);
     let trace = index.search_trace_for_test(&[0.0, 0.0], 4, 4);

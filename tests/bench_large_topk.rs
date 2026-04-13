@@ -30,7 +30,6 @@ fn generate_random_dataset(num_vectors: usize, dim: usize) -> Vec<f32> {
 
 /// Generate ground truth (brute-force)
 
-
 struct BenchmarkResult {
     top_k: usize,
     ef_search: usize,
@@ -227,7 +226,8 @@ fn test_large_topk_performance() {
     // Compute ground truth for max top_k
     println!("\nComputing ground truth (k=1000)...");
     let gt_start = Instant::now();
-    let ground_truth = common::compute_ground_truth(&base_data, &query_data, num_queries, dim, 1000);
+    let ground_truth =
+        common::compute_ground_truth(&base_data, &query_data, num_queries, dim, 1000);
     println!(
         "Ground truth computed in {:.2}s",
         gt_start.elapsed().as_secs_f64()

@@ -30,8 +30,6 @@ fn generate_gaussian_dataset(num_vectors: usize, dim: usize) -> Vec<f32> {
     data
 }
 
-
-
 struct BenchmarkResult {
     top_k: usize,
     ef_search: usize,

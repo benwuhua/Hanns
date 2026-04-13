@@ -83,7 +83,6 @@ fn compute_ground_truth(base: &[f32], queries: &[f32], dim: usize, top_k: usize)
     ground_truth
 }
 
-
 fn benchmark_flat(
     base: &[f32],
     queries: &[f32],

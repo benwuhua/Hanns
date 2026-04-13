@@ -4,9 +4,7 @@ use hanns::{HnswIndex, IndexType, MetricType};
 const DIM: usize = 32;
 
 fn make_vectors(n: usize) -> Vec<f32> {
-    (0..n * DIM)
-        .map(|k| (k as f32 * 0.001).sin())
-        .collect()
+    (0..n * DIM).map(|k| (k as f32 * 0.001).sin()).collect()
 }
 
 fn build_test_index(n: usize, metric: MetricType) -> HnswIndex {
@@ -58,8 +56,10 @@ fn test_serialize_roundtrip_l2_search() {
 
     let after = search_top_k(&restored, &queries, k);
 
-    assert_eq!(before, after,
-        "search results changed after L2 serialize/deserialize roundtrip");
+    assert_eq!(
+        before, after,
+        "search results changed after L2 serialize/deserialize roundtrip"
+    );
 }
 
 /// Round-trip for Cosine must also return identical results (normalization not double-applied).
@@ -76,8 +76,10 @@ fn test_serialize_roundtrip_cosine_search() {
 
     let after = search_top_k(&restored, &queries, k);
 
-    assert_eq!(before, after,
-        "search results changed after Cosine serialize/deserialize roundtrip");
+    assert_eq!(
+        before, after,
+        "search results changed after Cosine serialize/deserialize roundtrip"
+    );
 }
 
 /// Serialized bytes must be stable: re-serializing a deserialized index produces
@@ -88,6 +90,8 @@ fn test_serialize_bytes_stable() {
     let bytes1 = index.serialize_to_bytes().unwrap();
     let restored = HnswIndex::deserialize_from_bytes(&bytes1).unwrap();
     let bytes2 = restored.serialize_to_bytes().unwrap();
-    assert_eq!(bytes1, bytes2,
-        "re-serializing a deserialized index produced different bytes");
+    assert_eq!(
+        bytes1, bytes2,
+        "re-serializing a deserialized index produced different bytes"
+    );
 }

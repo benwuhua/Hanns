@@ -55,7 +55,6 @@ struct RealDatasetResult {
 
 /// Ground truth computation
 
-
 /// Load SIFT1M dataset from file
 /// Expected format: base vectors (1M x 128 f32), query vectors (10K x 128 f32), ground truth (10K x 100 i32)
 fn load_sift1m(base_path: &str) -> Result<(Vec<f32>, Vec<f32>, GroundTruth), String> {

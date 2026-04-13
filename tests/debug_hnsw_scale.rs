@@ -6,8 +6,6 @@ use hanns::MetricType;
 use rand::Rng;
 use std::collections::HashSet;
 
-
-
 #[test]
 fn debug_hnsw_scale_test() {
     let n = 10000;

@@ -30,7 +30,6 @@ fn generate_random_dataset(num_vectors: usize, dim: usize) -> Vec<f32> {
 
 /// Generate ground truth (brute-force)
 
-
 #[derive(Clone)]
 struct BenchmarkResult {
     base_ef: usize,

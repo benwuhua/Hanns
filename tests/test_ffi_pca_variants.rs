@@ -46,7 +46,10 @@ fn test_ffi_hnsw_pca_sq_train_add_search_smoke() {
     assert!(!result.is_null());
     let got = unsafe { result_ids(result) };
     assert_eq!(got.len(), 5);
-    assert!(got.contains(&100), "self id missing from HNSW-PCA-SQ results: {got:?}");
+    assert!(
+        got.contains(&100),
+        "self id missing from HNSW-PCA-SQ results: {got:?}"
+    );
 
     knowhere_free_result(result);
     knowhere_free_index(index);
@@ -83,7 +86,10 @@ fn test_ffi_hnsw_pca_usq_train_add_search_smoke() {
     assert!(!result.is_null());
     let got = unsafe { result_ids(result) };
     assert_eq!(got.len(), 5);
-    assert!(got.contains(&200), "self id missing from HNSW-PCA-USQ results: {got:?}");
+    assert!(
+        got.contains(&200),
+        "self id missing from HNSW-PCA-USQ results: {got:?}"
+    );
 
     knowhere_free_result(result);
     knowhere_free_index(index);
@@ -121,7 +127,10 @@ fn test_ffi_diskann_pca_usq_build_search_smoke() {
     assert!(!result.is_null());
     let got = unsafe { result_ids(result) };
     assert_eq!(got.len(), 5);
-    assert!(got.contains(&0), "self id missing from DiskANN-PCA-USQ results: {got:?}");
+    assert!(
+        got.contains(&0),
+        "self id missing from DiskANN-PCA-USQ results: {got:?}"
+    );
 
     knowhere_free_result(result);
     knowhere_free_index(index);

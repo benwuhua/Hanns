@@ -6,8 +6,6 @@ use hanns::MetricType;
 use rand::Rng;
 use std::collections::HashSet;
 
-
-
 #[test]
 fn debug_entry_point_test() {
     let n = 10000;

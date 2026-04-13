@@ -93,7 +93,6 @@ fn generate_gaussian_dataset(num_vectors: usize, dim: usize) -> Vec<f32> {
 
 /// Compute ground truth for random dataset (brute-force)
 
-
 /// Benchmark HNSW with specific parameter combination
 #[allow(clippy::too_many_arguments)]
 fn benchmark_hnsw_params(

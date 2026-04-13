@@ -6,8 +6,6 @@ use hanns::MetricType;
 use rand::Rng;
 use std::collections::HashSet;
 
-
-
 #[test]
 fn debug_hnsw_match_analysis() {
     let n = 1000;

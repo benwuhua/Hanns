@@ -78,7 +78,6 @@ fn generate_random_dataset(num_vectors: usize, dim: usize) -> Vec<f32> {
 
 /// Generate ground truth for random dataset (brute-force)
 #[cfg(feature = "long-tests")]
-
 #[cfg(feature = "long-tests")]
 
 /// Benchmark Flat index
@@ -439,10 +438,8 @@ fn test_json_export_contract_fast_lane() {
         #[cfg(feature = "long-tests")]
         k: 10,
     };
-    let output_dir = std::env::temp_dir().join(format!(
-        "hanns_json_export_contract_{}",
-        std::process::id()
-    ));
+    let output_dir =
+        std::env::temp_dir().join(format!("hanns_json_export_contract_{}", std::process::id()));
     let output_path = write_json_report(
         &output_dir,
         "benchmark_results_contract.json",

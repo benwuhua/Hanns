@@ -7,8 +7,6 @@ use rand::Rng;
 use std::collections::HashSet;
 use std::time::Instant;
 
-
-
 #[test]
 fn debug_ef_construction_test() {
     let n = 10000;

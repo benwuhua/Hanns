@@ -4,9 +4,7 @@
 //! 1. OPQ + PQ achieves R@10 > 50% on SIFT1M-like data
 //! 2. Residual PQ improves recall by > 20% over standard PQ
 
-use hanns::quantization::{
-    PQConfig, ProductQuantizer, ResidualPQConfig, ResidualProductQuantizer,
-};
+use hanns::quantization::{PQConfig, ProductQuantizer, ResidualPQConfig, ResidualProductQuantizer};
 
 #[cfg(feature = "long-tests")]
 use hanns::api::SearchRequest;

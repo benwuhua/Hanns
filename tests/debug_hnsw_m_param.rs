@@ -35,7 +35,6 @@ fn generate_gaussian_dataset(num_vectors: usize, dim: usize) -> Vec<f32> {
 
 /// Compute ground truth using brute-force
 
-
 /// Calculate recall@k
 fn calculate_recall(results: &[Vec<i64>], ground_truth: &[Vec<i32>], k: usize) -> f64 {
     let mut total_recall = 0.0;

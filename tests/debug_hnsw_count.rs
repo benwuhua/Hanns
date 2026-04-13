@@ -7,7 +7,6 @@ use hanns::api::{IndexConfig, IndexParams, IndexType, MetricType, SearchRequest}
 use hanns::faiss::HnswIndex;
 use rand::Rng;
 
-
 #[test]
 fn test_hnsw_search_count() {
     let dim = 128;

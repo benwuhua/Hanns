@@ -5,8 +5,6 @@ use hanns::faiss::HnswIndex;
 use hanns::MetricType;
 use rand::Rng;
 
-
-
 #[test]
 fn debug_neighbor_coverage() {
     let n = 10000;
@@ -17,7 +15,12 @@ fn debug_neighbor_coverage() {
 
     // Compute ground truth
     let mut gt_distances: Vec<(usize, f32)> = (0..n)
-        .map(|j| (j, common::l2_distance_squared(q, &vectors[j * dim..(j + 1) * dim])))
+        .map(|j| {
+            (
+                j,
+                common::l2_distance_squared(q, &vectors[j * dim..(j + 1) * dim]),
+            )
+        })
         .collect();
     gt_distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 

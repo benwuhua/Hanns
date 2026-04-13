@@ -6,8 +6,6 @@ use hanns::MetricType;
 use rand::Rng;
 use std::collections::HashSet;
 
-
-
 #[test]
 fn debug_ef_search_test() {
     let n = 10000;

@@ -11,7 +11,9 @@ fn build_test_layout(n: usize, dim: usize, nbits: u8) -> (UsqQuantizer, UsqLayou
     let mut q = UsqQuantizer::new(config.clone());
     q.set_centroid(&vec![0.0f32; dim]);
     let (data, ids) = make_data(n, dim);
-    let encoded: Vec<_> = (0..n).map(|i| q.encode(&data[i * dim..(i + 1) * dim])).collect();
+    let encoded: Vec<_> = (0..n)
+        .map(|i| q.encode(&data[i * dim..(i + 1) * dim]))
+        .collect();
     let layout = UsqLayout::build(&config, &encoded, &ids);
     (q, layout, ids)
 }
@@ -73,7 +75,8 @@ fn test_rotator_inverse() {
         assert!(
             (v[i] - recovered[i]).abs() < 1e-3,
             "inverse rotation failed at dim {i}: expected {}, got {}",
-            v[i], recovered[i]
+            v[i],
+            recovered[i]
         );
     }
 }
@@ -83,7 +86,11 @@ fn test_rotator_deterministic() {
     let config = UsqConfig::new(128, 4).unwrap();
     let r1 = UsqRotator::new(&config);
     let r2 = UsqRotator::new(&config);
-    assert_eq!(r1.matrix(), r2.matrix(), "same seed should produce same matrix");
+    assert_eq!(
+        r1.matrix(),
+        r2.matrix(),
+        "same seed should produce same matrix"
+    );
 }
 
 // ---- Task 2: UsqQuantizer tests ----
@@ -99,7 +106,10 @@ fn test_encode_4bit_basic() {
 
     assert!(encoded.norm > 0.0, "norm should be positive");
     assert!(encoded.vmax > 0.0, "vmax should be positive");
-    assert!(encoded.quant_quality > 0.0, "quant_quality should be positive");
+    assert!(
+        encoded.quant_quality > 0.0,
+        "quant_quality should be positive"
+    );
     assert_eq!(
         encoded.packed_bits.len(),
         config.code_bytes(),
@@ -141,8 +151,7 @@ fn test_score_is_reasonable() {
     // score(v, v) ≈ ‖v‖² (since centroid=0, rotation preserves inner products)
     let self_score = quantizer.score(&encoded, &v);
     let true_norm_sq: f32 = v.iter().map(|x| x * x).sum();
-    let relative_err =
-        ((self_score - true_norm_sq) / true_norm_sq.max(1e-6)).abs();
+    let relative_err = ((self_score - true_norm_sq) / true_norm_sq.max(1e-6)).abs();
     assert!(
         relative_err < 0.3,
         "self-score should approximate ‖v‖²: self_score={self_score:.4}, true_norm_sq={true_norm_sq:.4}, rel_err={relative_err:.4}"
@@ -231,7 +240,9 @@ fn test_layout_build_basic() {
 
     let n = 100;
     let data: Vec<f32> = (0..n * dim).map(|i| (i as f32 * 0.13).sin()).collect();
-    let encoded: Vec<_> = (0..n).map(|i| quantizer.encode(&data[i*dim..(i+1)*dim])).collect();
+    let encoded: Vec<_> = (0..n)
+        .map(|i| quantizer.encode(&data[i * dim..(i + 1) * dim]))
+        .collect();
     let ids: Vec<i64> = (0..n as i64).collect();
     let layout = UsqLayout::build(&config, &encoded, &ids);
 
@@ -269,7 +280,9 @@ fn test_layout_fastscan_block_size() {
 
     let n = 64; // exactly 2 full blocks
     let data: Vec<f32> = (0..n * 128).map(|i| (i as f32 * 0.13).sin()).collect();
-    let encoded: Vec<_> = (0..n).map(|i| quantizer.encode(&data[i*128..(i+1)*128])).collect();
+    let encoded: Vec<_> = (0..n)
+        .map(|i| quantizer.encode(&data[i * 128..(i + 1) * 128]))
+        .collect();
     let ids: Vec<i64> = (0..n as i64).collect();
     let layout = UsqLayout::build(&config, &encoded, &ids);
 
@@ -394,8 +407,7 @@ fn test_usq_recall_parity_vs_hvq() {
                         layout.quant_quality_at(i),
                         layout.packed_bits_at(i),
                     );
-                    let v_norm_sq: f32 =
-                        data[i * dim..(i + 1) * dim].iter().map(|x| x * x).sum();
+                    let v_norm_sq: f32 = data[i * dim..(i + 1) * dim].iter().map(|x| x * x).sum();
                     (i as i64, q_norm_sq + v_norm_sq - 2.0 * score)
                 })
                 .collect();

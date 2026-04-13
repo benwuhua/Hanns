@@ -1,6 +1,6 @@
 use hanns::faiss::rhtsdg::neighbor::{Neighbor, NeighborStatus, Neighborhood};
-use hanns::faiss::rhtsdg::RhtsdgIndex;
 use hanns::faiss::rhtsdg::xndescent::{XNDescentBuilder, XNDescentConfig};
+use hanns::faiss::rhtsdg::RhtsdgIndex;
 
 #[test]
 fn insert_neighbor_dedupes_and_keeps_best_k() {
@@ -159,7 +159,11 @@ fn insert_neighbor_prefers_smaller_id_when_distance_ties_at_capacity() {
     assert!(neighborhood.insert(20, 1.0, NeighborStatus::New));
     assert!(neighborhood.insert(10, 1.0, NeighborStatus::New));
 
-    let ids: Vec<u32> = neighborhood.snapshot().into_iter().map(|neighbor| neighbor.id).collect();
+    let ids: Vec<u32> = neighborhood
+        .snapshot()
+        .into_iter()
+        .map(|neighbor| neighbor.id)
+        .collect();
     assert_eq!(ids, vec![10, 20]);
 }
 

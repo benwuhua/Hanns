@@ -12,9 +12,7 @@ use hanns::MetricType;
 use rand::Rng;
 use std::time::Instant;
 
-
 /// Compute ground truth for random dataset (brute-force)
-
 
 struct PerfResult {
     name: String,

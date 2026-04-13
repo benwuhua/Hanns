@@ -36,7 +36,6 @@ fn generate_gaussian_dataset(num_vectors: usize, dim: usize) -> Vec<f32> {
 
 /// Compute ground truth for random dataset (brute-force)
 
-
 /// HNSW recall test result for a specific ef_search
 struct HnswRecallResult {
     ef_search: usize,

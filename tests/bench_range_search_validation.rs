@@ -10,9 +10,7 @@
 //! ```
 
 use hanns::api::{IndexConfig, IndexParams, IndexType};
-use hanns::benchmark::{
-    check_distance_in_scope_range, distance_statistics, validate_l2_distances,
-};
+use hanns::benchmark::{check_distance_in_scope_range, distance_statistics, validate_l2_distances};
 use hanns::dataset::{load_sift1m_complete, SiftDataset};
 use hanns::faiss::MemIndex as FlatIndex;
 use hanns::MetricType;

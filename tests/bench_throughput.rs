@@ -10,7 +10,6 @@
 //! cargo test --test bench_throughput -- --nocapture
 //! ```
 
-use hdrhistogram::Histogram;
 use hanns::api::{IndexConfig, IndexParams, SearchRequest};
 use hanns::benchmark::{
     average_recall_at_k, estimate_vector_memory, DistanceValidationReport, MemoryTracker,
@@ -18,6 +17,7 @@ use hanns::benchmark::{
 use hanns::faiss::{HnswIndex, IvfFlatIndex, MemIndex as FlatIndex};
 use hanns::IndexType;
 use hanns::MetricType;
+use hdrhistogram::Histogram;
 use rand::Rng;
 use rayon::prelude::*;
 use std::sync::Arc;

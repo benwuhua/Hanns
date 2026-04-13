@@ -26,7 +26,10 @@ fn milvus_cohere1m_compare_artifact_locks_fairness_contract() {
         .as_array()
         .expect("rows must be encoded as an array");
 
-    assert_eq!(artifact["benchmark"], "milvus-vectordbbench-cohere1m-hnsw-compare");
+    assert_eq!(
+        artifact["benchmark"],
+        "milvus-vectordbbench-cohere1m-hnsw-compare"
+    );
     assert_eq!(artifact["authority_scope"], "remote_x86_only");
     assert_eq!(artifact["host"], "hannsdb-x86");
 
@@ -39,7 +42,11 @@ fn milvus_cohere1m_compare_artifact_locks_fairness_contract() {
     assert_eq!(params["ef_construction"], 128);
     assert_eq!(params["ef_search"], 128);
 
-    assert_eq!(rows.len(), 2, "comparison artifact must contain exactly two rows");
+    assert_eq!(
+        rows.len(),
+        2,
+        "comparison artifact must contain exactly two rows"
+    );
 
     let native = find_row(rows, "milvus-native-knowhere");
     let rs = find_row(rows, "milvus-hanns");
@@ -47,20 +54,16 @@ fn milvus_cohere1m_compare_artifact_locks_fairness_contract() {
     assert!(native["qps"].as_f64().unwrap() > 0.0);
     assert!(native["recall"].as_f64().unwrap() > 0.0);
     assert!(native["load_duration"].as_f64().unwrap() > 0.0);
-    assert!(
-        native["source_result"]
-            .as_str()
-            .is_some_and(|path| path.contains("native"))
-    );
+    assert!(native["source_result"]
+        .as_str()
+        .is_some_and(|path| path.contains("native")));
 
     assert!(rs["qps"].as_f64().unwrap() > 0.0);
     assert!(rs["recall"].as_f64().unwrap() > 0.0);
     assert!(rs["load_duration"].as_f64().unwrap() > 0.0);
-    assert!(
-        rs["source_result"]
-            .as_str()
-            .is_some_and(|path| path.contains("hanns"))
-    );
+    assert!(rs["source_result"]
+        .as_str()
+        .is_some_and(|path| path.contains("hanns")));
 }
 
 #[test]

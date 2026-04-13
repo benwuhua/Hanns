@@ -35,7 +35,6 @@ fn generate_random_dataset(num_vectors: usize, dim: usize) -> Vec<f32> {
 
 /// Generate ground truth for random dataset (brute-force)
 
-
 /// Benchmark Flat index
 fn benchmark_flat(
     base: &[f32],

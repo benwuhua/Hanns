@@ -94,7 +94,6 @@ fn compute_ground_truth(base: &[f32], query: &[f32], dim: usize, k: usize) -> Ve
     ground_truth
 }
 
-
 /// 计算召回率
 fn calculate_recall(results: &[Vec<i64>], ground_truth: &[Vec<i64>], k: usize) -> f64 {
     let mut total_recall = 0.0;
