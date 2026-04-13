@@ -116,19 +116,18 @@ impl<T> SendPtr<T> {
     }
 }
 
-static HNSW_NQ_POOL: once_cell::sync::Lazy<rayon::ThreadPool> =
-    once_cell::sync::Lazy::new(|| {
-        let hw = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(8);
-        // Reserve CPU slots for CGO executor threads that will inject via install()
-        let pool_threads = hw.saturating_sub(CGO_EXECUTOR_SLOTS).max(4);
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(pool_threads)
-            .thread_name(|i| format!("hnsw-nq-{i}"))
-            .build()
-            .expect("failed to build HNSW_NQ_POOL")
-    });
+static HNSW_NQ_POOL: once_cell::sync::Lazy<rayon::ThreadPool> = once_cell::sync::Lazy::new(|| {
+    let hw = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(8);
+    // Reserve CPU slots for CGO executor threads that will inject via install()
+    let pool_threads = hw.saturating_sub(CGO_EXECUTOR_SLOTS).max(4);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(pool_threads)
+        .thread_name(|i| format!("hnsw-nq-{i}"))
+        .build()
+        .expect("failed to build HNSW_NQ_POOL")
+});
 
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 #[derive(Clone, Copy)]
@@ -2145,7 +2144,13 @@ impl HnswIndex {
             if idx > 0 {
                 let vec_start = idx * self.dim;
                 vec_scratch.copy_from_slice(&self.vectors[vec_start..vec_start + self.dim]);
-                self.insert_node_profiled_with_scratch(idx, &vec_scratch, node_level, stats, &mut scratch);
+                self.insert_node_profiled_with_scratch(
+                    idx,
+                    &vec_scratch,
+                    node_level,
+                    stats,
+                    &mut scratch,
+                );
             }
         }
 
@@ -4187,6 +4192,7 @@ impl HnswIndex {
         }
     }
 
+    #[allow(dead_code)]
     #[inline(always)]
     unsafe fn prefetch_layer0_slab_idx(&self, idx: usize) -> bool {
         let stride_words = self.layer0_slab.stride_words;
@@ -4430,10 +4436,12 @@ impl HnswIndex {
                             // SAFETY: q_idx is unique per task; slices are disjoint.
                             unsafe {
                                 let ids_slice = std::slice::from_raw_parts_mut(
-                                    ids_ptr_copy.get().add(q_idx * k), k,
+                                    ids_ptr_copy.get().add(q_idx * k),
+                                    k,
                                 );
                                 let dists_slice = std::slice::from_raw_parts_mut(
-                                    dists_ptr_copy.get().add(q_idx * k), k,
+                                    dists_ptr_copy.get().add(q_idx * k),
+                                    k,
                                 );
                                 for (i, &(id, dist)) in results.iter().take(k).enumerate() {
                                     ids_slice[i] = id;
@@ -4877,7 +4885,8 @@ impl HnswIndex {
             return vec![(best_idx, best_dist)];
         }
 
-        let is_filtered = |idx: usize| bitset.is_some_and(|mask| idx < mask.bitset_len() && mask.bitset_get(idx));
+        let is_filtered =
+            |idx: usize| bitset.is_some_and(|mask| idx < mask.bitset_len() && mask.bitset_get(idx));
         let use_l2_ptr_dispatch = self.metric_type == MetricType::L2;
         let query_ptr = query.as_ptr();
         let base_ptr = self.vectors.as_ptr();
@@ -5119,7 +5128,9 @@ impl HnswIndex {
         bitset: Option<&BitsetView>,
         scratch: &mut SearchScratch,
     ) -> Vec<(usize, f32)> {
-        self.search_layer_idx_shared::<BitsetView>(query, entry_idx, level, ef, bitset, scratch, None)
+        self.search_layer_idx_shared::<BitsetView>(
+            query, entry_idx, level, ef, bitset, scratch, None,
+        )
     }
 
     fn search_layer_idx_with_optional_profile(
@@ -5131,7 +5142,9 @@ impl HnswIndex {
         scratch: &mut SearchScratch,
         profile: Option<&mut HnswCandidateSearchProfileStats>,
     ) -> Vec<(usize, f32)> {
-        self.search_layer_idx_shared::<BitsetView>(query, entry_idx, level, ef, None, scratch, profile)
+        self.search_layer_idx_shared::<BitsetView>(
+            query, entry_idx, level, ef, None, scratch, profile,
+        )
     }
 
     fn search_layer_idx_l2_heap_with_optional_profile(
@@ -5755,7 +5768,8 @@ impl HnswIndex {
 
                     for i in 0..4 {
                         let nbr_idx = batch_indices[i];
-                        let is_filtered = nbr_idx < bitset.bitset_len() && bitset.bitset_get(nbr_idx);
+                        let is_filtered =
+                            nbr_idx < bitset.bitset_len() && bitset.bitset_get(nbr_idx);
                         let entry = Layer0PoolEntry {
                             idx: nbr_idx,
                             dist: distances[i],
@@ -6639,8 +6653,9 @@ impl HnswIndex {
         }
 
         if self.metric_type == MetricType::Cosine && self.ids.len() <= ef.max(k).max(64) {
-            return self
-                .brute_force_search(query, k, |_id, idx| idx >= bitset.bitset_len() || !bitset.bitset_get(idx));
+            return self.brute_force_search(query, k, |_id, idx| {
+                idx >= bitset.bitset_len() || !bitset.bitset_get(idx)
+            });
         }
 
         self.prepare_search_query_context(query);
@@ -6753,7 +6768,14 @@ impl HnswIndex {
 
         let mut result = HNSW_SEARCH_SCRATCH_TLS.with(|scratch_cell| {
             let mut scratch = scratch_cell.borrow_mut();
-            self.search_single_with_bitset_ref_scratch(query, curr_ep_idx, ef, k, bitset, &mut scratch)
+            self.search_single_with_bitset_ref_scratch(
+                query,
+                curr_ep_idx,
+                ef,
+                k,
+                bitset,
+                &mut scratch,
+            )
         });
 
         let t3 = Instant::now();
@@ -6845,10 +6867,12 @@ impl HnswIndex {
                             // SAFETY: q_idx is unique per task; slices are disjoint.
                             unsafe {
                                 let ids_slice = std::slice::from_raw_parts_mut(
-                                    ids_ptr_copy.get().add(q_idx * k), k,
+                                    ids_ptr_copy.get().add(q_idx * k),
+                                    k,
                                 );
                                 let dists_slice = std::slice::from_raw_parts_mut(
-                                    dists_ptr_copy.get().add(q_idx * k), k,
+                                    dists_ptr_copy.get().add(q_idx * k),
+                                    k,
                                 );
                                 for (i, &(id, dist)) in res.iter().take(k).enumerate() {
                                     ids_slice[i] = id;
@@ -7756,9 +7780,7 @@ impl HnswIndex {
                 let buf = &mut byte_buf[..batch * 8];
                 file.read_exact(buf)?;
                 for j in 0..batch {
-                    let id = i64::from_le_bytes(
-                        buf[j * 8..j * 8 + 8].try_into().unwrap()
-                    );
+                    let id = i64::from_le_bytes(buf[j * 8..j * 8 + 8].try_into().unwrap());
                     let global_i = loaded + j;
                     if !id_set.insert(id) {
                         return Err(crate::api::KnowhereError::Codec(format!(
@@ -10506,8 +10528,15 @@ mod tests {
         let mut scratch = SearchScratch::new();
         let mut stats = HnswCandidateSearchProfileStats::default();
 
-        let results =
-            index.search_layer_idx_shared::<BitsetView>(&query, 0, 0, 4, None, &mut scratch, Some(&mut stats));
+        let results = index.search_layer_idx_shared::<BitsetView>(
+            &query,
+            0,
+            0,
+            4,
+            None,
+            &mut scratch,
+            Some(&mut stats),
+        );
 
         assert_eq!(
             results.len(),
@@ -10527,8 +10556,15 @@ mod tests {
         let mut scratch = SearchScratch::new();
         let mut stats = HnswCandidateSearchProfileStats::default();
 
-        let results =
-            index.search_layer_idx_shared::<BitsetView>(&query, 0, 0, 4, None, &mut scratch, Some(&mut stats));
+        let results = index.search_layer_idx_shared::<BitsetView>(
+            &query,
+            0,
+            0,
+            4,
+            None,
+            &mut scratch,
+            Some(&mut stats),
+        );
 
         assert_eq!(
             results.len(),
@@ -11426,12 +11462,20 @@ mod tests {
             params: crate::api::IndexParams::default(),
         };
         let mut index = HnswIndex::new(&config).unwrap();
-        let vectors: Vec<f32> = (0..10).flat_map(|i| [i as f32, 0.0f32, 0.0f32, 0.0f32]).collect();
+        let vectors: Vec<f32> = (0..10)
+            .flat_map(|i| [i as f32, 0.0f32, 0.0f32, 0.0f32])
+            .collect();
         let ids: Vec<i64> = (0..10).collect();
         index.train(&vectors).unwrap();
         index.add(&vectors, Some(&ids)).unwrap();
 
-        let req = SearchRequest { top_k: 3, nprobe: 10, filter: None, params: None, radius: None };
+        let req = SearchRequest {
+            top_k: 3,
+            nprobe: 10,
+            filter: None,
+            params: None,
+            radius: None,
+        };
         let bitset = crate::bitset::BitsetRef::new(&[], 0);
         let query = vec![3.1f32, 0.0, 0.0, 0.0];
         let result = index.search_with_bitset_ref(&query, &req, &bitset).unwrap();
@@ -11440,8 +11484,14 @@ mod tests {
         // query=[3.1,0,0,0]; nearest is id=3 (dist=0.01), then id=4 (dist=0.81), then id=2 (dist=1.21)
         assert_eq!(result.ids[0], 3, "top-1 should be id=3");
         // distances must be ascending
-        assert!(result.distances[0] <= result.distances[1], "distances must be ascending");
-        assert!(result.distances[1] <= result.distances[2], "distances must be ascending");
+        assert!(
+            result.distances[0] <= result.distances[1],
+            "distances must be ascending"
+        );
+        assert!(
+            result.distances[1] <= result.distances[2],
+            "distances must be ascending"
+        );
     }
 
     #[test]

@@ -7,8 +7,6 @@
 use crate::simd::{dot_product_f32, l2_distance, l2_distance_sq};
 use rand::prelude::*;
 use rand::seq::SliceRandom;
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
 
 /// 计算两个向量的 L2 距离（自动选择 SIMD 实现）
 #[inline]
@@ -358,21 +356,27 @@ impl KMeans {
         for _iter in 0..self.max_iter {
             // 并行分配阶段 - rayon par_iter，结果写入预分配的 assignments
             use rayon::prelude::*;
-            (0..n).into_par_iter().map(|i| {
-                let mut min_dist = f32::MAX;
-                let mut best_k = 0;
-                let vec_start = i * self.dim;
-                let vec = &vectors[vec_start..vec_start + self.dim];
-                for c in 0..self.k {
-                    let centroid_start = c * self.dim;
-                    let dist = self.score(vec, &self.centroids[centroid_start..centroid_start + self.dim]);
-                    if dist < min_dist {
-                        min_dist = dist;
-                        best_k = c;
+            (0..n)
+                .into_par_iter()
+                .map(|i| {
+                    let mut min_dist = f32::MAX;
+                    let mut best_k = 0;
+                    let vec_start = i * self.dim;
+                    let vec = &vectors[vec_start..vec_start + self.dim];
+                    for c in 0..self.k {
+                        let centroid_start = c * self.dim;
+                        let dist = self.score(
+                            vec,
+                            &self.centroids[centroid_start..centroid_start + self.dim],
+                        );
+                        if dist < min_dist {
+                            min_dist = dist;
+                            best_k = c;
+                        }
                     }
-                }
-                best_k
-            }).collect_into_vec(&mut assignments);
+                    best_k
+                })
+                .collect_into_vec(&mut assignments);
 
             // 重置聚合缓冲区（复用，不重新分配）
             new_centroids.fill(0.0);
@@ -403,7 +407,10 @@ impl KMeans {
                     // For IP metric: normalize centroids after averaging.
                     if self.metric == KMeansMetric::InnerProduct {
                         let norm = new_centroids[centroid_start..centroid_end]
-                            .iter().map(|x| x * x).sum::<f32>().sqrt();
+                            .iter()
+                            .map(|x| x * x)
+                            .sum::<f32>()
+                            .sqrt();
                         if norm > 1e-12 {
                             for j in centroid_start..centroid_end {
                                 new_centroids[j] /= norm;

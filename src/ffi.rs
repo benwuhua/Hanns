@@ -513,11 +513,26 @@ impl IndexWrapper {
                 if config.ef_search > 0 {
                     eprintln!("warn: ef_search ignored for ScaNN; use reorder_k instead");
                 }
-                let num_partitions = if config.num_partitions > 0 { config.num_partitions } else { 16 };
-                let num_centroids = if config.num_centroids > 0 { config.num_centroids } else { 256 };
-                let reorder_k = if config.reorder_k > 0 { config.reorder_k } else { 100 };
+                let num_partitions = if config.num_partitions > 0 {
+                    config.num_partitions
+                } else {
+                    16
+                };
+                let num_centroids = if config.num_centroids > 0 {
+                    config.num_centroids
+                } else {
+                    256
+                };
+                let reorder_k = if config.reorder_k > 0 {
+                    config.reorder_k
+                } else {
+                    100
+                };
                 let scann_config = ScaNNConfig::new(num_partitions, num_centroids, reorder_k);
-                (IndexKind::Scann(ScaNNIndex::new(dim, scann_config).ok()?), 8)
+                (
+                    IndexKind::Scann(ScaNNIndex::new(dim, scann_config).ok()?),
+                    8,
+                )
             }
             CIndexType::HnswPrq => {
                 let hnsw_prq_config = crate::faiss::HnswPrqConfig::new(dim)
@@ -525,21 +540,48 @@ impl IndexWrapper {
                     .with_ef_construction(config.ef_construction)
                     .with_ef_search(config.ef_search)
                     .with_prq_params(
-                        if config.prq_nsplits > 0 { config.prq_nsplits } else { 2 },
-                        if config.prq_msub > 0 { config.prq_msub } else { 4 },
-                        if config.prq_nbits > 0 { config.prq_nbits } else { 8 },
+                        if config.prq_nsplits > 0 {
+                            config.prq_nsplits
+                        } else {
+                            2
+                        },
+                        if config.prq_msub > 0 {
+                            config.prq_msub
+                        } else {
+                            4
+                        },
+                        if config.prq_nbits > 0 {
+                            config.prq_nbits
+                        } else {
+                            8
+                        },
                     )
                     .with_metric_type(metric);
-                (IndexKind::HnswPrq(crate::faiss::HnswPrqIndex::new(hnsw_prq_config).ok()?), 8)
+                (
+                    IndexKind::HnswPrq(crate::faiss::HnswPrqIndex::new(hnsw_prq_config).ok()?),
+                    8,
+                )
             }
             CIndexType::IvfRabitq => {
                 eprintln!("IvfRabitq merged into IvfUsq; use ivf_usq API");
                 return None;
             }
             CIndexType::HnswSq => {
-                let ef_construction = if config.ef_construction > 0 { config.ef_construction } else { 200 };
-                let ef_search = if config.ef_search > 0 { config.ef_search } else { 50 };
-                let sq_bit = if config.prq_nbits > 0 { config.prq_nbits } else { 8 };
+                let ef_construction = if config.ef_construction > 0 {
+                    config.ef_construction
+                } else {
+                    200
+                };
+                let ef_search = if config.ef_search > 0 {
+                    config.ef_search
+                } else {
+                    50
+                };
+                let sq_bit = if config.prq_nbits > 0 {
+                    config.prq_nbits
+                } else {
+                    8
+                };
                 let hnsw_sq = crate::faiss::HnswSqIndex::new(dim);
                 let _hnsw_config = crate::faiss::HnswQuantizeConfig {
                     ef_construction,
@@ -550,18 +592,33 @@ impl IndexWrapper {
                 (IndexKind::HnswSq(hnsw_sq), 8)
             }
             CIndexType::HnswPq => {
-                let pq_m = if config.prq_nsplits > 0 { config.prq_nsplits } else { 8 };
-                let pq_k = if config.prq_msub > 0 { config.prq_msub } else { 256 };
+                let pq_m = if config.prq_nsplits > 0 {
+                    config.prq_nsplits
+                } else {
+                    8
+                };
+                let pq_k = if config.prq_msub > 0 {
+                    config.prq_msub
+                } else {
+                    256
+                };
                 let hnsw_pq_config = crate::faiss::HnswPqConfig::new(dim)
                     .with_m(16)
                     .with_ef_construction(config.ef_construction)
                     .with_ef_search(config.ef_search)
                     .with_pq_params(pq_m, pq_k)
                     .with_metric_type(metric);
-                (IndexKind::HnswPq(crate::faiss::HnswPqIndex::new(hnsw_pq_config).ok()?), 8)
+                (
+                    IndexKind::HnswPq(crate::faiss::HnswPqIndex::new(hnsw_pq_config).ok()?),
+                    8,
+                )
             }
             CIndexType::IvfSq8 => {
-                let nlist = if config.num_centroids > 0 { config.num_centroids } else { 256 };
+                let nlist = if config.num_centroids > 0 {
+                    config.num_centroids
+                } else {
+                    256
+                };
                 let np = if config.nprobe > 0 { config.nprobe } else { 8 };
                 let index_config = IndexConfig {
                     index_type: IndexType::IvfSq8,
@@ -570,10 +627,17 @@ impl IndexWrapper {
                     data_type,
                     params: IndexParams::ivf_sq8(nlist, np),
                 };
-                (IndexKind::IvfSq8(crate::faiss::IvfSq8Index::new(&index_config).ok()?), np)
+                (
+                    IndexKind::IvfSq8(crate::faiss::IvfSq8Index::new(&index_config).ok()?),
+                    np,
+                )
             }
             CIndexType::IvfFlat | CIndexType::IvfFlatCc => {
-                let nlist = if config.num_centroids > 0 { config.num_centroids } else { 256 };
+                let nlist = if config.num_centroids > 0 {
+                    config.num_centroids
+                } else {
+                    256
+                };
                 let np = if config.nprobe > 0 { config.nprobe } else { 8 };
                 let index_config = IndexConfig {
                     index_type: IndexType::IvfFlat,
@@ -582,10 +646,17 @@ impl IndexWrapper {
                     data_type,
                     params: IndexParams::ivf(nlist, np),
                 };
-                (IndexKind::IvfFlat(IvfFlatIndex::new(&index_config).ok()?), np)
+                (
+                    IndexKind::IvfFlat(IvfFlatIndex::new(&index_config).ok()?),
+                    np,
+                )
             }
             CIndexType::IvfSqCc => {
-                let nlist = if config.num_centroids > 0 { config.num_centroids } else { 256 };
+                let nlist = if config.num_centroids > 0 {
+                    config.num_centroids
+                } else {
+                    256
+                };
                 let np = if config.nprobe > 0 { config.nprobe } else { 8 };
                 let index_config = IndexConfig {
                     index_type: IndexType::IvfSq8,
@@ -594,7 +665,10 @@ impl IndexWrapper {
                     data_type,
                     params: IndexParams::ivf_sq8(nlist, np),
                 };
-                (IndexKind::IvfSq8(crate::faiss::IvfSq8Index::new(&index_config).ok()?), np)
+                (
+                    IndexKind::IvfSq8(crate::faiss::IvfSq8Index::new(&index_config).ok()?),
+                    np,
+                )
             }
             CIndexType::IvfPq => {
                 let index_config = IndexConfig {
@@ -606,15 +680,20 @@ impl IndexWrapper {
                         nlist: Some(config.num_clusters.max(1)),
                         nprobe: Some(config.nprobe.max(1)),
                         m: Some(config.pq_m.max(1).min(dim.max(1))),
-                        nbits_per_idx: Some(if config.pq_nbits > 0 { config.pq_nbits } else { 8 }),
+                        nbits_per_idx: Some(if config.pq_nbits > 0 {
+                            config.pq_nbits
+                        } else {
+                            8
+                        }),
                         ..Default::default()
                     },
                 };
                 (IndexKind::IvfPq(IvfPqIndex::new(&index_config).ok()?), 8)
             }
-            CIndexType::BinFlat => {
-                (IndexKind::BinFlat(crate::faiss::BinFlatIndex::new(dim, metric)), 8)
-            }
+            CIndexType::BinFlat => (
+                IndexKind::BinFlat(crate::faiss::BinFlatIndex::new(dim, metric)),
+                8,
+            ),
             CIndexType::BinaryHnsw => {
                 let mut index_config = IndexConfig {
                     index_type: IndexType::BinaryHnsw,
@@ -629,10 +708,17 @@ impl IndexWrapper {
                 if config.ef_search > 0 {
                     index_config.params.ef_search = Some(config.ef_search);
                 }
-                (IndexKind::BinaryHnsw(crate::faiss::BinaryHnswIndex::new(&index_config).ok()?), 8)
+                (
+                    IndexKind::BinaryHnsw(crate::faiss::BinaryHnswIndex::new(&index_config).ok()?),
+                    8,
+                )
             }
             CIndexType::BinIvfFlat => {
-                let nlist = if config.num_clusters > 0 { config.num_clusters } else { 256 };
+                let nlist = if config.num_clusters > 0 {
+                    config.num_clusters
+                } else {
+                    256
+                };
                 let mut bin_ivf_flat = crate::faiss::BinIvfFlatIndex::new(dim, nlist, metric);
                 if config.nprobe > 0 {
                     bin_ivf_flat.set_nprobe(config.nprobe);
@@ -648,7 +734,12 @@ impl IndexWrapper {
                     );
                     return None;
                 }
-                (IndexKind::SparseInverted(crate::faiss::SparseInvertedIndex::new(SparseMetricType::Ip)), 8)
+                (
+                    IndexKind::SparseInverted(crate::faiss::SparseInvertedIndex::new(
+                        SparseMetricType::Ip,
+                    )),
+                    8,
+                )
             }
             CIndexType::SparseWand => {
                 use crate::faiss::sparse_inverted::SparseMetricType;
@@ -659,7 +750,10 @@ impl IndexWrapper {
                     );
                     return None;
                 }
-                (IndexKind::SparseWand(crate::faiss::SparseWandIndex::new(SparseMetricType::Ip)), 8)
+                (
+                    IndexKind::SparseWand(crate::faiss::SparseWandIndex::new(SparseMetricType::Ip)),
+                    8,
+                )
             }
             CIndexType::SparseWandCc => {
                 use crate::faiss::sparse_inverted::SparseMetricType;
@@ -670,17 +764,40 @@ impl IndexWrapper {
                     );
                     return None;
                 }
-                let ssize = if config.num_partitions > 0 { config.num_partitions } else { 1000 };
-                (IndexKind::SparseWandCc(crate::faiss::SparseWandIndexCC::new(SparseMetricType::Ip, ssize)), 8)
+                let ssize = if config.num_partitions > 0 {
+                    config.num_partitions
+                } else {
+                    1000
+                };
+                (
+                    IndexKind::SparseWandCc(crate::faiss::SparseWandIndexCC::new(
+                        SparseMetricType::Ip,
+                        ssize,
+                    )),
+                    8,
+                )
             }
-            CIndexType::MinHashLsh => {
-                (IndexKind::MinHashLsh(crate::index::MinHashLSHIndex::new()), 8)
-            }
+            CIndexType::MinHashLsh => (
+                IndexKind::MinHashLsh(crate::index::MinHashLSHIndex::new()),
+                8,
+            ),
             CIndexType::DiskAnn => {
                 use crate::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
-                let max_degree = if config.ef_construction > 0 { config.ef_construction } else { 48 };
-                let search_list_size = if config.ef_search > 0 { config.ef_search } else { 128 };
-                let beamwidth = if config.beamwidth > 0 { config.beamwidth } else { 8 };
+                let max_degree = if config.ef_construction > 0 {
+                    config.ef_construction
+                } else {
+                    48
+                };
+                let search_list_size = if config.ef_search > 0 {
+                    config.ef_search
+                } else {
+                    128
+                };
+                let beamwidth = if config.beamwidth > 0 {
+                    config.beamwidth
+                } else {
+                    8
+                };
                 let aisaq_config = AisaqConfig {
                     max_degree,
                     search_list_size,
@@ -690,10 +807,17 @@ impl IndexWrapper {
                     beamwidth,
                     ..AisaqConfig::default()
                 };
-                (IndexKind::DiskAnn(PQFlashIndex::new(aisaq_config, metric, dim).ok()?), 8)
+                (
+                    IndexKind::DiskAnn(PQFlashIndex::new(aisaq_config, metric, dim).ok()?),
+                    8,
+                )
             }
             CIndexType::HnswPcaSq => {
-                let pca_dim = if config.pca_dim > 0 { config.pca_dim } else { dim / 2 };
+                let pca_dim = if config.pca_dim > 0 {
+                    config.pca_dim
+                } else {
+                    dim / 2
+                };
                 let idx = crate::faiss::HnswPcaSqIndex::new(crate::faiss::HnswPcaSqConfig {
                     dim,
                     pca_dim,
@@ -704,37 +828,62 @@ impl IndexWrapper {
                 (IndexKind::HnswPcaSq(idx), 8)
             }
             CIndexType::HnswPcaUsq => {
-                let pca_dim = if config.pca_dim > 0 { config.pca_dim } else { dim / 2 };
+                let pca_dim = if config.pca_dim > 0 {
+                    config.pca_dim
+                } else {
+                    dim / 2
+                };
                 let idx = crate::faiss::HnswPcaUsqIndex::new(crate::faiss::HnswPcaUsqConfig {
                     dim,
                     pca_dim,
                     bits_per_dim: 4,
                     rotation_seed: 42,
-                }).map_err(|_| CError::Internal).ok()?;
+                })
+                .map_err(|_| CError::Internal)
+                .ok()?;
                 (IndexKind::HnswPcaUsq(idx), 8)
             }
             CIndexType::DiskAnnPcaUsq => {
                 use crate::faiss::diskann_aisaq::AisaqConfig;
-                let pca_dim = if config.pca_dim > 0 { config.pca_dim } else { dim / 2 };
-                let max_degree = if config.ef_construction > 0 { config.ef_construction } else { 48 };
-                let search_list_size = if config.ef_search > 0 { config.ef_search } else { 128 };
-                let idx = crate::faiss::DiskAnnPcaUsqIndex::new(dim, metric,
+                let pca_dim = if config.pca_dim > 0 {
+                    config.pca_dim
+                } else {
+                    dim / 2
+                };
+                let max_degree = if config.ef_construction > 0 {
+                    config.ef_construction
+                } else {
+                    48
+                };
+                let search_list_size = if config.ef_search > 0 {
+                    config.ef_search
+                } else {
+                    128
+                };
+                let idx = crate::faiss::DiskAnnPcaUsqIndex::new(
+                    dim,
+                    metric,
                     crate::faiss::DiskAnnPcaUsqConfig {
                         base: AisaqConfig {
                             max_degree,
                             search_list_size,
-                            beamwidth: if config.beamwidth > 0 { config.beamwidth } else { 8 },
+                            beamwidth: if config.beamwidth > 0 {
+                                config.beamwidth
+                            } else {
+                                8
+                            },
                             ..AisaqConfig::default()
                         },
                         pca_dim,
                         bits_per_dim: 4,
                         rotation_seed: 42,
                         rerank_k: 64,
-                    }
-                ).map_err(|_| CError::Internal).ok()?;
+                    },
+                )
+                .map_err(|_| CError::Internal)
+                .ok()?;
                 (IndexKind::DiskAnnPcaUsq(idx), 8)
             }
-            _ => return None,
         };
         Some(Self { kind, dim, nprobe })
     }
@@ -762,32 +911,48 @@ impl IndexWrapper {
             IndexKind::SparseInverted(idx) => {
                 let dim = self.dim;
                 let n_vectors = vectors.len() / dim;
-                let ids_vec: Vec<i64> = ids.map(|s| s.to_vec())
+                let ids_vec: Vec<i64> = ids
+                    .map(|s| s.to_vec())
                     .unwrap_or_else(|| (0..n_vectors as i64).collect());
                 for (i, chunk) in vectors.chunks_exact(dim).enumerate() {
                     let elements: Vec<crate::faiss::sparse_inverted::SparseVecElement> = chunk
-                        .iter().enumerate().filter(|(_, &v)| v != 0.0)
-                        .map(|(j, &v)| crate::faiss::sparse_inverted::SparseVecElement { dim: j as u32, val: v })
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, &v)| v != 0.0)
+                        .map(|(j, &v)| crate::faiss::sparse_inverted::SparseVecElement {
+                            dim: j as u32,
+                            val: v,
+                        })
                         .collect();
                     let sparse_vec = crate::faiss::sparse_inverted::SparseVector { elements };
                     let doc_id = ids_vec.get(i).copied().unwrap_or(i as i64);
-                    if idx.add(&sparse_vec, doc_id).is_err() { return Err(CError::Internal); }
+                    if idx.add(&sparse_vec, doc_id).is_err() {
+                        return Err(CError::Internal);
+                    }
                 }
                 Ok(n_vectors)
             }
             IndexKind::SparseWand(idx) => {
                 let dim = self.dim;
                 let n_vectors = vectors.len() / dim;
-                let ids_vec: Vec<i64> = ids.map(|s| s.to_vec())
+                let ids_vec: Vec<i64> = ids
+                    .map(|s| s.to_vec())
                     .unwrap_or_else(|| (0..n_vectors as i64).collect());
                 for (i, chunk) in vectors.chunks_exact(dim).enumerate() {
                     let elements: Vec<crate::faiss::sparse_inverted::SparseVecElement> = chunk
-                        .iter().enumerate().filter(|(_, &v)| v != 0.0)
-                        .map(|(j, &v)| crate::faiss::sparse_inverted::SparseVecElement { dim: j as u32, val: v })
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, &v)| v != 0.0)
+                        .map(|(j, &v)| crate::faiss::sparse_inverted::SparseVecElement {
+                            dim: j as u32,
+                            val: v,
+                        })
                         .collect();
                     let sparse_vec = crate::faiss::sparse_inverted::SparseVector { elements };
                     let doc_id = ids_vec.get(i).copied().unwrap_or(i as i64);
-                    if idx.add(&sparse_vec, doc_id).is_err() { return Err(CError::Internal); }
+                    if idx.add(&sparse_vec, doc_id).is_err() {
+                        return Err(CError::Internal);
+                    }
                 }
                 Ok(n_vectors)
             }
@@ -817,14 +982,16 @@ impl IndexWrapper {
             }
             IndexKind::DiskAnn(idx) => {
                 let n_vectors = vectors.len() / self.dim;
-                idx.add_with_ids(vectors, ids).map_err(|_| CError::Internal)?;
+                idx.add_with_ids(vectors, ids)
+                    .map_err(|_| CError::Internal)?;
                 Ok(n_vectors)
             }
             IndexKind::HnswPcaSq(idx) => idx.add(vectors, ids).map_err(|_| CError::Internal),
             IndexKind::HnswPcaUsq(idx) => idx.add(vectors, ids).map_err(|_| CError::Internal),
             IndexKind::DiskAnnPcaUsq(idx) => {
                 let n = vectors.len() / self.dim;
-                idx.build(vectors, n, self.dim).map_err(|_| CError::Internal)?;
+                idx.build(vectors, n, self.dim)
+                    .map_err(|_| CError::Internal)?;
                 Ok(n)
             }
             _ => Err(CError::InvalidArg),
@@ -836,14 +1003,16 @@ impl IndexWrapper {
             IndexKind::BinFlat(idx) => {
                 let dim_bytes = idx.dim().div_ceil(8);
                 let n = vectors.len() / dim_bytes;
-                idx.add(n as u32, vectors, ids).map_err(|_| CError::Internal)?;
+                idx.add(n as u32, vectors, ids)
+                    .map_err(|_| CError::Internal)?;
                 Ok(n)
             }
             IndexKind::BinaryHnsw(idx) => idx.add(vectors, ids).map_err(|_| CError::Internal),
             IndexKind::BinIvfFlat(idx) => {
                 let dim_bytes = idx.dim().div_ceil(8);
                 let n = vectors.len() / dim_bytes;
-                idx.add(n as u32, vectors, ids).map_err(|_| CError::Internal)?;
+                idx.add(n as u32, vectors, ids)
+                    .map_err(|_| CError::Internal)?;
                 Ok(n)
             }
             IndexKind::MinHashLsh(idx) => {
@@ -856,7 +1025,9 @@ impl IndexWrapper {
                     return Err(CError::InvalidArg);
                 }
                 let mh_vec_length = vector_bytes / mh_vec_element_size;
-                if mh_vec_length == 0 { return Err(CError::InvalidArg); }
+                if mh_vec_length == 0 {
+                    return Err(CError::InvalidArg);
+                }
                 idx.build(vectors, mh_vec_length, mh_vec_element_size, 4, true)
                     .map_err(|_| CError::Internal)?;
                 Ok(idx.count())
@@ -869,23 +1040,38 @@ impl IndexWrapper {
         match &mut self.kind {
             IndexKind::Flat(idx) => idx.train(vectors).map_err(|_| CError::Internal),
             IndexKind::Hnsw(idx) => idx.train(vectors).map_err(|_| CError::Internal),
-            IndexKind::Scann(idx) => { idx.train(vectors, None); Ok(()) }
+            IndexKind::Scann(idx) => {
+                idx.train(vectors, None);
+                Ok(())
+            }
             IndexKind::HnswPrq(idx) => idx.train(vectors).map_err(|_| CError::Internal),
             IndexKind::HnswSq(idx) => idx.train(vectors).map(|_| ()).map_err(|_| CError::Internal),
             IndexKind::HnswPq(idx) => idx.train(vectors).map_err(|_| CError::Internal),
             IndexKind::IvfSq8(idx) => idx.train(vectors).map(|_| ()).map_err(|_| CError::Internal),
-            IndexKind::IvfFlat(idx) => { idx.train(vectors); Ok(()) }
+            IndexKind::IvfFlat(idx) => {
+                let _ = idx.train(vectors);
+                Ok(())
+            }
             IndexKind::IvfPq(idx) => idx.train(vectors).map_err(|_| CError::Internal),
-            IndexKind::SparseInverted(_) | IndexKind::SparseWand(_) | IndexKind::SparseWandCc(_) => Ok(()),
+            IndexKind::SparseInverted(_)
+            | IndexKind::SparseWand(_)
+            | IndexKind::SparseWandCc(_) => Ok(()),
             IndexKind::DiskAnn(idx) => idx.train(vectors).map_err(|_| CError::Internal),
-            IndexKind::HnswPcaSq(idx) => idx.train(vectors).map(|_| ()).map_err(|_| CError::Internal),
+            IndexKind::HnswPcaSq(idx) => {
+                idx.train(vectors).map(|_| ()).map_err(|_| CError::Internal)
+            }
             IndexKind::HnswPcaUsq(idx) => idx.train(vectors).map_err(|_| CError::Internal),
             IndexKind::DiskAnnPcaUsq(_) => Ok(()),
             _ => Err(CError::InvalidArg),
         }
     }
 
-    fn search(&self, query: &[f32], top_k: usize, query_dim: usize) -> Result<ApiSearchResult, CError> {
+    fn search(
+        &self,
+        query: &[f32],
+        top_k: usize,
+        query_dim: usize,
+    ) -> Result<ApiSearchResult, CError> {
         let req = SearchRequest {
             top_k,
             nprobe: self.nprobe,
@@ -908,41 +1094,69 @@ impl IndexWrapper {
             }
             IndexKind::HnswPrq(idx) => {
                 let start = std::time::Instant::now();
-                let results = idx.search(query, top_k, None).map_err(|_| CError::Internal)?;
+                let results = idx
+                    .search(query, top_k, None)
+                    .map_err(|_| CError::Internal)?;
                 let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
+                Ok(ApiSearchResult::new(
+                    results.ids,
+                    results.distances,
+                    elapsed_ms,
+                ))
             }
             IndexKind::HnswSq(idx) => {
                 let start = std::time::Instant::now();
                 let req8 = SearchRequest { nprobe: 8, ..req };
                 let results = idx.search(query, &req8).map_err(|_| CError::Internal)?;
                 let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
+                Ok(ApiSearchResult::new(
+                    results.ids,
+                    results.distances,
+                    elapsed_ms,
+                ))
             }
             IndexKind::HnswPq(idx) => {
                 let start = std::time::Instant::now();
-                let results = idx.search(query, top_k, None).map_err(|_| CError::Internal)?;
+                let results = idx
+                    .search(query, top_k, None)
+                    .map_err(|_| CError::Internal)?;
                 let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
+                Ok(ApiSearchResult::new(
+                    results.ids,
+                    results.distances,
+                    elapsed_ms,
+                ))
             }
             IndexKind::IvfSq8(idx) => {
                 let start = std::time::Instant::now();
                 let results = idx.search(query, &req).map_err(|_| CError::Internal)?;
                 let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
+                Ok(ApiSearchResult::new(
+                    results.ids,
+                    results.distances,
+                    elapsed_ms,
+                ))
             }
             IndexKind::IvfFlat(idx) => {
                 let start = std::time::Instant::now();
                 let results = idx.search(query, &req).map_err(|_| CError::Internal)?;
                 let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
+                Ok(ApiSearchResult::new(
+                    results.ids,
+                    results.distances,
+                    elapsed_ms,
+                ))
             }
             IndexKind::IvfPq(idx) => {
                 let req8 = SearchRequest { nprobe: 8, ..req };
                 let start = std::time::Instant::now();
                 let results = idx.search(query, &req8).map_err(|_| CError::Internal)?;
                 let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
+                Ok(ApiSearchResult::new(
+                    results.ids,
+                    results.distances,
+                    elapsed_ms,
+                ))
             }
             IndexKind::SparseInverted(idx) => {
                 self.search_sparse_queries(query, query_dim, |q| idx.search(q, top_k, None))
@@ -955,23 +1169,37 @@ impl IndexWrapper {
             }
             IndexKind::DiskAnn(idx) => {
                 let start = std::time::Instant::now();
-                let result = idx.search_batch(query, top_k).map_err(|_| CError::Internal)?;
+                let result = idx
+                    .search_batch(query, top_k)
+                    .map_err(|_| CError::Internal)?;
                 let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                Ok(ApiSearchResult::new(result.ids, result.distances, elapsed_ms))
+                Ok(ApiSearchResult::new(
+                    result.ids,
+                    result.distances,
+                    elapsed_ms,
+                ))
             }
             IndexKind::HnswPcaSq(idx) => {
                 let req8 = SearchRequest { nprobe: 8, ..req };
                 let start = std::time::Instant::now();
                 let results = idx.search(query, &req8).map_err(|_| CError::Internal)?;
                 let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
+                Ok(ApiSearchResult::new(
+                    results.ids,
+                    results.distances,
+                    elapsed_ms,
+                ))
             }
             IndexKind::HnswPcaUsq(idx) => {
                 let req8 = SearchRequest { nprobe: 8, ..req };
                 let start = std::time::Instant::now();
                 let results = idx.search(query, &req8).map_err(|_| CError::Internal)?;
                 let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                Ok(ApiSearchResult::new(results.ids, results.distances, elapsed_ms))
+                Ok(ApiSearchResult::new(
+                    results.ids,
+                    results.distances,
+                    elapsed_ms,
+                ))
             }
             IndexKind::DiskAnnPcaUsq(idx) => {
                 let start = std::time::Instant::now();
@@ -982,7 +1210,10 @@ impl IndexWrapper {
                     ids.push(id as i64);
                     dists.push(dist);
                 }
-                while ids.len() < top_k { ids.push(-1); dists.push(f32::MAX); }
+                while ids.len() < top_k {
+                    ids.push(-1);
+                    dists.push(f32::MAX);
+                }
                 let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
                 Ok(ApiSearchResult::new(ids, dists, elapsed_ms))
             }
@@ -992,8 +1223,14 @@ impl IndexWrapper {
 
     fn set_ef_search(&mut self, ef_search: usize) -> Result<(), CError> {
         match &mut self.kind {
-            IndexKind::Hnsw(idx) => { idx.set_ef_search(ef_search); Ok(()) }
-            IndexKind::DiskAnn(idx) => { idx.set_search_list_size(ef_search); Ok(()) }
+            IndexKind::Hnsw(idx) => {
+                idx.set_ef_search(ef_search);
+                Ok(())
+            }
+            IndexKind::DiskAnn(idx) => {
+                idx.set_search_list_size(ef_search);
+                Ok(())
+            }
             IndexKind::HnswPcaSq(_) => Ok(()),
             IndexKind::HnswPcaUsq(_) => Ok(()),
             IndexKind::DiskAnnPcaUsq(_) => Ok(()),
@@ -1003,7 +1240,10 @@ impl IndexWrapper {
 
     fn set_nprobe(&mut self, nprobe: usize) -> Result<(), CError> {
         match &self.kind {
-            IndexKind::IvfSq8(_) | IndexKind::IvfFlat(_) => { self.nprobe = nprobe; Ok(()) }
+            IndexKind::IvfSq8(_) | IndexKind::IvfFlat(_) => {
+                self.nprobe = nprobe;
+                Ok(())
+            }
             _ => Err(CError::InvalidArg),
         }
     }
@@ -1029,7 +1269,9 @@ impl IndexWrapper {
             }
             IndexKind::MinHashLsh(idx) => {
                 let start = std::time::Instant::now();
-                let (ids, distances) = idx.search(query, top_k, None).map_err(|_| CError::Internal)?;
+                let (ids, distances) = idx
+                    .search(query, top_k, None)
+                    .map_err(|_| CError::Internal)?;
                 let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
                 Ok(ApiSearchResult::new(ids, distances, elapsed_ms))
             }
@@ -1042,7 +1284,9 @@ impl IndexWrapper {
         match &self.kind {
             IndexKind::Flat(idx) => {
                 let start = std::time::Instant::now();
-                let (ids, distances) = idx.range_search(query, radius).map_err(|_| CError::Internal)?;
+                let (ids, distances) = idx
+                    .range_search(query, radius)
+                    .map_err(|_| CError::Internal)?;
                 let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
                 let lims: Vec<usize> = if num_queries > 0 {
                     let per_query = ids.len() / num_queries;
@@ -1071,34 +1315,56 @@ impl IndexWrapper {
     ) -> Option<*mut CSearchResult> {
         use crate::bitset::BitsetRef;
         let bitset_ref = BitsetRef::new(bitset_words, bitset_len);
-        let req = SearchRequest { top_k, nprobe: 8, filter: None, params: None, radius: None };
+        let req = SearchRequest {
+            top_k,
+            nprobe: 8,
+            filter: None,
+            params: None,
+            radius: None,
+        };
 
         let result = match &self.kind {
             IndexKind::Flat(idx) => {
-                let bitset_view = crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_len);
-                idx.search_with_bitset(query_slice, &req, &bitset_view).ok()?
+                let bitset_view =
+                    crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_len);
+                idx.search_with_bitset(query_slice, &req, &bitset_view)
+                    .ok()?
             }
-            IndexKind::Hnsw(idx) => {
-                idx.search_with_bitset_ref(query_slice, &req, &bitset_ref).ok()?
-            }
+            IndexKind::Hnsw(idx) => idx
+                .search_with_bitset_ref(query_slice, &req, &bitset_ref)
+                .ok()?,
             IndexKind::SparseInverted(idx) => {
-                let bitset_view = crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_len);
+                let bitset_view =
+                    crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_len);
                 let sparse_bitset = crate::faiss::sparse_inverted::bitset_to_bool_vec(&bitset_view);
-                self.search_sparse_queries(query_slice, dim, |q| idx.search(q, top_k, Some(&sparse_bitset))).ok()?
+                self.search_sparse_queries(query_slice, dim, |q| {
+                    idx.search(q, top_k, Some(&sparse_bitset))
+                })
+                .ok()?
             }
             IndexKind::SparseWand(idx) => {
-                let bitset_view = crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_len);
+                let bitset_view =
+                    crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_len);
                 let sparse_bitset = crate::faiss::sparse_inverted::bitset_to_bool_vec(&bitset_view);
-                self.search_sparse_queries(query_slice, dim, |q| idx.search(q, top_k, Some(&sparse_bitset))).ok()?
+                self.search_sparse_queries(query_slice, dim, |q| {
+                    idx.search(q, top_k, Some(&sparse_bitset))
+                })
+                .ok()?
             }
             IndexKind::SparseWandCc(idx) => {
-                let bitset_view = crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_len);
+                let bitset_view =
+                    crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_len);
                 let sparse_bitset = crate::faiss::sparse_inverted::bitset_to_bool_vec(&bitset_view);
-                self.search_sparse_queries(query_slice, dim, |q| idx.search(q, top_k, Some(&sparse_bitset))).ok()?
+                self.search_sparse_queries(query_slice, dim, |q| {
+                    idx.search(q, top_k, Some(&sparse_bitset))
+                })
+                .ok()?
             }
             IndexKind::DiskAnn(idx) => {
-                let bitset_view = crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_len);
-                idx.search_batch_with_bitset(query_slice, top_k, &bitset_view).ok()?
+                let bitset_view =
+                    crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_len);
+                idx.search_batch_with_bitset(query_slice, top_k, &bitset_view)
+                    .ok()?
             }
             IndexKind::HnswSq(idx) => {
                 let bitset_view =
@@ -1181,7 +1447,8 @@ impl IndexWrapper {
             IndexKind::IvfPq(idx) => {
                 let bitset_view =
                     crate::bitset::BitsetView::from_vec(bitset_words.to_vec(), bitset_len);
-                idx.search_with_bitset(query_slice, &req, &bitset_view).ok()?
+                idx.search_with_bitset(query_slice, &req, &bitset_view)
+                    .ok()?
             }
             IndexKind::IvfFlat(_) => return None,
             IndexKind::HnswPcaSq(_) => return None,
@@ -1250,7 +1517,6 @@ impl IndexWrapper {
             IndexKind::HnswPcaSq(idx) => idx.count(),
             IndexKind::HnswPcaUsq(idx) => idx.count(),
             IndexKind::DiskAnnPcaUsq(idx) => idx.count(),
-            _ => 0,
         }
     }
 
@@ -1276,7 +1542,6 @@ impl IndexWrapper {
             IndexKind::HnswPcaSq(_) => true,
             IndexKind::HnswPcaUsq(_) => true,
             IndexKind::DiskAnnPcaUsq(_) => true,
-            _ => self.count() > 0,
         }
     }
 
@@ -1342,7 +1607,9 @@ impl IndexWrapper {
                 MetricType::Cosine | MetricType::Hamming => "Cosine",
             },
             IndexKind::Scann(_) => "L2",
-            IndexKind::SparseInverted(_) | IndexKind::SparseWand(_) | IndexKind::SparseWandCc(_) => "IP",
+            IndexKind::SparseInverted(_)
+            | IndexKind::SparseWand(_)
+            | IndexKind::SparseWandCc(_) => "IP",
             _ => "Unknown",
         }
     }
@@ -1365,7 +1632,9 @@ impl IndexWrapper {
 
     fn additional_scalar_support_mode(&self) -> &'static str {
         match &self.kind {
-            IndexKind::SparseInverted(_) | IndexKind::SparseWand(_) | IndexKind::SparseWandCc(_) => "partial",
+            IndexKind::SparseInverted(_)
+            | IndexKind::SparseWand(_)
+            | IndexKind::SparseWandCc(_) => "partial",
             _ => "unsupported",
         }
     }
@@ -1385,7 +1654,10 @@ impl IndexWrapper {
     }
 
     fn is_additional_scalar_supported(&self, is_mv_only: bool) -> bool {
-        matches!(self.additional_scalar_support_mode(), "partial" | "supported") && is_mv_only
+        matches!(
+            self.additional_scalar_support_mode(),
+            "partial" | "supported"
+        ) && is_mv_only
     }
 
     fn capability_summary(&self) -> IndexCapabilitySummary<'static> {
@@ -1396,12 +1668,20 @@ impl IndexWrapper {
                 persistence: "supported",
             },
             IndexKind::Hnsw(_) | IndexKind::Scann(_) => IndexCapabilitySummary {
-                get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
+                get_vector_by_ids: if self.has_raw_data() {
+                    "supported"
+                } else {
+                    "unsupported"
+                },
                 ann_iterator: "supported",
                 persistence: "supported",
             },
             IndexKind::HnswPrq(_) => IndexCapabilitySummary {
-                get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
+                get_vector_by_ids: if self.has_raw_data() {
+                    "supported"
+                } else {
+                    "unsupported"
+                },
                 ann_iterator: "unsupported",
                 persistence: "supported",
             },
@@ -1420,23 +1700,37 @@ impl IndexWrapper {
                 ann_iterator: "supported",
                 persistence: "unsupported",
             },
-            IndexKind::BinFlat(_) | IndexKind::BinaryHnsw(_) | IndexKind::BinIvfFlat(_) => IndexCapabilitySummary {
-                get_vector_by_ids: "unsupported",
-                ann_iterator: "unsupported",
-                persistence: "unsupported",
-            },
+            IndexKind::BinFlat(_) | IndexKind::BinaryHnsw(_) | IndexKind::BinIvfFlat(_) => {
+                IndexCapabilitySummary {
+                    get_vector_by_ids: "unsupported",
+                    ann_iterator: "unsupported",
+                    persistence: "unsupported",
+                }
+            }
             IndexKind::IvfSq8(_) => IndexCapabilitySummary {
-                get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
+                get_vector_by_ids: if self.has_raw_data() {
+                    "supported"
+                } else {
+                    "unsupported"
+                },
                 ann_iterator: "unsupported",
                 persistence: "unsupported",
             },
             IndexKind::IvfFlat(_) => IndexCapabilitySummary {
-                get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
+                get_vector_by_ids: if self.has_raw_data() {
+                    "supported"
+                } else {
+                    "unsupported"
+                },
                 ann_iterator: "unsupported",
                 persistence: "supported",
             },
             IndexKind::SparseInverted(_) | IndexKind::SparseWand(_) => IndexCapabilitySummary {
-                get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
+                get_vector_by_ids: if self.has_raw_data() {
+                    "supported"
+                } else {
+                    "unsupported"
+                },
                 ann_iterator: "supported",
                 persistence: "supported",
             },
@@ -1446,7 +1740,11 @@ impl IndexWrapper {
                 persistence: "unsupported",
             },
             IndexKind::MinHashLsh(_) => IndexCapabilitySummary {
-                get_vector_by_ids: if self.has_raw_data() { "supported" } else { "unsupported" },
+                get_vector_by_ids: if self.has_raw_data() {
+                    "supported"
+                } else {
+                    "unsupported"
+                },
                 ann_iterator: "supported",
                 persistence: "supported",
             },
@@ -1465,12 +1763,17 @@ impl IndexWrapper {
                 memory_serialize: "supported",
                 deserialize_from_file: "supported",
             },
-            IndexKind::Scann(_) | IndexKind::HnswPrq(_) | IndexKind::MinHashLsh(_) => PersistenceSemantics {
-                file_save_load: "supported",
-                memory_serialize: "unsupported",
-                deserialize_from_file: "supported",
-            },
-            IndexKind::Hnsw(_) | IndexKind::IvfSq8(_) | IndexKind::IvfFlat(_) | IndexKind::IvfPq(_) => PersistenceSemantics {
+            IndexKind::Scann(_) | IndexKind::HnswPrq(_) | IndexKind::MinHashLsh(_) => {
+                PersistenceSemantics {
+                    file_save_load: "supported",
+                    memory_serialize: "unsupported",
+                    deserialize_from_file: "supported",
+                }
+            }
+            IndexKind::Hnsw(_)
+            | IndexKind::IvfSq8(_)
+            | IndexKind::IvfFlat(_)
+            | IndexKind::IvfPq(_) => PersistenceSemantics {
                 file_save_load: "supported",
                 memory_serialize: "supported",
                 deserialize_from_file: "supported",
@@ -1505,37 +1808,64 @@ impl IndexWrapper {
         };
 
         match &self.kind {
-            IndexKind::Hnsw(_) | IndexKind::HnswPrq(_) | IndexKind::HnswSq(_) | IndexKind::HnswPq(_) => IndexMetaSemantics {
+            IndexKind::Hnsw(_)
+            | IndexKind::HnswPrq(_)
+            | IndexKind::HnswSq(_)
+            | IndexKind::HnswPq(_) => IndexMetaSemantics {
                 family: "hnsw",
-                raw_data_gate: if self.has_raw_data() { "raw_vectors_retained" } else { "compressed_or_graph_only" },
+                raw_data_gate: if self.has_raw_data() {
+                    "raw_vectors_retained"
+                } else {
+                    "compressed_or_graph_only"
+                },
                 persistence_mode,
                 persistence,
                 metadata_granularity: "per-index-capability",
             },
-            IndexKind::IvfSq8(_) | IndexKind::IvfFlat(_) | IndexKind::IvfPq(_) => IndexMetaSemantics {
-                family: "ivf",
-                raw_data_gate: if self.has_raw_data() { "raw_vectors_retained" } else { "quantized_or_codebook_only" },
-                persistence_mode,
-                persistence,
-                metadata_granularity: "per-index-capability",
-            },
+            IndexKind::IvfSq8(_) | IndexKind::IvfFlat(_) | IndexKind::IvfPq(_) => {
+                IndexMetaSemantics {
+                    family: "ivf",
+                    raw_data_gate: if self.has_raw_data() {
+                        "raw_vectors_retained"
+                    } else {
+                        "quantized_or_codebook_only"
+                    },
+                    persistence_mode,
+                    persistence,
+                    metadata_granularity: "per-index-capability",
+                }
+            }
             IndexKind::Scann(_) => IndexMetaSemantics {
                 family: "scann",
-                raw_data_gate: if self.has_raw_data() { "raw_vectors_retained" } else { "partition_or_reorder_only" },
+                raw_data_gate: if self.has_raw_data() {
+                    "raw_vectors_retained"
+                } else {
+                    "partition_or_reorder_only"
+                },
                 persistence_mode,
                 persistence,
                 metadata_granularity: "per-index-capability",
             },
-            IndexKind::SparseInverted(_) | IndexKind::SparseWand(_) | IndexKind::SparseWandCc(_) => IndexMetaSemantics {
+            IndexKind::SparseInverted(_)
+            | IndexKind::SparseWand(_)
+            | IndexKind::SparseWandCc(_) => IndexMetaSemantics {
                 family: "sparse",
-                raw_data_gate: if self.has_raw_data() { "sparse_postings_retained" } else { "wand_state_only" },
+                raw_data_gate: if self.has_raw_data() {
+                    "sparse_postings_retained"
+                } else {
+                    "wand_state_only"
+                },
                 persistence_mode,
                 persistence,
                 metadata_granularity: "per-index-capability",
             },
             _ => IndexMetaSemantics {
                 family: "generic",
-                raw_data_gate: if self.has_raw_data() { "raw_vectors_retained" } else { "not_retained" },
+                raw_data_gate: if self.has_raw_data() {
+                    "raw_vectors_retained"
+                } else {
+                    "not_retained"
+                },
                 persistence_mode,
                 persistence,
                 metadata_granularity: "uniform-summary",
@@ -1591,7 +1921,11 @@ impl IndexWrapper {
             } else {
                 "estimated_runtime_memory_bytes_or_codebook_only"
             },
-            disk_bytes: if mmap_supported { "estimated_file_bytes" } else { "unsupported" },
+            disk_bytes: if mmap_supported {
+                "estimated_file_bytes"
+            } else {
+                "unsupported"
+            },
             mmap_supported,
             unsupported_reason,
         }
@@ -1649,7 +1983,9 @@ impl IndexWrapper {
                     let mut dense = vec![0.0f32; self.dim];
                     for elem in sparse.elements {
                         let d = elem.dim as usize;
-                        if d < self.dim { dense[d] = elem.val; }
+                        if d < self.dim {
+                            dense[d] = elem.val;
+                        }
                     }
                     vectors.extend_from_slice(&dense);
                     num_found += 1;
@@ -1670,7 +2006,10 @@ impl IndexWrapper {
                 let mut vectors = Vec::new();
                 let mut num_found = 0usize;
                 for row in rows {
-                    if let Some(v) = row { vectors.extend_from_slice(&v); num_found += 1; }
+                    if let Some(v) = row {
+                        vectors.extend_from_slice(&v);
+                        num_found += 1;
+                    }
                 }
                 Ok((vectors, num_found))
             }
@@ -1710,7 +2049,9 @@ impl IndexWrapper {
     fn deserialize(&mut self, data: &[u8]) -> Result<(), CError> {
         let sparse_fallback_dim = self.dim.max(1);
         match &mut self.kind {
-            IndexKind::Flat(idx) => idx.deserialize_from_memory(data).map_err(|_| CError::Internal),
+            IndexKind::Flat(idx) => idx
+                .deserialize_from_memory(data)
+                .map_err(|_| CError::Internal),
             IndexKind::IvfSq8(idx) => {
                 let loaded = crate::faiss::IvfSq8Index::deserialize_from_bytes(data, idx.dim())
                     .map_err(|_| CError::Internal)?;
@@ -1778,10 +2119,14 @@ impl IndexWrapper {
             IndexKind::HnswPq(idx) => idx.save(path).map_err(|_| CError::Internal),
             IndexKind::IvfSq8(idx) => idx.save(path).map_err(|_| CError::Internal),
             IndexKind::IvfFlat(idx) => idx.save(path).map_err(|_| CError::Internal),
-            IndexKind::Scann(idx) => idx.save(path.to_str().unwrap()).map_err(|_| CError::Internal),
+            IndexKind::Scann(idx) => idx
+                .save(path.to_str().unwrap())
+                .map_err(|_| CError::Internal),
             IndexKind::HnswPrq(idx) => idx.save(path).map_err(|_| CError::Internal),
             IndexKind::IvfPq(idx) => idx.save(path).map_err(|_| CError::Internal),
-            IndexKind::MinHashLsh(idx) => idx.save(path.to_str().unwrap()).map_err(|_| CError::Internal),
+            IndexKind::MinHashLsh(idx) => idx
+                .save(path.to_str().unwrap())
+                .map_err(|_| CError::Internal),
             IndexKind::DiskAnn(idx) => idx.save(path).map(|_| ()).map_err(|_| CError::Internal),
             IndexKind::HnswPcaSq(idx) => idx.save(path).map_err(|_| CError::Internal),
             IndexKind::HnswPcaUsq(_) => Err(CError::NotImplemented),
@@ -1790,7 +2135,6 @@ impl IndexWrapper {
             | IndexKind::BinIvfFlat(_)
             | IndexKind::SparseWandCc(_) => Err(CError::NotImplemented),
             IndexKind::DiskAnnPcaUsq(idx) => idx.save(path).map_err(|_| CError::Internal),
-            _ => Err(CError::InvalidArg),
         }
     }
 
@@ -1817,15 +2161,23 @@ impl IndexWrapper {
                 Ok(())
             }
             IndexKind::IvfFlat(idx) => {
-                *idx = crate::faiss::IvfFlatIndex::load(path, idx.dim()).map_err(|_| CError::Internal)?;
+                *idx = crate::faiss::IvfFlatIndex::load(path, idx.dim())
+                    .map_err(|_| CError::Internal)?;
                 Ok(())
             }
-            IndexKind::Scann(idx) => idx.load(path.to_str().unwrap()).map_err(|_| CError::Internal),
-            IndexKind::HnswPrq(idx) => idx.load(path.to_str().unwrap()).map_err(|_| CError::Internal),
+            IndexKind::Scann(idx) => idx
+                .load(path.to_str().unwrap())
+                .map_err(|_| CError::Internal),
+            IndexKind::HnswPrq(idx) => idx
+                .load(path.to_str().unwrap())
+                .map_err(|_| CError::Internal),
             IndexKind::IvfPq(idx) => idx.load(path).map_err(|_| CError::Internal),
-            IndexKind::MinHashLsh(idx) => idx.load(path.to_str().unwrap()).map_err(|_| CError::Internal),
+            IndexKind::MinHashLsh(idx) => idx
+                .load(path.to_str().unwrap())
+                .map_err(|_| CError::Internal),
             IndexKind::DiskAnn(idx) => {
-                *idx = crate::faiss::diskann_aisaq::PQFlashIndex::load(path).map_err(|_| CError::Internal)?;
+                *idx = crate::faiss::diskann_aisaq::PQFlashIndex::load(path)
+                    .map_err(|_| CError::Internal)?;
                 Ok(())
             }
             IndexKind::HnswPcaSq(idx) => {
@@ -1838,10 +2190,10 @@ impl IndexWrapper {
             | IndexKind::BinIvfFlat(_)
             | IndexKind::SparseWandCc(_) => Err(CError::NotImplemented),
             IndexKind::DiskAnnPcaUsq(idx) => {
-                *idx = crate::faiss::DiskAnnPcaUsqIndex::load(path).map_err(|_| CError::Internal)?;
+                *idx =
+                    crate::faiss::DiskAnnPcaUsqIndex::load(path).map_err(|_| CError::Internal)?;
                 Ok(())
             }
-            _ => Err(CError::InvalidArg),
         }
     }
 
@@ -1872,12 +2224,24 @@ impl IndexWrapper {
         bitset: Option<&crate::bitset::BitsetView>,
     ) -> Result<Box<dyn crate::index::AnnIterator>, CError> {
         match &self.kind {
-            IndexKind::Hnsw(idx) => idx.create_ann_iterator(query, bitset).map_err(|_| CError::NotImplemented),
-            IndexKind::Scann(idx) => idx.create_ann_iterator(query, bitset).map_err(|_| CError::NotImplemented),
-            IndexKind::SparseInverted(idx) => idx.create_ann_iterator(query, bitset).map_err(|_| CError::NotImplemented),
-            IndexKind::HnswPq(idx) => idx.create_ann_iterator(query, bitset).map_err(|_| CError::NotImplemented),
-            IndexKind::MinHashLsh(idx) => idx.create_ann_iterator(query, bitset).map_err(|_| CError::NotImplemented),
-            IndexKind::SparseWand(idx) => idx.create_ann_iterator(query, bitset).map_err(|_| CError::NotImplemented),
+            IndexKind::Hnsw(idx) => idx
+                .create_ann_iterator(query, bitset)
+                .map_err(|_| CError::NotImplemented),
+            IndexKind::Scann(idx) => idx
+                .create_ann_iterator(query, bitset)
+                .map_err(|_| CError::NotImplemented),
+            IndexKind::SparseInverted(idx) => idx
+                .create_ann_iterator(query, bitset)
+                .map_err(|_| CError::NotImplemented),
+            IndexKind::HnswPq(idx) => idx
+                .create_ann_iterator(query, bitset)
+                .map_err(|_| CError::NotImplemented),
+            IndexKind::MinHashLsh(idx) => idx
+                .create_ann_iterator(query, bitset)
+                .map_err(|_| CError::NotImplemented),
+            IndexKind::SparseWand(idx) => idx
+                .create_ann_iterator(query, bitset)
+                .map_err(|_| CError::NotImplemented),
             _ => Err(CError::NotImplemented),
         }
     }
@@ -2108,10 +2472,8 @@ pub extern "C" fn knowhere_search_with_bitset(
         let index = &*(index as *const IndexWrapper);
         let bitset_wrapper = &*bitset;
         let query_slice = std::slice::from_raw_parts(query, count * dim);
-        let bitset_words = std::slice::from_raw_parts(
-            bitset_wrapper.data,
-            bitset_wrapper.len.div_ceil(64),
-        );
+        let bitset_words =
+            std::slice::from_raw_parts(bitset_wrapper.data, bitset_wrapper.len.div_ceil(64));
 
         match index.search_with_bitset(query_slice, top_k, dim, bitset_words, bitset_wrapper.len) {
             Some(ptr) => ptr,
@@ -4111,7 +4473,9 @@ mod tests {
         let _guard = EnvVarGuard::remove(FFI_FORCE_SERIAL_HNSW_ADD_ENV);
         let _parallel_guard = EnvVarGuard::remove(FFI_ENABLE_PARALLEL_HNSW_ADD_ENV);
         let wrapper = hnsw_wrapper_for_add_strategy_test();
-        let IndexKind::Hnsw(idx) = &wrapper.kind else { panic!("wrapper should hold HNSW") };
+        let IndexKind::Hnsw(idx) = &wrapper.kind else {
+            panic!("wrapper should hold HNSW")
+        };
 
         assert!(
             !IndexWrapper::should_use_parallel_hnsw_add_via_ffi(idx, 1000),
@@ -4125,7 +4489,9 @@ mod tests {
         let _guard = EnvVarGuard::set(FFI_FORCE_SERIAL_HNSW_ADD_ENV, "1");
         let _parallel_guard = EnvVarGuard::set(FFI_ENABLE_PARALLEL_HNSW_ADD_ENV, "1");
         let wrapper = hnsw_wrapper_for_add_strategy_test();
-        let IndexKind::Hnsw(idx) = &wrapper.kind else { panic!("wrapper should hold HNSW") };
+        let IndexKind::Hnsw(idx) = &wrapper.kind else {
+            panic!("wrapper should hold HNSW")
+        };
 
         assert!(
             !IndexWrapper::should_use_parallel_hnsw_add_via_ffi(idx, 1000),
@@ -4139,7 +4505,9 @@ mod tests {
         let _guard = EnvVarGuard::remove(FFI_FORCE_SERIAL_HNSW_ADD_ENV);
         let _parallel_guard = EnvVarGuard::set(FFI_ENABLE_PARALLEL_HNSW_ADD_ENV, "1");
         let wrapper = hnsw_wrapper_for_add_strategy_test();
-        let IndexKind::Hnsw(idx) = &wrapper.kind else { panic!("wrapper should hold HNSW") };
+        let IndexKind::Hnsw(idx) = &wrapper.kind else {
+            panic!("wrapper should hold HNSW")
+        };
 
         assert!(
             IndexWrapper::should_use_parallel_hnsw_add_via_ffi(idx, 1000),
@@ -4519,10 +4887,8 @@ mod tests {
         assert_eq!(dense[8 + 2], 3.0);
         knowhere_free_vector_result(vector_result);
 
-        let path = std::env::temp_dir().join(format!(
-            "hanns_sparse_inverted_{}.bin",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("hanns_sparse_inverted_{}.bin", std::process::id()));
         let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
         assert_eq!(
             knowhere_save_index(index, path_c.as_ptr()),
@@ -6606,8 +6972,7 @@ mod tests {
 
             let err = knowhere_train_index(index as *mut _, vectors.as_ptr(), n, dim);
             assert_eq!(err, 0);
-            let err =
-                knowhere_add_index(index as *mut _, vectors.as_ptr(), ids.as_ptr(), n, dim);
+            let err = knowhere_add_index(index as *mut _, vectors.as_ptr(), ids.as_ptr(), n, dim);
             assert_eq!(err, 0);
 
             // Save
@@ -6722,10 +7087,8 @@ mod tests {
     fn test_diskann_pca_usq_ffi_file_roundtrip_and_bitset_entry() {
         use std::ffi::CString;
 
-        let tmp_dir = std::env::temp_dir().join(format!(
-            "diskann_pca_usq_ffi_test_{}",
-            std::process::id()
-        ));
+        let tmp_dir =
+            std::env::temp_dir().join(format!("diskann_pca_usq_ffi_test_{}", std::process::id()));
         std::fs::create_dir_all(&tmp_dir).unwrap();
         let path_c = CString::new(tmp_dir.to_string_lossy().as_bytes()).unwrap();
 
@@ -6749,7 +7112,10 @@ mod tests {
             let ids: Vec<i64> = (0..n as i64).collect();
 
             assert_eq!(knowhere_train_index(index, vectors.as_ptr(), n, dim), 0);
-            assert_eq!(knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), n, dim), 0);
+            assert_eq!(
+                knowhere_add_index(index, vectors.as_ptr(), ids.as_ptr(), n, dim),
+                0
+            );
             assert_eq!(knowhere_get_index_count(index), n);
             assert_eq!(knowhere_get_index_size(index), n * 4 * 4);
             assert_eq!(knowhere_set_ef_search(index, 48), 0);
@@ -6792,11 +7158,7 @@ mod tests {
         let index = knowhere_create_index(config);
         assert!(!index.is_null());
 
-        let vectors: Vec<f32> = vec![
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-        ];
+        let vectors: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
         let ids = [10_i64, 11, 12];
 
         assert_eq!(
@@ -6850,10 +7212,8 @@ mod tests {
         assert_eq!(knowhere_get_index_count(index), 6);
         assert_eq!(knowhere_set_ef_search(index, 32), CError::Success as i32);
 
-        let path = std::env::temp_dir().join(format!(
-            "hanns_hnsw_pca_sq_{}.bin",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("hanns_hnsw_pca_sq_{}.bin", std::process::id()));
         let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
         assert_eq!(
             knowhere_save_index(index, path_c.as_ptr()),
@@ -6902,10 +7262,8 @@ mod tests {
         assert_eq!(knowhere_get_index_count(index), 6);
         assert_eq!(knowhere_set_ef_search(index, 24), CError::Success as i32);
 
-        let path = std::env::temp_dir().join(format!(
-            "hanns_hnsw_pca_usq_{}.bin",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("hanns_hnsw_pca_usq_{}.bin", std::process::id()));
         let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
         assert_eq!(
             knowhere_save_index(index, path_c.as_ptr()),
@@ -6940,9 +7298,15 @@ mod tests {
             let ids: Vec<i64> = (0..12).collect();
 
             assert_eq!(knowhere_train_index(hnsw_sq, vectors.as_ptr(), 12, 8), 0);
-            assert_eq!(knowhere_add_index(hnsw_sq, vectors.as_ptr(), ids.as_ptr(), 12, 8), 0);
+            assert_eq!(
+                knowhere_add_index(hnsw_sq, vectors.as_ptr(), ids.as_ptr(), 12, 8),
+                0
+            );
             assert_eq!(knowhere_train_index(ivfpq, vectors.as_ptr(), 12, 8), 0);
-            assert_eq!(knowhere_add_index(ivfpq, vectors.as_ptr(), ids.as_ptr(), 12, 8), 0);
+            assert_eq!(
+                knowhere_add_index(ivfpq, vectors.as_ptr(), ids.as_ptr(), 12, 8),
+                0
+            );
 
             let bitset = knowhere_bitset_create(12);
             assert!(!bitset.is_null());
@@ -6954,8 +7318,7 @@ mod tests {
             assert!(!hnsw_sq_result.is_null());
             knowhere_free_result(hnsw_sq_result);
 
-            let ivfpq_result =
-                knowhere_search_with_bitset(ivfpq, query.as_ptr(), 1, 4, 8, bitset);
+            let ivfpq_result = knowhere_search_with_bitset(ivfpq, query.as_ptr(), 1, 4, 8, bitset);
             assert!(!ivfpq_result.is_null());
             knowhere_free_result(ivfpq_result);
 

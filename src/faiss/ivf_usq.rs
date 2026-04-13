@@ -13,7 +13,7 @@ use crate::index::{
     AnnIterator, Index as IndexTrait, IndexError, SearchResult as IndexSearchResult,
 };
 use crate::quantization::usq::{
-    fastscan_topk, UsqConfig, UsqEncoded, UsqFastScanState, UsqLayout, UsqQuantizer, UsqQueryState,
+    fastscan_topk, UsqConfig, UsqEncoded, UsqFastScanState, UsqLayout, UsqQuantizer,
 };
 use crate::quantization::KMeans;
 
@@ -440,7 +440,6 @@ impl IvfUsqIndex {
 
         // Compute global centroid from all loaded vectors and set it
         let dim = config.dim;
-        let mut global_sum = vec![0.0f32; dim];
         let mut total_count = 0usize;
         for cluster in &snapshot.clusters {
             // We don't have raw vectors, so we reconstruct from codes.

@@ -954,6 +954,7 @@ impl HvqQuantizer {
     }
 
     #[cfg(target_arch = "x86_64")]
+    #[allow(dead_code)]
     fn score_code_1bit_with_meta(
         &self,
         state: &HvqQueryState,
@@ -978,6 +979,7 @@ impl HvqQuantizer {
     }
 
     #[cfg(not(target_arch = "x86_64"))]
+    #[allow(dead_code)]
     fn score_code_1bit_with_meta(
         &self,
         state: &HvqQueryState,
