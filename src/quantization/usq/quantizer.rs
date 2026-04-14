@@ -33,6 +33,7 @@ thread_local! {
         codes: Vec::new(),
         sign_codes: Vec::new(),
     });
+    static EXPAND_BUF: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Output of a single vector encoding pass.
@@ -385,12 +386,13 @@ impl UsqQuantizer {
 
         let int_ip = match self.config.nbits {
             8 => dot_u8_i8_avx512(packed_bits, &state.q_quantized),
-            4 => {
+            4 => EXPAND_BUF.with(|buf| {
                 let padded_dim = self.config.padded_dim();
-                let mut expanded = vec![0u8; padded_dim];
-                unpack_packed_u4_into(packed_bits, &mut expanded);
-                dot_u8_i8_avx512(&expanded, &state.q_quantized)
-            }
+                let mut buf = buf.borrow_mut();
+                buf.resize(padded_dim, 0);
+                unpack_packed_u4_into(packed_bits, &mut buf);
+                dot_u8_i8_avx512(&buf, &state.q_quantized)
+            }),
             _ => return self.compute_ip_scalar(&state.q_rot, vmax, packed_bits),
         };
 
