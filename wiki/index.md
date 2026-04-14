@@ -1,6 +1,6 @@
 # hanns Wiki — Index
 
-> LLM 维护。最后更新：2026-04-10。
+> LLM 维护。最后更新：2026-04-14。
 
 **项目目标**：Rust 实现的 Milvus KnowHere，在核心 CPU 路径上全面超越原生 C++。
 
@@ -44,6 +44,7 @@
 - [[decisions/rayon-private-pool]] — 为什么不能用 rayon 全局池
 - [[decisions/prefetch-l1-thrash]] — prefetch 为什么让 QPS 减半
 - [[decisions/materialize-storage]] — load() 后必须 materialize_storage() 的根因
+- [[decisions/hannsdb-zvec-storage-query-parity]] — HannsDB 对标 zvec 时，为什么要先把 ANN 状态诚实性做实
 
 ## Machines
 

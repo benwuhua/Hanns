@@ -4,6 +4,31 @@ append-only 时间线。新条目加在顶部。
 
 ---
 
+## 2026-04-14 — HannsDB vs zvec：storage/query parity 收尾改为“状态诚实性优先”
+
+**类型**：decision / refactor
+**仓库**：HannsDB
+
+**结果摘要**：
+- 当前 dirty slice 没有继续扩新 parity 面，而是先收敛 storage/query 主线：`db.rs` 存储职责拆分、显式校验、ANN 状态回归测试。
+- 新增 `storage/{paths,primary_keys,recovery,segment_io,wal}.rs`，并把共享结构拆到 `db_types.rs` / `query/hits.rs`。
+- 明确验证 `index_completeness` / `ann_ready` 的三段状态：optimize 后成立、reopen 后保持、subsequent write 后清空。
+- daemon 层也补齐 router rebuild / write-after-optimize 的同类状态验证。
+
+**关键判断**：
+- 这轮对 zvec 缩小的是真实 runtime 成熟度差距的一部分，而不是新的 surface 名义 parity。
+- zvec 的整体 versioned segment/runtime 体系仍然更成熟；HannsDB 这轮主要是把“对外宣称的状态”做成事实。
+
+**验证**：
+- `cargo test -p hannsdb-core --test collection_api --test wal_recovery -- --nocapture`
+- `cargo test -p hannsdb-daemon --test http_smoke -- --nocapture`
+- `bash scripts/run_zvec_parity_smoke.sh`
+- parity smoke 通过：Rust parity + lifecycle + compaction + collection_api + wal_recovery + segment_storage + daemon + Python（168 passed / 4 skipped）
+
+→ 详见 [[decisions/hannsdb-zvec-storage-query-parity]]。
+
+---
+
 ## 2026-04-10 — Milvus Cohere-1M：PCA / SQ / IVF-SQ8 benchmark 更新
 
 **类型**：bench
