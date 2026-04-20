@@ -1392,6 +1392,29 @@ pub struct HnswIndex {
     level_rng: StdRng,
 }
 
+#[derive(Debug, Clone)]
+pub struct HnswSectionedExport {
+    pub dim: usize,
+    pub count: usize,
+    pub metric_type: MetricType,
+    pub m: usize,
+    pub m_max0: usize,
+    pub ef_search: usize,
+    pub ef_construction: usize,
+    pub max_level: usize,
+    pub level_multiplier: f32,
+    pub entry_point: Option<i64>,
+    pub sq_mode: SqMode,
+    pub ids: Vec<i64>,
+    pub vectors: Vec<f32>,
+    pub levels: Vec<u32>,
+    pub neighbor_offsets: Vec<u64>,
+    pub neighbor_ids: Vec<i64>,
+    pub neighbor_dists: Vec<f32>,
+    pub deleted_ids: Vec<i64>,
+    pub sq_codes: Vec<u8>,
+}
+
 impl HnswIndex {
     #[inline]
     fn bf16_storage_enabled_for_config(config: &IndexConfig) -> bool {
@@ -7131,6 +7154,67 @@ impl HnswIndex {
         }
 
         Some((min_count, max_count, total as f32 / seen as f32))
+    }
+
+    pub fn export_sectioned_snapshot(&self) -> Result<HnswSectionedExport> {
+        let mut levels = Vec::with_capacity(self.node_info.len());
+        let mut neighbor_offsets = Vec::with_capacity(
+            self.node_info
+                .iter()
+                .map(|node_info| node_info.max_layer + 1)
+                .sum::<usize>()
+                + 1,
+        );
+        let mut neighbor_ids = Vec::new();
+        let mut neighbor_dists = Vec::new();
+        let mut neighbor_len = 0u64;
+
+        neighbor_offsets.push(neighbor_len);
+        for node_info in &self.node_info {
+            levels.push(node_info.max_layer as u32);
+
+            for layer_idx in 0..=node_info.max_layer {
+                let layer_nbrs = &node_info.layer_neighbors[layer_idx];
+                if layer_nbrs.ids.len() != layer_nbrs.dists.len() {
+                    return Err(crate::api::KnowhereError::Codec(format!(
+                        "HNSW layer {} neighbor ids/dists length mismatch: {} != {}",
+                        layer_idx,
+                        layer_nbrs.ids.len(),
+                        layer_nbrs.dists.len()
+                    )));
+                }
+
+                neighbor_ids.extend_from_slice(&layer_nbrs.ids);
+                neighbor_dists.extend_from_slice(&layer_nbrs.dists);
+                neighbor_len += layer_nbrs.ids.len() as u64;
+                neighbor_offsets.push(neighbor_len);
+            }
+        }
+
+        let mut deleted_ids: Vec<i64> = self.deleted.iter().copied().collect();
+        deleted_ids.sort_unstable();
+
+        Ok(HnswSectionedExport {
+            dim: self.dim,
+            count: self.ids.len(),
+            metric_type: self.metric_type,
+            m: self.m,
+            m_max0: self.m_max0,
+            ef_search: self.ef_search,
+            ef_construction: self.ef_construction,
+            max_level: self.max_level,
+            level_multiplier: self.level_multiplier,
+            entry_point: self.entry_point,
+            sq_mode: self.sq_mode,
+            ids: self.ids.clone(),
+            vectors: self.vectors.clone(),
+            levels,
+            neighbor_offsets,
+            neighbor_ids,
+            neighbor_dists,
+            deleted_ids,
+            sq_codes: self.sq_codes.clone(),
+        })
     }
 
     fn write_to<W: std::io::Write>(&self, file: &mut W) -> Result<()> {
