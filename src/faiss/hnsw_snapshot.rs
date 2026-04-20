@@ -1,4 +1,4 @@
-use crate::api::{MetricType, Result};
+use crate::api::{KnowhereError, MetricType, Result};
 use crate::index::Index;
 use crate::kernel::{AnnRuntime, IndexFamily};
 use crate::storage::{
@@ -9,6 +9,7 @@ use crate::storage::{
 use super::{HnswIndex, HnswRuntime};
 
 pub const HNSW_SNAPSHOT_SECTION: &str = "hnsw.bytes";
+const HNSW_SNAPSHOT_VARIANT: &str = "hnsw_blob_v1";
 
 pub struct HnswSnapshot {
     manifest: IndexManifest,
@@ -21,7 +22,7 @@ impl HnswSnapshot {
         let manifest = IndexManifest {
             version: 1,
             family: IndexFamily::Hnsw,
-            variant: "hnsw_blob_v1".to_string(),
+            variant: HNSW_SNAPSHOT_VARIANT.to_string(),
             dim: index.dim(),
             metric: metric_name(index.metric_type()).to_string(),
             count: index.ntotal(),
@@ -51,7 +52,16 @@ impl AnnSnapshotLoader for HnswSnapshotLoader {
         reader: &dyn IndexArtifactReader,
         mode: LoadMode,
     ) -> Result<Box<dyn AnnRuntime>> {
-        let _ = reader.manifest()?;
+        let manifest = reader.manifest()?;
+        if manifest.version != 1
+            || manifest.family != IndexFamily::Hnsw
+            || manifest.variant != HNSW_SNAPSHOT_VARIANT
+        {
+            return Err(KnowhereError::Codec(format!(
+                "invalid HNSW snapshot manifest: expected version 1 family Hnsw variant {HNSW_SNAPSHOT_VARIANT}, got version {} family {:?} variant {:?}",
+                manifest.version, manifest.family, manifest.variant
+            )));
+        }
 
         match mode {
             LoadMode::OwnedMemory => {}

@@ -60,6 +60,44 @@ fn assert_runtime_matches_index(index: &HnswIndex, runtime: &dyn hanns::kernel::
     assert_eq!(&dists[..n], expected.distances.as_slice());
 }
 
+fn hnsw_bytes_store_with_manifest(
+    mut edit_manifest: impl FnMut(&mut IndexManifest),
+) -> MemoryArtifactStore {
+    let index = build_small_hnsw();
+    let snapshot = HnswSnapshot::from_index(&index).expect("snapshot should build");
+    let mut source = MemoryArtifactStore::default();
+    snapshot
+        .write_snapshot(&mut source)
+        .expect("snapshot should write");
+
+    let mut manifest = source.manifest().expect("manifest should exist").clone();
+    edit_manifest(&mut manifest);
+
+    let bytes = source
+        .read_section(HNSW_SNAPSHOT_SECTION)
+        .expect("hnsw bytes should exist")
+        .into_owned();
+    let mut store = MemoryArtifactStore::default();
+    store
+        .write_section(HNSW_SNAPSHOT_SECTION, &bytes)
+        .expect("hnsw bytes should write");
+    store
+        .finish_manifest(&manifest)
+        .expect("manifest should write");
+    store
+}
+
+fn assert_invalid_hnsw_snapshot_manifest(error: KnowhereError) {
+    assert!(
+        matches!(error, KnowhereError::Codec(_)),
+        "expected Codec error, got {error:?}"
+    );
+    assert!(
+        error.to_string().contains("invalid HNSW snapshot manifest"),
+        "error should mention invalid HNSW snapshot manifest, got {error}"
+    );
+}
+
 #[test]
 fn hnsw_snapshot_roundtrips_through_memory_store() {
     let index = build_small_hnsw();
@@ -135,4 +173,32 @@ fn hnsw_snapshot_loader_errors_when_hnsw_bytes_section_is_missing() {
         "expected Codec error, got {error:?}"
     );
     assert!(error.to_string().contains(HNSW_SNAPSHOT_SECTION));
+}
+
+#[test]
+fn hnsw_snapshot_loader_rejects_flat_manifest_with_hnsw_bytes() {
+    let store = hnsw_bytes_store_with_manifest(|manifest| {
+        manifest.family = IndexFamily::Flat;
+    });
+
+    let error = match HnswSnapshotLoader.load_snapshot(&store, LoadMode::OwnedMemory) {
+        Ok(_) => panic!("flat manifest with hnsw bytes should error"),
+        Err(error) => error,
+    };
+
+    assert_invalid_hnsw_snapshot_manifest(error);
+}
+
+#[test]
+fn hnsw_snapshot_loader_rejects_future_hnsw_variant_with_hnsw_bytes() {
+    let store = hnsw_bytes_store_with_manifest(|manifest| {
+        manifest.variant = "future_sectioned_hnsw_v2".to_string();
+    });
+
+    let error = match HnswSnapshotLoader.load_snapshot(&store, LoadMode::OwnedMemory) {
+        Ok(_) => panic!("future hnsw variant with hnsw bytes should error"),
+        Err(error) => error,
+    };
+
+    assert_invalid_hnsw_snapshot_manifest(error);
 }
