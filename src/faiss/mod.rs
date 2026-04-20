@@ -8,13 +8,13 @@ pub mod diskann_aisaq;
 pub mod diskann_pca_usq;
 pub mod diskann_sq;
 pub mod hnsw;
-pub mod hnsw_runtime;
 pub mod hnsw_hvq;
 pub mod hnsw_pca_sq;
 pub mod hnsw_pca_usq;
 pub mod hnsw_pq;
 pub mod hnsw_prq;
 pub mod hnsw_quantized;
+pub mod hnsw_runtime;
 pub mod index;
 pub mod ivf;
 pub mod ivf_flat;
@@ -47,13 +47,13 @@ pub use diskann_aisaq::{
 pub use diskann_pca_usq::{DiskAnnPcaUsqConfig, DiskAnnPcaUsqIndex};
 pub use diskann_sq::{DiskAnnSqConfig, DiskAnnSqIndex};
 pub use hnsw::HnswIndex;
-pub use hnsw_runtime::HnswRuntime;
 pub use hnsw_hvq::{HnswHvqConfig, HnswHvqIndex};
 pub use hnsw_pca_sq::{HnswPcaSqConfig, HnswPcaSqIndex};
 pub use hnsw_pca_usq::{HnswPcaUsqConfig, HnswPcaUsqIndex};
 pub use hnsw_pq::{HnswPqConfig, HnswPqIndex};
 pub use hnsw_prq::{HnswPrqConfig, HnswPrqIndex};
 pub use hnsw_quantized::{HnswQuantizeConfig, HnswSqIndex};
+pub use hnsw_runtime::HnswRuntime;
 pub use index::FaissIndex;
 #[allow(deprecated)]
 // Re-exported for compatibility with callers that still name the legacy IVF scaffold.

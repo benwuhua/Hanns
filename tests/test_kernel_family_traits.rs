@@ -1,6 +1,6 @@
 use hanns::kernel::{
-    DiskGraphRuntimeConfig, EncodedVectorStore, IvfListScanner, IvfPartitionSelector,
-    NodeReader, NodeRecord, QuantizerModel, RerankStore, SelectedPartitions,
+    DiskGraphRuntimeConfig, EncodedVectorStore, IvfListScanner, IvfPartitionSelector, NodeReader,
+    NodeRecord, QuantizerModel, RerankStore, SelectedPartitions,
 };
 
 struct DummyPartitionSelector;
