@@ -25,6 +25,7 @@ pub mod quantization;
 pub mod search;
 pub mod serialize;
 pub mod simd;
+pub mod storage;
 pub mod types;
 pub mod utils;
 pub mod version;
