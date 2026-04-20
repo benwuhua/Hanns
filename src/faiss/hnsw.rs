@@ -1393,6 +1393,37 @@ pub struct HnswIndex {
 }
 
 #[derive(Debug, Clone)]
+pub struct HnswSqExportMeta {
+    pub dim: usize,
+    pub bit: usize,
+    pub quantizer_type: u8,
+    pub min_val: f32,
+    pub max_val: f32,
+    pub scale: f32,
+    pub offset: f32,
+}
+
+impl From<&ScalarQuantizer> for HnswSqExportMeta {
+    fn from(sq: &ScalarQuantizer) -> Self {
+        let quantizer_type = match sq.quantizer_type {
+            crate::quantization::sq::QuantizerType::Uniform => 0,
+            crate::quantization::sq::QuantizerType::Learned => 1,
+            crate::quantization::sq::QuantizerType::Quant4 => 2,
+        };
+
+        Self {
+            dim: sq.dim,
+            bit: sq.bit,
+            quantizer_type,
+            min_val: sq.min_val,
+            max_val: sq.max_val,
+            scale: sq.scale,
+            offset: sq.offset,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct HnswSectionedExport {
     pub dim: usize,
     pub count: usize,
@@ -1412,6 +1443,7 @@ pub struct HnswSectionedExport {
     pub neighbor_ids: Vec<i64>,
     pub neighbor_dists: Vec<f32>,
     pub deleted_ids: Vec<i64>,
+    pub sq_meta: Option<HnswSqExportMeta>,
     pub sq_codes: Vec<u8>,
 }
 
@@ -7213,6 +7245,7 @@ impl HnswIndex {
             neighbor_ids,
             neighbor_dists,
             deleted_ids,
+            sq_meta: self.sq_quantizer.as_ref().map(HnswSqExportMeta::from),
             sq_codes: self.sq_codes.clone(),
         })
     }
