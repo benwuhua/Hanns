@@ -1,7 +1,9 @@
-use hanns::api::{IndexConfig, IndexType, MetricType, SqMode};
-use hanns::faiss::{HnswIndex, HnswSectionedSnapshot};
+use hanns::api::{IndexConfig, IndexType, MetricType, SearchRequest, SqMode};
+use hanns::faiss::{HnswIndex, HnswSectionedSnapshot, HnswSnapshotLoader};
 use hanns::kernel::IndexFamily;
-use hanns::storage::{AnnSnapshot, IndexArtifactReader, MemoryArtifactStore};
+use hanns::storage::{
+    AnnSnapshot, AnnSnapshotLoader, IndexArtifactReader, LoadMode, MemoryArtifactStore,
+};
 
 fn build_small_hnsw() -> HnswIndex {
     let dim = 4;
@@ -147,4 +149,34 @@ fn hnsw_sectioned_snapshot_writes_expected_sections() {
             .unwrap_or_else(|| panic!("missing manifest descriptor for {section}"));
         assert_eq!(descriptor.len, store.section_len(section).unwrap());
     }
+}
+
+#[test]
+fn hnsw_sectioned_snapshot_roundtrips_search_results() {
+    let index = build_small_hnsw();
+    let req = SearchRequest {
+        top_k: 3,
+        nprobe: 16,
+        filter: None,
+        params: None,
+        radius: None,
+    };
+    let query = [0.0, 0.0, 0.0, 0.0];
+    let expected = index.search(&query, &req).expect("search");
+
+    let snapshot = HnswSectionedSnapshot::from_index(&index).expect("snapshot");
+    let mut store = MemoryArtifactStore::default();
+    snapshot.write_snapshot(&mut store).expect("write");
+
+    let loader = HnswSnapshotLoader;
+    let runtime = loader
+        .load_snapshot(&store, LoadMode::OwnedMemory)
+        .expect("load");
+    let mut ids = vec![-1; req.top_k];
+    let mut dists = vec![f32::INFINITY; req.top_k];
+    let n = runtime
+        .search_into(&query, &req, &mut ids, &mut dists)
+        .expect("runtime search");
+
+    assert_eq!(&ids[..n], expected.ids.as_slice());
 }

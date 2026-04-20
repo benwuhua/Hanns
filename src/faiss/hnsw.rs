@@ -7250,6 +7250,232 @@ impl HnswIndex {
         })
     }
 
+    pub(crate) fn from_sectioned_snapshot_export(export: HnswSectionedExport) -> Result<Self> {
+        use std::collections::HashSet;
+
+        if export.dim == 0 {
+            return Err(crate::api::KnowhereError::Codec(
+                "invalid HNSW sectioned snapshot: dim must be non-zero".to_string(),
+            ));
+        }
+
+        let expected_vector_len = export.count.checked_mul(export.dim).ok_or_else(|| {
+            crate::api::KnowhereError::Codec(
+                "invalid HNSW sectioned snapshot: vector length overflow".to_string(),
+            )
+        })?;
+        if export.vectors.len() != expected_vector_len {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invalid HNSW sectioned snapshot: vectors length {} != count*dim {}",
+                export.vectors.len(),
+                expected_vector_len
+            )));
+        }
+        if export.ids.len() != export.count {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invalid HNSW sectioned snapshot: ids length {} != count {}",
+                export.ids.len(),
+                export.count
+            )));
+        }
+        if export.levels.len() != export.count {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invalid HNSW sectioned snapshot: levels length {} != count {}",
+                export.levels.len(),
+                export.count
+            )));
+        }
+        if export.neighbor_ids.len() != export.neighbor_dists.len() {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invalid HNSW sectioned snapshot: neighbor ids/dists length mismatch {} != {}",
+                export.neighbor_ids.len(),
+                export.neighbor_dists.len()
+            )));
+        }
+        if export.neighbor_offsets.first().copied() != Some(0) {
+            return Err(crate::api::KnowhereError::Codec(
+                "invalid HNSW sectioned snapshot: neighbor offsets must start at 0".to_string(),
+            ));
+        }
+        if !export
+            .neighbor_offsets
+            .windows(2)
+            .all(|window| window[0] <= window[1])
+        {
+            return Err(crate::api::KnowhereError::Codec(
+                "invalid HNSW sectioned snapshot: neighbor offsets must be monotonic".to_string(),
+            ));
+        }
+        if export.neighbor_offsets.last().copied() != Some(export.neighbor_ids.len() as u64) {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invalid HNSW sectioned snapshot: last neighbor offset {:?} != neighbor count {}",
+                export.neighbor_offsets.last().copied(),
+                export.neighbor_ids.len()
+            )));
+        }
+
+        let expected_offsets = export
+            .levels
+            .iter()
+            .try_fold(1usize, |total, &level| {
+                total.checked_add(level as usize + 1)
+            })
+            .ok_or_else(|| {
+                crate::api::KnowhereError::Codec(
+                    "invalid HNSW sectioned snapshot: neighbor offset count overflow".to_string(),
+                )
+            })?;
+        if export.neighbor_offsets.len() != expected_offsets {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invalid HNSW sectioned snapshot: neighbor offsets length {} != expected {}",
+                export.neighbor_offsets.len(),
+                expected_offsets
+            )));
+        }
+
+        let mut id_set = HashSet::with_capacity(export.count);
+        let mut use_sequential_ids = true;
+        for (idx, &id) in export.ids.iter().enumerate() {
+            if !id_set.insert(id) {
+                return Err(crate::api::KnowhereError::Codec(format!(
+                    "invalid HNSW sectioned snapshot: duplicate id {id}",
+                )));
+            }
+            if id < 0 || id as usize != idx {
+                use_sequential_ids = false;
+            }
+        }
+
+        if export.count > 0 {
+            match export.entry_point {
+                Some(entry) if id_set.contains(&entry) => {}
+                Some(entry) => {
+                    return Err(crate::api::KnowhereError::Codec(format!(
+                        "invalid HNSW sectioned snapshot: entry point id {entry} not found in ids table"
+                    )))
+                }
+                None => {
+                    return Err(crate::api::KnowhereError::Codec(
+                        "invalid HNSW sectioned snapshot: missing entry point for non-empty index"
+                            .to_string(),
+                    ))
+                }
+            }
+        } else if export.entry_point.is_some() {
+            return Err(crate::api::KnowhereError::Codec(
+                "invalid HNSW sectioned snapshot: empty index cannot have an entry point"
+                    .to_string(),
+            ));
+        }
+
+        for &neighbor_id in &export.neighbor_ids {
+            if !id_set.contains(&neighbor_id) {
+                return Err(crate::api::KnowhereError::Codec(format!(
+                    "invalid HNSW sectioned snapshot: neighbor id {neighbor_id} not found in ids table"
+                )));
+            }
+        }
+        for &deleted_id in &export.deleted_ids {
+            if !id_set.contains(&deleted_id) {
+                return Err(crate::api::KnowhereError::Codec(format!(
+                    "invalid HNSW sectioned snapshot: deleted id {deleted_id} not found in ids table"
+                )));
+            }
+        }
+
+        if export.sq_mode == SqMode::None {
+            if export.sq_meta.is_some() || !export.sq_codes.is_empty() {
+                return Err(crate::api::KnowhereError::Codec(
+                    "invalid HNSW sectioned snapshot: SQ sections present when sq_mode is none"
+                        .to_string(),
+                ));
+            }
+        } else {
+            let sq_meta = export.sq_meta.as_ref().ok_or_else(|| {
+                crate::api::KnowhereError::Codec(
+                    "invalid HNSW sectioned snapshot: missing SQ metadata".to_string(),
+                )
+            })?;
+            if sq_meta.dim != export.dim {
+                return Err(crate::api::KnowhereError::Codec(format!(
+                    "invalid HNSW sectioned snapshot: SQ dim {} != dim {}",
+                    sq_meta.dim, export.dim
+                )));
+            }
+            let expected_sq_codes = export.count.checked_mul(export.dim).ok_or_else(|| {
+                crate::api::KnowhereError::Codec(
+                    "invalid HNSW sectioned snapshot: SQ code length overflow".to_string(),
+                )
+            })?;
+            if export.sq_codes.len() != expected_sq_codes {
+                return Err(crate::api::KnowhereError::Codec(format!(
+                    "invalid HNSW sectioned snapshot: SQ code length {} != {}",
+                    export.sq_codes.len(),
+                    expected_sq_codes
+                )));
+            }
+            return Err(crate::api::KnowhereError::Codec(
+                "sectioned HNSW SQ snapshot import is not supported yet".to_string(),
+            ));
+        }
+
+        let mut node_info = Vec::with_capacity(export.count);
+        let mut offset_idx = 0usize;
+        for &level in &export.levels {
+            let max_layer = level as usize;
+            let mut node = NodeInfo::new(max_layer, export.m);
+            for layer_idx in 0..=max_layer {
+                let start = export.neighbor_offsets[offset_idx] as usize;
+                let end = export.neighbor_offsets[offset_idx + 1] as usize;
+                for (&neighbor_id, &dist) in export.neighbor_ids[start..end]
+                    .iter()
+                    .zip(export.neighbor_dists[start..end].iter())
+                {
+                    node.layer_neighbors[layer_idx].push(neighbor_id, dist);
+                }
+                offset_idx += 1;
+            }
+            node_info.push(node);
+        }
+
+        let mut config = IndexConfig::new(IndexType::Hnsw, export.metric_type, export.dim);
+        config.params.m = Some(export.m);
+        config.params.ef_construction = Some(export.ef_construction);
+        config.params.ef_search = Some(export.ef_search);
+        config.params.ml = Some(export.level_multiplier);
+        config.params.sq_mode = Some(export.sq_mode);
+
+        let mut index = Self::new(&config)?;
+        index.entry_point = export.entry_point;
+        index.max_level = export.max_level;
+        index.vectors = export.vectors;
+        index.ids = export.ids;
+        index.deleted = export.deleted_ids.into_iter().collect();
+        index.node_info = node_info;
+        index.next_id = index.ids.iter().copied().max().map_or(0, |id| id + 1);
+        index.trained = true;
+        index.dim = export.dim;
+        index.ef_construction = export.ef_construction;
+        index.ef_search = export.ef_search.max(1);
+        index.m = export.m;
+        index.m_max0 = export.m_max0;
+        index.level_multiplier = export.level_multiplier;
+        index.metric_type = export.metric_type;
+        index.sq_mode = export.sq_mode;
+        index.sq_quantizer = None;
+        index.sq_codes = export.sq_codes;
+        index.distance_to_idx_fn =
+            Self::resolve_distance_to_idx_fn(index.metric_type, index.sq_mode);
+        index.l2_distance_sq_ptr_kernel = simd::l2_distance_sq_ptr_kernel();
+        index.use_sequential_ids = use_sequential_ids;
+        index.config.metric_type = index.metric_type;
+        index.config.dim = index.dim;
+        index.config.params.sq_mode = Some(index.sq_mode);
+        index.rebuild_bf16_storage();
+        index.refresh_layer0_flat_graph();
+        Ok(index)
+    }
+
     fn write_to<W: std::io::Write>(&self, file: &mut W) -> Result<()> {
         // Magic and version
         file.write_all(b"HNSW")?;
