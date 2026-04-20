@@ -103,3 +103,16 @@ fn ann_snapshot_loader_opens_runtime_from_artifact_store() {
     assert_eq!(runtime.dim(), 4);
     assert_eq!(runtime.len(), 1);
 }
+
+#[test]
+fn load_mode_planned_variants_are_public() {
+    let modes = [
+        LoadMode::OwnedMemory,
+        LoadMode::Mmap,
+        LoadMode::PageCache,
+        LoadMode::Lazy,
+    ];
+
+    assert_eq!(modes.len(), 4);
+    assert!(modes.contains(&LoadMode::OwnedMemory));
+}

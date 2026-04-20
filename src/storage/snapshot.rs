@@ -3,9 +3,13 @@ use crate::kernel::AnnRuntime;
 
 use super::{IndexArtifactReader, IndexArtifactWriter};
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadMode {
     OwnedMemory,
+    Mmap,
+    PageCache,
+    Lazy,
 }
 
 pub trait AnnSnapshot {

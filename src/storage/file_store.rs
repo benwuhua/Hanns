@@ -43,6 +43,18 @@ impl FileArtifactStore {
         validate_section_name(name)?;
         Ok(self.sections_dir().join(name))
     }
+
+    fn ensure_writable(&self) -> Result<()> {
+        if self.manifest.is_some() {
+            return Err(existing_artifact_error());
+        }
+
+        match fs::metadata(self.manifest_path()) {
+            Ok(_) => Err(existing_artifact_error()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(codec_io("read manifest metadata", error)),
+        }
+    }
 }
 
 impl IndexArtifactReader for FileArtifactStore {
@@ -99,6 +111,7 @@ impl IndexArtifactReader for FileArtifactStore {
 
 impl IndexArtifactWriter for FileArtifactStore {
     fn write_section(&mut self, name: &str, bytes: &[u8]) -> Result<()> {
+        self.ensure_writable()?;
         let path = self.section_path(name)?;
         fs::create_dir_all(self.sections_dir())
             .map_err(|error| codec_io("create sections directory", error))?;
@@ -107,6 +120,11 @@ impl IndexArtifactWriter for FileArtifactStore {
     }
 
     fn finish_manifest(&mut self, manifest: &IndexManifest) -> Result<()> {
+        self.ensure_writable()?;
+        for section in &manifest.sections {
+            validate_section_name(&section.name)?;
+        }
+
         fs::create_dir_all(&self.root)
             .map_err(|error| codec_io("create artifact directory", error))?;
         let bytes = serde_json::to_vec_pretty(manifest)
@@ -130,4 +148,10 @@ fn validate_section_name(name: &str) -> Result<()> {
 
 fn codec_io(context: &str, error: std::io::Error) -> KnowhereError {
     KnowhereError::Codec(format!("{context}: {error}"))
+}
+
+fn existing_artifact_error() -> KnowhereError {
+    KnowhereError::Codec(
+        "artifact already exists; cannot write through opened existing artifact".to_string(),
+    )
 }
