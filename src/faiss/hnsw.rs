@@ -7334,26 +7334,50 @@ impl HnswIndex {
         }
 
         let mut id_set = HashSet::with_capacity(export.count);
+        let mut id_levels = BTreeMap::new();
         let mut use_sequential_ids = true;
-        for (idx, &id) in export.ids.iter().enumerate() {
+        for (idx, (&id, &level)) in export.ids.iter().zip(export.levels.iter()).enumerate() {
             if !id_set.insert(id) {
                 return Err(crate::api::KnowhereError::Codec(format!(
                     "invalid HNSW sectioned snapshot: duplicate id {id}",
                 )));
             }
+            id_levels.insert(id, level as usize);
             if id < 0 || id as usize != idx {
                 use_sequential_ids = false;
             }
         }
 
+        let actual_max_level = export
+            .levels
+            .iter()
+            .copied()
+            .max()
+            .map(|level| level as usize)
+            .unwrap_or(0);
+        if export.max_level != actual_max_level {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invalid HNSW sectioned snapshot: max_level {} != max(levels) {}",
+                export.max_level, actual_max_level
+            )));
+        }
+
         if export.count > 0 {
             match export.entry_point {
-                Some(entry) if id_set.contains(&entry) => {}
-                Some(entry) => {
-                    return Err(crate::api::KnowhereError::Codec(format!(
-                        "invalid HNSW sectioned snapshot: entry point id {entry} not found in ids table"
-                    )))
-                }
+                Some(entry) => match id_levels.get(&entry).copied() {
+                    Some(entry_level) if entry_level == export.max_level => {}
+                    Some(entry_level) => {
+                        return Err(crate::api::KnowhereError::Codec(format!(
+                            "invalid HNSW sectioned snapshot: entry point id {entry} has level {entry_level} != max_level {}",
+                            export.max_level
+                        )))
+                    }
+                    None => {
+                        return Err(crate::api::KnowhereError::Codec(format!(
+                            "invalid HNSW sectioned snapshot: entry point id {entry} not found in ids table"
+                        )))
+                    }
+                },
                 None => {
                     return Err(crate::api::KnowhereError::Codec(
                         "invalid HNSW sectioned snapshot: missing entry point for non-empty index"
@@ -7368,11 +7392,38 @@ impl HnswIndex {
             ));
         }
 
-        for &neighbor_id in &export.neighbor_ids {
-            if !id_set.contains(&neighbor_id) {
-                return Err(crate::api::KnowhereError::Codec(format!(
-                    "invalid HNSW sectioned snapshot: neighbor id {neighbor_id} not found in ids table"
-                )));
+        let mut offset_idx = 0usize;
+        for (node_idx, &level) in export.levels.iter().enumerate() {
+            let node_id = export.ids[node_idx];
+            let max_layer = level as usize;
+            for layer_idx in 0..=max_layer {
+                let start = export.neighbor_offsets[offset_idx] as usize;
+                let end = export.neighbor_offsets[offset_idx + 1] as usize;
+                let degree = end - start;
+                let max_degree = if layer_idx == 0 {
+                    export.m_max0
+                } else {
+                    export.m
+                };
+                if degree > max_degree {
+                    return Err(crate::api::KnowhereError::Codec(format!(
+                        "invalid HNSW sectioned snapshot: node id {node_id} layer {layer_idx} degree {degree} exceeds configured max {max_degree}"
+                    )));
+                }
+
+                for &neighbor_id in &export.neighbor_ids[start..end] {
+                    let neighbor_level = id_levels.get(&neighbor_id).copied().ok_or_else(|| {
+                        crate::api::KnowhereError::Codec(format!(
+                            "invalid HNSW sectioned snapshot: neighbor id {neighbor_id} not found in ids table"
+                        ))
+                    })?;
+                    if neighbor_level < layer_idx {
+                        return Err(crate::api::KnowhereError::Codec(format!(
+                            "invalid HNSW sectioned snapshot: neighbor id {neighbor_id} has max layer {neighbor_level} below layer {layer_idx}"
+                        )));
+                    }
+                }
+                offset_idx += 1;
             }
         }
         for &deleted_id in &export.deleted_ids {
