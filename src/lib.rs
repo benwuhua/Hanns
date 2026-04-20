@@ -18,6 +18,7 @@ pub mod half; // fp16/bf16 support
 pub mod index;
 pub mod integration;
 pub mod interrupt;
+pub mod kernel;
 pub mod memory;
 pub mod metrics;
 pub mod quantization;
