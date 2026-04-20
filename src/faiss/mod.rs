@@ -55,7 +55,10 @@ pub use hnsw_pq::{HnswPqConfig, HnswPqIndex};
 pub use hnsw_prq::{HnswPrqConfig, HnswPrqIndex};
 pub use hnsw_quantized::{HnswQuantizeConfig, HnswSqIndex};
 pub use hnsw_runtime::HnswRuntime;
-pub use hnsw_snapshot::{HnswSnapshot, HnswSnapshotLoader, HNSW_SNAPSHOT_SECTION};
+pub use hnsw_snapshot::{
+    HnswSectionedSnapshot, HnswSnapshot, HnswSnapshotLoader, HNSW_SECTIONS_SNAPSHOT_VARIANT,
+    HNSW_SNAPSHOT_SECTION,
+};
 pub use index::FaissIndex;
 #[allow(deprecated)]
 // Re-exported for compatibility with callers that still name the legacy IVF scaffold.

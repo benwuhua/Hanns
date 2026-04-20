@@ -1,5 +1,7 @@
 use hanns::api::{IndexConfig, IndexType, MetricType, SqMode};
-use hanns::faiss::HnswIndex;
+use hanns::faiss::{HnswIndex, HnswSectionedSnapshot};
+use hanns::kernel::IndexFamily;
+use hanns::storage::{AnnSnapshot, IndexArtifactReader, MemoryArtifactStore};
 
 fn build_small_hnsw() -> HnswIndex {
     let dim = 4;
@@ -97,4 +99,52 @@ fn hnsw_exports_sq_metadata_with_codes() {
     let sq_meta = export.sq_meta.expect("sq metadata should export");
     assert!(!export.sq_codes.is_empty());
     assert_eq!(sq_meta.dim, dim);
+}
+
+#[test]
+fn hnsw_sectioned_snapshot_writes_expected_sections() {
+    let index = build_small_hnsw();
+    let export = index.export_sectioned_snapshot().expect("export");
+    let snapshot = HnswSectionedSnapshot::from_index(&index).expect("snapshot");
+    let mut store = MemoryArtifactStore::default();
+
+    snapshot.write_snapshot(&mut store).expect("write");
+    let manifest = store.manifest().expect("manifest");
+
+    assert_eq!(manifest.family, IndexFamily::Hnsw);
+    assert_eq!(manifest.variant, "hnsw_sections_v1");
+    assert!(store.section_len("hnsw.meta.json").unwrap() > 0);
+    assert_eq!(store.section_len("hnsw.ids.i64").unwrap(), 4 * 8);
+    assert_eq!(store.section_len("hnsw.vectors.f32").unwrap(), 16 * 4);
+
+    assert_eq!(
+        store.section_len("hnsw.neighbors.offsets.u64").unwrap(),
+        export.neighbor_offsets.len() as u64 * 8
+    );
+    assert_eq!(
+        store.section_len("hnsw.neighbors.ids.i64").unwrap(),
+        export.neighbor_ids.len() as u64 * 8
+    );
+    assert_eq!(
+        store.section_len("hnsw.neighbors.dists.f32").unwrap(),
+        export.neighbor_dists.len() as u64 * 4
+    );
+
+    for section in [
+        "hnsw.meta.json",
+        "hnsw.ids.i64",
+        "hnsw.vectors.f32",
+        "hnsw.levels.u32",
+        "hnsw.neighbors.offsets.u64",
+        "hnsw.neighbors.ids.i64",
+        "hnsw.neighbors.dists.f32",
+        "hnsw.deleted.ids.i64",
+    ] {
+        let descriptor = manifest
+            .sections
+            .iter()
+            .find(|candidate| candidate.name == section)
+            .unwrap_or_else(|| panic!("missing manifest descriptor for {section}"));
+        assert_eq!(descriptor.len, store.section_len(section).unwrap());
+    }
 }
