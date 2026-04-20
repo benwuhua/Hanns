@@ -15,6 +15,7 @@ pub mod hnsw_pq;
 pub mod hnsw_prq;
 pub mod hnsw_quantized;
 pub mod hnsw_runtime;
+pub mod hnsw_snapshot;
 pub mod index;
 pub mod ivf;
 pub mod ivf_flat;
@@ -54,6 +55,7 @@ pub use hnsw_pq::{HnswPqConfig, HnswPqIndex};
 pub use hnsw_prq::{HnswPrqConfig, HnswPrqIndex};
 pub use hnsw_quantized::{HnswQuantizeConfig, HnswSqIndex};
 pub use hnsw_runtime::HnswRuntime;
+pub use hnsw_snapshot::{HnswSnapshot, HnswSnapshotLoader, HNSW_SNAPSHOT_SECTION};
 pub use index::FaissIndex;
 #[allow(deprecated)]
 // Re-exported for compatibility with callers that still name the legacy IVF scaffold.
