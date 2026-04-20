@@ -8,6 +8,7 @@ pub mod diskann_aisaq;
 pub mod diskann_pca_usq;
 pub mod diskann_sq;
 pub mod hnsw;
+pub mod hnsw_runtime;
 pub mod hnsw_hvq;
 pub mod hnsw_pca_sq;
 pub mod hnsw_pca_usq;
@@ -46,6 +47,7 @@ pub use diskann_aisaq::{
 pub use diskann_pca_usq::{DiskAnnPcaUsqConfig, DiskAnnPcaUsqIndex};
 pub use diskann_sq::{DiskAnnSqConfig, DiskAnnSqIndex};
 pub use hnsw::HnswIndex;
+pub use hnsw_runtime::HnswRuntime;
 pub use hnsw_hvq::{HnswHvqConfig, HnswHvqIndex};
 pub use hnsw_pca_sq::{HnswPcaSqConfig, HnswPcaSqIndex};
 pub use hnsw_pca_usq::{HnswPcaUsqConfig, HnswPcaUsqIndex};
