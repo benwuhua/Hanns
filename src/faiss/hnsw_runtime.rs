@@ -1,6 +1,6 @@
 use crate::api::{Result, SearchRequest};
 use crate::index::Index;
-use crate::kernel::{AnnRuntime, IndexFamily, RowFilter};
+use crate::kernel::{AnnRuntime, IndexFamily};
 
 use super::HnswIndex;
 
@@ -39,16 +39,5 @@ impl AnnRuntime for HnswRuntime {
         dists: &mut [f32],
     ) -> Result<usize> {
         self.inner.search_into(query, req, ids, dists)
-    }
-
-    fn search_with_filter_into(
-        &self,
-        query: &[f32],
-        req: &SearchRequest,
-        _filter: &dyn RowFilter,
-        ids: &mut [i64],
-        dists: &mut [f32],
-    ) -> Result<usize> {
-        self.search_into(query, req, ids, dists)
     }
 }
