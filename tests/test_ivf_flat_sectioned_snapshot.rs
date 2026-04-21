@@ -1,5 +1,12 @@
 use hanns::api::{DataType, IndexConfig, IndexParams, IndexType, KnowhereError, MetricType};
-use hanns::faiss::IvfFlatIndex;
+use hanns::faiss::{
+    IvfFlatIndex, IvfFlatSectionedSnapshot, IVF_FLAT_CENTROIDS_SECTION, IVF_FLAT_IDS_SECTION,
+    IVF_FLAT_LIST_IDS_SECTION, IVF_FLAT_LIST_OFFSETS_SECTION, IVF_FLAT_LIST_SIZES_SECTION,
+    IVF_FLAT_LIST_VECTORS_SECTION, IVF_FLAT_META_SECTION, IVF_FLAT_SECTIONS_SNAPSHOT_VARIANT,
+    IVF_FLAT_VECTORS_SECTION,
+};
+use hanns::kernel::IndexFamily;
+use hanns::storage::{AnnSnapshot, IndexArtifactReader, MemoryArtifactStore};
 
 fn build_small_ivf_flat() -> (IvfFlatIndex, usize) {
     let dim = 4;
@@ -77,4 +84,61 @@ fn ivf_flat_exports_sectioned_snapshot_shape() {
     );
     assert_eq!(export.ids.len(), export.count);
     assert_eq!(export.vectors.len(), export.count * export.dim);
+}
+
+#[test]
+fn ivf_flat_sectioned_snapshot_writes_expected_sections() {
+    let (index, _) = build_small_ivf_flat();
+    let export = index.export_sectioned_snapshot().expect("export");
+    let snapshot = IvfFlatSectionedSnapshot::from_index(&index).expect("snapshot");
+    let mut store = MemoryArtifactStore::default();
+
+    snapshot.write_snapshot(&mut store).expect("write");
+    let manifest = store.manifest().expect("manifest");
+
+    assert_eq!(manifest.family, IndexFamily::Ivf);
+    assert_eq!(manifest.variant, IVF_FLAT_SECTIONS_SNAPSHOT_VARIANT);
+    assert!(store.section_len(IVF_FLAT_META_SECTION).unwrap() > 0);
+
+    for (section, expected_len) in [
+        (
+            IVF_FLAT_CENTROIDS_SECTION,
+            export.centroids.len() as u64 * 4,
+        ),
+        (
+            IVF_FLAT_LIST_OFFSETS_SECTION,
+            export.list_offsets.len() as u64 * 8,
+        ),
+        (
+            IVF_FLAT_LIST_SIZES_SECTION,
+            export.list_sizes.len() as u64 * 8,
+        ),
+        (IVF_FLAT_LIST_IDS_SECTION, export.list_ids.len() as u64 * 8),
+        (
+            IVF_FLAT_LIST_VECTORS_SECTION,
+            export.list_vectors.len() as u64 * 4,
+        ),
+        (IVF_FLAT_IDS_SECTION, export.ids.len() as u64 * 8),
+        (IVF_FLAT_VECTORS_SECTION, export.vectors.len() as u64 * 4),
+    ] {
+        assert_eq!(store.section_len(section).unwrap(), expected_len);
+    }
+
+    for section in [
+        IVF_FLAT_META_SECTION,
+        IVF_FLAT_CENTROIDS_SECTION,
+        IVF_FLAT_LIST_OFFSETS_SECTION,
+        IVF_FLAT_LIST_SIZES_SECTION,
+        IVF_FLAT_LIST_IDS_SECTION,
+        IVF_FLAT_LIST_VECTORS_SECTION,
+        IVF_FLAT_IDS_SECTION,
+        IVF_FLAT_VECTORS_SECTION,
+    ] {
+        let descriptor = manifest
+            .sections
+            .iter()
+            .find(|candidate| candidate.name == section)
+            .unwrap_or_else(|| panic!("missing manifest descriptor for {section}"));
+        assert_eq!(descriptor.len, store.section_len(section).unwrap());
+    }
 }
