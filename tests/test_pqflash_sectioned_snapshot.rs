@@ -71,6 +71,36 @@ fn build_small_pqflash_with_pq() -> (PQFlashIndex, Vec<f32>) {
     (index, vectors)
 }
 
+fn build_small_pqflash_with_hvq_sq8() -> (PQFlashIndex, Vec<f32>) {
+    let dim = 4;
+    let n = 80;
+    let config = AisaqConfig {
+        max_degree: 8,
+        search_list_size: 32,
+        beamwidth: 4,
+        disk_pq_dims: 0,
+        num_entry_points: 2,
+        random_seed: 19,
+        run_refine_pass: true,
+        num_refine_passes: 1,
+        use_hvq: true,
+        hvq_nbits: 4,
+        use_sq8_prefilter: true,
+        ..Default::default()
+    };
+    let mut vectors = Vec::with_capacity(n * dim);
+    for i in 0..n {
+        for j in 0..dim {
+            let cluster = (i % 5) as f32 * 4.0;
+            vectors.push(cluster + ((i * 31 + j * 13) % 41) as f32 / 41.0);
+        }
+    }
+
+    let mut index = PQFlashIndex::new(config, MetricType::L2, dim).expect("index");
+    index.add(&vectors).expect("vectors should add");
+    (index, vectors)
+}
+
 fn sectioned_store_with(
     index: &PQFlashIndex,
     edit: impl FnOnce(&mut IndexManifest, &mut BTreeMap<String, Vec<u8>>),
@@ -203,6 +233,43 @@ fn pqflash_sectioned_snapshot_preserves_pq_payload() {
     assert_eq!(
         loaded_export.pq.as_ref().unwrap().centroids,
         export.pq.as_ref().unwrap().centroids
+    );
+
+    let roundtrip = loaded.search(query, 8).expect("loaded search");
+    assert_eq!(roundtrip.ids, original.ids);
+    assert_eq!(roundtrip.distances, original.distances);
+}
+
+#[test]
+fn pqflash_sectioned_snapshot_preserves_hvq_and_sq8_payloads() {
+    let (index, vectors) = build_small_pqflash_with_hvq_sq8();
+    let export = index.export_sectioned_snapshot().expect("export");
+    assert!(export.hvq.is_some());
+    assert!(export.sq8.is_some());
+
+    let query = &vectors[0..4];
+    let original = index.search(query, 8).expect("original search");
+    let snapshot = PqFlashSectionedSnapshot::from_index(&index).expect("snapshot");
+    let mut store = MemoryArtifactStore::default();
+    snapshot.write_snapshot(&mut store).expect("write");
+
+    let loaded = load_pqflash_index_from_artifact(&store).expect("load");
+    let loaded_export = loaded.export_sectioned_snapshot().expect("loaded export");
+    assert_eq!(
+        loaded_export.hvq.as_ref().unwrap().codes,
+        export.hvq.as_ref().unwrap().codes
+    );
+    assert_eq!(
+        loaded_export.hvq.as_ref().unwrap().rotation_matrix,
+        export.hvq.as_ref().unwrap().rotation_matrix
+    );
+    assert_eq!(
+        loaded_export.sq8.as_ref().unwrap().codes,
+        export.sq8.as_ref().unwrap().codes
+    );
+    assert_eq!(
+        loaded_export.sq8.as_ref().unwrap().scale,
+        export.sq8.as_ref().unwrap().scale
     );
 
     let roundtrip = loaded.search(query, 8).expect("loaded search");

@@ -635,6 +635,29 @@ pub struct PQFlashSectionedPqExport {
 }
 
 #[derive(Clone, Debug)]
+pub struct PQFlashSectionedHvqExport {
+    pub dim: usize,
+    pub nbits: u8,
+    pub rotation_matrix: Vec<f32>,
+    pub scale: f32,
+    pub offset: f32,
+    pub centroid: Vec<f32>,
+    pub rotated_centroid: Vec<f32>,
+    pub codes: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PQFlashSectionedSq8Export {
+    pub dim: usize,
+    pub bit: usize,
+    pub min_val: f32,
+    pub max_val: f32,
+    pub scale: f32,
+    pub offset: f32,
+    pub codes: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
 pub struct PQFlashSectionedExport {
     pub config: AisaqConfig,
     pub metric_type: MetricType,
@@ -652,6 +675,8 @@ pub struct PQFlashSectionedExport {
     pub node_pq_codes: Vec<u8>,
     pub deleted_rows: Vec<u64>,
     pub pq: Option<PQFlashSectionedPqExport>,
+    pub hvq: Option<PQFlashSectionedHvqExport>,
+    pub sq8: Option<PQFlashSectionedSq8Export>,
 }
 
 #[derive(Clone, Debug)]
@@ -1067,16 +1092,6 @@ impl PQFlashIndex {
                 "PQFlash sectioned snapshot v1 requires an owned-memory index".to_string(),
             ));
         }
-        if self.hvq_quantizer.is_some() || !self.hvq_codes.is_empty() {
-            return Err(KnowhereError::InvalidArg(
-                "PQFlash sectioned snapshot v1 does not support HVQ state".to_string(),
-            ));
-        }
-        if self.sq8_quantizer.is_some() || !self.sq8_codes.is_empty() {
-            return Err(KnowhereError::InvalidArg(
-                "PQFlash sectioned snapshot v1 does not support SQ8 prefilter state".to_string(),
-            ));
-        }
         let exported_node_pq_codes = if self.pq_code_size > 0 {
             self.node_pq_codes.clone()
         } else {
@@ -1110,6 +1125,47 @@ impl PQFlashIndex {
                 dim: encoder.dim(),
                 centroids: encoder.centroids().to_vec(),
             });
+        let hvq = self
+            .hvq_quantizer
+            .as_ref()
+            .map(|quantizer| PQFlashSectionedHvqExport {
+                dim: quantizer.config.dim,
+                nbits: quantizer.config.nbits,
+                rotation_matrix: quantizer.rotation_matrix.clone(),
+                scale: quantizer.scale,
+                offset: quantizer.offset,
+                centroid: quantizer.centroid.clone(),
+                rotated_centroid: quantizer.rotated_centroid.clone(),
+                codes: self.hvq_codes.clone(),
+            });
+        if hvq.is_some() && self.hvq_codes.is_empty() && self.node_count > 0 {
+            return Err(KnowhereError::Codec(
+                "invalid PQFlash state: HVQ quantizer is present but codes are empty".to_string(),
+            ));
+        }
+        if let Some(hvq) = hvq.as_ref() {
+            validate_pqflash_hvq_sectioned(self.node_count, self.dim, hvq)?;
+        }
+        let sq8 = self
+            .sq8_quantizer
+            .as_ref()
+            .map(|quantizer| PQFlashSectionedSq8Export {
+                dim: quantizer.dim,
+                bit: quantizer.bit,
+                min_val: quantizer.min_val,
+                max_val: quantizer.max_val,
+                scale: quantizer.scale,
+                offset: quantizer.offset,
+                codes: self.sq8_codes.clone(),
+            });
+        if sq8.is_some() && self.sq8_codes.is_empty() && self.node_count > 0 {
+            return Err(KnowhereError::Codec(
+                "invalid PQFlash state: SQ8 quantizer is present but codes are empty".to_string(),
+            ));
+        }
+        if let Some(sq8) = sq8.as_ref() {
+            validate_pqflash_sq8_sectioned(self.node_count, self.dim, sq8)?;
+        }
 
         Ok(PQFlashSectionedExport {
             config: self.config.clone(),
@@ -1133,6 +1189,8 @@ impl PQFlashIndex {
                 .map(|row| row as u64)
                 .collect(),
             pq,
+            hvq,
+            sq8,
         })
     }
 
@@ -1163,6 +1221,36 @@ impl PQFlashIndex {
                 .expect("validated PQ centroids should restore");
             encoder
         });
+        let (hvq_quantizer, hvq_codes) = if let Some(hvq) = export.hvq {
+            validate_pqflash_hvq_sectioned(export.count, export.dim, &hvq)?;
+            (
+                Some(HvqQuantizer {
+                    config: HvqConfig {
+                        dim: hvq.dim,
+                        nbits: hvq.nbits,
+                    },
+                    rotation_matrix: hvq.rotation_matrix,
+                    scale: hvq.scale,
+                    offset: hvq.offset,
+                    centroid: hvq.centroid,
+                    rotated_centroid: hvq.rotated_centroid,
+                }),
+                hvq.codes,
+            )
+        } else {
+            (None, Vec::new())
+        };
+        let (sq8_quantizer, sq8_codes) = if let Some(sq8) = export.sq8 {
+            validate_pqflash_sq8_sectioned(export.count, export.dim, &sq8)?;
+            let mut quantizer = crate::quantization::sq::ScalarQuantizer::new(sq8.dim, sq8.bit);
+            quantizer.min_val = sq8.min_val;
+            quantizer.max_val = sq8.max_val;
+            quantizer.scale = sq8.scale;
+            quantizer.offset = sq8.offset;
+            (Some(quantizer), sq8.codes)
+        } else {
+            (None, Vec::new())
+        };
         let disk_pq_codes = if export.pq_code_size > 0 {
             export.node_pq_codes.clone()
         } else {
@@ -1192,8 +1280,8 @@ impl PQFlashIndex {
             flat_stride: export.flat_stride,
             pq_encoder,
             pq_code_size: export.pq_code_size,
-            hvq_quantizer: None,
-            hvq_codes: Vec::new(),
+            hvq_quantizer,
+            hvq_codes,
             entry_points: export.entry_points,
             io_template,
             trained: export.trained,
@@ -1206,8 +1294,8 @@ impl PQFlashIndex {
                 .into_iter()
                 .map(|row| row as usize)
                 .collect(),
-            sq8_quantizer: None,
-            sq8_codes: Vec::new(),
+            sq8_quantizer,
+            sq8_codes,
             scratch_pool: Mutex::new(Vec::new()),
         })
     }
@@ -5789,6 +5877,92 @@ fn validate_pqflash_sectioned_parts(parts: PQFlashSectionedParts<'_>) -> Result<
                 parts.count
             )));
         }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_pqflash_hvq_sectioned(
+    count: usize,
+    dim: usize,
+    hvq: &PQFlashSectionedHvqExport,
+) -> Result<()> {
+    if hvq.dim != dim {
+        return Err(KnowhereError::Codec(format!(
+            "invalid PQFlash HVQ state: dim {} != index dim {dim}",
+            hvq.dim
+        )));
+    }
+    if !(1..=8).contains(&hvq.nbits) {
+        return Err(KnowhereError::Codec(format!(
+            "invalid PQFlash HVQ state: nbits {}",
+            hvq.nbits
+        )));
+    }
+    let expected_matrix = dim.checked_mul(dim).ok_or_else(|| {
+        KnowhereError::Codec("invalid PQFlash HVQ state: matrix overflow".to_string())
+    })?;
+    if hvq.rotation_matrix.len() != expected_matrix {
+        return Err(KnowhereError::Codec(format!(
+            "invalid PQFlash HVQ state: rotation_matrix len {} != dim * dim {}",
+            hvq.rotation_matrix.len(),
+            expected_matrix
+        )));
+    }
+    if hvq.centroid.len() != dim || hvq.rotated_centroid.len() != dim {
+        return Err(KnowhereError::Codec(
+            "invalid PQFlash HVQ state: centroid lengths must equal dim".to_string(),
+        ));
+    }
+    let code_size = 12 + dim.saturating_mul(hvq.nbits as usize).div_ceil(8);
+    let expected_codes = count.checked_mul(code_size).ok_or_else(|| {
+        KnowhereError::Codec("invalid PQFlash HVQ state: code length overflow".to_string())
+    })?;
+    if hvq.codes.len() != expected_codes {
+        return Err(KnowhereError::Codec(format!(
+            "invalid PQFlash HVQ state: codes len {} != count * code_size {}",
+            hvq.codes.len(),
+            expected_codes
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_pqflash_sq8_sectioned(
+    count: usize,
+    dim: usize,
+    sq8: &PQFlashSectionedSq8Export,
+) -> Result<()> {
+    if sq8.dim != dim {
+        return Err(KnowhereError::Codec(format!(
+            "invalid PQFlash SQ8 state: dim {} != index dim {dim}",
+            sq8.dim
+        )));
+    }
+    if sq8.bit == 0 || sq8.bit > 8 {
+        return Err(KnowhereError::Codec(format!(
+            "invalid PQFlash SQ8 state: bit {}",
+            sq8.bit
+        )));
+    }
+    if !sq8.min_val.is_finite()
+        || !sq8.max_val.is_finite()
+        || !sq8.scale.is_finite()
+        || !sq8.offset.is_finite()
+        || sq8.scale <= 0.0
+    {
+        return Err(KnowhereError::Codec(
+            "invalid PQFlash SQ8 state: non-finite or non-positive quantizer parameter".to_string(),
+        ));
+    }
+    let expected_codes = count.checked_mul(dim).ok_or_else(|| {
+        KnowhereError::Codec("invalid PQFlash SQ8 state: code length overflow".to_string())
+    })?;
+    if sq8.codes.len() != expected_codes {
+        return Err(KnowhereError::Codec(format!(
+            "invalid PQFlash SQ8 state: codes len {} != count * dim {}",
+            sq8.codes.len(),
+            expected_codes
+        )));
     }
     Ok(())
 }

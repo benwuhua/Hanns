@@ -9,7 +9,10 @@ use crate::storage::{
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-use super::diskann_aisaq::{PQFlashSectionedExport, PQFlashSectionedPqExport};
+use super::diskann_aisaq::{
+    validate_pqflash_hvq_sectioned, validate_pqflash_sq8_sectioned, PQFlashSectionedExport,
+    PQFlashSectionedHvqExport, PQFlashSectionedPqExport, PQFlashSectionedSq8Export,
+};
 
 pub const PQFLASH_SECTIONS_SNAPSHOT_VARIANT: &str = "pqflash_sections_v1";
 
@@ -21,8 +24,12 @@ pub const PQFLASH_NEIGHBOR_IDS_SECTION: &str = "pqflash.neighbor_ids.u32";
 pub const PQFLASH_NODE_PQ_CODES_SECTION: &str = "pqflash.node_pq_codes.u8";
 pub const PQFLASH_DELETED_ROWS_SECTION: &str = "pqflash.deleted_rows.u64";
 pub const PQFLASH_PQ_CENTROIDS_SECTION: &str = "pqflash.pq_centroids.f32";
+pub const PQFLASH_HVQ_META_SECTION: &str = "pqflash.hvq.meta.json";
+pub const PQFLASH_HVQ_CODES_SECTION: &str = "pqflash.hvq.codes.u8";
+pub const PQFLASH_SQ8_META_SECTION: &str = "pqflash.sq8.meta.json";
+pub const PQFLASH_SQ8_CODES_SECTION: &str = "pqflash.sq8.codes.u8";
 
-const REQUIRED_PQFLASH_SECTIONS: [&str; 8] = [
+const REQUIRED_PQFLASH_SECTIONS: [&str; 12] = [
     PQFLASH_META_SECTION,
     PQFLASH_VECTORS_SECTION,
     PQFLASH_NODE_IDS_SECTION,
@@ -31,6 +38,10 @@ const REQUIRED_PQFLASH_SECTIONS: [&str; 8] = [
     PQFLASH_NODE_PQ_CODES_SECTION,
     PQFLASH_DELETED_ROWS_SECTION,
     PQFLASH_PQ_CENTROIDS_SECTION,
+    PQFLASH_HVQ_META_SECTION,
+    PQFLASH_HVQ_CODES_SECTION,
+    PQFLASH_SQ8_META_SECTION,
+    PQFLASH_SQ8_CODES_SECTION,
 ];
 
 #[derive(Deserialize, Serialize)]
@@ -47,6 +58,29 @@ struct PqFlashSectionMetadata {
     entry_points: Vec<u32>,
     pq_m: Option<usize>,
     pq_nbits: Option<usize>,
+    has_hvq: bool,
+    has_sq8: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+struct PqFlashHvqMetadata {
+    dim: usize,
+    nbits: u8,
+    rotation_matrix: Vec<f32>,
+    scale: f32,
+    offset: f32,
+    centroid: Vec<f32>,
+    rotated_centroid: Vec<f32>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct PqFlashSq8Metadata {
+    dim: usize,
+    bit: usize,
+    min_val: f32,
+    max_val: f32,
+    scale: f32,
+    offset: f32,
 }
 
 pub struct PqFlashSectionedSnapshot {
@@ -70,6 +104,8 @@ impl PqFlashSectionedSnapshot {
             entry_points: export.entry_points.clone(),
             pq_m: export.pq.as_ref().map(|pq| pq.m),
             pq_nbits: export.pq.as_ref().map(|pq| pq.nbits),
+            has_hvq: export.hvq.is_some(),
+            has_sq8: export.sq8.is_some(),
         };
 
         let mut sections = vec![
@@ -110,6 +146,51 @@ impl PqFlashSectionedSnapshot {
                         .map(|pq| pq.centroids.as_slice())
                         .unwrap_or(&[]),
                 ),
+            ),
+            (
+                PQFLASH_HVQ_META_SECTION.to_string(),
+                encode_json(
+                    &export.hvq.as_ref().map(|hvq| PqFlashHvqMetadata {
+                        dim: hvq.dim,
+                        nbits: hvq.nbits,
+                        rotation_matrix: hvq.rotation_matrix.clone(),
+                        scale: hvq.scale,
+                        offset: hvq.offset,
+                        centroid: hvq.centroid.clone(),
+                        rotated_centroid: hvq.rotated_centroid.clone(),
+                    }),
+                    PQFLASH_HVQ_META_SECTION,
+                )?,
+            ),
+            (
+                PQFLASH_HVQ_CODES_SECTION.to_string(),
+                export
+                    .hvq
+                    .as_ref()
+                    .map(|hvq| hvq.codes.clone())
+                    .unwrap_or_default(),
+            ),
+            (
+                PQFLASH_SQ8_META_SECTION.to_string(),
+                encode_json(
+                    &export.sq8.as_ref().map(|sq8| PqFlashSq8Metadata {
+                        dim: sq8.dim,
+                        bit: sq8.bit,
+                        min_val: sq8.min_val,
+                        max_val: sq8.max_val,
+                        scale: sq8.scale,
+                        offset: sq8.offset,
+                    }),
+                    PQFLASH_SQ8_META_SECTION,
+                )?,
+            ),
+            (
+                PQFLASH_SQ8_CODES_SECTION.to_string(),
+                export
+                    .sq8
+                    .as_ref()
+                    .map(|sq8| sq8.codes.clone())
+                    .unwrap_or_default(),
             ),
         ];
 
@@ -222,6 +303,57 @@ fn load_sectioned_pqflash(
             ));
         }
     };
+    let hvq_meta: Option<PqFlashHvqMetadata> =
+        serde_json::from_slice(reader.read_section(PQFLASH_HVQ_META_SECTION)?.as_ref())
+            .map_err(|e| KnowhereError::Codec(format!("decode {PQFLASH_HVQ_META_SECTION}: {e}")))?;
+    let hvq_codes = reader.read_section(PQFLASH_HVQ_CODES_SECTION)?.into_owned();
+    let hvq = match (meta.has_hvq, hvq_meta) {
+        (true, Some(hvq_meta)) => {
+            let hvq = PQFlashSectionedHvqExport {
+                dim: hvq_meta.dim,
+                nbits: hvq_meta.nbits,
+                rotation_matrix: hvq_meta.rotation_matrix,
+                scale: hvq_meta.scale,
+                offset: hvq_meta.offset,
+                centroid: hvq_meta.centroid,
+                rotated_centroid: hvq_meta.rotated_centroid,
+                codes: hvq_codes,
+            };
+            validate_pqflash_hvq_sectioned(meta.count, meta.dim, &hvq)?;
+            Some(hvq)
+        }
+        (false, None) if hvq_codes.is_empty() => None,
+        _ => {
+            return Err(KnowhereError::Codec(
+                "invalid PQFlash HVQ section state".to_string(),
+            ));
+        }
+    };
+    let sq8_meta: Option<PqFlashSq8Metadata> =
+        serde_json::from_slice(reader.read_section(PQFLASH_SQ8_META_SECTION)?.as_ref())
+            .map_err(|e| KnowhereError::Codec(format!("decode {PQFLASH_SQ8_META_SECTION}: {e}")))?;
+    let sq8_codes = reader.read_section(PQFLASH_SQ8_CODES_SECTION)?.into_owned();
+    let sq8 = match (meta.has_sq8, sq8_meta) {
+        (true, Some(sq8_meta)) => {
+            let sq8 = PQFlashSectionedSq8Export {
+                dim: sq8_meta.dim,
+                bit: sq8_meta.bit,
+                min_val: sq8_meta.min_val,
+                max_val: sq8_meta.max_val,
+                scale: sq8_meta.scale,
+                offset: sq8_meta.offset,
+                codes: sq8_codes,
+            };
+            validate_pqflash_sq8_sectioned(meta.count, meta.dim, &sq8)?;
+            Some(sq8)
+        }
+        (false, None) if sq8_codes.is_empty() => None,
+        _ => {
+            return Err(KnowhereError::Codec(
+                "invalid PQFlash SQ8 section state".to_string(),
+            ));
+        }
+    };
 
     let export = PQFlashSectionedExport {
         config: meta.config,
@@ -259,6 +391,8 @@ fn load_sectioned_pqflash(
             PQFLASH_DELETED_ROWS_SECTION,
         )?,
         pq,
+        hvq,
+        sq8,
     };
 
     PQFlashIndex::from_sectioned_snapshot_export(export)
