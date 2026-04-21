@@ -132,6 +132,23 @@ class SnapshotHeaderTests(unittest.TestCase):
                 check=True,
             )
 
+    def test_snapshot_callback_example_compiles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            obj = Path(tmp) / "snapshot_callback_loader.o"
+            subprocess.run(
+                [
+                    "cc",
+                    "-std=c11",
+                    "-I",
+                    str(REPO_ROOT / "include"),
+                    "-c",
+                    str(REPO_ROOT / "examples" / "snapshot_callback_loader.c"),
+                    "-o",
+                    str(obj),
+                ],
+                check=True,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
