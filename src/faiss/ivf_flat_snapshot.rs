@@ -1,10 +1,12 @@
 use crate::api::{KnowhereError, MetricType, Result};
 use crate::kernel::IndexFamily;
-use crate::storage::{AnnSnapshot, IndexArtifactWriter, IndexManifest, SectionDescriptor};
+use crate::storage::{
+    AnnSnapshot, IndexArtifactReader, IndexArtifactWriter, IndexManifest, SectionDescriptor,
+};
 
 use serde::{Deserialize, Serialize};
 
-use super::IvfFlatIndex;
+use super::ivf_flat::{IvfFlatIndex, IvfFlatSectionedExport};
 
 pub const IVF_FLAT_SECTIONS_SNAPSHOT_VARIANT: &str = "ivf_flat_sections_v1";
 
@@ -109,6 +111,86 @@ impl AnnSnapshot for IvfFlatSectionedSnapshot {
     }
 }
 
+pub fn load_ivf_flat_index_from_artifact(reader: &dyn IndexArtifactReader) -> Result<IvfFlatIndex> {
+    let manifest = reader.manifest()?;
+    if manifest.version != 1 || manifest.family != IndexFamily::Ivf {
+        return Err(KnowhereError::Codec(format!(
+            "invalid IVF-Flat snapshot manifest: expected version 1 family Ivf, got version {} family {:?} variant {:?}",
+            manifest.version, manifest.family, manifest.variant
+        )));
+    }
+
+    match manifest.variant.as_str() {
+        IVF_FLAT_SECTIONS_SNAPSHOT_VARIANT => load_sectioned_ivf_flat(reader, manifest),
+        variant => Err(KnowhereError::Codec(format!(
+            "invalid IVF-Flat snapshot manifest: expected variant {IVF_FLAT_SECTIONS_SNAPSHOT_VARIANT}, got {variant:?}"
+        ))),
+    }
+}
+
+fn load_sectioned_ivf_flat(
+    reader: &dyn IndexArtifactReader,
+    manifest: &IndexManifest,
+) -> Result<IvfFlatIndex> {
+    let meta_bytes = reader.read_section(IVF_FLAT_META_SECTION)?;
+    let meta: IvfFlatSectionMetadata =
+        serde_json::from_slice(meta_bytes.as_ref()).map_err(|error| {
+            KnowhereError::Codec(format!("decode {IVF_FLAT_META_SECTION}: {error}"))
+        })?;
+    if meta.version != 1 {
+        return Err(KnowhereError::Codec(format!(
+            "invalid IVF-Flat sectioned metadata: unsupported version {}",
+            meta.version
+        )));
+    }
+    if manifest.dim != meta.dim || manifest.count != meta.count || manifest.metric != meta.metric {
+        return Err(KnowhereError::Codec(format!(
+            "invalid IVF-Flat sectioned manifest metadata: manifest dim/count/metric = {}/{}/{:?}, metadata = {}/{}/{:?}",
+            manifest.dim, manifest.count, manifest.metric, meta.dim, meta.count, meta.metric
+        )));
+    }
+
+    let export = IvfFlatSectionedExport {
+        dim: meta.dim,
+        count: meta.count,
+        nlist: meta.nlist,
+        nprobe: meta.nprobe,
+        metric_type: parse_metric_name(&meta.metric)?,
+        next_id: meta.next_id,
+        trained: meta.trained,
+        centroids: decode_f32s(
+            reader.read_section(IVF_FLAT_CENTROIDS_SECTION)?.as_ref(),
+            IVF_FLAT_CENTROIDS_SECTION,
+        )?,
+        list_offsets: decode_u64s(
+            reader.read_section(IVF_FLAT_LIST_OFFSETS_SECTION)?.as_ref(),
+            IVF_FLAT_LIST_OFFSETS_SECTION,
+        )?,
+        list_sizes: decode_u64s(
+            reader.read_section(IVF_FLAT_LIST_SIZES_SECTION)?.as_ref(),
+            IVF_FLAT_LIST_SIZES_SECTION,
+        )?,
+        list_ids: decode_i64s(
+            reader.read_section(IVF_FLAT_LIST_IDS_SECTION)?.as_ref(),
+            IVF_FLAT_LIST_IDS_SECTION,
+        )?,
+        list_vectors: decode_f32s(
+            reader.read_section(IVF_FLAT_LIST_VECTORS_SECTION)?.as_ref(),
+            IVF_FLAT_LIST_VECTORS_SECTION,
+        )?,
+        ids: decode_i64s(
+            reader.read_section(IVF_FLAT_IDS_SECTION)?.as_ref(),
+            IVF_FLAT_IDS_SECTION,
+        )?,
+        vectors: decode_f32s(
+            reader.read_section(IVF_FLAT_VECTORS_SECTION)?.as_ref(),
+            IVF_FLAT_VECTORS_SECTION,
+        )?,
+    };
+
+    IvfFlatIndex::from_sectioned_snapshot_export(export)
+}
+
 fn metric_name(metric: MetricType) -> &'static str {
     match metric {
         MetricType::L2 => "l2",
@@ -116,6 +198,57 @@ fn metric_name(metric: MetricType) -> &'static str {
         MetricType::Cosine => "cosine",
         MetricType::Hamming => "hamming",
     }
+}
+
+fn parse_metric_name(name: &str) -> Result<MetricType> {
+    match name {
+        "l2" => Ok(MetricType::L2),
+        "ip" => Ok(MetricType::Ip),
+        "cosine" => Ok(MetricType::Cosine),
+        "hamming" => Ok(MetricType::Hamming),
+        other => Err(KnowhereError::Codec(format!(
+            "unsupported IVF-Flat sectioned metric: {other}"
+        ))),
+    }
+}
+
+fn decode_i64s(bytes: &[u8], section_name: &str) -> Result<Vec<i64>> {
+    if bytes.len() % 8 != 0 {
+        return Err(KnowhereError::Codec(format!(
+            "decode {section_name}: length {} is not a multiple of 8",
+            bytes.len()
+        )));
+    }
+    Ok(bytes
+        .chunks_exact(8)
+        .map(|chunk| i64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect())
+}
+
+fn decode_u64s(bytes: &[u8], section_name: &str) -> Result<Vec<u64>> {
+    if bytes.len() % 8 != 0 {
+        return Err(KnowhereError::Codec(format!(
+            "decode {section_name}: length {} is not a multiple of 8",
+            bytes.len()
+        )));
+    }
+    Ok(bytes
+        .chunks_exact(8)
+        .map(|chunk| u64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect())
+}
+
+fn decode_f32s(bytes: &[u8], section_name: &str) -> Result<Vec<f32>> {
+    if bytes.len() % 4 != 0 {
+        return Err(KnowhereError::Codec(format!(
+            "decode {section_name}: length {} is not a multiple of 4",
+            bytes.len()
+        )));
+    }
+    Ok(bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+        .collect())
 }
 
 fn encode_json<T: Serialize>(value: &T, section_name: &str) -> Result<Vec<u8>> {

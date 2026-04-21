@@ -1,9 +1,11 @@
-use hanns::api::{DataType, IndexConfig, IndexParams, IndexType, KnowhereError, MetricType};
+use hanns::api::{
+    DataType, IndexConfig, IndexParams, IndexType, KnowhereError, MetricType, SearchRequest,
+};
 use hanns::faiss::{
-    IvfFlatIndex, IvfFlatSectionedSnapshot, IVF_FLAT_CENTROIDS_SECTION, IVF_FLAT_IDS_SECTION,
-    IVF_FLAT_LIST_IDS_SECTION, IVF_FLAT_LIST_OFFSETS_SECTION, IVF_FLAT_LIST_SIZES_SECTION,
-    IVF_FLAT_LIST_VECTORS_SECTION, IVF_FLAT_META_SECTION, IVF_FLAT_SECTIONS_SNAPSHOT_VARIANT,
-    IVF_FLAT_VECTORS_SECTION,
+    load_ivf_flat_index_from_artifact, IvfFlatIndex, IvfFlatSectionedSnapshot,
+    IVF_FLAT_CENTROIDS_SECTION, IVF_FLAT_IDS_SECTION, IVF_FLAT_LIST_IDS_SECTION,
+    IVF_FLAT_LIST_OFFSETS_SECTION, IVF_FLAT_LIST_SIZES_SECTION, IVF_FLAT_LIST_VECTORS_SECTION,
+    IVF_FLAT_META_SECTION, IVF_FLAT_SECTIONS_SNAPSHOT_VARIANT, IVF_FLAT_VECTORS_SECTION,
 };
 use hanns::kernel::IndexFamily;
 use hanns::storage::{AnnSnapshot, IndexArtifactReader, MemoryArtifactStore};
@@ -141,4 +143,26 @@ fn ivf_flat_sectioned_snapshot_writes_expected_sections() {
             .unwrap_or_else(|| panic!("missing manifest descriptor for {section}"));
         assert_eq!(descriptor.len, store.section_len(section).unwrap());
     }
+}
+
+#[test]
+fn ivf_flat_sectioned_snapshot_roundtrips_search_results() {
+    let (index, _) = build_small_ivf_flat();
+    let query = [1.05, 1.0, 1.0, 1.0];
+    let req = SearchRequest {
+        top_k: 4,
+        nprobe: 3,
+        ..Default::default()
+    };
+    let original = index.search(&query, &req).expect("original search");
+
+    let snapshot = IvfFlatSectionedSnapshot::from_index(&index).expect("snapshot");
+    let mut store = MemoryArtifactStore::default();
+    snapshot.write_snapshot(&mut store).expect("write");
+
+    let loaded = load_ivf_flat_index_from_artifact(&store).expect("load");
+    let roundtrip = loaded.search(&query, &req).expect("loaded search");
+
+    assert_eq!(roundtrip.ids, original.ids);
+    assert_eq!(roundtrip.distances, original.distances);
 }

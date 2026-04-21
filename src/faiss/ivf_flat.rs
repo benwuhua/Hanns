@@ -14,7 +14,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 
-use crate::api::{IndexConfig, MetricType, Result, SearchRequest, SearchResult};
+use crate::api::{IndexConfig, KnowhereError, MetricType, Result, SearchRequest, SearchResult};
 use crate::simd::{
     dot_product_f32, ip_batch_4, l2_batch_4_ptr, l2_distance_sq, l2_distance_sq_ptr,
 };
@@ -916,13 +916,26 @@ impl IvfFlatIndex {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        let next_id = self
+            .ids
+            .iter()
+            .copied()
+            .max()
+            .map_or(self.next_id, |max_id| {
+                if max_id == i64::MAX {
+                    self.next_id
+                } else {
+                    self.next_id.max(max_id + 1)
+                }
+            });
+
         Ok(IvfFlatSectionedExport {
             dim: self.dim,
             count,
             nlist: self.nlist,
             nprobe: self.nprobe,
             metric_type: self.metric_type,
-            next_id: self.next_id,
+            next_id,
             trained: self.trained,
             centroids: self.centroids.clone(),
             list_offsets,
@@ -931,6 +944,153 @@ impl IvfFlatIndex {
             list_vectors: self.invlist_vectors.clone(),
             ids: self.ids.clone(),
             vectors: self.vectors.clone(),
+        })
+    }
+
+    pub(crate) fn from_sectioned_snapshot_export(export: IvfFlatSectionedExport) -> Result<Self> {
+        if export.dim == 0 {
+            return Err(KnowhereError::Codec(
+                "invalid IVF-Flat sectioned snapshot: dim must be > 0".to_string(),
+            ));
+        }
+        if export.nlist == 0 {
+            return Err(KnowhereError::Codec(
+                "invalid IVF-Flat sectioned snapshot: nlist must be > 0".to_string(),
+            ));
+        }
+        if !export.trained {
+            return Err(KnowhereError::Codec(
+                "invalid IVF-Flat sectioned snapshot: trained must be true".to_string(),
+            ));
+        }
+
+        let expected_centroids = export.nlist.checked_mul(export.dim).ok_or_else(|| {
+            KnowhereError::Codec(
+                "invalid IVF-Flat sectioned snapshot: centroid length overflow".to_string(),
+            )
+        })?;
+        if export.centroids.len() != expected_centroids {
+            return Err(KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned snapshot: centroids len {} != nlist * dim {}",
+                export.centroids.len(),
+                expected_centroids
+            )));
+        }
+        if export.list_offsets.len() != export.nlist {
+            return Err(KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned snapshot: list_offsets len {} != nlist {}",
+                export.list_offsets.len(),
+                export.nlist
+            )));
+        }
+        if export.list_sizes.len() != export.nlist {
+            return Err(KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned snapshot: list_sizes len {} != nlist {}",
+                export.list_sizes.len(),
+                export.nlist
+            )));
+        }
+
+        let list_count = export.list_ids.len();
+        let expected_list_vectors = list_count.checked_mul(export.dim).ok_or_else(|| {
+            KnowhereError::Codec(
+                "invalid IVF-Flat sectioned snapshot: list vector length overflow".to_string(),
+            )
+        })?;
+        if export.list_vectors.len() != expected_list_vectors {
+            return Err(KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned snapshot: list_vectors len {} != list_ids * dim {}",
+                export.list_vectors.len(),
+                expected_list_vectors
+            )));
+        }
+
+        let mut invlist_offsets = Vec::with_capacity(export.nlist);
+        let mut invlist_sizes = Vec::with_capacity(export.nlist);
+        let mut expected_offset = 0usize;
+        for (list_idx, (&offset, &size)) in export
+            .list_offsets
+            .iter()
+            .zip(export.list_sizes.iter())
+            .enumerate()
+        {
+            let offset = usize::try_from(offset).map_err(|_| {
+                KnowhereError::Codec(format!(
+                    "invalid IVF-Flat sectioned snapshot: list {list_idx} offset too large"
+                ))
+            })?;
+            let size = usize::try_from(size).map_err(|_| {
+                KnowhereError::Codec(format!(
+                    "invalid IVF-Flat sectioned snapshot: list {list_idx} size too large"
+                ))
+            })?;
+            if offset != expected_offset {
+                return Err(KnowhereError::Codec(format!(
+                    "invalid IVF-Flat sectioned snapshot: list {list_idx} offset {offset} != expected canonical offset {expected_offset}"
+                )));
+            }
+            expected_offset = expected_offset.checked_add(size).ok_or_else(|| {
+                KnowhereError::Codec(format!(
+                    "invalid IVF-Flat sectioned snapshot: list {list_idx} offset overflow"
+                ))
+            })?;
+            if expected_offset > list_count {
+                return Err(KnowhereError::Codec(format!(
+                    "invalid IVF-Flat sectioned snapshot: list {list_idx} range {offset}..{expected_offset} exceeds list_ids len {list_count}"
+                )));
+            }
+            invlist_offsets.push(offset);
+            invlist_sizes.push(size);
+        }
+        if expected_offset != list_count {
+            return Err(KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned snapshot: canonical list coverage ends at {expected_offset} != list_ids len {list_count}"
+            )));
+        }
+
+        if export.ids.len() != export.count {
+            return Err(KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned snapshot: ids len {} != count {}",
+                export.ids.len(),
+                export.count
+            )));
+        }
+        let expected_vectors = export.count.checked_mul(export.dim).ok_or_else(|| {
+            KnowhereError::Codec(
+                "invalid IVF-Flat sectioned snapshot: vector length overflow".to_string(),
+            )
+        })?;
+        if export.vectors.len() != expected_vectors {
+            return Err(KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned snapshot: vectors len {} != count * dim {}",
+                export.vectors.len(),
+                expected_vectors
+            )));
+        }
+        if let Some(max_id) = export.ids.iter().copied().max() {
+            if max_id < i64::MAX && export.next_id < max_id + 1 {
+                return Err(KnowhereError::Codec(format!(
+                    "invalid IVF-Flat sectioned snapshot: next_id {} < max id + 1 {}",
+                    export.next_id,
+                    max_id + 1
+                )));
+            }
+        }
+
+        Ok(Self {
+            dim: export.dim,
+            nlist: export.nlist,
+            nprobe: export.nprobe,
+            metric_type: export.metric_type,
+            centroids: export.centroids,
+            invlist_ids: export.list_ids,
+            invlist_vectors: export.list_vectors,
+            invlist_offsets,
+            invlist_sizes,
+            vectors: export.vectors,
+            ids: export.ids,
+            next_id: export.next_id,
+            trained: export.trained,
         })
     }
 
