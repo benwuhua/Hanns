@@ -70,6 +70,14 @@ CSearchResult* knowhere_snapshot_runtime_search(
     size_t top_k,
     size_t dim);
 
+CSearchResult* knowhere_snapshot_runtime_search_with_params(
+    const void* runtime,
+    const float* query,
+    size_t count,
+    size_t top_k,
+    size_t dim,
+    size_t nprobe);
+
 void knowhere_free_snapshot_runtime(void* runtime);
 
 #ifdef __cplusplus

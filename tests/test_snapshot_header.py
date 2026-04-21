@@ -50,6 +50,7 @@ class SnapshotHeaderTests(unittest.TestCase):
                 (void)knowhere_free_cstring;
                 (void)knowhere_load_snapshot_from_callbacks;
                 (void)knowhere_snapshot_runtime_search;
+                (void)knowhere_snapshot_runtime_search_with_params;
                 CSearchResult result = {
                     .ids = 0,
                     .distances = 0,

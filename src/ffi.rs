@@ -3253,6 +3253,18 @@ pub extern "C" fn knowhere_snapshot_runtime_search(
     top_k: usize,
     dim: usize,
 ) -> *mut CSearchResult {
+    knowhere_snapshot_runtime_search_with_params(runtime, query, count, top_k, dim, top_k.max(1))
+}
+
+#[no_mangle]
+pub extern "C" fn knowhere_snapshot_runtime_search_with_params(
+    runtime: *const std::ffi::c_void,
+    query: *const f32,
+    count: usize,
+    top_k: usize,
+    dim: usize,
+    nprobe: usize,
+) -> *mut CSearchResult {
     if runtime.is_null() || query.is_null() || count == 0 || top_k == 0 || dim == 0 {
         return std::ptr::null_mut();
     }
@@ -3273,7 +3285,7 @@ pub extern "C" fn knowhere_snapshot_runtime_search(
         let query = std::slice::from_raw_parts(query, query_len);
         let req = SearchRequest {
             top_k,
-            nprobe: top_k.max(1),
+            nprobe: nprobe.max(1),
             filter: None,
             params: None,
             radius: None,
@@ -5392,7 +5404,8 @@ mod tests {
         assert_eq!(knowhere_snapshot_runtime_count(runtime), ids.len());
 
         let query = [0.0, 0.0, 0.0, 0.0];
-        let result = knowhere_snapshot_runtime_search(runtime, query.as_ptr(), 1, 3, dim);
+        let result =
+            knowhere_snapshot_runtime_search_with_params(runtime, query.as_ptr(), 1, 3, dim, 16);
         assert!(!result.is_null());
 
         unsafe {
@@ -5403,6 +5416,16 @@ mod tests {
         }
 
         knowhere_free_result(result);
+
+        let default_result = knowhere_snapshot_runtime_search(runtime, query.as_ptr(), 1, 3, dim);
+        assert!(!default_result.is_null());
+        knowhere_free_result(default_result);
+
+        let zero_nprobe_result =
+            knowhere_snapshot_runtime_search_with_params(runtime, query.as_ptr(), 1, 3, dim, 0);
+        assert!(!zero_nprobe_result.is_null());
+        knowhere_free_result(zero_nprobe_result);
+
         knowhere_free_snapshot_runtime(runtime);
     }
 
