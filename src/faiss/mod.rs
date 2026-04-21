@@ -29,6 +29,7 @@ pub mod ivf_sq8_snapshot;
 pub mod ivf_sq_cc;
 pub mod ivf_turboquant;
 pub mod ivfpq;
+pub mod ivfpq_snapshot;
 pub mod mem_index;
 pub mod pq_simd;
 pub mod rhtsdg;
@@ -88,6 +89,13 @@ pub use ivf_sq8_snapshot::{
 pub use ivf_sq_cc::IvfSqCcIndex;
 pub use ivf_turboquant::{IvfTurboQuantConfig, IvfTurboQuantIndex};
 pub use ivfpq::IvfPqIndex;
+pub use ivfpq_snapshot::{
+    load_ivf_pq_index_from_artifact, load_ivf_pq_sectioned_snapshot,
+    save_ivf_pq_sectioned_snapshot, IvfPqSectionedSnapshot, IVF_PQ_CENTROIDS_SECTION,
+    IVF_PQ_IDS_SECTION, IVF_PQ_LIST_CODES_SECTION, IVF_PQ_LIST_IDS_SECTION,
+    IVF_PQ_LIST_OFFSETS_SECTION, IVF_PQ_LIST_SIZES_SECTION, IVF_PQ_META_SECTION,
+    IVF_PQ_PQ_CENTROIDS_SECTION, IVF_PQ_SECTIONS_SNAPSHOT_VARIANT, IVF_PQ_VECTORS_SECTION,
+};
 pub use mem_index::MemIndex;
 pub use rhtsdg::RhtsdgIndex;
 pub use scann::{ScaNNConfig, ScaNNIndex};
