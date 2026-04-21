@@ -194,6 +194,24 @@ fn is_better(candidate: SearchHit, existing: SearchHit) -> bool {
     candidate < existing
 }
 
+#[derive(Debug, Clone)]
+pub struct IvfFlatSectionedExport {
+    pub dim: usize,
+    pub count: usize,
+    pub nlist: usize,
+    pub nprobe: usize,
+    pub metric_type: MetricType,
+    pub next_id: i64,
+    pub trained: bool,
+    pub centroids: Vec<f32>,
+    pub list_offsets: Vec<u64>,
+    pub list_sizes: Vec<u64>,
+    pub list_ids: Vec<i64>,
+    pub list_vectors: Vec<f32>,
+    pub ids: Vec<i64>,
+    pub vectors: Vec<f32>,
+}
+
 /// IVF-Flat Index - stores raw vectors in flattened inverted lists
 pub struct IvfFlatIndex {
     dim: usize,
@@ -771,6 +789,143 @@ impl IvfFlatIndex {
                     })
             })
             .collect()
+    }
+
+    pub fn export_sectioned_snapshot(&self) -> Result<IvfFlatSectionedExport> {
+        if self.dim == 0 {
+            return Err(crate::api::KnowhereError::Codec(
+                "invalid IVF-Flat sectioned snapshot: dim must be > 0".to_string(),
+            ));
+        }
+        if self.nlist == 0 {
+            return Err(crate::api::KnowhereError::Codec(
+                "invalid IVF-Flat sectioned snapshot: nlist must be > 0".to_string(),
+            ));
+        }
+
+        let centroid_len = self.nlist.checked_mul(self.dim).ok_or_else(|| {
+            crate::api::KnowhereError::Codec(
+                "invalid IVF-Flat sectioned snapshot: centroid length overflow".to_string(),
+            )
+        })?;
+        if self.trained && self.centroids.len() != centroid_len {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned snapshot: centroids len {} != nlist * dim {}",
+                self.centroids.len(),
+                centroid_len
+            )));
+        }
+        if self.invlist_offsets.len() != self.nlist {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned snapshot: list_offsets len {} != nlist {}",
+                self.invlist_offsets.len(),
+                self.nlist
+            )));
+        }
+        if self.invlist_sizes.len() != self.nlist {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned snapshot: list_sizes len {} != nlist {}",
+                self.invlist_sizes.len(),
+                self.nlist
+            )));
+        }
+
+        let list_count = self.invlist_ids.len();
+        let list_vector_len = list_count.checked_mul(self.dim).ok_or_else(|| {
+            crate::api::KnowhereError::Codec(
+                "invalid IVF-Flat sectioned snapshot: list vector length overflow".to_string(),
+            )
+        })?;
+        if self.invlist_vectors.len() != list_vector_len {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned snapshot: list_vectors len {} != list_ids * dim {}",
+                self.invlist_vectors.len(),
+                list_vector_len
+            )));
+        }
+
+        let mut list_total = 0usize;
+        for (list_idx, (&offset, &size)) in self
+            .invlist_offsets
+            .iter()
+            .zip(self.invlist_sizes.iter())
+            .enumerate()
+        {
+            let end = offset.checked_add(size).ok_or_else(|| {
+                crate::api::KnowhereError::Codec(format!(
+                    "invalid IVF-Flat sectioned snapshot: list {list_idx} offset overflow"
+                ))
+            })?;
+            if end > list_count {
+                return Err(crate::api::KnowhereError::Codec(format!(
+                    "invalid IVF-Flat sectioned snapshot: list {list_idx} range {offset}..{end} exceeds list_ids len {list_count}"
+                )));
+            }
+            list_total = list_total.checked_add(size).ok_or_else(|| {
+                crate::api::KnowhereError::Codec(
+                    "invalid IVF-Flat sectioned snapshot: list size total overflow".to_string(),
+                )
+            })?;
+        }
+        if list_total != list_count {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned snapshot: sum(list_sizes) {list_total} != list_ids len {list_count}"
+            )));
+        }
+
+        let count = self.ids.len();
+        let vector_len = count.checked_mul(self.dim).ok_or_else(|| {
+            crate::api::KnowhereError::Codec(
+                "invalid IVF-Flat sectioned snapshot: vector length overflow".to_string(),
+            )
+        })?;
+        if self.vectors.len() != vector_len {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned snapshot: vectors len {} != ids * dim {}",
+                self.vectors.len(),
+                vector_len
+            )));
+        }
+
+        let list_offsets = self
+            .invlist_offsets
+            .iter()
+            .map(|&offset| {
+                u64::try_from(offset).map_err(|_| {
+                    crate::api::KnowhereError::Codec(
+                        "invalid IVF-Flat sectioned snapshot: list offset too large".to_string(),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let list_sizes = self
+            .invlist_sizes
+            .iter()
+            .map(|&size| {
+                u64::try_from(size).map_err(|_| {
+                    crate::api::KnowhereError::Codec(
+                        "invalid IVF-Flat sectioned snapshot: list size too large".to_string(),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(IvfFlatSectionedExport {
+            dim: self.dim,
+            count,
+            nlist: self.nlist,
+            nprobe: self.nprobe,
+            metric_type: self.metric_type,
+            next_id: self.next_id,
+            trained: self.trained,
+            centroids: self.centroids.clone(),
+            list_offsets,
+            list_sizes,
+            list_ids: self.invlist_ids.clone(),
+            list_vectors: self.invlist_vectors.clone(),
+            ids: self.ids.clone(),
+            vectors: self.vectors.clone(),
+        })
     }
 
     fn write_to<W: Write>(&self, writer: &mut W) -> Result<()> {
