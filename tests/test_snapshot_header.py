@@ -84,6 +84,42 @@ class SnapshotHeaderTests(unittest.TestCase):
                 check=True,
             )
 
+    def test_snapshot_header_compiles_for_cpp_hosts(self) -> None:
+        source = textwrap.dedent(
+            """
+            #include "knowhere_snapshot.h"
+
+            int main() {
+                CSnapshotArtifactCallbacks callbacks{};
+                callbacks.context = nullptr;
+                callbacks.section_len = nullptr;
+                callbacks.read_range = nullptr;
+                (void)callbacks;
+                (void)CSnapshotLoadMode_OwnedMemory;
+                (void)knowhere_load_snapshot_from_callbacks;
+                return 0;
+            }
+            """
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "snapshot_header_smoke.cc"
+            obj = Path(tmp) / "snapshot_header_smoke.o"
+            src.write_text(source, encoding="utf-8")
+            subprocess.run(
+                [
+                    "c++",
+                    "-std=c++17",
+                    "-I",
+                    str(REPO_ROOT / "include"),
+                    "-c",
+                    str(src),
+                    "-o",
+                    str(obj),
+                ],
+                check=True,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
