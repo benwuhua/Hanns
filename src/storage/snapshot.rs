@@ -18,6 +18,10 @@ pub trait AnnSnapshot {
 }
 
 pub trait AnnSnapshotLoader {
+    fn supported_load_modes(&self) -> &'static [LoadMode] {
+        &[LoadMode::OwnedMemory]
+    }
+
     fn load_snapshot(
         &self,
         reader: &dyn IndexArtifactReader,
@@ -72,6 +76,23 @@ impl AnnSnapshotRegistry {
             ))
         })?;
         loader.load_snapshot(reader, mode)
+    }
+
+    pub fn supported_load_modes_for_variant(&self, variant: &str) -> Result<&'static [LoadMode]> {
+        let loader = self.loaders.get(variant).ok_or_else(|| {
+            crate::api::KnowhereError::InvalidArg(format!(
+                "no snapshot loader registered for variant {variant:?}"
+            ))
+        })?;
+        Ok(loader.supported_load_modes())
+    }
+
+    pub fn supported_load_modes(
+        &self,
+        reader: &dyn IndexArtifactReader,
+    ) -> Result<&'static [LoadMode]> {
+        let manifest = reader.manifest()?;
+        self.supported_load_modes_for_variant(&manifest.variant)
     }
 
     pub fn registered_variants(&self) -> Vec<&str> {

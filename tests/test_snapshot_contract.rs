@@ -105,6 +105,12 @@ fn ann_snapshot_loader_opens_runtime_from_artifact_store() {
 }
 
 #[test]
+fn ann_snapshot_loader_default_capability_is_owned_memory() {
+    let loader = DummyLoader;
+    assert_eq!(loader.supported_load_modes(), &[LoadMode::OwnedMemory]);
+}
+
+#[test]
 fn load_mode_planned_variants_are_public() {
     let modes = [
         LoadMode::OwnedMemory,

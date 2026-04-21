@@ -125,6 +125,18 @@ fn default_registry_loads_ivf_flat_runtime_by_manifest_variant() {
     assert!(registry
         .registered_variants()
         .contains(&"ivf_flat_sections_v1"));
+    assert_eq!(
+        registry
+            .supported_load_modes(&store)
+            .expect("capabilities should resolve"),
+        &[LoadMode::OwnedMemory]
+    );
+    assert_eq!(
+        registry
+            .supported_load_modes_for_variant("ivf_flat_sections_v1")
+            .expect("capabilities should resolve by variant"),
+        &[LoadMode::OwnedMemory]
+    );
 
     let runtime = registry
         .load_snapshot(&store, LoadMode::OwnedMemory)
@@ -150,6 +162,19 @@ fn default_registry_loads_ivf_flat_runtime_by_manifest_variant() {
 
     assert_eq!(count, 2);
     assert_eq!(ids[0], 10);
+}
+
+#[test]
+fn default_registry_rejects_capability_query_for_unknown_variant() {
+    let registry = default_ann_snapshot_registry().expect("registry");
+    let error = registry
+        .supported_load_modes_for_variant("unknown_sections_v1")
+        .expect_err("unknown variant should fail");
+
+    assert!(
+        error.to_string().contains("no snapshot loader registered"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
