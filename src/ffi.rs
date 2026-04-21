@@ -268,6 +268,13 @@ pub struct CSnapshotArtifactCallbacks {
     >,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct CSnapshotSearchParams {
+    pub top_k: usize,
+    pub nprobe: usize,
+}
+
 struct SnapshotRuntimeHandle {
     runtime: Box<dyn crate::kernel::AnnRuntime>,
 }
@@ -3325,6 +3332,24 @@ pub extern "C" fn knowhere_snapshot_runtime_search_with_params(
 }
 
 #[no_mangle]
+pub extern "C" fn knowhere_snapshot_runtime_search_with_search_params(
+    runtime: *const std::ffi::c_void,
+    query: *const f32,
+    count: usize,
+    dim: usize,
+    params: CSnapshotSearchParams,
+) -> *mut CSearchResult {
+    knowhere_snapshot_runtime_search_with_params(
+        runtime,
+        query,
+        count,
+        params.top_k,
+        dim,
+        params.nprobe,
+    )
+}
+
+#[no_mangle]
 pub extern "C" fn knowhere_free_snapshot_runtime(runtime: *mut std::ffi::c_void) {
     if !runtime.is_null() {
         unsafe {
@@ -5425,6 +5450,20 @@ mod tests {
             knowhere_snapshot_runtime_search_with_params(runtime, query.as_ptr(), 1, 3, dim, 0);
         assert!(!zero_nprobe_result.is_null());
         knowhere_free_result(zero_nprobe_result);
+
+        let search_params = CSnapshotSearchParams {
+            top_k: 3,
+            nprobe: 16,
+        };
+        let params_result = knowhere_snapshot_runtime_search_with_search_params(
+            runtime,
+            query.as_ptr(),
+            1,
+            dim,
+            search_params,
+        );
+        assert!(!params_result.is_null());
+        knowhere_free_result(params_result);
 
         knowhere_free_snapshot_runtime(runtime);
     }

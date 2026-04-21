@@ -48,6 +48,11 @@ typedef struct CSnapshotArtifactCallbacks {
     CSnapshotReadRangeFn read_range;
 } CSnapshotArtifactCallbacks;
 
+typedef struct CSnapshotSearchParams {
+    size_t top_k;
+    size_t nprobe;
+} CSnapshotSearchParams;
+
 char* knowhere_snapshot_manifest_plan(const char* manifest_json);
 
 void knowhere_free_cstring(char* ptr);
@@ -77,6 +82,13 @@ CSearchResult* knowhere_snapshot_runtime_search_with_params(
     size_t top_k,
     size_t dim,
     size_t nprobe);
+
+CSearchResult* knowhere_snapshot_runtime_search_with_search_params(
+    const void* runtime,
+    const float* query,
+    size_t count,
+    size_t dim,
+    CSnapshotSearchParams params);
 
 void knowhere_free_snapshot_runtime(void* runtime);
 
