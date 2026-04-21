@@ -6,6 +6,7 @@ pub mod binary;
 pub mod binary_hnsw;
 pub mod diskann_aisaq;
 pub mod diskann_pca_usq;
+pub mod diskann_pca_usq_snapshot;
 pub mod diskann_sq;
 pub mod diskann_sq_snapshot;
 pub mod hnsw;
@@ -54,6 +55,16 @@ pub use diskann_aisaq::{
     PQFlashIndex, PageCache, PageCacheStats,
 };
 pub use diskann_pca_usq::{DiskAnnPcaUsqConfig, DiskAnnPcaUsqIndex};
+pub use diskann_pca_usq_snapshot::{
+    load_diskann_pca_usq_index_from_artifact, load_diskann_pca_usq_sectioned_snapshot,
+    save_diskann_pca_usq_sectioned_snapshot, DiskAnnPcaUsqSectionedSnapshot,
+    DISKANN_PCA_USQ_INNER_MANIFEST_SECTION, DISKANN_PCA_USQ_INNER_PREFIX,
+    DISKANN_PCA_USQ_META_SECTION, DISKANN_PCA_USQ_NORMS_SECTION, DISKANN_PCA_USQ_NORMS_SQ_SECTION,
+    DISKANN_PCA_USQ_PACKED_BITS_SECTION, DISKANN_PCA_USQ_PCA_COMPONENTS_SECTION,
+    DISKANN_PCA_USQ_PCA_MEAN_SECTION, DISKANN_PCA_USQ_QUANTIZER_CENTROID_SECTION,
+    DISKANN_PCA_USQ_QUANT_QUALITIES_SECTION, DISKANN_PCA_USQ_SECTIONS_SNAPSHOT_VARIANT,
+    DISKANN_PCA_USQ_SIGN_BITS_SECTION, DISKANN_PCA_USQ_VMAXS_SECTION,
+};
 pub use diskann_sq::{DiskAnnSqConfig, DiskAnnSqIndex};
 pub use diskann_sq_snapshot::{
     load_diskann_sq_index_from_artifact, load_diskann_sq_sectioned_snapshot,

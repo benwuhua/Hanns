@@ -64,6 +64,34 @@ pub struct DiskAnnPcaUsqIndex {
     config: DiskAnnPcaUsqConfig,
 }
 
+#[derive(Clone, Debug)]
+pub struct DiskAnnPcaUsqPcaExport {
+    pub d_in: usize,
+    pub d_out: usize,
+    pub mean: Vec<f32>,
+    pub components: Vec<f32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DiskAnnPcaUsqSectionedExport {
+    pub metric_type: MetricType,
+    pub n: usize,
+    pub d_in: usize,
+    pub d_proj: usize,
+    pub config: DiskAnnPcaUsqConfig,
+    pub quantizer_centroid: Vec<f32>,
+    pub code_bytes: usize,
+    pub sign_bytes: usize,
+    pub packed_bits: Vec<u8>,
+    pub sign_bits: Vec<u8>,
+    pub norms: Vec<f32>,
+    pub norms_sq: Vec<f32>,
+    pub vmaxs: Vec<f32>,
+    pub quant_qualities: Vec<f32>,
+    pub pca: Option<DiskAnnPcaUsqPcaExport>,
+    pub inner: crate::faiss::diskann_aisaq::PQFlashSectionedExport,
+}
+
 impl DiskAnnPcaUsqIndex {
     pub fn new(dim: usize, metric_type: MetricType, config: DiskAnnPcaUsqConfig) -> Result<Self> {
         if dim == 0 {
@@ -304,6 +332,231 @@ impl DiskAnnPcaUsqIndex {
             },
         })
     }
+
+    pub fn export_sectioned_snapshot(&self) -> Result<DiskAnnPcaUsqSectionedExport> {
+        let usq_config = self.quantizer.config();
+        let code_bytes = usq_config.code_bytes();
+        let sign_bytes = usq_config.sign_bytes();
+        validate_diskann_pca_usq_sectioned_parts(
+            self.n,
+            self.d_proj,
+            code_bytes,
+            sign_bytes,
+            &self.codes,
+        )?;
+
+        let mut packed_bits = Vec::with_capacity(self.n * code_bytes);
+        let mut sign_bits = Vec::with_capacity(self.n * sign_bytes);
+        let mut norms = Vec::with_capacity(self.n);
+        let mut norms_sq = Vec::with_capacity(self.n);
+        let mut vmaxs = Vec::with_capacity(self.n);
+        let mut quant_qualities = Vec::with_capacity(self.n);
+        for code in &self.codes {
+            packed_bits.extend_from_slice(&code.packed_bits);
+            sign_bits.extend_from_slice(&code.sign_bits);
+            norms.push(code.norm);
+            norms_sq.push(code.norm_sq);
+            vmaxs.push(code.vmax);
+            quant_qualities.push(code.quant_quality);
+        }
+
+        Ok(DiskAnnPcaUsqSectionedExport {
+            metric_type: self.metric_type,
+            n: self.n,
+            d_in: self.d_in,
+            d_proj: self.d_proj,
+            config: self.config.clone(),
+            quantizer_centroid: self.quantizer.centroid().to_vec(),
+            code_bytes,
+            sign_bytes,
+            packed_bits,
+            sign_bits,
+            norms,
+            norms_sq,
+            vmaxs,
+            quant_qualities,
+            pca: self.pca.as_ref().map(|pca| DiskAnnPcaUsqPcaExport {
+                d_in: pca.d_in,
+                d_out: pca.d_out,
+                mean: pca.mean.clone(),
+                components: pca.components.clone(),
+            }),
+            inner: self.inner.export_sectioned_snapshot()?,
+        })
+    }
+
+    pub fn from_sectioned_snapshot_export(export: DiskAnnPcaUsqSectionedExport) -> Result<Self> {
+        let usq_config = UsqConfig::new(export.d_proj, export.config.bits_per_dim)
+            .map_err(|e| KnowhereError::Codec(format!("USQ config error: {e}")))?
+            .with_seed(export.config.rotation_seed);
+        if export.code_bytes != usq_config.code_bytes()
+            || export.sign_bytes != usq_config.sign_bytes()
+        {
+            return Err(KnowhereError::Codec(
+                "invalid DiskAnnPcaUsq sectioned snapshot: USQ byte sizes mismatch".to_string(),
+            ));
+        }
+        validate_diskann_pca_usq_payloads(DiskAnnPcaUsqPayloadParts {
+            n: export.n,
+            d_proj: export.d_proj,
+            code_bytes: export.code_bytes,
+            sign_bytes: export.sign_bytes,
+            packed_bits: &export.packed_bits,
+            sign_bits: &export.sign_bits,
+            norms: &export.norms,
+            norms_sq: &export.norms_sq,
+            vmaxs: &export.vmaxs,
+            quant_qualities: &export.quant_qualities,
+        })?;
+        if export.quantizer_centroid.len() != export.d_proj {
+            return Err(KnowhereError::Codec(format!(
+                "invalid DiskAnnPcaUsq sectioned snapshot: centroid len {} != d_proj {}",
+                export.quantizer_centroid.len(),
+                export.d_proj
+            )));
+        }
+
+        let pca = match export.pca {
+            Some(pca) => {
+                if pca.d_in != export.d_in || pca.d_out != export.d_proj {
+                    return Err(KnowhereError::Codec(
+                        "invalid DiskAnnPcaUsq sectioned snapshot: PCA dimensions mismatch"
+                            .to_string(),
+                    ));
+                }
+                if pca.mean.len() != pca.d_in || pca.components.len() != pca.d_in * pca.d_out {
+                    return Err(KnowhereError::Codec(
+                        "invalid DiskAnnPcaUsq sectioned snapshot: PCA payload length mismatch"
+                            .to_string(),
+                    ));
+                }
+                Some(PcaTransform {
+                    d_in: pca.d_in,
+                    d_out: pca.d_out,
+                    mean: pca.mean,
+                    components: pca.components,
+                })
+            }
+            None => None,
+        };
+
+        let mut quantizer = UsqQuantizer::new(usq_config);
+        quantizer.set_centroid(&export.quantizer_centroid);
+        let mut codes = Vec::with_capacity(export.n);
+        for row in 0..export.n {
+            let packed_start = row * export.code_bytes;
+            let sign_start = row * export.sign_bytes;
+            codes.push(UsqEncoded {
+                packed_bits: export.packed_bits[packed_start..packed_start + export.code_bytes]
+                    .to_vec(),
+                sign_bits: export.sign_bits[sign_start..sign_start + export.sign_bytes].to_vec(),
+                norm: export.norms[row],
+                norm_sq: export.norms_sq[row],
+                vmax: export.vmaxs[row],
+                quant_quality: export.quant_qualities[row],
+            });
+        }
+
+        Ok(Self {
+            inner: PQFlashIndex::from_sectioned_snapshot_export(export.inner)?,
+            metric_type: export.metric_type,
+            quantizer,
+            codes,
+            pca,
+            n: export.n,
+            d_in: export.d_in,
+            d_proj: export.d_proj,
+            config: export.config,
+        })
+    }
+}
+
+fn validate_diskann_pca_usq_sectioned_parts(
+    n: usize,
+    d_proj: usize,
+    code_bytes: usize,
+    sign_bytes: usize,
+    codes: &[UsqEncoded],
+) -> Result<()> {
+    if codes.len() != n {
+        return Err(KnowhereError::Codec(format!(
+            "invalid DiskAnnPcaUsq sectioned snapshot: codes len {} != n {}",
+            codes.len(),
+            n
+        )));
+    }
+    for (row, code) in codes.iter().enumerate() {
+        if code.packed_bits.len() != code_bytes || code.sign_bits.len() != sign_bytes {
+            return Err(KnowhereError::Codec(format!(
+                "invalid DiskAnnPcaUsq sectioned snapshot: row {row} code byte length mismatch"
+            )));
+        }
+    }
+    if d_proj == 0 {
+        return Err(KnowhereError::Codec(
+            "invalid DiskAnnPcaUsq sectioned snapshot: d_proj must be > 0".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+struct DiskAnnPcaUsqPayloadParts<'a> {
+    n: usize,
+    d_proj: usize,
+    code_bytes: usize,
+    sign_bytes: usize,
+    packed_bits: &'a [u8],
+    sign_bits: &'a [u8],
+    norms: &'a [f32],
+    norms_sq: &'a [f32],
+    vmaxs: &'a [f32],
+    quant_qualities: &'a [f32],
+}
+
+fn validate_diskann_pca_usq_payloads(parts: DiskAnnPcaUsqPayloadParts<'_>) -> Result<()> {
+    if parts.d_proj == 0 {
+        return Err(KnowhereError::Codec(
+            "invalid DiskAnnPcaUsq sectioned snapshot: d_proj must be > 0".to_string(),
+        ));
+    }
+    let expected_packed = parts.n.checked_mul(parts.code_bytes).ok_or_else(|| {
+        KnowhereError::Codec(
+            "invalid DiskAnnPcaUsq sectioned snapshot: packed length overflow".to_string(),
+        )
+    })?;
+    let expected_sign = parts.n.checked_mul(parts.sign_bytes).ok_or_else(|| {
+        KnowhereError::Codec(
+            "invalid DiskAnnPcaUsq sectioned snapshot: sign length overflow".to_string(),
+        )
+    })?;
+    if parts.packed_bits.len() != expected_packed {
+        return Err(KnowhereError::Codec(format!(
+            "invalid DiskAnnPcaUsq sectioned snapshot: packed_bits len {} != expected {}",
+            parts.packed_bits.len(),
+            expected_packed
+        )));
+    }
+    if parts.sign_bits.len() != expected_sign {
+        return Err(KnowhereError::Codec(format!(
+            "invalid DiskAnnPcaUsq sectioned snapshot: sign_bits len {} != expected {}",
+            parts.sign_bits.len(),
+            expected_sign
+        )));
+    }
+    for (name, len) in [
+        ("norms", parts.norms.len()),
+        ("norms_sq", parts.norms_sq.len()),
+        ("vmaxs", parts.vmaxs.len()),
+        ("quant_qualities", parts.quant_qualities.len()),
+    ] {
+        if len != parts.n {
+            return Err(KnowhereError::Codec(format!(
+                "invalid DiskAnnPcaUsq sectioned snapshot: {name} len {len} != n {}",
+                parts.n
+            )));
+        }
+    }
+    Ok(())
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
