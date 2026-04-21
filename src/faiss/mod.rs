@@ -34,6 +34,7 @@ pub mod ivfpq;
 pub mod ivfpq_snapshot;
 pub mod mem_index;
 pub mod pq_simd;
+pub mod pqflash_snapshot;
 pub mod rhtsdg;
 pub mod scann;
 pub mod snapshot_registry;
@@ -113,6 +114,13 @@ pub use ivfpq_snapshot::{
     IVF_PQ_VECTORS_SECTION,
 };
 pub use mem_index::MemIndex;
+pub use pqflash_snapshot::{
+    load_pqflash_index_from_artifact, load_pqflash_sectioned_snapshot,
+    save_pqflash_sectioned_snapshot, PqFlashSectionedSnapshot, PqFlashSnapshotLoader,
+    PQFLASH_DELETED_ROWS_SECTION, PQFLASH_META_SECTION, PQFLASH_NEIGHBOR_COUNTS_SECTION,
+    PQFLASH_NEIGHBOR_IDS_SECTION, PQFLASH_NODE_IDS_SECTION, PQFLASH_NODE_PQ_CODES_SECTION,
+    PQFLASH_PQ_CENTROIDS_SECTION, PQFLASH_SECTIONS_SNAPSHOT_VARIANT, PQFLASH_VECTORS_SECTION,
+};
 pub use rhtsdg::RhtsdgIndex;
 pub use scann::{ScaNNConfig, ScaNNIndex};
 pub use snapshot_registry::default_ann_snapshot_registry;

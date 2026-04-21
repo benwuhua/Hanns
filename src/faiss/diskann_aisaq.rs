@@ -21,6 +21,7 @@ use crate::api::{IndexConfig, KnowhereError, MetricType, Result, SearchResult};
 use crate::bitset::BitsetView;
 use crate::dataset::Dataset;
 use crate::index::{Index, IndexError};
+use crate::kernel::{AnnRuntime, IndexFamily};
 use crate::quantization::hvq::{HvqConfig, HvqQuantizer, HvqQueryState};
 use crate::quantization::{PQConfig, ProductQuantizer};
 #[cfg(all(feature = "async-io", target_os = "linux"))]
@@ -626,6 +627,34 @@ struct AisaqMetadata {
 }
 
 #[derive(Clone, Debug)]
+pub struct PQFlashSectionedPqExport {
+    pub m: usize,
+    pub nbits: usize,
+    pub dim: usize,
+    pub centroids: Vec<f32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PQFlashSectionedExport {
+    pub config: AisaqConfig,
+    pub metric_type: MetricType,
+    pub dim: usize,
+    pub flash_layout: FlashLayout,
+    pub flat_stride: usize,
+    pub pq_code_size: usize,
+    pub entry_points: Vec<u32>,
+    pub trained: bool,
+    pub count: usize,
+    pub vectors: Vec<f32>,
+    pub node_ids: Vec<i64>,
+    pub neighbor_counts: Vec<u32>,
+    pub neighbor_ids: Vec<u32>,
+    pub node_pq_codes: Vec<u8>,
+    pub deleted_rows: Vec<u64>,
+    pub pq: Option<PQFlashSectionedPqExport>,
+}
+
+#[derive(Clone, Debug)]
 pub struct FileGroup {
     root: PathBuf,
 }
@@ -1030,6 +1059,157 @@ impl PQFlashIndex {
 
     pub fn set_uring_group_size(&mut self, group_size: usize) {
         self.config.uring_group_size = group_size.max(1);
+    }
+
+    pub fn export_sectioned_snapshot(&self) -> Result<PQFlashSectionedExport> {
+        if self.storage.is_some() || self.mmap_storage.is_some() {
+            return Err(KnowhereError::InvalidArg(
+                "PQFlash sectioned snapshot v1 requires an owned-memory index".to_string(),
+            ));
+        }
+        if self.hvq_quantizer.is_some() || !self.hvq_codes.is_empty() {
+            return Err(KnowhereError::InvalidArg(
+                "PQFlash sectioned snapshot v1 does not support HVQ state".to_string(),
+            ));
+        }
+        if self.sq8_quantizer.is_some() || !self.sq8_codes.is_empty() {
+            return Err(KnowhereError::InvalidArg(
+                "PQFlash sectioned snapshot v1 does not support SQ8 prefilter state".to_string(),
+            ));
+        }
+        let exported_node_pq_codes = if self.pq_code_size > 0 {
+            self.node_pq_codes.clone()
+        } else {
+            Vec::new()
+        };
+        validate_pqflash_sectioned_parts(PQFlashSectionedParts {
+            dim: self.dim,
+            count: self.node_count,
+            flat_stride: self.flat_stride,
+            max_degree: self.config.max_degree,
+            pq_code_size: self.pq_code_size,
+            vectors: &self.vectors,
+            node_ids: &self.node_ids,
+            neighbor_counts: &self.node_neighbor_counts,
+            neighbor_ids: &self.node_neighbor_ids,
+            node_pq_codes: &exported_node_pq_codes,
+            deleted_rows: &self
+                .deleted_ids
+                .iter()
+                .copied()
+                .map(|row| row as u64)
+                .collect::<Vec<_>>(),
+        })?;
+
+        let pq = self
+            .pq_encoder
+            .as_ref()
+            .map(|encoder| PQFlashSectionedPqExport {
+                m: encoder.m(),
+                nbits: encoder.nbits(),
+                dim: encoder.dim(),
+                centroids: encoder.centroids().to_vec(),
+            });
+
+        Ok(PQFlashSectionedExport {
+            config: self.config.clone(),
+            metric_type: self.metric_type,
+            dim: self.dim,
+            flash_layout: self.flash_layout.clone(),
+            flat_stride: self.flat_stride,
+            pq_code_size: self.pq_code_size,
+            entry_points: self.entry_points.clone(),
+            trained: self.trained,
+            count: self.node_count,
+            vectors: self.vectors.clone(),
+            node_ids: self.node_ids.clone(),
+            neighbor_counts: self.node_neighbor_counts.clone(),
+            neighbor_ids: self.node_neighbor_ids.clone(),
+            node_pq_codes: exported_node_pq_codes,
+            deleted_rows: self
+                .deleted_ids
+                .iter()
+                .copied()
+                .map(|row| row as u64)
+                .collect(),
+            pq,
+        })
+    }
+
+    pub fn from_sectioned_snapshot_export(export: PQFlashSectionedExport) -> Result<Self> {
+        validate_pqflash_sectioned_parts(PQFlashSectionedParts {
+            dim: export.dim,
+            count: export.count,
+            flat_stride: export.flat_stride,
+            max_degree: export.config.max_degree,
+            pq_code_size: export.pq_code_size,
+            vectors: &export.vectors,
+            node_ids: &export.node_ids,
+            neighbor_counts: &export.neighbor_counts,
+            neighbor_ids: &export.neighbor_ids,
+            node_pq_codes: &export.node_pq_codes,
+            deleted_rows: &export.deleted_rows,
+        })?;
+        if export.pq_code_size > 0 && export.pq.is_none() {
+            return Err(KnowhereError::Codec(
+                "invalid PQFlash sectioned snapshot: missing PQ metadata".to_string(),
+            ));
+        }
+
+        let pq_encoder = export.pq.map(|pq| {
+            let mut encoder = ProductQuantizer::new(PQConfig::new(pq.dim, pq.m, pq.nbits));
+            encoder
+                .set_centroids(pq.centroids)
+                .expect("validated PQ centroids should restore");
+            encoder
+        });
+        let disk_pq_codes = if export.pq_code_size > 0 {
+            export.node_pq_codes.clone()
+        } else {
+            Vec::new()
+        };
+        let mut io_template = BeamSearchIO::new(&export.flash_layout, &export.config);
+        if export.config.warm_up {
+            for &entry in &export.entry_points {
+                io_template.cache_node(entry);
+                if export.pq_code_size > 0 {
+                    io_template.cache_pq_vector(entry);
+                }
+            }
+        }
+
+        Ok(Self {
+            config: export.config,
+            metric_type: export.metric_type,
+            dim: export.dim,
+            flash_layout: export.flash_layout,
+            vectors: export.vectors,
+            node_ids: export.node_ids,
+            node_neighbor_ids: export.neighbor_ids,
+            node_neighbor_counts: export.neighbor_counts,
+            node_pq_codes: export.node_pq_codes,
+            disk_pq_codes,
+            flat_stride: export.flat_stride,
+            pq_encoder,
+            pq_code_size: export.pq_code_size,
+            hvq_quantizer: None,
+            hvq_codes: Vec::new(),
+            entry_points: export.entry_points,
+            io_template,
+            trained: export.trained,
+            node_count: export.count,
+            storage: None,
+            mmap_storage: None,
+            loaded_node_cache: None,
+            deleted_ids: export
+                .deleted_rows
+                .into_iter()
+                .map(|row| row as usize)
+                .collect(),
+            sq8_quantizer: None,
+            sq8_codes: Vec::new(),
+            scratch_pool: Mutex::new(Vec::new()),
+        })
     }
 
     /// Soft-delete node by external id. Returns true if found and marked.
@@ -5511,6 +5691,108 @@ fn resolve_pq_centroids(num_vectors: usize) -> usize {
     power.max(2)
 }
 
+struct PQFlashSectionedParts<'a> {
+    dim: usize,
+    count: usize,
+    flat_stride: usize,
+    max_degree: usize,
+    pq_code_size: usize,
+    vectors: &'a [f32],
+    node_ids: &'a [i64],
+    neighbor_counts: &'a [u32],
+    neighbor_ids: &'a [u32],
+    node_pq_codes: &'a [u8],
+    deleted_rows: &'a [u64],
+}
+
+fn validate_pqflash_sectioned_parts(parts: PQFlashSectionedParts<'_>) -> Result<()> {
+    if parts.dim == 0 {
+        return Err(KnowhereError::Codec(
+            "invalid PQFlash sectioned snapshot: dim must be > 0".to_string(),
+        ));
+    }
+    if parts.flat_stride == 0 && parts.count > 0 {
+        return Err(KnowhereError::Codec(
+            "invalid PQFlash sectioned snapshot: flat_stride must be > 0".to_string(),
+        ));
+    }
+    let expected_vectors = parts.count.checked_mul(parts.dim).ok_or_else(|| {
+        KnowhereError::Codec("invalid PQFlash sectioned snapshot: vector overflow".to_string())
+    })?;
+    if parts.vectors.len() != expected_vectors {
+        return Err(KnowhereError::Codec(format!(
+            "invalid PQFlash sectioned snapshot: vectors len {} != count * dim {}",
+            parts.vectors.len(),
+            expected_vectors
+        )));
+    }
+    if parts.node_ids.len() != parts.count {
+        return Err(KnowhereError::Codec(format!(
+            "invalid PQFlash sectioned snapshot: node_ids len {} != count {}",
+            parts.node_ids.len(),
+            parts.count
+        )));
+    }
+    if parts.neighbor_counts.len() != parts.count {
+        return Err(KnowhereError::Codec(format!(
+            "invalid PQFlash sectioned snapshot: neighbor_counts len {} != count {}",
+            parts.neighbor_counts.len(),
+            parts.count
+        )));
+    }
+    let expected_neighbors = parts.count.checked_mul(parts.flat_stride).ok_or_else(|| {
+        KnowhereError::Codec("invalid PQFlash sectioned snapshot: neighbor overflow".to_string())
+    })?;
+    if parts.neighbor_ids.len() != expected_neighbors {
+        return Err(KnowhereError::Codec(format!(
+            "invalid PQFlash sectioned snapshot: neighbor_ids len {} != count * flat_stride {}",
+            parts.neighbor_ids.len(),
+            expected_neighbors
+        )));
+    }
+    for (row, &count_u32) in parts.neighbor_counts.iter().enumerate() {
+        let degree = count_u32 as usize;
+        if degree > parts.flat_stride || degree > parts.max_degree {
+            return Err(KnowhereError::Codec(format!(
+                "invalid PQFlash sectioned snapshot: row {row} degree {degree} exceeds stride {} or max_degree {}",
+                parts.flat_stride, parts.max_degree
+            )));
+        }
+        let start = row * parts.flat_stride;
+        for &neighbor in &parts.neighbor_ids[start..start + degree] {
+            if neighbor as usize >= parts.count {
+                return Err(KnowhereError::Codec(format!(
+                    "invalid PQFlash sectioned snapshot: row {row} neighbor {neighbor} >= count {}",
+                    parts.count
+                )));
+            }
+        }
+    }
+    let expected_pq = if parts.pq_code_size > 0 {
+        parts.count.checked_mul(parts.pq_code_size).ok_or_else(|| {
+            KnowhereError::Codec("invalid PQFlash sectioned snapshot: pq overflow".to_string())
+        })?
+    } else {
+        0
+    };
+    if parts.node_pq_codes.len() != expected_pq {
+        return Err(KnowhereError::Codec(format!(
+            "invalid PQFlash sectioned snapshot: node_pq_codes len {} != count * pq_code_size {}",
+            parts.node_pq_codes.len(),
+            expected_pq
+        )));
+    }
+    for &row in parts.deleted_rows {
+        if row as usize >= parts.count {
+            return Err(KnowhereError::Codec(format!(
+                "invalid PQFlash sectioned snapshot: deleted row {row} >= count {}",
+                parts.count
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn gb_to_bytes(gb: f32) -> usize {
     if gb <= 0.0 {
         return 0;
@@ -5660,6 +5942,34 @@ fn block_on<F: Future>(future: F) -> F::Output {
             Poll::Ready(out) => return out,
             Poll::Pending => std::thread::yield_now(),
         }
+    }
+}
+
+impl AnnRuntime for PQFlashIndex {
+    fn family(&self) -> IndexFamily {
+        IndexFamily::DiskAnn
+    }
+
+    fn dim(&self) -> usize {
+        self.dim
+    }
+
+    fn len(&self) -> usize {
+        self.node_count
+    }
+
+    fn search_into(
+        &self,
+        query: &[f32],
+        req: &crate::api::SearchRequest,
+        ids: &mut [i64],
+        dists: &mut [f32],
+    ) -> Result<usize> {
+        let result = self.search(query, req.top_k)?;
+        let count = result.ids.len().min(ids.len()).min(dists.len());
+        ids[..count].copy_from_slice(&result.ids[..count]);
+        dists[..count].copy_from_slice(&result.distances[..count]);
+        Ok(count)
     }
 }
 
