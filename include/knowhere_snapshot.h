@@ -43,6 +43,10 @@ typedef struct CSnapshotArtifactCallbacks {
     CSnapshotReadRangeFn read_range;
 } CSnapshotArtifactCallbacks;
 
+char* knowhere_snapshot_manifest_plan(const char* manifest_json);
+
+void knowhere_free_cstring(char* ptr);
+
 void* knowhere_load_snapshot_from_callbacks(
     const char* manifest_json,
     CSnapshotArtifactCallbacks callbacks,

@@ -46,6 +46,8 @@ class SnapshotHeaderTests(unittest.TestCase):
                 };
                 (void)callbacks;
                 (void)CSnapshotLoadMode_OwnedMemory;
+                (void)knowhere_snapshot_manifest_plan;
+                (void)knowhere_free_cstring;
                 (void)knowhere_load_snapshot_from_callbacks;
                 (void)knowhere_snapshot_runtime_search;
                 return 0;
