@@ -19,6 +19,17 @@ pub const IVF_FLAT_LIST_VECTORS_SECTION: &str = "ivf_flat.list_vectors.f32";
 pub const IVF_FLAT_IDS_SECTION: &str = "ivf_flat.ids.i64";
 pub const IVF_FLAT_VECTORS_SECTION: &str = "ivf_flat.vectors.f32";
 
+const REQUIRED_IVF_FLAT_SECTIONS: [&str; 8] = [
+    IVF_FLAT_META_SECTION,
+    IVF_FLAT_CENTROIDS_SECTION,
+    IVF_FLAT_LIST_OFFSETS_SECTION,
+    IVF_FLAT_LIST_SIZES_SECTION,
+    IVF_FLAT_LIST_IDS_SECTION,
+    IVF_FLAT_LIST_VECTORS_SECTION,
+    IVF_FLAT_IDS_SECTION,
+    IVF_FLAT_VECTORS_SECTION,
+];
+
 #[derive(Deserialize, Serialize)]
 struct IvfFlatSectionMetadata {
     version: u32,
@@ -132,6 +143,8 @@ fn load_sectioned_ivf_flat(
     reader: &dyn IndexArtifactReader,
     manifest: &IndexManifest,
 ) -> Result<IvfFlatIndex> {
+    validate_manifest_sections(reader, manifest)?;
+
     let meta_bytes = reader.read_section(IVF_FLAT_META_SECTION)?;
     let meta: IvfFlatSectionMetadata =
         serde_json::from_slice(meta_bytes.as_ref()).map_err(|error| {
@@ -189,6 +202,46 @@ fn load_sectioned_ivf_flat(
     };
 
     IvfFlatIndex::from_sectioned_snapshot_export(export)
+}
+
+fn validate_manifest_sections(
+    reader: &dyn IndexArtifactReader,
+    manifest: &IndexManifest,
+) -> Result<()> {
+    use std::collections::HashSet;
+
+    let mut seen = HashSet::new();
+    for descriptor in &manifest.sections {
+        if !seen.insert(descriptor.name.as_str()) {
+            return Err(KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned manifest: duplicate section descriptor {}",
+                descriptor.name
+            )));
+        }
+
+        let actual_len = reader.section_len(&descriptor.name).map_err(|error| {
+            KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned manifest: descriptor {} references unreadable section: {error}",
+                descriptor.name
+            ))
+        })?;
+        if descriptor.len != actual_len {
+            return Err(KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned manifest: descriptor length for {} is {}, actual section length is {}",
+                descriptor.name, descriptor.len, actual_len
+            )));
+        }
+    }
+
+    for section_name in REQUIRED_IVF_FLAT_SECTIONS {
+        if !seen.contains(section_name) {
+            return Err(KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned manifest: missing required section descriptor {section_name}"
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 fn metric_name(metric: MetricType) -> &'static str {

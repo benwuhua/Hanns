@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use hanns::api::{
     DataType, IndexConfig, IndexParams, IndexType, KnowhereError, MetricType, SearchRequest,
 };
@@ -8,7 +10,9 @@ use hanns::faiss::{
     IVF_FLAT_META_SECTION, IVF_FLAT_SECTIONS_SNAPSHOT_VARIANT, IVF_FLAT_VECTORS_SECTION,
 };
 use hanns::kernel::IndexFamily;
-use hanns::storage::{AnnSnapshot, IndexArtifactReader, MemoryArtifactStore};
+use hanns::storage::{
+    AnnSnapshot, IndexArtifactReader, IndexArtifactWriter, IndexManifest, MemoryArtifactStore,
+};
 
 fn build_small_ivf_flat() -> (IvfFlatIndex, usize) {
     let dim = 4;
@@ -36,6 +40,78 @@ fn build_small_ivf_flat() -> (IvfFlatIndex, usize) {
         .add(&vectors, Some(&ids))
         .expect("ivf-flat vectors should add");
     (index, nlist)
+}
+
+fn sectioned_store_with(
+    index: &IvfFlatIndex,
+    edit: impl FnOnce(&mut IndexManifest, &mut BTreeMap<String, Vec<u8>>),
+) -> MemoryArtifactStore {
+    let snapshot = IvfFlatSectionedSnapshot::from_index(index).expect("snapshot");
+    let mut source = MemoryArtifactStore::default();
+    snapshot.write_snapshot(&mut source).expect("write");
+
+    let mut manifest = source.manifest().expect("manifest").clone();
+    let mut sections = BTreeMap::new();
+    for descriptor in &manifest.sections {
+        sections.insert(
+            descriptor.name.clone(),
+            source
+                .read_section(&descriptor.name)
+                .expect("section should read")
+                .into_owned(),
+        );
+    }
+
+    edit(&mut manifest, &mut sections);
+
+    let mut store = MemoryArtifactStore::default();
+    for (name, bytes) in sections {
+        store.write_section(&name, &bytes).expect("section write");
+    }
+    store.finish_manifest(&manifest).expect("manifest write");
+    store
+}
+
+fn refresh_manifest_lengths(manifest: &mut IndexManifest, sections: &BTreeMap<String, Vec<u8>>) {
+    for descriptor in &mut manifest.sections {
+        descriptor.len = sections
+            .get(&descriptor.name)
+            .unwrap_or_else(|| panic!("section {} should exist", descriptor.name))
+            .len() as u64;
+    }
+}
+
+fn load_error(store: &MemoryArtifactStore) -> KnowhereError {
+    match load_ivf_flat_index_from_artifact(store) {
+        Ok(_) => panic!("malformed sectioned IVF-Flat snapshot should error"),
+        Err(error) => error,
+    }
+}
+
+fn assert_codec_contains(error: KnowhereError, expected: &str) {
+    assert!(
+        matches!(error, KnowhereError::Codec(_)),
+        "expected Codec error, got {error:?}"
+    );
+    assert!(
+        error.to_string().contains(expected),
+        "error should contain {expected:?}, got {error}"
+    );
+}
+
+fn decode_u64s(bytes: &[u8]) -> Vec<u64> {
+    bytes
+        .chunks_exact(8)
+        .map(|chunk| u64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect()
+}
+
+fn encode_u64s(values: &[u64]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(std::mem::size_of_val(values));
+    for value in values {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
 }
 
 #[test]
@@ -165,4 +241,98 @@ fn ivf_flat_sectioned_snapshot_roundtrips_search_results() {
 
     assert_eq!(roundtrip.ids, original.ids);
     assert_eq!(roundtrip.distances, original.distances);
+}
+
+#[test]
+fn ivf_flat_sectioned_restore_preserves_legacy_next_id_for_auto_ids() {
+    let (index, _) = build_small_ivf_flat();
+    let snapshot = IvfFlatSectionedSnapshot::from_index(&index).expect("snapshot");
+    let mut store = MemoryArtifactStore::default();
+    snapshot.write_snapshot(&mut store).expect("write");
+
+    let mut loaded = load_ivf_flat_index_from_artifact(&store).expect("load");
+    let auto_vector = vec![3.0, 3.0, 3.0, 3.0];
+    loaded.add(&auto_vector, None).expect("auto add");
+
+    assert_eq!(loaded.get_vectors(&[6]), vec![Some(auto_vector)]);
+    assert_eq!(loaded.get_vectors(&[16]), vec![None]);
+}
+
+#[test]
+fn ivf_flat_sectioned_snapshot_rejects_malformed_list_count() {
+    let (index, _) = build_small_ivf_flat();
+    let store = sectioned_store_with(&index, |manifest, sections| {
+        let mut list_sizes = decode_u64s(
+            sections
+                .get(IVF_FLAT_LIST_SIZES_SECTION)
+                .expect("list sizes section"),
+        );
+        let non_empty_list = list_sizes
+            .iter()
+            .position(|&size| size > 0)
+            .expect("at least one populated list");
+        list_sizes[non_empty_list] -= 1;
+
+        let mut list_offsets = Vec::with_capacity(list_sizes.len());
+        let mut running = 0u64;
+        for &size in &list_sizes {
+            list_offsets.push(running);
+            running += size;
+        }
+
+        sections.insert(
+            IVF_FLAT_LIST_SIZES_SECTION.to_string(),
+            encode_u64s(&list_sizes),
+        );
+        sections.insert(
+            IVF_FLAT_LIST_OFFSETS_SECTION.to_string(),
+            encode_u64s(&list_offsets),
+        );
+
+        let mut list_ids = sections
+            .get(IVF_FLAT_LIST_IDS_SECTION)
+            .expect("list ids section")
+            .clone();
+        list_ids.truncate(list_ids.len() - std::mem::size_of::<i64>());
+        sections.insert(IVF_FLAT_LIST_IDS_SECTION.to_string(), list_ids);
+
+        let mut list_vectors = sections
+            .get(IVF_FLAT_LIST_VECTORS_SECTION)
+            .expect("list vectors section")
+            .clone();
+        list_vectors.truncate(list_vectors.len() - 4 * std::mem::size_of::<f32>());
+        sections.insert(IVF_FLAT_LIST_VECTORS_SECTION.to_string(), list_vectors);
+
+        refresh_manifest_lengths(manifest, sections);
+    });
+
+    assert_codec_contains(load_error(&store), "list_ids len 5 != count 6");
+}
+
+#[test]
+fn ivf_flat_sectioned_snapshot_rejects_manifest_descriptor_length_mismatch() {
+    let (index, _) = build_small_ivf_flat();
+    let store = sectioned_store_with(&index, |manifest, _sections| {
+        let descriptor = manifest
+            .sections
+            .iter_mut()
+            .find(|descriptor| descriptor.name == IVF_FLAT_IDS_SECTION)
+            .expect("ids descriptor");
+        descriptor.len += 1;
+    });
+
+    assert_codec_contains(load_error(&store), "descriptor length");
+}
+
+#[test]
+fn ivf_flat_sectioned_snapshot_roundtrips_get_vectors() {
+    let (index, _) = build_small_ivf_flat();
+    let snapshot = IvfFlatSectionedSnapshot::from_index(&index).expect("snapshot");
+    let mut store = MemoryArtifactStore::default();
+    snapshot.write_snapshot(&mut store).expect("write");
+
+    let loaded = load_ivf_flat_index_from_artifact(&store).expect("load");
+    let ids = [10, 12, 15, 999];
+
+    assert_eq!(loaded.get_vectors(&ids), index.get_vectors(&ids));
 }

@@ -10,6 +10,7 @@
 //! - 保留 SIMD 批量距离计算
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -210,6 +211,61 @@ pub struct IvfFlatSectionedExport {
     pub list_vectors: Vec<f32>,
     pub ids: Vec<i64>,
     pub vectors: Vec<f32>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct SectionedVectorRecord {
+    id: i64,
+    vector_bits: Vec<u32>,
+}
+
+impl SectionedVectorRecord {
+    fn new(id: i64, vector: &[f32]) -> Self {
+        Self {
+            id,
+            vector_bits: vector.iter().map(|value| value.to_bits()).collect(),
+        }
+    }
+}
+
+fn validate_sectioned_list_payload_matches_raw(export: &IvfFlatSectionedExport) -> Result<()> {
+    let mut expected = HashMap::<SectionedVectorRecord, usize>::new();
+    for (idx, &id) in export.ids.iter().enumerate() {
+        let start = idx * export.dim;
+        let end = start + export.dim;
+        *expected
+            .entry(SectionedVectorRecord::new(id, &export.vectors[start..end]))
+            .or_insert(0) += 1;
+    }
+
+    for (idx, &id) in export.list_ids.iter().enumerate() {
+        let start = idx * export.dim;
+        let end = start + export.dim;
+        let record = SectionedVectorRecord::new(id, &export.list_vectors[start..end]);
+        let remove_record = match expected.get_mut(&record) {
+            Some(count) if *count > 0 => {
+                *count -= 1;
+                *count == 0
+            }
+            _ => {
+                return Err(KnowhereError::Codec(format!(
+                    "invalid IVF-Flat sectioned snapshot: list payload entry {idx} does not match raw ids/vectors"
+                )));
+            }
+        };
+        if remove_record {
+            expected.remove(&record);
+        }
+    }
+
+    if !expected.is_empty() {
+        let missing = expected.values().sum::<usize>();
+        return Err(KnowhereError::Codec(format!(
+            "invalid IVF-Flat sectioned snapshot: list payload is missing {missing} raw vector entries"
+        )));
+    }
+
+    Ok(())
 }
 
 /// IVF-Flat Index - stores raw vectors in flattened inverted lists
@@ -916,26 +972,13 @@ impl IvfFlatIndex {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let next_id = self
-            .ids
-            .iter()
-            .copied()
-            .max()
-            .map_or(self.next_id, |max_id| {
-                if max_id == i64::MAX {
-                    self.next_id
-                } else {
-                    self.next_id.max(max_id + 1)
-                }
-            });
-
         Ok(IvfFlatSectionedExport {
             dim: self.dim,
             count,
             nlist: self.nlist,
             nprobe: self.nprobe,
             metric_type: self.metric_type,
-            next_id,
+            next_id: self.next_id,
             trained: self.trained,
             centroids: self.centroids.clone(),
             list_offsets,
@@ -991,19 +1034,41 @@ impl IvfFlatIndex {
             )));
         }
 
-        let list_count = export.list_ids.len();
-        let expected_list_vectors = list_count.checked_mul(export.dim).ok_or_else(|| {
-            KnowhereError::Codec(
-                "invalid IVF-Flat sectioned snapshot: list vector length overflow".to_string(),
-            )
-        })?;
-        if export.list_vectors.len() != expected_list_vectors {
+        if export.ids.len() != export.count {
             return Err(KnowhereError::Codec(format!(
-                "invalid IVF-Flat sectioned snapshot: list_vectors len {} != list_ids * dim {}",
-                export.list_vectors.len(),
-                expected_list_vectors
+                "invalid IVF-Flat sectioned snapshot: ids len {} != count {}",
+                export.ids.len(),
+                export.count
             )));
         }
+        let expected_vectors = export.count.checked_mul(export.dim).ok_or_else(|| {
+            KnowhereError::Codec(
+                "invalid IVF-Flat sectioned snapshot: vector length overflow".to_string(),
+            )
+        })?;
+        if export.vectors.len() != expected_vectors {
+            return Err(KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned snapshot: vectors len {} != count * dim {}",
+                export.vectors.len(),
+                expected_vectors
+            )));
+        }
+        if export.list_ids.len() != export.count {
+            return Err(KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned snapshot: list_ids len {} != count {}",
+                export.list_ids.len(),
+                export.count
+            )));
+        }
+        if export.list_vectors.len() != expected_vectors {
+            return Err(KnowhereError::Codec(format!(
+                "invalid IVF-Flat sectioned snapshot: list_vectors len {} != count * dim {}",
+                export.list_vectors.len(),
+                expected_vectors
+            )));
+        }
+
+        let list_count = export.list_ids.len();
 
         let mut invlist_offsets = Vec::with_capacity(export.nlist);
         let mut invlist_sizes = Vec::with_capacity(export.nlist);
@@ -1048,34 +1113,7 @@ impl IvfFlatIndex {
             )));
         }
 
-        if export.ids.len() != export.count {
-            return Err(KnowhereError::Codec(format!(
-                "invalid IVF-Flat sectioned snapshot: ids len {} != count {}",
-                export.ids.len(),
-                export.count
-            )));
-        }
-        let expected_vectors = export.count.checked_mul(export.dim).ok_or_else(|| {
-            KnowhereError::Codec(
-                "invalid IVF-Flat sectioned snapshot: vector length overflow".to_string(),
-            )
-        })?;
-        if export.vectors.len() != expected_vectors {
-            return Err(KnowhereError::Codec(format!(
-                "invalid IVF-Flat sectioned snapshot: vectors len {} != count * dim {}",
-                export.vectors.len(),
-                expected_vectors
-            )));
-        }
-        if let Some(max_id) = export.ids.iter().copied().max() {
-            if max_id < i64::MAX && export.next_id < max_id + 1 {
-                return Err(KnowhereError::Codec(format!(
-                    "invalid IVF-Flat sectioned snapshot: next_id {} < max id + 1 {}",
-                    export.next_id,
-                    max_id + 1
-                )));
-            }
-        }
+        validate_sectioned_list_payload_matches_raw(&export)?;
 
         Ok(Self {
             dim: export.dim,
