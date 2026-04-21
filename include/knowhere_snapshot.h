@@ -53,6 +53,8 @@ typedef struct CSnapshotSearchParams {
     size_t nprobe;
     uint8_t has_radius;
     float radius;
+    size_t refine_k;
+    size_t beam_width;
 } CSnapshotSearchParams;
 
 char* knowhere_snapshot_manifest_plan(const char* manifest_json);

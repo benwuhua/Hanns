@@ -93,6 +93,8 @@ int main(void) {
         .nprobe = 64,
         .has_radius = 0,
         .radius = 0.0f,
+        .refine_k = 0,
+        .beam_width = 0,
     };
 
     char* plan = knowhere_snapshot_manifest_plan(manifest_json);

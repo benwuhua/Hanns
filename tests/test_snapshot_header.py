@@ -56,11 +56,15 @@ class SnapshotHeaderTests(unittest.TestCase):
                     .nprobe = 16,
                     .has_radius = 1,
                     .radius = 0.25f,
+                    .refine_k = 64,
+                    .beam_width = 32,
                 };
                 (void)params.top_k;
                 (void)params.nprobe;
                 (void)params.has_radius;
                 (void)params.radius;
+                (void)params.refine_k;
+                (void)params.beam_width;
                 (void)knowhere_snapshot_runtime_search_with_search_params;
                 CSearchResult result = {
                     .ids = 0,

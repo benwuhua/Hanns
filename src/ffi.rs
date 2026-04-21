@@ -275,6 +275,8 @@ pub struct CSnapshotSearchParams {
     pub nprobe: usize,
     pub has_radius: u8,
     pub radius: f32,
+    pub refine_k: usize,
+    pub beam_width: usize,
 }
 
 struct SnapshotRuntimeHandle {
@@ -3129,11 +3131,27 @@ fn c_callback_section_name(name: &str) -> Result<std::ffi::CString, CError> {
 }
 
 fn snapshot_search_request_from_c_params(params: CSnapshotSearchParams) -> SearchRequest {
+    let params_json = if params.refine_k == 0 && params.beam_width == 0 {
+        None
+    } else {
+        let mut value = serde_json::Map::new();
+        if params.refine_k != 0 {
+            value.insert("refine_k".to_string(), serde_json::json!(params.refine_k));
+        }
+        if params.beam_width != 0 {
+            value.insert(
+                "beam_width".to_string(),
+                serde_json::json!(params.beam_width),
+            );
+        }
+        Some(serde_json::Value::Object(value).to_string())
+    };
+
     SearchRequest {
         top_k: params.top_k,
         nprobe: params.nprobe.max(1),
         filter: None,
-        params: None,
+        params: params_json,
         radius: if params.has_radius != 0 {
             Some(params.radius)
         } else {
@@ -3298,6 +3316,8 @@ pub extern "C" fn knowhere_snapshot_runtime_search_with_params(
             nprobe,
             has_radius: 0,
             radius: 0.0,
+            refine_k: 0,
+            beam_width: 0,
         },
     )
 }
@@ -5470,6 +5490,8 @@ mod tests {
             nprobe: 16,
             has_radius: 0,
             radius: 0.0,
+            refine_k: 0,
+            beam_width: 0,
         };
         let params_result = knowhere_snapshot_runtime_search_with_search_params(
             runtime,
@@ -5491,11 +5513,30 @@ mod tests {
             nprobe: 3,
             has_radius: 1,
             radius: 0.5,
+            refine_k: 0,
+            beam_width: 0,
         });
 
         assert_eq!(req.top_k, 7);
         assert_eq!(req.nprobe, 3);
         assert_eq!(req.radius, Some(0.5));
+    }
+
+    #[test]
+    fn test_snapshot_search_params_map_refine_and_beam() {
+        let req = snapshot_search_request_from_c_params(CSnapshotSearchParams {
+            top_k: 10,
+            nprobe: 4,
+            has_radius: 0,
+            radius: 0.0,
+            refine_k: 64,
+            beam_width: 32,
+        });
+        let params: serde_json::Value =
+            serde_json::from_str(req.params.as_deref().expect("params JSON")).unwrap();
+
+        assert_eq!(params["refine_k"], 64);
+        assert_eq!(params["beam_width"], 32);
     }
 
     #[test]
