@@ -23,6 +23,7 @@ pub mod ivf_flat_cc;
 pub mod ivf_flat_snapshot;
 pub mod ivf_opq;
 pub mod ivf_usq;
+pub mod ivf_usq_snapshot;
 
 pub mod ivf_sq8;
 pub mod ivf_sq8_snapshot;
@@ -77,6 +78,15 @@ pub use ivf_flat_snapshot::{
 };
 pub use ivf_opq::{IvfOpqConfig, IvfOpqIndex, IvfOpqIndexWrapper};
 pub use ivf_usq::{IvfUsqConfig, IvfUsqIndex};
+pub use ivf_usq_snapshot::{
+    load_ivf_usq_index_from_artifact, load_ivf_usq_sectioned_snapshot,
+    save_ivf_usq_sectioned_snapshot, IvfUsqSectionedSnapshot, IVF_USQ_CENTROIDS_SECTION,
+    IVF_USQ_LIST_IDS_SECTION, IVF_USQ_LIST_OFFSETS_SECTION, IVF_USQ_LIST_SIZES_SECTION,
+    IVF_USQ_META_SECTION, IVF_USQ_NORMS_SECTION, IVF_USQ_NORMS_SQ_SECTION,
+    IVF_USQ_PACKED_BITS_SECTION, IVF_USQ_QUANTIZER_CENTROID_SECTION,
+    IVF_USQ_QUANT_QUALITIES_SECTION, IVF_USQ_SECTIONS_SNAPSHOT_VARIANT, IVF_USQ_SIGN_BITS_SECTION,
+    IVF_USQ_VMAXS_SECTION,
+};
 
 pub use ivf_sq8::IvfSq8Index;
 pub use ivf_sq8_snapshot::{
