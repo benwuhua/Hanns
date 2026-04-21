@@ -1373,6 +1373,10 @@ impl IvfPqIndex {
         self.ids.len()
     }
 
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+
     pub fn is_trained(&self) -> bool {
         self.trained
     }

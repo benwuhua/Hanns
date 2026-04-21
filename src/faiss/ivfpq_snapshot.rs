@@ -1,14 +1,15 @@
 use crate::api::{KnowhereError, MetricType, Result};
-use crate::kernel::IndexFamily;
+use crate::kernel::{AnnRuntime, IndexFamily};
 use crate::storage::{
-    AnnSnapshot, FileArtifactStore, IndexArtifactReader, IndexArtifactWriter, IndexManifest,
-    SectionDescriptor,
+    AnnSnapshot, AnnSnapshotLoader, FileArtifactStore, IndexArtifactReader, IndexArtifactWriter,
+    IndexManifest, LoadMode, SectionDescriptor,
 };
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use super::ivfpq::{IvfPqIndex, IvfPqSectionedExport};
+use super::IvfRuntime;
 
 pub const IVF_PQ_SECTIONS_SNAPSHOT_VARIANT: &str = "ivf_pq_sections_v1";
 
@@ -165,6 +166,20 @@ pub fn load_ivf_pq_index_from_artifact(reader: &dyn IndexArtifactReader) -> Resu
         variant => Err(KnowhereError::Codec(format!(
             "invalid IVF-PQ snapshot manifest: expected variant {IVF_PQ_SECTIONS_SNAPSHOT_VARIANT}, got {variant:?}"
         ))),
+    }
+}
+
+pub struct IvfPqSnapshotLoader;
+
+impl AnnSnapshotLoader for IvfPqSnapshotLoader {
+    fn load_snapshot(
+        &self,
+        reader: &dyn IndexArtifactReader,
+        _mode: LoadMode,
+    ) -> Result<Box<dyn AnnRuntime>> {
+        Ok(Box::new(IvfRuntime::pq(load_ivf_pq_index_from_artifact(
+            reader,
+        )?)))
     }
 }
 

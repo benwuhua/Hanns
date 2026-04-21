@@ -1,14 +1,15 @@
 use crate::api::{KnowhereError, MetricType, Result};
-use crate::kernel::IndexFamily;
+use crate::kernel::{AnnRuntime, IndexFamily};
 use crate::storage::{
-    AnnSnapshot, FileArtifactStore, IndexArtifactReader, IndexArtifactWriter, IndexManifest,
-    SectionDescriptor,
+    AnnSnapshot, AnnSnapshotLoader, FileArtifactStore, IndexArtifactReader, IndexArtifactWriter,
+    IndexManifest, LoadMode, SectionDescriptor,
 };
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use super::ivf_usq::{IvfUsqIndex, IvfUsqSectionedExport};
+use super::IvfRuntime;
 
 pub const IVF_USQ_SECTIONS_SNAPSHOT_VARIANT: &str = "ivf_usq_sections_v1";
 
@@ -188,6 +189,20 @@ pub fn load_ivf_usq_index_from_artifact(reader: &dyn IndexArtifactReader) -> Res
         variant => Err(KnowhereError::Codec(format!(
             "invalid IVF-USQ snapshot manifest: expected variant {IVF_USQ_SECTIONS_SNAPSHOT_VARIANT}, got {variant:?}"
         ))),
+    }
+}
+
+pub struct IvfUsqSnapshotLoader;
+
+impl AnnSnapshotLoader for IvfUsqSnapshotLoader {
+    fn load_snapshot(
+        &self,
+        reader: &dyn IndexArtifactReader,
+        _mode: LoadMode,
+    ) -> Result<Box<dyn AnnRuntime>> {
+        Ok(Box::new(IvfRuntime::usq(load_ivf_usq_index_from_artifact(
+            reader,
+        )?)))
     }
 }
 

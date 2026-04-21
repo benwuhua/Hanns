@@ -16,7 +16,7 @@ use super::{
 };
 
 pub const HNSW_SNAPSHOT_SECTION: &str = "hnsw.bytes";
-const HNSW_SNAPSHOT_VARIANT: &str = "hnsw_blob_v1";
+pub const HNSW_SNAPSHOT_VARIANT: &str = "hnsw_blob_v1";
 pub const HNSW_SECTIONS_SNAPSHOT_VARIANT: &str = "hnsw_sections_v1";
 
 pub const HNSW_META_SECTION: &str = "hnsw.meta.json";

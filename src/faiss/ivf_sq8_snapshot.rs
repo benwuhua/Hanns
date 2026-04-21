@@ -1,14 +1,15 @@
 use crate::api::{KnowhereError, MetricType, Result};
-use crate::kernel::IndexFamily;
+use crate::kernel::{AnnRuntime, IndexFamily};
 use crate::storage::{
-    AnnSnapshot, FileArtifactStore, IndexArtifactReader, IndexArtifactWriter, IndexManifest,
-    SectionDescriptor,
+    AnnSnapshot, AnnSnapshotLoader, FileArtifactStore, IndexArtifactReader, IndexArtifactWriter,
+    IndexManifest, LoadMode, SectionDescriptor,
 };
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use super::ivf_sq8::{IvfSq8Index, IvfSq8SectionedExport};
+use super::IvfRuntime;
 
 pub const IVF_SQ8_SECTIONS_SNAPSHOT_VARIANT: &str = "ivf_sq8_sections_v1";
 
@@ -165,6 +166,20 @@ pub fn load_ivf_sq8_index_from_artifact(reader: &dyn IndexArtifactReader) -> Res
         variant => Err(KnowhereError::Codec(format!(
             "invalid IVF-SQ8 snapshot manifest: expected variant {IVF_SQ8_SECTIONS_SNAPSHOT_VARIANT}, got {variant:?}"
         ))),
+    }
+}
+
+pub struct IvfSq8SnapshotLoader;
+
+impl AnnSnapshotLoader for IvfSq8SnapshotLoader {
+    fn load_snapshot(
+        &self,
+        reader: &dyn IndexArtifactReader,
+        _mode: LoadMode,
+    ) -> Result<Box<dyn AnnRuntime>> {
+        Ok(Box::new(IvfRuntime::sq8(load_ivf_sq8_index_from_artifact(
+            reader,
+        )?)))
     }
 }
 

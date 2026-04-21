@@ -1,14 +1,15 @@
 use crate::api::{KnowhereError, MetricType, Result};
-use crate::kernel::IndexFamily;
+use crate::kernel::{AnnRuntime, IndexFamily};
 use crate::storage::{
-    AnnSnapshot, FileArtifactStore, IndexArtifactReader, IndexArtifactWriter, IndexManifest,
-    SectionDescriptor,
+    AnnSnapshot, AnnSnapshotLoader, FileArtifactStore, IndexArtifactReader, IndexArtifactWriter,
+    IndexManifest, LoadMode, SectionDescriptor,
 };
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use super::ivf_flat::{IvfFlatIndex, IvfFlatSectionedExport};
+use super::IvfRuntime;
 
 pub const IVF_FLAT_SECTIONS_SNAPSHOT_VARIANT: &str = "ivf_flat_sections_v1";
 
@@ -152,6 +153,20 @@ pub fn load_ivf_flat_index_from_artifact(reader: &dyn IndexArtifactReader) -> Re
         variant => Err(KnowhereError::Codec(format!(
             "invalid IVF-Flat snapshot manifest: expected variant {IVF_FLAT_SECTIONS_SNAPSHOT_VARIANT}, got {variant:?}"
         ))),
+    }
+}
+
+pub struct IvfFlatSnapshotLoader;
+
+impl AnnSnapshotLoader for IvfFlatSnapshotLoader {
+    fn load_snapshot(
+        &self,
+        reader: &dyn IndexArtifactReader,
+        _mode: LoadMode,
+    ) -> Result<Box<dyn AnnRuntime>> {
+        Ok(Box::new(IvfRuntime::flat(
+            load_ivf_flat_index_from_artifact(reader)?,
+        )))
     }
 }
 

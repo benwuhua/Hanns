@@ -22,6 +22,7 @@ pub mod ivf_flat;
 pub mod ivf_flat_cc;
 pub mod ivf_flat_snapshot;
 pub mod ivf_opq;
+pub mod ivf_runtime;
 pub mod ivf_usq;
 pub mod ivf_usq_snapshot;
 
@@ -35,6 +36,7 @@ pub mod mem_index;
 pub mod pq_simd;
 pub mod rhtsdg;
 pub mod scann;
+pub mod snapshot_registry;
 pub mod sparse;
 pub mod sparse_inverted;
 pub mod sparse_inverted_cc;
@@ -62,6 +64,7 @@ pub use hnsw_runtime::HnswRuntime;
 pub use hnsw_snapshot::{
     load_hnsw_sectioned_snapshot, save_hnsw_sectioned_snapshot, HnswSectionedSnapshot,
     HnswSnapshot, HnswSnapshotLoader, HNSW_SECTIONS_SNAPSHOT_VARIANT, HNSW_SNAPSHOT_SECTION,
+    HNSW_SNAPSHOT_VARIANT,
 };
 pub use index::FaissIndex;
 #[allow(deprecated)]
@@ -71,19 +74,20 @@ pub use ivf_flat::IvfFlatIndex;
 pub use ivf_flat_cc::IvfFlatCcIndex;
 pub use ivf_flat_snapshot::{
     load_ivf_flat_index_from_artifact, load_ivf_flat_sectioned_snapshot,
-    save_ivf_flat_sectioned_snapshot, IvfFlatSectionedSnapshot, IVF_FLAT_CENTROIDS_SECTION,
-    IVF_FLAT_IDS_SECTION, IVF_FLAT_LIST_IDS_SECTION, IVF_FLAT_LIST_OFFSETS_SECTION,
-    IVF_FLAT_LIST_SIZES_SECTION, IVF_FLAT_LIST_VECTORS_SECTION, IVF_FLAT_META_SECTION,
-    IVF_FLAT_SECTIONS_SNAPSHOT_VARIANT, IVF_FLAT_VECTORS_SECTION,
+    save_ivf_flat_sectioned_snapshot, IvfFlatSectionedSnapshot, IvfFlatSnapshotLoader,
+    IVF_FLAT_CENTROIDS_SECTION, IVF_FLAT_IDS_SECTION, IVF_FLAT_LIST_IDS_SECTION,
+    IVF_FLAT_LIST_OFFSETS_SECTION, IVF_FLAT_LIST_SIZES_SECTION, IVF_FLAT_LIST_VECTORS_SECTION,
+    IVF_FLAT_META_SECTION, IVF_FLAT_SECTIONS_SNAPSHOT_VARIANT, IVF_FLAT_VECTORS_SECTION,
 };
 pub use ivf_opq::{IvfOpqConfig, IvfOpqIndex, IvfOpqIndexWrapper};
+pub use ivf_runtime::IvfRuntime;
 pub use ivf_usq::{IvfUsqConfig, IvfUsqIndex};
 pub use ivf_usq_snapshot::{
     load_ivf_usq_index_from_artifact, load_ivf_usq_sectioned_snapshot,
-    save_ivf_usq_sectioned_snapshot, IvfUsqSectionedSnapshot, IVF_USQ_CENTROIDS_SECTION,
-    IVF_USQ_LIST_IDS_SECTION, IVF_USQ_LIST_OFFSETS_SECTION, IVF_USQ_LIST_SIZES_SECTION,
-    IVF_USQ_META_SECTION, IVF_USQ_NORMS_SECTION, IVF_USQ_NORMS_SQ_SECTION,
-    IVF_USQ_PACKED_BITS_SECTION, IVF_USQ_QUANTIZER_CENTROID_SECTION,
+    save_ivf_usq_sectioned_snapshot, IvfUsqSectionedSnapshot, IvfUsqSnapshotLoader,
+    IVF_USQ_CENTROIDS_SECTION, IVF_USQ_LIST_IDS_SECTION, IVF_USQ_LIST_OFFSETS_SECTION,
+    IVF_USQ_LIST_SIZES_SECTION, IVF_USQ_META_SECTION, IVF_USQ_NORMS_SECTION,
+    IVF_USQ_NORMS_SQ_SECTION, IVF_USQ_PACKED_BITS_SECTION, IVF_USQ_QUANTIZER_CENTROID_SECTION,
     IVF_USQ_QUANT_QUALITIES_SECTION, IVF_USQ_SECTIONS_SNAPSHOT_VARIANT, IVF_USQ_SIGN_BITS_SECTION,
     IVF_USQ_VMAXS_SECTION,
 };
@@ -91,24 +95,27 @@ pub use ivf_usq_snapshot::{
 pub use ivf_sq8::IvfSq8Index;
 pub use ivf_sq8_snapshot::{
     load_ivf_sq8_index_from_artifact, load_ivf_sq8_sectioned_snapshot,
-    save_ivf_sq8_sectioned_snapshot, IvfSq8SectionedSnapshot, IVF_SQ8_CENTROIDS_SECTION,
-    IVF_SQ8_IDS_SECTION, IVF_SQ8_LIST_CODES_SECTION, IVF_SQ8_LIST_IDS_SECTION,
-    IVF_SQ8_LIST_OFFSETS_SECTION, IVF_SQ8_LIST_ROWS_SECTION, IVF_SQ8_LIST_SIZES_SECTION,
-    IVF_SQ8_META_SECTION, IVF_SQ8_SECTIONS_SNAPSHOT_VARIANT, IVF_SQ8_VECTORS_SECTION,
+    save_ivf_sq8_sectioned_snapshot, IvfSq8SectionedSnapshot, IvfSq8SnapshotLoader,
+    IVF_SQ8_CENTROIDS_SECTION, IVF_SQ8_IDS_SECTION, IVF_SQ8_LIST_CODES_SECTION,
+    IVF_SQ8_LIST_IDS_SECTION, IVF_SQ8_LIST_OFFSETS_SECTION, IVF_SQ8_LIST_ROWS_SECTION,
+    IVF_SQ8_LIST_SIZES_SECTION, IVF_SQ8_META_SECTION, IVF_SQ8_SECTIONS_SNAPSHOT_VARIANT,
+    IVF_SQ8_VECTORS_SECTION,
 };
 pub use ivf_sq_cc::IvfSqCcIndex;
 pub use ivf_turboquant::{IvfTurboQuantConfig, IvfTurboQuantIndex};
 pub use ivfpq::IvfPqIndex;
 pub use ivfpq_snapshot::{
     load_ivf_pq_index_from_artifact, load_ivf_pq_sectioned_snapshot,
-    save_ivf_pq_sectioned_snapshot, IvfPqSectionedSnapshot, IVF_PQ_CENTROIDS_SECTION,
-    IVF_PQ_IDS_SECTION, IVF_PQ_LIST_CODES_SECTION, IVF_PQ_LIST_IDS_SECTION,
-    IVF_PQ_LIST_OFFSETS_SECTION, IVF_PQ_LIST_SIZES_SECTION, IVF_PQ_META_SECTION,
-    IVF_PQ_PQ_CENTROIDS_SECTION, IVF_PQ_SECTIONS_SNAPSHOT_VARIANT, IVF_PQ_VECTORS_SECTION,
+    save_ivf_pq_sectioned_snapshot, IvfPqSectionedSnapshot, IvfPqSnapshotLoader,
+    IVF_PQ_CENTROIDS_SECTION, IVF_PQ_IDS_SECTION, IVF_PQ_LIST_CODES_SECTION,
+    IVF_PQ_LIST_IDS_SECTION, IVF_PQ_LIST_OFFSETS_SECTION, IVF_PQ_LIST_SIZES_SECTION,
+    IVF_PQ_META_SECTION, IVF_PQ_PQ_CENTROIDS_SECTION, IVF_PQ_SECTIONS_SNAPSHOT_VARIANT,
+    IVF_PQ_VECTORS_SECTION,
 };
 pub use mem_index::MemIndex;
 pub use rhtsdg::RhtsdgIndex;
 pub use scann::{ScaNNConfig, ScaNNIndex};
+pub use snapshot_registry::default_ann_snapshot_registry;
 pub use sparse::{SparseIndex, SparseVector};
 pub use sparse_inverted::{
     ApproxSearchParams, InvertedIndexAlgo, SparseInvertedIndex, SparseInvertedSearcher,
