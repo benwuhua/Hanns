@@ -1,4 +1,4 @@
-use hanns::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType};
+use hanns::api::{DataType, IndexConfig, IndexParams, IndexType, KnowhereError, MetricType};
 use hanns::faiss::IvfFlatIndex;
 
 fn build_small_ivf_flat() -> (IvfFlatIndex, usize) {
@@ -27,6 +27,34 @@ fn build_small_ivf_flat() -> (IvfFlatIndex, usize) {
         .add(&vectors, Some(&ids))
         .expect("ivf-flat vectors should add");
     (index, nlist)
+}
+
+#[test]
+fn ivf_flat_rejects_untrained_sectioned_export() {
+    let cfg = IndexConfig {
+        index_type: IndexType::IvfFlat,
+        metric_type: MetricType::L2,
+        dim: 4,
+        data_type: DataType::Float,
+        params: IndexParams::ivf(3, 2),
+    };
+    let index = IvfFlatIndex::new(&cfg).expect("ivf-flat index should build");
+
+    let error = index
+        .export_sectioned_snapshot()
+        .expect_err("untrained IVF-Flat sectioned export should fail");
+
+    assert!(
+        matches!(
+            error,
+            KnowhereError::InvalidArg(_) | KnowhereError::Codec(_)
+        ),
+        "expected clear validation error, got {error:?}"
+    );
+    assert!(
+        error.to_string().contains("trained"),
+        "error should mention trained state, got {error}"
+    );
 }
 
 #[test]

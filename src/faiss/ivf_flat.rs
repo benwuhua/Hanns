@@ -802,13 +802,19 @@ impl IvfFlatIndex {
                 "invalid IVF-Flat sectioned snapshot: nlist must be > 0".to_string(),
             ));
         }
+        if !self.trained {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "cannot export untrained IVF-Flat sectioned snapshot; train index first"
+                    .to_string(),
+            ));
+        }
 
         let centroid_len = self.nlist.checked_mul(self.dim).ok_or_else(|| {
             crate::api::KnowhereError::Codec(
                 "invalid IVF-Flat sectioned snapshot: centroid length overflow".to_string(),
             )
         })?;
-        if self.trained && self.centroids.len() != centroid_len {
+        if self.centroids.len() != centroid_len {
             return Err(crate::api::KnowhereError::Codec(format!(
                 "invalid IVF-Flat sectioned snapshot: centroids len {} != nlist * dim {}",
                 self.centroids.len(),
@@ -844,32 +850,32 @@ impl IvfFlatIndex {
             )));
         }
 
-        let mut list_total = 0usize;
+        let mut expected_offset = 0usize;
         for (list_idx, (&offset, &size)) in self
             .invlist_offsets
             .iter()
             .zip(self.invlist_sizes.iter())
             .enumerate()
         {
-            let end = offset.checked_add(size).ok_or_else(|| {
+            if offset != expected_offset {
+                return Err(crate::api::KnowhereError::Codec(format!(
+                    "invalid IVF-Flat sectioned snapshot: list {list_idx} offset {offset} != expected canonical offset {expected_offset}"
+                )));
+            }
+            expected_offset = expected_offset.checked_add(size).ok_or_else(|| {
                 crate::api::KnowhereError::Codec(format!(
                     "invalid IVF-Flat sectioned snapshot: list {list_idx} offset overflow"
                 ))
             })?;
-            if end > list_count {
+            if expected_offset > list_count {
                 return Err(crate::api::KnowhereError::Codec(format!(
-                    "invalid IVF-Flat sectioned snapshot: list {list_idx} range {offset}..{end} exceeds list_ids len {list_count}"
+                    "invalid IVF-Flat sectioned snapshot: list {list_idx} range {offset}..{expected_offset} exceeds list_ids len {list_count}"
                 )));
             }
-            list_total = list_total.checked_add(size).ok_or_else(|| {
-                crate::api::KnowhereError::Codec(
-                    "invalid IVF-Flat sectioned snapshot: list size total overflow".to_string(),
-                )
-            })?;
         }
-        if list_total != list_count {
+        if expected_offset != list_count {
             return Err(crate::api::KnowhereError::Codec(format!(
-                "invalid IVF-Flat sectioned snapshot: sum(list_sizes) {list_total} != list_ids len {list_count}"
+                "invalid IVF-Flat sectioned snapshot: canonical list coverage ends at {expected_offset} != list_ids len {list_count}"
             )));
         }
 
@@ -1151,6 +1157,41 @@ mod tests {
 
         let result = index.search(&query, &req).unwrap();
         assert!(!result.ids.is_empty() && result.ids.len() <= 2); // IVF may return fewer than top_k
+    }
+
+    #[test]
+    fn export_sectioned_snapshot_rejects_noncanonical_list_layout() {
+        let index = IvfFlatIndex {
+            dim: 2,
+            nlist: 3,
+            nprobe: 2,
+            metric_type: MetricType::L2,
+            centroids: vec![0.0; 6],
+            invlist_ids: vec![10, 11, 12],
+            invlist_vectors: vec![0.0; 6],
+            invlist_offsets: vec![0, 0, 2],
+            invlist_sizes: vec![1, 1, 1],
+            vectors: vec![0.0; 6],
+            ids: vec![10, 11, 12],
+            next_id: 13,
+            trained: true,
+        };
+
+        let error = index
+            .export_sectioned_snapshot()
+            .expect_err("overlapping IVF list layout should fail");
+
+        assert!(
+            matches!(
+                error,
+                crate::api::KnowhereError::Codec(_) | crate::api::KnowhereError::InvalidArg(_)
+            ),
+            "expected validation error, got {error:?}"
+        );
+        assert!(
+            error.to_string().contains("list 1 offset"),
+            "error should identify noncanonical offset, got {error}"
+        );
     }
 
     #[cfg(feature = "parallel")]
