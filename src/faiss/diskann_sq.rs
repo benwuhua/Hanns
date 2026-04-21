@@ -7,8 +7,9 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
 
-use crate::api::{MetricType, Result};
+use crate::api::{MetricType, Result, SearchRequest};
 use crate::faiss::diskann_aisaq::{AisaqConfig, PQFlashIndex};
+use crate::kernel::{AnnRuntime, IndexFamily};
 use crate::quantization::sq::QuantizerType;
 use crate::quantization::{PcaTransform, Sq8Quantizer};
 
@@ -348,6 +349,36 @@ fn validate_diskann_sq_sectioned_parts(n: usize, d_sq: usize, sq_codes: &[u8]) -
         )));
     }
     Ok(())
+}
+
+impl AnnRuntime for DiskAnnSqIndex {
+    fn family(&self) -> IndexFamily {
+        IndexFamily::DiskAnn
+    }
+
+    fn dim(&self) -> usize {
+        self.d_in
+    }
+
+    fn len(&self) -> usize {
+        self.n
+    }
+
+    fn search_into(
+        &self,
+        query: &[f32],
+        req: &SearchRequest,
+        ids: &mut [i64],
+        dists: &mut [f32],
+    ) -> Result<usize> {
+        let result = self.search(query, req.top_k)?;
+        let count = result.len().min(ids.len()).min(dists.len());
+        for (slot, (dist, id)) in result.into_iter().take(count).enumerate() {
+            ids[slot] = if id == u32::MAX { -1 } else { id as i64 };
+            dists[slot] = dist;
+        }
+        Ok(count)
+    }
 }
 
 fn write_bool<W: Write>(w: &mut W, v: bool) -> Result<()> {

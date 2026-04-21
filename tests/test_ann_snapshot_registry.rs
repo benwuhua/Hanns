@@ -1,7 +1,8 @@
 use hanns::api::{DataType, IndexConfig, IndexParams, IndexType, MetricType, SearchRequest};
 use hanns::faiss::{
-    default_ann_snapshot_registry, HnswIndex, HnswSectionedSnapshot, IvfFlatIndex,
-    IvfFlatSectionedSnapshot,
+    default_ann_snapshot_registry, AisaqConfig, DiskAnnPcaUsqConfig, DiskAnnPcaUsqIndex,
+    DiskAnnPcaUsqSectionedSnapshot, DiskAnnSqConfig, DiskAnnSqIndex, DiskAnnSqSectionedSnapshot,
+    HnswIndex, HnswSectionedSnapshot, IvfFlatIndex, IvfFlatSectionedSnapshot,
 };
 use hanns::kernel::IndexFamily;
 use hanns::storage::{
@@ -54,6 +55,63 @@ fn build_hnsw() -> HnswIndex {
         .add(&vectors, Some(&ids))
         .expect("hnsw vectors should add");
     index
+}
+
+fn build_diskann_sq() -> (DiskAnnSqIndex, Vec<f32>) {
+    let dim = 4;
+    let n = 32;
+    let config = DiskAnnSqConfig {
+        base: AisaqConfig {
+            max_degree: 8,
+            search_list_size: 32,
+            beamwidth: 4,
+            num_entry_points: 2,
+            num_refine_passes: 1,
+            ..Default::default()
+        },
+        use_pca: false,
+        pca_dim: 4,
+        rerank_k: 16,
+    };
+    let mut vectors = Vec::with_capacity(n * dim);
+    for i in 0..n {
+        for j in 0..dim {
+            vectors.push(((i * 13 + j * 7) % 31) as f32 / 31.0);
+        }
+    }
+    let mut index = DiskAnnSqIndex::new(dim, MetricType::L2, config).expect("diskann sq");
+    index.build(&vectors, n, dim).expect("diskann sq build");
+    (index, vectors)
+}
+
+fn build_diskann_pca_usq() -> (DiskAnnPcaUsqIndex, Vec<f32>) {
+    let dim = 8;
+    let n = 32;
+    let config = DiskAnnPcaUsqConfig {
+        base: AisaqConfig {
+            max_degree: 8,
+            search_list_size: 32,
+            beamwidth: 4,
+            num_entry_points: 2,
+            num_refine_passes: 1,
+            ..Default::default()
+        },
+        pca_dim: 4,
+        bits_per_dim: 4,
+        rotation_seed: 7,
+        rerank_k: 16,
+    };
+    let mut vectors = Vec::with_capacity(n * dim);
+    for i in 0..n {
+        for j in 0..dim {
+            vectors.push(((i * 17 + j * 11) % 37) as f32 / 37.0);
+        }
+    }
+    let mut index = DiskAnnPcaUsqIndex::new(dim, MetricType::L2, config).expect("diskann pca usq");
+    index
+        .build(&vectors, n, dim)
+        .expect("diskann pca usq build");
+    (index, vectors)
 }
 
 #[test]
@@ -109,6 +167,72 @@ fn default_registry_loads_hnsw_sectioned_runtime_by_manifest_variant() {
     assert_eq!(runtime.family(), IndexFamily::Hnsw);
     assert_eq!(runtime.dim(), 4);
     assert_eq!(runtime.len(), 4);
+}
+
+#[test]
+fn default_registry_loads_diskann_sq_runtime_by_manifest_variant() {
+    let (index, vectors) = build_diskann_sq();
+    let snapshot = DiskAnnSqSectionedSnapshot::from_index(&index).expect("snapshot");
+    let mut store = MemoryArtifactStore::default();
+    snapshot.write_snapshot(&mut store).expect("write");
+
+    let registry = default_ann_snapshot_registry().expect("registry");
+    let runtime = registry
+        .load_snapshot(&store, LoadMode::OwnedMemory)
+        .expect("runtime should load");
+
+    assert_eq!(runtime.family(), IndexFamily::DiskAnn);
+    assert_eq!(runtime.dim(), 4);
+    assert_eq!(runtime.len(), 32);
+
+    let mut ids = vec![-1; 4];
+    let mut dists = vec![f32::MAX; 4];
+    let count = runtime
+        .search_into(
+            &vectors[0..4],
+            &SearchRequest {
+                top_k: 4,
+                ..Default::default()
+            },
+            &mut ids,
+            &mut dists,
+        )
+        .expect("runtime search");
+    assert_eq!(count, 4);
+    assert!(ids[0] >= 0);
+}
+
+#[test]
+fn default_registry_loads_diskann_pca_usq_runtime_by_manifest_variant() {
+    let (index, vectors) = build_diskann_pca_usq();
+    let snapshot = DiskAnnPcaUsqSectionedSnapshot::from_index(&index).expect("snapshot");
+    let mut store = MemoryArtifactStore::default();
+    snapshot.write_snapshot(&mut store).expect("write");
+
+    let registry = default_ann_snapshot_registry().expect("registry");
+    let runtime = registry
+        .load_snapshot(&store, LoadMode::OwnedMemory)
+        .expect("runtime should load");
+
+    assert_eq!(runtime.family(), IndexFamily::DiskAnn);
+    assert_eq!(runtime.dim(), 8);
+    assert_eq!(runtime.len(), 32);
+
+    let mut ids = vec![-1; 4];
+    let mut dists = vec![f32::MAX; 4];
+    let count = runtime
+        .search_into(
+            &vectors[0..8],
+            &SearchRequest {
+                top_k: 4,
+                ..Default::default()
+            },
+            &mut ids,
+            &mut dists,
+        )
+        .expect("runtime search");
+    assert_eq!(count, 4);
+    assert!(ids[0] >= 0);
 }
 
 #[test]

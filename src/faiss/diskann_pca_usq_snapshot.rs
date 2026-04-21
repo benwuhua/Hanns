@@ -2,10 +2,10 @@ use crate::api::{KnowhereError, MetricType, Result};
 use crate::faiss::diskann_pca_usq::{
     DiskAnnPcaUsqConfig, DiskAnnPcaUsqIndex, DiskAnnPcaUsqPcaExport, DiskAnnPcaUsqSectionedExport,
 };
-use crate::kernel::IndexFamily;
+use crate::kernel::{AnnRuntime, IndexFamily};
 use crate::storage::{
-    AnnSnapshot, FileArtifactStore, IndexArtifactReader, IndexArtifactWriter, IndexManifest,
-    MemoryArtifactStore, SectionDescriptor,
+    AnnSnapshot, AnnSnapshotLoader, FileArtifactStore, IndexArtifactReader, IndexArtifactWriter,
+    IndexManifest, LoadMode, MemoryArtifactStore, SectionDescriptor,
 };
 
 use serde::{Deserialize, Serialize};
@@ -313,6 +313,18 @@ pub fn load_diskann_pca_usq_index_from_artifact(
         inner: load_pqflash_index_from_artifact(&inner_store)?.export_sectioned_snapshot()?,
     };
     DiskAnnPcaUsqIndex::from_sectioned_snapshot_export(export)
+}
+
+pub struct DiskAnnPcaUsqSnapshotLoader;
+
+impl AnnSnapshotLoader for DiskAnnPcaUsqSnapshotLoader {
+    fn load_snapshot(
+        &self,
+        reader: &dyn IndexArtifactReader,
+        _mode: LoadMode,
+    ) -> Result<Box<dyn AnnRuntime>> {
+        Ok(Box::new(load_diskann_pca_usq_index_from_artifact(reader)?))
+    }
 }
 
 fn metric_name(metric: MetricType) -> &'static str {
