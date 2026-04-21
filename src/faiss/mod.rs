@@ -7,6 +7,7 @@ pub mod binary_hnsw;
 pub mod diskann_aisaq;
 pub mod diskann_pca_usq;
 pub mod diskann_sq;
+pub mod diskann_sq_snapshot;
 pub mod hnsw;
 pub mod hnsw_hvq;
 pub mod hnsw_pca_sq;
@@ -54,6 +55,13 @@ pub use diskann_aisaq::{
 };
 pub use diskann_pca_usq::{DiskAnnPcaUsqConfig, DiskAnnPcaUsqIndex};
 pub use diskann_sq::{DiskAnnSqConfig, DiskAnnSqIndex};
+pub use diskann_sq_snapshot::{
+    load_diskann_sq_index_from_artifact, load_diskann_sq_sectioned_snapshot,
+    save_diskann_sq_sectioned_snapshot, DiskAnnSqSectionedSnapshot,
+    DISKANN_SQ_INNER_MANIFEST_SECTION, DISKANN_SQ_INNER_PREFIX, DISKANN_SQ_META_SECTION,
+    DISKANN_SQ_PCA_COMPONENTS_SECTION, DISKANN_SQ_PCA_MEAN_SECTION,
+    DISKANN_SQ_SECTIONS_SNAPSHOT_VARIANT, DISKANN_SQ_SQ_CODES_SECTION,
+};
 pub use hnsw::HnswIndex;
 pub use hnsw_hvq::{HnswHvqConfig, HnswHvqIndex};
 pub use hnsw_pca_sq::{HnswPcaSqConfig, HnswPcaSqIndex};

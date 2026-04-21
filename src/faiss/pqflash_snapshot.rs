@@ -91,6 +91,10 @@ pub struct PqFlashSectionedSnapshot {
 impl PqFlashSectionedSnapshot {
     pub fn from_index(index: &PQFlashIndex) -> Result<Self> {
         let export = index.export_sectioned_snapshot()?;
+        Self::from_export(export)
+    }
+
+    pub fn from_export(export: PQFlashSectionedExport) -> Result<Self> {
         let meta = PqFlashSectionMetadata {
             version: 1,
             dim: export.dim,
@@ -214,6 +218,10 @@ impl PqFlashSectionedSnapshot {
         // Keep a stable section order matching REQUIRED_PQFLASH_SECTIONS.
         sections.shrink_to_fit();
         Ok(Self { manifest, sections })
+    }
+
+    pub fn into_manifest_and_sections(self) -> (IndexManifest, Vec<(String, Vec<u8>)>) {
+        (self.manifest, self.sections)
     }
 }
 

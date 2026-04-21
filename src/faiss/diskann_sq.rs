@@ -43,6 +43,33 @@ pub struct DiskAnnSqIndex {
     config: DiskAnnSqConfig,
 }
 
+#[derive(Clone, Debug)]
+pub struct DiskAnnSqPcaExport {
+    pub d_in: usize,
+    pub d_out: usize,
+    pub mean: Vec<f32>,
+    pub components: Vec<f32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DiskAnnSqSectionedExport {
+    pub metric_type: MetricType,
+    pub n: usize,
+    pub d_in: usize,
+    pub d_sq: usize,
+    pub config: DiskAnnSqConfig,
+    pub sq_dim: usize,
+    pub sq_bit: usize,
+    pub sq_quantizer_type: QuantizerType,
+    pub sq_min_val: f32,
+    pub sq_max_val: f32,
+    pub sq_scale: f32,
+    pub sq_offset: f32,
+    pub sq_codes: Vec<u8>,
+    pub pca: Option<DiskAnnSqPcaExport>,
+    pub inner: crate::faiss::diskann_aisaq::PQFlashSectionedExport,
+}
+
 impl DiskAnnSqIndex {
     pub fn new(dim: usize, metric_type: MetricType, config: DiskAnnSqConfig) -> Result<Self> {
         if dim == 0 {
@@ -222,6 +249,105 @@ impl DiskAnnSqIndex {
             config,
         })
     }
+
+    pub fn export_sectioned_snapshot(&self) -> Result<DiskAnnSqSectionedExport> {
+        validate_diskann_sq_sectioned_parts(self.n, self.d_sq, &self.sq_codes)?;
+        Ok(DiskAnnSqSectionedExport {
+            metric_type: self.metric_type,
+            n: self.n,
+            d_in: self.d_in,
+            d_sq: self.d_sq,
+            config: self.config.clone(),
+            sq_dim: self.sq.dim,
+            sq_bit: self.sq.bit,
+            sq_quantizer_type: self.sq.quantizer_type,
+            sq_min_val: self.sq.min_val,
+            sq_max_val: self.sq.max_val,
+            sq_scale: self.sq.scale,
+            sq_offset: self.sq.offset,
+            sq_codes: self.sq_codes.clone(),
+            pca: self.pca.as_ref().map(|pca| DiskAnnSqPcaExport {
+                d_in: pca.d_in,
+                d_out: pca.d_out,
+                mean: pca.mean.clone(),
+                components: pca.components.clone(),
+            }),
+            inner: self.inner.export_sectioned_snapshot()?,
+        })
+    }
+
+    pub fn from_sectioned_snapshot_export(export: DiskAnnSqSectionedExport) -> Result<Self> {
+        validate_diskann_sq_sectioned_parts(export.n, export.d_sq, &export.sq_codes)?;
+        if export.sq_dim != export.d_sq {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invalid DiskAnnSq sectioned snapshot: sq dim {} != d_sq {}",
+                export.sq_dim, export.d_sq
+            )));
+        }
+        if export.sq_scale <= 0.0 || !export.sq_scale.is_finite() {
+            return Err(crate::api::KnowhereError::Codec(
+                "invalid DiskAnnSq sectioned snapshot: SQ scale must be finite and > 0".to_string(),
+            ));
+        }
+        let pca = match export.pca {
+            Some(pca) => {
+                if pca.d_in != export.d_in || pca.d_out != export.d_sq {
+                    return Err(crate::api::KnowhereError::Codec(
+                        "invalid DiskAnnSq sectioned snapshot: PCA dimensions mismatch".to_string(),
+                    ));
+                }
+                if pca.mean.len() != pca.d_in || pca.components.len() != pca.d_in * pca.d_out {
+                    return Err(crate::api::KnowhereError::Codec(
+                        "invalid DiskAnnSq sectioned snapshot: PCA payload length mismatch"
+                            .to_string(),
+                    ));
+                }
+                Some(PcaTransform {
+                    d_in: pca.d_in,
+                    d_out: pca.d_out,
+                    mean: pca.mean,
+                    components: pca.components,
+                })
+            }
+            None => None,
+        };
+        let sq = Sq8Quantizer {
+            dim: export.sq_dim,
+            bit: export.sq_bit,
+            quantizer_type: export.sq_quantizer_type,
+            min_val: export.sq_min_val,
+            max_val: export.sq_max_val,
+            scale: export.sq_scale,
+            offset: export.sq_offset,
+        };
+        Ok(Self {
+            inner: PQFlashIndex::from_sectioned_snapshot_export(export.inner)?,
+            metric_type: export.metric_type,
+            sq,
+            sq_codes: export.sq_codes,
+            pca,
+            n: export.n,
+            d_in: export.d_in,
+            d_sq: export.d_sq,
+            config: export.config,
+        })
+    }
+}
+
+fn validate_diskann_sq_sectioned_parts(n: usize, d_sq: usize, sq_codes: &[u8]) -> Result<()> {
+    let expected = n.checked_mul(d_sq).ok_or_else(|| {
+        crate::api::KnowhereError::Codec(
+            "invalid DiskAnnSq sectioned snapshot: SQ code length overflow".to_string(),
+        )
+    })?;
+    if sq_codes.len() != expected {
+        return Err(crate::api::KnowhereError::Codec(format!(
+            "invalid DiskAnnSq sectioned snapshot: sq_codes len {} != n * d_sq {}",
+            sq_codes.len(),
+            expected
+        )));
+    }
+    Ok(())
 }
 
 fn write_bool<W: Write>(w: &mut W, v: bool) -> Result<()> {
