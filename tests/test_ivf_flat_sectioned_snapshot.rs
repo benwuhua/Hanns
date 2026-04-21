@@ -4,7 +4,8 @@ use hanns::api::{
     DataType, IndexConfig, IndexParams, IndexType, KnowhereError, MetricType, SearchRequest,
 };
 use hanns::faiss::{
-    load_ivf_flat_index_from_artifact, IvfFlatIndex, IvfFlatSectionedSnapshot,
+    load_ivf_flat_index_from_artifact, load_ivf_flat_sectioned_snapshot,
+    save_ivf_flat_sectioned_snapshot, IvfFlatIndex, IvfFlatSectionedSnapshot,
     IVF_FLAT_CENTROIDS_SECTION, IVF_FLAT_IDS_SECTION, IVF_FLAT_LIST_IDS_SECTION,
     IVF_FLAT_LIST_OFFSETS_SECTION, IVF_FLAT_LIST_SIZES_SECTION, IVF_FLAT_LIST_VECTORS_SECTION,
     IVF_FLAT_META_SECTION, IVF_FLAT_SECTIONS_SNAPSHOT_VARIANT, IVF_FLAT_VECTORS_SECTION,
@@ -13,6 +14,7 @@ use hanns::kernel::IndexFamily;
 use hanns::storage::{
     AnnSnapshot, IndexArtifactReader, IndexArtifactWriter, IndexManifest, MemoryArtifactStore,
 };
+use tempfile::tempdir;
 
 fn build_small_ivf_flat() -> (IvfFlatIndex, usize) {
     let dim = 4;
@@ -244,6 +246,26 @@ fn ivf_flat_sectioned_snapshot_roundtrips_search_results() {
 }
 
 #[test]
+fn ivf_flat_sectioned_file_helpers_roundtrip() {
+    let (index, _) = build_small_ivf_flat();
+    let query = [1.05, 1.0, 1.0, 1.0];
+    let req = SearchRequest {
+        top_k: 4,
+        nprobe: 3,
+        ..Default::default()
+    };
+    let original = index.search(&query, &req).expect("original search");
+    let dir = tempdir().expect("tempdir should build");
+
+    save_ivf_flat_sectioned_snapshot(&index, dir.path()).expect("save sectioned snapshot");
+    let loaded = load_ivf_flat_sectioned_snapshot(dir.path()).expect("load sectioned snapshot");
+    let roundtrip = loaded.search(&query, &req).expect("loaded search");
+
+    assert_eq!(roundtrip.ids, original.ids);
+    assert_eq!(roundtrip.distances, original.distances);
+}
+
+#[test]
 fn ivf_flat_sectioned_restore_preserves_legacy_next_id_for_auto_ids() {
     let (index, _) = build_small_ivf_flat();
     let snapshot = IvfFlatSectionedSnapshot::from_index(&index).expect("snapshot");
@@ -310,6 +332,43 @@ fn ivf_flat_sectioned_snapshot_rejects_malformed_list_count() {
 }
 
 #[test]
+fn ivf_flat_sectioned_snapshot_rejects_bad_centroid_length() {
+    let (index, _) = build_small_ivf_flat();
+    let store = sectioned_store_with(&index, |manifest, sections| {
+        let centroids = sections
+            .get_mut(IVF_FLAT_CENTROIDS_SECTION)
+            .expect("centroids section");
+        centroids.truncate(centroids.len() - std::mem::size_of::<f32>());
+        refresh_manifest_lengths(manifest, sections);
+    });
+
+    assert_codec_contains(load_error(&store), "centroids len 11 != nlist * dim 12");
+}
+
+#[test]
+fn ivf_flat_sectioned_snapshot_rejects_noncanonical_list_offset() {
+    let (index, _) = build_small_ivf_flat();
+    let store = sectioned_store_with(&index, |manifest, sections| {
+        let mut list_offsets = decode_u64s(
+            sections
+                .get(IVF_FLAT_LIST_OFFSETS_SECTION)
+                .expect("list offsets section"),
+        );
+        list_offsets[0] = 1;
+        sections.insert(
+            IVF_FLAT_LIST_OFFSETS_SECTION.to_string(),
+            encode_u64s(&list_offsets),
+        );
+        refresh_manifest_lengths(manifest, sections);
+    });
+
+    assert_codec_contains(
+        load_error(&store),
+        "list 0 offset 1 != expected canonical offset 0",
+    );
+}
+
+#[test]
 fn ivf_flat_sectioned_snapshot_rejects_manifest_descriptor_length_mismatch() {
     let (index, _) = build_small_ivf_flat();
     let store = sectioned_store_with(&index, |manifest, _sections| {
@@ -322,6 +381,16 @@ fn ivf_flat_sectioned_snapshot_rejects_manifest_descriptor_length_mismatch() {
     });
 
     assert_codec_contains(load_error(&store), "descriptor length");
+}
+
+#[test]
+fn ivf_flat_sectioned_snapshot_rejects_unsupported_manifest_variant() {
+    let (index, _) = build_small_ivf_flat();
+    let store = sectioned_store_with(&index, |manifest, _sections| {
+        manifest.variant = "ivf_flat_sections_v2".to_string();
+    });
+
+    assert_codec_contains(load_error(&store), "expected variant ivf_flat_sections_v1");
 }
 
 #[test]

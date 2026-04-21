@@ -67,7 +67,8 @@ pub use ivf::IvfIndex;
 pub use ivf_flat::IvfFlatIndex;
 pub use ivf_flat_cc::IvfFlatCcIndex;
 pub use ivf_flat_snapshot::{
-    load_ivf_flat_index_from_artifact, IvfFlatSectionedSnapshot, IVF_FLAT_CENTROIDS_SECTION,
+    load_ivf_flat_index_from_artifact, load_ivf_flat_sectioned_snapshot,
+    save_ivf_flat_sectioned_snapshot, IvfFlatSectionedSnapshot, IVF_FLAT_CENTROIDS_SECTION,
     IVF_FLAT_IDS_SECTION, IVF_FLAT_LIST_IDS_SECTION, IVF_FLAT_LIST_OFFSETS_SECTION,
     IVF_FLAT_LIST_SIZES_SECTION, IVF_FLAT_LIST_VECTORS_SECTION, IVF_FLAT_META_SECTION,
     IVF_FLAT_SECTIONS_SNAPSHOT_VARIANT, IVF_FLAT_VECTORS_SECTION,

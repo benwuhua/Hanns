@@ -1,10 +1,12 @@
 use crate::api::{KnowhereError, MetricType, Result};
 use crate::kernel::IndexFamily;
 use crate::storage::{
-    AnnSnapshot, IndexArtifactReader, IndexArtifactWriter, IndexManifest, SectionDescriptor,
+    AnnSnapshot, FileArtifactStore, IndexArtifactReader, IndexArtifactWriter, IndexManifest,
+    SectionDescriptor,
 };
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 use super::ivf_flat::{IvfFlatIndex, IvfFlatSectionedExport};
 
@@ -120,6 +122,20 @@ impl AnnSnapshot for IvfFlatSectionedSnapshot {
         }
         writer.finish_manifest(&self.manifest)
     }
+}
+
+pub fn save_ivf_flat_sectioned_snapshot(
+    index: &IvfFlatIndex,
+    root: impl AsRef<Path>,
+) -> Result<()> {
+    let mut store = FileArtifactStore::new(root)?;
+    let snapshot = IvfFlatSectionedSnapshot::from_index(index)?;
+    snapshot.write_snapshot(&mut store)
+}
+
+pub fn load_ivf_flat_sectioned_snapshot(root: impl AsRef<Path>) -> Result<IvfFlatIndex> {
+    let store = FileArtifactStore::new(root)?;
+    load_ivf_flat_index_from_artifact(&store)
 }
 
 pub fn load_ivf_flat_index_from_artifact(reader: &dyn IndexArtifactReader) -> Result<IvfFlatIndex> {
