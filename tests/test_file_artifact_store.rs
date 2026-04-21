@@ -1,7 +1,7 @@
 use hanns::kernel::IndexFamily;
 use hanns::storage::{
     FileArtifactStore, IndexArtifactReader, IndexArtifactWriter, IndexManifest, LoadMode,
-    SectionDescriptor,
+    ManifestFeatures, SectionDescriptor,
 };
 use tempfile::tempdir;
 
@@ -14,6 +14,7 @@ fn manifest() -> IndexManifest {
         metric: "l2".to_string(),
         count: 2,
         supported_load_modes: vec![LoadMode::OwnedMemory],
+        features: ManifestFeatures::default(),
         sections: vec![
             SectionDescriptor {
                 name: "vectors".to_string(),
@@ -38,6 +39,7 @@ fn manifest_with_section_name(name: &str) -> IndexManifest {
         metric: "l2".to_string(),
         count: 1,
         supported_load_modes: vec![LoadMode::OwnedMemory],
+        features: ManifestFeatures::default(),
         sections: vec![SectionDescriptor {
             name: name.to_string(),
             len: 4,

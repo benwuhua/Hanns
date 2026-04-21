@@ -2,7 +2,7 @@ use hanns::api::SearchRequest;
 use hanns::kernel::{AnnRuntime, IndexFamily};
 use hanns::storage::{
     AnnSnapshot, AnnSnapshotLoader, IndexArtifactReader, IndexArtifactWriter, IndexManifest,
-    LoadMode, MemoryArtifactStore, SectionDescriptor,
+    LoadMode, ManifestFeatures, MemoryArtifactStore, SectionDescriptor,
 };
 
 struct DummySnapshot;
@@ -18,6 +18,7 @@ impl AnnSnapshot for DummySnapshot {
             metric: "l2".to_string(),
             count: 1,
             supported_load_modes: vec![LoadMode::OwnedMemory],
+            features: ManifestFeatures::default(),
             sections: vec![SectionDescriptor {
                 name: "payload".to_string(),
                 len: 4,

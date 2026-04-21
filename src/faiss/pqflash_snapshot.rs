@@ -206,6 +206,16 @@ impl PqFlashSectionedSnapshot {
             metric: metric_name(export.metric_type).to_string(),
             count: export.count,
             supported_load_modes: vec![LoadMode::OwnedMemory],
+            features: crate::storage::ManifestFeatures {
+                raw_vectors: true,
+                graph_payload: true,
+                quantized_payload: export.pq.is_some()
+                    || export.hvq.is_some()
+                    || export.sq8.is_some(),
+                compressed_vectors: export.pq_code_size > 0
+                    || export.hvq.is_some()
+                    || export.sq8.is_some(),
+            },
             sections: sections
                 .iter()
                 .map(|(name, bytes)| SectionDescriptor {

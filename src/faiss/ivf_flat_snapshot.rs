@@ -103,6 +103,12 @@ impl IvfFlatSectionedSnapshot {
             metric: metric_name(export.metric_type).to_string(),
             count: export.count,
             supported_load_modes: vec![LoadMode::OwnedMemory],
+            features: crate::storage::ManifestFeatures {
+                raw_vectors: true,
+                graph_payload: false,
+                quantized_payload: false,
+                compressed_vectors: false,
+            },
             sections: sections
                 .iter()
                 .map(|(name, bytes)| SectionDescriptor {

@@ -141,6 +141,12 @@ impl DiskAnnSqSectionedSnapshot {
             metric: metric_name(export.metric_type).to_string(),
             count: export.n,
             supported_load_modes: vec![LoadMode::OwnedMemory],
+            features: crate::storage::ManifestFeatures {
+                raw_vectors: true,
+                graph_payload: true,
+                quantized_payload: true,
+                compressed_vectors: true,
+            },
             sections: sections
                 .iter()
                 .map(|(name, bytes)| SectionDescriptor {

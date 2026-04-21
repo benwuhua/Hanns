@@ -1,5 +1,5 @@
 use hanns::kernel::IndexFamily;
-use hanns::storage::{IndexManifest, LoadMode, SectionDescriptor};
+use hanns::storage::{IndexManifest, LoadMode, ManifestFeatures, SectionDescriptor};
 
 #[test]
 fn manifest_roundtrips_as_json() {
@@ -11,6 +11,12 @@ fn manifest_roundtrips_as_json() {
         metric: "l2".to_string(),
         count: 10,
         supported_load_modes: vec![LoadMode::OwnedMemory],
+        features: ManifestFeatures {
+            raw_vectors: true,
+            graph_payload: true,
+            quantized_payload: false,
+            compressed_vectors: false,
+        },
         sections: vec![SectionDescriptor {
             name: "ids".to_string(),
             len: 80,
@@ -23,6 +29,10 @@ fn manifest_roundtrips_as_json() {
     assert_eq!(loaded.family, IndexFamily::Hnsw);
     assert_eq!(loaded.sections[0].name, "ids");
     assert!(loaded.supports_load_mode(LoadMode::OwnedMemory));
+    assert!(loaded.has_raw_vectors());
+    assert!(loaded.has_graph_payload());
+    assert!(!loaded.has_quantized_payload());
+    assert!(!loaded.has_compressed_vectors());
 }
 
 #[test]
@@ -39,4 +49,5 @@ fn manifest_defaults_supported_load_modes_for_legacy_json() {
 
     let loaded: IndexManifest = serde_json::from_str(json).unwrap();
     assert_eq!(loaded.supported_load_modes, vec![LoadMode::OwnedMemory]);
+    assert_eq!(loaded.features, ManifestFeatures::default());
 }

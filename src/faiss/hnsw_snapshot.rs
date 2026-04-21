@@ -46,6 +46,12 @@ impl HnswSnapshot {
             metric: metric_name(index.metric_type()).to_string(),
             count: index.ntotal(),
             supported_load_modes: vec![LoadMode::OwnedMemory],
+            features: crate::storage::ManifestFeatures {
+                raw_vectors: true,
+                graph_payload: true,
+                quantized_payload: false,
+                compressed_vectors: false,
+            },
             sections: vec![SectionDescriptor {
                 name: HNSW_SNAPSHOT_SECTION.to_string(),
                 len: bytes.len() as u64,
@@ -178,7 +184,8 @@ impl HnswSectionedSnapshot {
             ));
         }
 
-        if !export.sq_codes.is_empty() {
+        let has_sq_codes = !export.sq_codes.is_empty();
+        if has_sq_codes {
             sections.push((HNSW_SQ_CODES_SECTION.to_string(), export.sq_codes));
         }
 
@@ -190,6 +197,12 @@ impl HnswSectionedSnapshot {
             metric: metric_name(export.metric_type).to_string(),
             count: export.count,
             supported_load_modes: vec![LoadMode::OwnedMemory],
+            features: crate::storage::ManifestFeatures {
+                raw_vectors: true,
+                graph_payload: true,
+                quantized_payload: has_sq_codes,
+                compressed_vectors: has_sq_codes,
+            },
             sections: sections
                 .iter()
                 .map(|(name, bytes)| SectionDescriptor {

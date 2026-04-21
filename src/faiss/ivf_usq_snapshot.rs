@@ -142,6 +142,12 @@ impl IvfUsqSectionedSnapshot {
             metric: metric_name(export.metric_type).to_string(),
             count: export.ntotal,
             supported_load_modes: vec![LoadMode::OwnedMemory],
+            features: crate::storage::ManifestFeatures {
+                raw_vectors: false,
+                graph_payload: false,
+                quantized_payload: true,
+                compressed_vectors: true,
+            },
             sections: sections
                 .iter()
                 .map(|(name, bytes)| SectionDescriptor {

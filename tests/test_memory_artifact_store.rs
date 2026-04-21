@@ -1,6 +1,7 @@
 use hanns::kernel::IndexFamily;
 use hanns::storage::{
-    IndexArtifactReader, IndexArtifactWriter, IndexManifest, LoadMode, MemoryArtifactStore,
+    IndexArtifactReader, IndexArtifactWriter, IndexManifest, LoadMode, ManifestFeatures,
+    MemoryArtifactStore,
 };
 
 fn manifest() -> IndexManifest {
@@ -12,6 +13,7 @@ fn manifest() -> IndexManifest {
         metric: "l2".to_string(),
         count: 1,
         supported_load_modes: vec![LoadMode::OwnedMemory],
+        features: ManifestFeatures::default(),
         sections: Vec::new(),
     }
 }

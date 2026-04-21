@@ -6,7 +6,8 @@ use hanns::faiss::{
 };
 use hanns::kernel::IndexFamily;
 use hanns::storage::{
-    AnnSnapshot, IndexArtifactWriter, IndexManifest, LoadMode, MemoryArtifactStore,
+    AnnSnapshot, IndexArtifactWriter, IndexManifest, LoadMode, ManifestFeatures,
+    MemoryArtifactStore,
 };
 
 fn build_ivf_flat() -> IvfFlatIndex {
@@ -293,6 +294,7 @@ fn registry_rejects_unregistered_variant() {
             metric: "l2".to_string(),
             count: 0,
             supported_load_modes: vec![LoadMode::OwnedMemory],
+            features: ManifestFeatures::default(),
             sections: vec![],
         })
         .expect("manifest write");
