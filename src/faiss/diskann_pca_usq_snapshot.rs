@@ -4,8 +4,9 @@ use crate::faiss::diskann_pca_usq::{
 };
 use crate::kernel::{AnnRuntime, IndexFamily};
 use crate::storage::{
-    AnnSnapshot, AnnSnapshotLoader, FileArtifactStore, IndexArtifactReader, IndexArtifactWriter,
-    IndexManifest, LoadMode, MemoryArtifactStore, SectionDescriptor,
+    require_owned_memory_load_mode, AnnSnapshot, AnnSnapshotLoader, FileArtifactStore,
+    IndexArtifactReader, IndexArtifactWriter, IndexManifest, LoadMode, MemoryArtifactStore,
+    SectionDescriptor,
 };
 
 use serde::{Deserialize, Serialize};
@@ -321,8 +322,9 @@ impl AnnSnapshotLoader for DiskAnnPcaUsqSnapshotLoader {
     fn load_snapshot(
         &self,
         reader: &dyn IndexArtifactReader,
-        _mode: LoadMode,
+        mode: LoadMode,
     ) -> Result<Box<dyn AnnRuntime>> {
+        require_owned_memory_load_mode(mode, "DiskAnnPcaUsqSnapshotLoader")?;
         Ok(Box::new(load_diskann_pca_usq_index_from_artifact(reader)?))
     }
 }

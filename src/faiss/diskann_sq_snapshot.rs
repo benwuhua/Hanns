@@ -5,8 +5,9 @@ use crate::faiss::diskann_sq::{
 use crate::kernel::{AnnRuntime, IndexFamily};
 use crate::quantization::sq::QuantizerType;
 use crate::storage::{
-    AnnSnapshot, AnnSnapshotLoader, FileArtifactStore, IndexArtifactReader, IndexArtifactWriter,
-    IndexManifest, LoadMode, MemoryArtifactStore, SectionDescriptor,
+    require_owned_memory_load_mode, AnnSnapshot, AnnSnapshotLoader, FileArtifactStore,
+    IndexArtifactReader, IndexArtifactWriter, IndexManifest, LoadMode, MemoryArtifactStore,
+    SectionDescriptor,
 };
 
 use serde::{Deserialize, Serialize};
@@ -272,8 +273,9 @@ impl AnnSnapshotLoader for DiskAnnSqSnapshotLoader {
     fn load_snapshot(
         &self,
         reader: &dyn IndexArtifactReader,
-        _mode: LoadMode,
+        mode: LoadMode,
     ) -> Result<Box<dyn AnnRuntime>> {
+        require_owned_memory_load_mode(mode, "DiskAnnSqSnapshotLoader")?;
         Ok(Box::new(load_diskann_sq_index_from_artifact(reader)?))
     }
 }

@@ -4,8 +4,8 @@ use crate::api::{KnowhereError, MetricType, Result, SqMode};
 use crate::index::Index;
 use crate::kernel::{AnnRuntime, IndexFamily};
 use crate::storage::{
-    AnnSnapshot, AnnSnapshotLoader, FileArtifactStore, IndexArtifactReader, IndexArtifactWriter,
-    IndexManifest, LoadMode, SectionDescriptor,
+    require_owned_memory_load_mode, AnnSnapshot, AnnSnapshotLoader, FileArtifactStore,
+    IndexArtifactReader, IndexArtifactWriter, IndexManifest, LoadMode, SectionDescriptor,
 };
 
 use serde::{Deserialize, Serialize};
@@ -230,13 +230,7 @@ impl AnnSnapshotLoader for HnswSnapshotLoader {
         reader: &dyn IndexArtifactReader,
         mode: LoadMode,
     ) -> Result<Box<dyn AnnRuntime>> {
-        match mode {
-            LoadMode::OwnedMemory => {}
-            LoadMode::Mmap | LoadMode::PageCache | LoadMode::Lazy => {
-                // Planned storage modes load through the same owned-memory path until
-                // HNSW gets mmap/page-cache specific runtime support.
-            }
-        }
+        require_owned_memory_load_mode(mode, "HnswSnapshotLoader")?;
 
         let index = load_hnsw_index_from_artifact(reader)?;
         Ok(Box::new(HnswRuntime::new(index)))

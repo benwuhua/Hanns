@@ -1,4 +1,4 @@
-use crate::api::Result;
+use crate::api::{KnowhereError, Result};
 use crate::kernel::AnnRuntime;
 
 use super::{IndexArtifactReader, IndexArtifactWriter};
@@ -23,6 +23,15 @@ pub trait AnnSnapshotLoader {
         reader: &dyn IndexArtifactReader,
         mode: LoadMode,
     ) -> Result<Box<dyn AnnRuntime>>;
+}
+
+pub fn require_owned_memory_load_mode(mode: LoadMode, loader_name: &str) -> Result<()> {
+    if mode == LoadMode::OwnedMemory {
+        return Ok(());
+    }
+    Err(KnowhereError::InvalidArg(format!(
+        "{loader_name} supports only LoadMode::OwnedMemory; requested {mode:?}"
+    )))
 }
 
 #[derive(Default)]

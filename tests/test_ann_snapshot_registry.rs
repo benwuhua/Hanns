@@ -153,6 +153,26 @@ fn default_registry_loads_ivf_flat_runtime_by_manifest_variant() {
 }
 
 #[test]
+fn default_registry_rejects_non_owned_load_modes_until_supported() {
+    let index = build_ivf_flat();
+    let snapshot = IvfFlatSectionedSnapshot::from_index(&index).expect("snapshot");
+    let mut store = MemoryArtifactStore::default();
+    snapshot.write_snapshot(&mut store).expect("write");
+    let registry = default_ann_snapshot_registry().expect("registry");
+
+    for mode in [LoadMode::Mmap, LoadMode::PageCache, LoadMode::Lazy] {
+        let error = match registry.load_snapshot(&store, mode) {
+            Ok(_) => panic!("mode {mode:?} should be rejected until implemented"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("LoadMode::OwnedMemory"),
+            "unexpected error for mode {mode:?}: {error}"
+        );
+    }
+}
+
+#[test]
 fn default_registry_loads_hnsw_sectioned_runtime_by_manifest_variant() {
     let index = build_hnsw();
     let snapshot = HnswSectionedSnapshot::from_index(&index).expect("snapshot");

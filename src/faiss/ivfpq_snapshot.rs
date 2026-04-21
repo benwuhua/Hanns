@@ -1,8 +1,8 @@
 use crate::api::{KnowhereError, MetricType, Result};
 use crate::kernel::{AnnRuntime, IndexFamily};
 use crate::storage::{
-    AnnSnapshot, AnnSnapshotLoader, FileArtifactStore, IndexArtifactReader, IndexArtifactWriter,
-    IndexManifest, LoadMode, SectionDescriptor,
+    require_owned_memory_load_mode, AnnSnapshot, AnnSnapshotLoader, FileArtifactStore,
+    IndexArtifactReader, IndexArtifactWriter, IndexManifest, LoadMode, SectionDescriptor,
 };
 
 use serde::{Deserialize, Serialize};
@@ -175,8 +175,9 @@ impl AnnSnapshotLoader for IvfPqSnapshotLoader {
     fn load_snapshot(
         &self,
         reader: &dyn IndexArtifactReader,
-        _mode: LoadMode,
+        mode: LoadMode,
     ) -> Result<Box<dyn AnnRuntime>> {
+        require_owned_memory_load_mode(mode, "IvfPqSnapshotLoader")?;
         Ok(Box::new(IvfRuntime::pq(load_ivf_pq_index_from_artifact(
             reader,
         )?)))

@@ -6,4 +6,6 @@ pub mod snapshot;
 pub use artifact::{IndexArtifactReader, IndexArtifactWriter, MemoryArtifactStore};
 pub use file_store::FileArtifactStore;
 pub use manifest::{IndexManifest, SectionDescriptor};
-pub use snapshot::{AnnSnapshot, AnnSnapshotLoader, AnnSnapshotRegistry, LoadMode};
+pub use snapshot::{
+    require_owned_memory_load_mode, AnnSnapshot, AnnSnapshotLoader, AnnSnapshotRegistry, LoadMode,
+};
