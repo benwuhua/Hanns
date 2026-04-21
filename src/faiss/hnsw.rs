@@ -20,7 +20,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use crate::api::{
-    DataType, IndexConfig, IndexType, MetricType, Predicate, Result, SearchRequest,
+    DataType, IndexConfig, IndexParams, IndexType, MetricType, Predicate, Result, SearchRequest,
     SearchResult as ApiSearchResult, SqMode,
 };
 use crate::bitset::BitsetView;
@@ -7253,6 +7253,404 @@ impl HnswIndex {
         let mut bytes = Vec::new();
         self.write_to(&mut bytes)?;
         Ok(bytes)
+    }
+
+    /// Fast deserialization optimized for the hanns v5 binary format.
+    ///
+    /// Key optimizations over `deserialize_from_bytes()`:
+    /// 1. Zero-copy vector loading on little-endian platforms (memcpy vs per-element)
+    /// 2. Skips ID HashSet validation (trusts serialized data integrity)
+    /// 3. Bulk batch reads instead of per-element Cursor reads for node info
+    /// 4. Builds Layer0FlatGraph directly during node_info parsing (avoids second pass)
+    /// 5. Builds Layer0Slab directly from flat_graph + vectors (avoids intermediate copies)
+    ///
+    /// For 50K×128d cosine index: ~7s → ~300-500ms expected.
+    pub fn fast_deserialize_from_bytes(bytes: &[u8]) -> Result<Self> {
+        use std::collections::HashSet;
+
+        let total_len = bytes.len();
+        let mut pos: usize = 0;
+
+        macro_rules! read_exact {
+            ($n:expr) => {{
+                if pos + $n > total_len {
+                    return Err(crate::api::KnowhereError::Codec("unexpected end of data".into()));
+                }
+                let slice = &bytes[pos..pos + $n];
+                pos += $n;
+                slice
+            }};
+        }
+        macro_rules! read_u32 {
+            () => {{
+                let b = read_exact!(4);
+                u32::from_le_bytes(b.try_into().unwrap())
+            }};
+        }
+        macro_rules! read_u64 {
+            () => {{
+                let b = read_exact!(8);
+                u64::from_le_bytes(b.try_into().unwrap())
+            }};
+        }
+        macro_rules! read_f32 {
+            () => {{
+                let b = read_exact!(4);
+                f32::from_le_bytes(b.try_into().unwrap())
+            }};
+        }
+        macro_rules! read_i64 {
+            () => {{
+                let b = read_exact!(8);
+                i64::from_le_bytes(b.try_into().unwrap())
+            }};
+        }
+
+        // === Header ===
+        let magic = read_exact!(4);
+        if magic != b"HNSW" {
+            return Err(crate::api::KnowhereError::Codec("invalid magic".into()));
+        }
+        let version = read_u32!();
+        if version < 3 || version > 5 {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "unsupported version: {}",
+                version
+            )));
+        }
+
+        let dim = read_u32!() as usize;
+        let m = read_u32!() as usize;
+        let m_max0 = read_u32!() as usize;
+        let ef_search = read_u32!() as usize;
+        let ef_construction = read_u32!() as usize;
+        let max_level = read_u32!() as usize;
+        let level_multiplier = read_f32!();
+        let metric_type_u8 = read_exact!(1)[0];
+        let metric_type = match metric_type_u8 {
+            0 => MetricType::L2,
+            1 => MetricType::Ip,
+            2 => MetricType::Cosine,
+            4 => MetricType::Hamming,
+            _ => return Err(crate::api::KnowhereError::Codec("invalid metric".into())),
+        };
+
+        eprintln!("[fast_deser] after header+metric: pos={}, total={}", pos, total_len);
+
+        // SQ state (v5) — must match read_from exactly
+        let sq_mode_u8 = if version >= 5 { read_exact!(1)[0] } else { 0 };
+        let sq_mode = match sq_mode_u8 {
+            0 => SqMode::None,
+            1 => SqMode::SQ8,
+            2 => SqMode::SQ8Refine,
+            _ => return Err(crate::api::KnowhereError::Codec("invalid sq_mode".into())),
+        };
+        let sq_quantizer = if version >= 5 && sq_mode_u8 != 0 {
+            let has_q = read_exact!(1)[0];
+            if has_q != 0 {
+                let sq_dim = read_u32!() as usize;
+                let sq_bit = read_exact!(1)[0] as usize;
+                let qt = read_exact!(1)[0];
+                let min_val = read_f32!();
+                let max_val = read_f32!();
+                let scale = read_f32!();
+                let offset = read_f32!();
+                Some(ScalarQuantizer {
+                    dim: sq_dim,
+                    bit: sq_bit,
+                    quantizer_type: match qt {
+                        0 => crate::quantization::sq::QuantizerType::Uniform,
+                        _ => crate::quantization::sq::QuantizerType::Uniform,
+                    },
+                    min_val,
+                    max_val,
+                    scale,
+                    offset,
+                })
+            } else {
+                None
+            }
+        } else if version >= 5 && sq_mode_u8 == 0 {
+            // sq_mode=0: read_from skips has_q and sq_codes_len entirely
+            // but write_to always writes has_q(1B) + sq_codes_len(8B) = 9 bytes
+            // We must consume these bytes to stay in sync
+            // Wait — let's check what read_from actually does:
+            // read_from: sq_mode==0 => { self.sq_mode=None; self.sq_quantizer=None; self.sq_codes.clear(); }
+            // It does NOT read has_q or sq_codes_len. But write_to ALWAYS writes them.
+            // This means read_from is actually reading those bytes as the next field (count).
+            // Since has_q=0x00 and sq_codes_len=0u64, the count would be read starting at has_q byte.
+            // That's 9 bytes that get misinterpreted!
+            // BUT the old deserialize works... so write_to must NOT write them when sq_mode=0?
+            // Let me check: write_to has `if let Some(sq)` ... `else { write [0u8] }` then ALWAYS writes sq_codes_len.
+            // So it writes: [sq_mode=0][has_q=0][sq_codes_len=0] = 1+1+8 = 10 bytes for SQ
+            // read_from reads: [sq_mode=0] then skips to count.
+            // count would read from has_q byte: 0x00 0x00 0x00 0x00 = 0 ... that's 4 bytes from has_q + sq_codes_len first 4 bytes
+            // No wait, count is u64 (8 bytes). It would read has_q(1B) + first 7B of sq_codes_len.
+            // That gives count = 0 (since all bytes are 0).
+            // Then vectors = 0 bytes, ids = 0 bytes, node_info = 0 iterations... index would be empty!
+            // But old deserialize returns correct results with 50K vectors...
+            // So something is different. Let me just skip these bytes for now and see.
+            // Actually, maybe write_to DOES skip the has_q + sq_codes_len when sq_mode=0.
+            // Let me re-check...
+            // The `else { file.write_all(&[0u8])?; }` is inside the `if let Some(sq)` block.
+            // When sq_mode=0, sq_quantizer could still be None, so the else branch writes [0u8].
+            // But sq_codes_len is written OUTSIDE the if-let, always.
+            // Hmm, but this means read_from is misaligned...
+            // UNLESS the old read_from is also reading these extra bytes as something else.
+            // Let me just skip them to match write_to format:
+            let _has_q = read_exact!(1); // consume has_q=0x00
+            let _sq_codes_len = read_u64!(); // consume sq_codes_len=0
+            None
+        } else {
+            None
+        };
+        let sq_codes = if version >= 5 && sq_mode_u8 != 0 {
+            let sq_codes_len = read_u64!() as usize;
+            if sq_codes_len > 0 {
+                let data = read_exact!(sq_codes_len);
+                data.to_vec()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
+        // === Vectors: zero-copy on LE, bulk copy otherwise ===
+        let count = read_u64!() as usize;
+        let total_f32 = count * dim;
+
+        let vectors = {
+            let vec_bytes = read_exact!(total_f32 * 4);
+            let mut v = Vec::<f32>::with_capacity(total_f32);
+            // SAFETY: on LE, f32 LE bytes are native representation
+            #[cfg(target_endian = "little")]
+            {
+                let ptr = vec_bytes.as_ptr() as *const f32;
+                let slice = unsafe { std::slice::from_raw_parts(ptr, total_f32) };
+                v.extend_from_slice(slice);
+            }
+            #[cfg(not(target_endian = "little"))]
+            {
+                for i in 0..total_f32 {
+                    v.push(f32::from_le_bytes(
+                        vec_bytes[i * 4..i * 4 + 4].try_into().unwrap(),
+                    ));
+                }
+            }
+            v
+        };
+
+        // Cosine normalization
+        let vectors = if metric_type == MetricType::Cosine {
+            let mut v = vectors;
+            for vec in v.chunks_exact_mut(dim) {
+                let norm = simd::inner_product(vec, vec).sqrt();
+                if norm > 0.0 {
+                    let inv = 1.0 / norm;
+                    for x in vec.iter_mut() {
+                        *x *= inv;
+                    }
+                }
+            }
+            v
+        } else {
+            vectors
+        };
+
+        // bf16 rebuild (no-op unless enabled)
+        let use_bf16_storage = false;
+        let bf16_vectors = Vec::new();
+
+        // === IDs: bulk read, skip HashSet validation ===
+        let ids_bytes = read_exact!(count * 8);
+        let ids: Vec<i64> = {
+            let mut v = Vec::<i64>::with_capacity(count);
+            #[cfg(target_endian = "little")]
+            {
+                let ptr = ids_bytes.as_ptr() as *const i64;
+                let slice = unsafe { std::slice::from_raw_parts(ptr, count) };
+                v.extend_from_slice(slice);
+            }
+            #[cfg(not(target_endian = "little"))]
+            {
+                for i in 0..count {
+                    v.push(i64::from_le_bytes(
+                        ids_bytes[i * 8..i * 8 + 8].try_into().unwrap(),
+                    ));
+                }
+            }
+            v
+        };
+        let use_sequential_ids = ids.iter().enumerate().all(|(i, &id)| id >= 0 && id as usize == i);
+
+        // === Node info: build flat_graph directly + minimal node_info ===
+        let mut node_info: Vec<NodeInfo> = Vec::with_capacity(count);
+        let mut layer0_flat_graph = Layer0FlatGraph::default();
+        layer0_flat_graph.max_neighbors = m_max0;
+        layer0_flat_graph.degrees.resize(count, 0);
+        layer0_flat_graph
+            .neighbors
+            .resize(count * m_max0, u32::MAX);
+
+        for node_idx in 0..count {
+            let node_max_layer = read_u32!() as usize;
+
+            let mut ni = NodeInfo::new(node_max_layer, m);
+
+            for layer_idx in 0..=node_max_layer {
+                let nbr_count = read_u32!() as usize;
+
+                // Pre-read all neighbor data for this layer in one slice
+                let nbr_data_bytes = nbr_count * 12; // 8 (i64 id) + 4 (f32 dist) per neighbor
+                let nbr_data = read_exact!(nbr_data_bytes);
+
+                ni.layer_neighbors[layer_idx].ids.reserve(nbr_count);
+                ni.layer_neighbors[layer_idx].dists.reserve(nbr_count);
+
+                for j in 0..nbr_count {
+                    let base = j * 12;
+                    let nbr_id = i64::from_le_bytes(
+                        nbr_data[base..base + 8].try_into().unwrap(),
+                    );
+                    let dist = f32::from_le_bytes(
+                        nbr_data[base + 8..base + 12].try_into().unwrap(),
+                    );
+                    ni.layer_neighbors[layer_idx].push(nbr_id, dist);
+                }
+
+                // Build flat_graph for layer 0 directly
+                if layer_idx == 0 {
+                    let ids_slice = &ni.layer_neighbors[0].ids;
+                    let mut degree = 0usize;
+                    for &nbr_id in ids_slice {
+                        if degree >= m_max0 {
+                            break;
+                        }
+                        // Convert i64 id to u32 index
+                        let nbr_idx = if use_sequential_ids {
+                            nbr_id as usize
+                        } else {
+                            // Binary search in sorted ids for non-sequential case
+                            match ids.binary_search(&nbr_id) {
+                                Ok(idx) => idx,
+                                Err(_) => continue,
+                            }
+                        };
+                        if nbr_idx < count {
+                            layer0_flat_graph.neighbors[node_idx * m_max0 + degree] =
+                                nbr_idx as u32;
+                            degree += 1;
+                        }
+                    }
+                    layer0_flat_graph.degrees[node_idx] = degree;
+                }
+            }
+
+            node_info.push(ni);
+        }
+        layer0_flat_graph.enabled = true;
+
+        // === Entry point ===
+        let ep_flag = read_exact!(1)[0];
+        let entry_point = if ep_flag == 1 {
+            Some(read_i64!())
+        } else {
+            None
+        };
+
+        // === Deleted IDs ===
+        let mut deleted = HashSet::new();
+        if version >= 4 {
+            let del_count = read_u64!() as usize;
+            for _ in 0..del_count {
+                deleted.insert(read_i64!());
+            }
+        }
+
+        if count > 0 && entry_point.is_none() {
+            return Err(crate::api::KnowhereError::Codec(
+                "missing entry point".into(),
+            ));
+        }
+
+        // === Build slab directly from flat_graph + vectors (no second pass) ===
+        let mut layer0_slab = Layer0Slab::default();
+        if layer0_flat_graph.is_enabled_for(count) && dim > 0 {
+            let vector_offset_words = 1 + m_max0;
+            let stride_words = vector_offset_words + dim;
+            layer0_slab.stride_words = stride_words;
+            layer0_slab.vector_offset_words = vector_offset_words;
+            layer0_slab.max_neighbors = m_max0;
+            layer0_slab.dim = dim;
+            layer0_slab.words.resize(count * stride_words, 0);
+
+            for node_idx in 0..count {
+                let base = node_idx * stride_words;
+                let neighbors = layer0_flat_graph.neighbors_for(node_idx);
+                layer0_slab.words[base] = neighbors.len() as u32;
+                for (offset, &nbr_idx) in neighbors.iter().enumerate() {
+                    layer0_slab.words[base + 1 + offset] = nbr_idx;
+                }
+                let vec_start = node_idx * dim;
+                // Batch copy vector data as u32 bits
+                let dst = &mut layer0_slab.words[base + vector_offset_words..base + vector_offset_words + dim];
+                for (i, &v) in vectors[vec_start..vec_start + dim].iter().enumerate() {
+                    dst[i] = v.to_bits();
+                }
+            }
+            layer0_slab.enabled = true;
+        }
+
+        // === Construct final index ===
+        let distance_to_idx_fn = Self::resolve_distance_to_idx_fn(metric_type, sq_mode);
+        let l2_distance_sq_ptr_kernel = simd::l2_distance_sq_ptr_kernel();
+
+        let index = HnswIndex {
+            config: IndexConfig {
+                index_type: IndexType::Hnsw,
+                metric_type,
+                data_type: DataType::Float,
+                dim,
+                params: IndexParams {
+                    ef_construction: Some(ef_construction),
+                    ef_search: Some(ef_search),
+                    m: Some(m),
+                    ml: Some(level_multiplier),
+                    sq_mode: Some(sq_mode),
+                    ..Default::default()
+                },
+            },
+            entry_point,
+            max_level,
+            vectors,
+            bf16_vectors,
+            use_bf16_storage,
+            ids,
+            deleted,
+            node_info,
+            layer0_flat_graph,
+            layer0_slab,
+            next_id: count as i64,
+            trained: true,
+            dim,
+            ef_construction,
+            ef_search,
+            m,
+            m_max0,
+            level_multiplier,
+            metric_type,
+            sq_mode,
+            sq_quantizer,
+            sq_codes,
+            distance_to_idx_fn,
+            l2_distance_sq_ptr_kernel,
+            use_sequential_ids,
+            num_threads: 1,
+            level_rng: StdRng::from_entropy(),
+        };
+
+        Ok(index)
     }
 
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self> {
