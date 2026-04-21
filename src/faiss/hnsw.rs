@@ -27,6 +27,7 @@ use crate::bitset::BitsetView;
 use crate::dataset::Dataset;
 use crate::half::{bf16_l2_sq_batch_4, Bf16};
 use crate::index::{Index as IndexTrait, IndexError, SearchResult as IndexSearchResult};
+use crate::quantization::sq::QuantizerType;
 use crate::quantization::ScalarQuantizer;
 use crate::simd;
 
@@ -1406,9 +1407,9 @@ pub struct HnswSqExportMeta {
 impl From<&ScalarQuantizer> for HnswSqExportMeta {
     fn from(sq: &ScalarQuantizer) -> Self {
         let quantizer_type = match sq.quantizer_type {
-            crate::quantization::sq::QuantizerType::Uniform => 0,
-            crate::quantization::sq::QuantizerType::Learned => 1,
-            crate::quantization::sq::QuantizerType::Quant4 => 2,
+            QuantizerType::Uniform => 0,
+            QuantizerType::Learned => 1,
+            QuantizerType::Quant4 => 2,
         };
 
         Self {
@@ -1420,6 +1421,39 @@ impl From<&ScalarQuantizer> for HnswSqExportMeta {
             scale: sq.scale,
             offset: sq.offset,
         }
+    }
+}
+
+impl TryFrom<&HnswSqExportMeta> for ScalarQuantizer {
+    type Error = crate::api::KnowhereError;
+
+    fn try_from(meta: &HnswSqExportMeta) -> std::result::Result<Self, Self::Error> {
+        let quantizer_type = match meta.quantizer_type {
+            0 => QuantizerType::Uniform,
+            1 => QuantizerType::Learned,
+            2 => QuantizerType::Quant4,
+            other => {
+                return Err(crate::api::KnowhereError::Codec(format!(
+                    "invalid HNSW sectioned snapshot: unsupported SQ quantizer_type tag {other}",
+                )))
+            }
+        };
+        if meta.bit == 0 || meta.bit > 8 {
+            return Err(crate::api::KnowhereError::Codec(format!(
+                "invalid HNSW sectioned snapshot: unsupported SQ bit {}",
+                meta.bit
+            )));
+        }
+
+        Ok(Self {
+            dim: meta.dim,
+            bit: meta.bit,
+            quantizer_type,
+            min_val: meta.min_val,
+            max_val: meta.max_val,
+            scale: meta.scale,
+            offset: meta.offset,
+        })
     }
 }
 
@@ -7434,13 +7468,14 @@ impl HnswIndex {
             }
         }
 
-        if export.sq_mode == SqMode::None {
+        let sq_quantizer = if export.sq_mode == SqMode::None {
             if export.sq_meta.is_some() || !export.sq_codes.is_empty() {
                 return Err(crate::api::KnowhereError::Codec(
                     "invalid HNSW sectioned snapshot: SQ sections present when sq_mode is none"
                         .to_string(),
                 ));
             }
+            None
         } else {
             let sq_meta = export.sq_meta.as_ref().ok_or_else(|| {
                 crate::api::KnowhereError::Codec(
@@ -7465,10 +7500,8 @@ impl HnswIndex {
                     expected_sq_codes
                 )));
             }
-            return Err(crate::api::KnowhereError::Codec(
-                "sectioned HNSW SQ snapshot import is not supported yet".to_string(),
-            ));
-        }
+            Some(ScalarQuantizer::try_from(sq_meta)?)
+        };
 
         let mut node_info = Vec::with_capacity(export.count);
         let mut offset_idx = 0usize;
@@ -7513,7 +7546,7 @@ impl HnswIndex {
         index.level_multiplier = export.level_multiplier;
         index.metric_type = export.metric_type;
         index.sq_mode = export.sq_mode;
-        index.sq_quantizer = None;
+        index.sq_quantizer = sq_quantizer;
         index.sq_codes = export.sq_codes;
         index.distance_to_idx_fn =
             Self::resolve_distance_to_idx_fn(index.metric_type, index.sq_mode);

@@ -128,6 +128,14 @@ fn assert_codec_contains(error: KnowhereError, expected: &str) {
 }
 
 fn assert_search_matches(index: &HnswIndex, runtime: &dyn hanns::kernel::AnnRuntime) {
+    assert_search_matches_for_query(index, runtime, &[0.0, 0.0, 0.0, 0.0]);
+}
+
+fn assert_search_matches_for_query(
+    index: &HnswIndex,
+    runtime: &dyn hanns::kernel::AnnRuntime,
+    query: &[f32],
+) {
     let req = SearchRequest {
         top_k: 3,
         nprobe: 16,
@@ -135,7 +143,6 @@ fn assert_search_matches(index: &HnswIndex, runtime: &dyn hanns::kernel::AnnRunt
         params: None,
         radius: None,
     };
-    let query = [0.0, 0.0, 0.0, 0.0];
     let expected = index.search(&query, &req).expect("search");
     let mut ids = vec![-1; req.top_k];
     let mut dists = vec![f32::INFINITY; req.top_k];
@@ -152,6 +159,31 @@ fn assert_search_matches(index: &HnswIndex, runtime: &dyn hanns::kernel::AnnRunt
             "distance mismatch: actual {actual}, expected {expected}"
         );
     }
+}
+
+fn build_sq_hnsw(sq_mode: SqMode) -> HnswIndex {
+    let dim = 8;
+    let mut cfg = IndexConfig::new(IndexType::Hnsw, MetricType::L2, dim);
+    cfg.params.m = Some(4);
+    cfg.params.ef_construction = Some(16);
+    cfg.params.ef_search = Some(16);
+    cfg.params.num_threads = Some(1);
+    cfg.params.random_seed = Some(42);
+    cfg.params.sq_mode = Some(sq_mode);
+
+    let mut vectors = Vec::with_capacity(16 * dim);
+    for i in 0..16usize {
+        for d in 0..dim {
+            vectors.push((i as f32 * 0.01) + (d as f32 * 0.001));
+        }
+    }
+
+    let mut index = HnswIndex::new(&cfg).expect("hnsw sq index should build");
+    index.train(&vectors).expect("hnsw sq index should train");
+    index
+        .add(&vectors, None)
+        .expect("hnsw sq vectors should add");
+    index
 }
 
 fn encode_i64s(values: &[i64]) -> Vec<u8> {
@@ -462,35 +494,37 @@ fn hnsw_sectioned_snapshot_rejects_degree_overflow() {
 }
 
 #[test]
-fn hnsw_sectioned_snapshot_rejects_sq_import_until_supported() {
-    let dim = 8;
-    let mut cfg = IndexConfig::new(IndexType::Hnsw, MetricType::L2, dim);
-    cfg.params.m = Some(4);
-    cfg.params.ef_construction = Some(16);
-    cfg.params.ef_search = Some(16);
-    cfg.params.num_threads = Some(1);
-    cfg.params.random_seed = Some(42);
-    cfg.params.sq_mode = Some(SqMode::SQ8);
-
-    let mut vectors = Vec::with_capacity(16 * dim);
-    for i in 0..16usize {
-        for d in 0..dim {
-            vectors.push((i as f32 * 0.01) + (d as f32 * 0.001));
-        }
-    }
-
-    let mut index = HnswIndex::new(&cfg).expect("hnsw sq index should build");
-    index.train(&vectors).expect("hnsw sq index should train");
-    index
-        .add(&vectors, None)
-        .expect("hnsw sq vectors should add");
+fn hnsw_sectioned_snapshot_roundtrips_sq8() {
+    let index = build_sq_hnsw(SqMode::SQ8);
 
     let snapshot = HnswSectionedSnapshot::from_index(&index).expect("snapshot");
     let mut store = MemoryArtifactStore::default();
     snapshot.write_snapshot(&mut store).expect("write");
 
-    assert_codec_contains(
-        load_error(&store),
-        "sectioned HNSW SQ snapshot import is not supported yet",
+    let runtime = HnswSnapshotLoader
+        .load_snapshot(&store, LoadMode::OwnedMemory)
+        .expect("load SQ8 sectioned snapshot");
+    assert_search_matches_for_query(
+        &index,
+        runtime.as_ref(),
+        &[0.052, 0.054, 0.056, 0.058, 0.060, 0.062, 0.064, 0.066],
+    );
+}
+
+#[test]
+fn hnsw_sectioned_snapshot_roundtrips_sq8_refine() {
+    let index = build_sq_hnsw(SqMode::SQ8Refine);
+
+    let snapshot = HnswSectionedSnapshot::from_index(&index).expect("snapshot");
+    let mut store = MemoryArtifactStore::default();
+    snapshot.write_snapshot(&mut store).expect("write");
+
+    let runtime = HnswSnapshotLoader
+        .load_snapshot(&store, LoadMode::OwnedMemory)
+        .expect("load SQ8Refine sectioned snapshot");
+    assert_search_matches_for_query(
+        &index,
+        runtime.as_ref(),
+        &[0.052, 0.054, 0.056, 0.058, 0.060, 0.062, 0.064, 0.066],
     );
 }
