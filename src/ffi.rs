@@ -237,6 +237,41 @@ pub struct CGetVectorResult {
     pub ids: *mut i64,
 }
 
+#[repr(i32)]
+#[derive(Debug, Clone, Copy)]
+pub enum CSnapshotLoadMode {
+    OwnedMemory = 0,
+    Mmap = 1,
+    PageCache = 2,
+    Lazy = 3,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CSnapshotArtifactCallbacks {
+    pub context: *mut std::ffi::c_void,
+    pub section_len: Option<
+        extern "C" fn(
+            context: *mut std::ffi::c_void,
+            name: *const std::os::raw::c_char,
+            out_len: *mut u64,
+        ) -> i32,
+    >,
+    pub read_range: Option<
+        extern "C" fn(
+            context: *mut std::ffi::c_void,
+            name: *const std::os::raw::c_char,
+            offset: u64,
+            len: usize,
+            out: *mut u8,
+        ) -> i32,
+    >,
+}
+
+struct SnapshotRuntimeHandle {
+    runtime: Box<dyn crate::kernel::AnnRuntime>,
+}
+
 #[derive(Serialize)]
 struct AdditionalScalarMeta<'a> {
     runtime_supported: bool,
@@ -3071,6 +3106,19 @@ fn snapshot_load_mode_name(mode: crate::storage::LoadMode) -> &'static str {
     }
 }
 
+fn snapshot_load_mode_from_c(mode: CSnapshotLoadMode) -> crate::storage::LoadMode {
+    match mode {
+        CSnapshotLoadMode::OwnedMemory => crate::storage::LoadMode::OwnedMemory,
+        CSnapshotLoadMode::Mmap => crate::storage::LoadMode::Mmap,
+        CSnapshotLoadMode::PageCache => crate::storage::LoadMode::PageCache,
+        CSnapshotLoadMode::Lazy => crate::storage::LoadMode::Lazy,
+    }
+}
+
+fn c_callback_section_name(name: &str) -> Result<std::ffi::CString, CError> {
+    std::ffi::CString::new(name).map_err(|_| CError::InvalidArg)
+}
+
 /// Plan storage/load compatibility for a Hanns sectioned snapshot manifest.
 ///
 /// Accepts a UTF-8 JSON `IndexManifest` and returns a Rust-allocated JSON string.
@@ -3096,6 +3144,179 @@ pub extern "C" fn knowhere_snapshot_manifest_plan(
                 Err(_) => std::ptr::null_mut(),
             },
             Err(_) => std::ptr::null_mut(),
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn knowhere_load_snapshot_from_callbacks(
+    manifest_json: *const std::os::raw::c_char,
+    callbacks: CSnapshotArtifactCallbacks,
+    load_mode: CSnapshotLoadMode,
+) -> *mut std::ffi::c_void {
+    if manifest_json.is_null() || callbacks.section_len.is_none() || callbacks.read_range.is_none()
+    {
+        return std::ptr::null_mut();
+    }
+
+    let section_len = callbacks.section_len.expect("checked above");
+    let read_range = callbacks.read_range.expect("checked above");
+
+    unsafe {
+        let manifest_json = match std::ffi::CStr::from_ptr(manifest_json).to_str() {
+            Ok(json) => json,
+            Err(_) => return std::ptr::null_mut(),
+        };
+        let manifest: crate::storage::IndexManifest = match serde_json::from_str(manifest_json) {
+            Ok(manifest) => manifest,
+            Err(_) => return std::ptr::null_mut(),
+        };
+        let reader = crate::storage::CallbackArtifactReader::new(
+            manifest,
+            |name: &str| -> crate::api::Result<u64> {
+                let name = c_callback_section_name(name).map_err(|_| {
+                    crate::api::KnowhereError::InvalidArg("invalid section name".to_string())
+                })?;
+                let mut out_len = 0u64;
+                let status = section_len(callbacks.context, name.as_ptr(), &mut out_len);
+                if status == CError::Success as i32 {
+                    Ok(out_len)
+                } else {
+                    Err(crate::api::KnowhereError::Codec(format!(
+                        "section_len callback failed for {} with status {}",
+                        name.to_string_lossy(),
+                        status
+                    )))
+                }
+            },
+            |name: &str, offset, len| -> crate::api::Result<Vec<u8>> {
+                let name = c_callback_section_name(name).map_err(|_| {
+                    crate::api::KnowhereError::InvalidArg("invalid section name".to_string())
+                })?;
+                let mut bytes = vec![0u8; len];
+                let out = if len == 0 {
+                    std::ptr::NonNull::<u8>::dangling().as_ptr()
+                } else {
+                    bytes.as_mut_ptr()
+                };
+                let status = read_range(callbacks.context, name.as_ptr(), offset, len, out);
+                if status == CError::Success as i32 {
+                    Ok(bytes)
+                } else {
+                    Err(crate::api::KnowhereError::Codec(format!(
+                        "read_range callback failed for {} with status {}",
+                        name.to_string_lossy(),
+                        status
+                    )))
+                }
+            },
+        );
+        let registry = match crate::faiss::default_ann_snapshot_registry() {
+            Ok(registry) => registry,
+            Err(_) => return std::ptr::null_mut(),
+        };
+        let runtime = match registry.load_snapshot(&reader, snapshot_load_mode_from_c(load_mode)) {
+            Ok(runtime) => runtime,
+            Err(_) => return std::ptr::null_mut(),
+        };
+        Box::into_raw(Box::new(SnapshotRuntimeHandle { runtime })) as *mut std::ffi::c_void
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn knowhere_snapshot_runtime_dim(runtime: *const std::ffi::c_void) -> usize {
+    if runtime.is_null() {
+        return 0;
+    }
+    unsafe {
+        let runtime = &*(runtime as *const SnapshotRuntimeHandle);
+        runtime.runtime.dim()
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn knowhere_snapshot_runtime_count(runtime: *const std::ffi::c_void) -> usize {
+    if runtime.is_null() {
+        return 0;
+    }
+    unsafe {
+        let runtime = &*(runtime as *const SnapshotRuntimeHandle);
+        runtime.runtime.len()
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn knowhere_snapshot_runtime_search(
+    runtime: *const std::ffi::c_void,
+    query: *const f32,
+    count: usize,
+    top_k: usize,
+    dim: usize,
+) -> *mut CSearchResult {
+    if runtime.is_null() || query.is_null() || count == 0 || top_k == 0 || dim == 0 {
+        return std::ptr::null_mut();
+    }
+
+    unsafe {
+        let runtime = &*(runtime as *const SnapshotRuntimeHandle);
+        if runtime.runtime.dim() != dim {
+            return std::ptr::null_mut();
+        }
+
+        let Some(query_len) = count.checked_mul(dim) else {
+            return std::ptr::null_mut();
+        };
+        let Some(result_capacity) = count.checked_mul(top_k) else {
+            return std::ptr::null_mut();
+        };
+
+        let query = std::slice::from_raw_parts(query, query_len);
+        let req = SearchRequest {
+            top_k,
+            nprobe: top_k.max(1),
+            filter: None,
+            params: None,
+            radius: None,
+        };
+        let start = std::time::Instant::now();
+        let mut ids = Vec::with_capacity(result_capacity);
+        let mut distances = Vec::with_capacity(result_capacity);
+
+        for query in query.chunks_exact(dim) {
+            let mut query_ids = vec![-1_i64; top_k];
+            let mut query_distances = vec![f32::INFINITY; top_k];
+            let n =
+                match runtime
+                    .runtime
+                    .search_into(query, &req, &mut query_ids, &mut query_distances)
+                {
+                    Ok(n) => n,
+                    Err(_) => return std::ptr::null_mut(),
+                };
+            ids.extend_from_slice(&query_ids[..n]);
+            distances.extend_from_slice(&query_distances[..n]);
+        }
+
+        let num_results = ids.len();
+        let ids_ptr = ids.as_mut_ptr();
+        let distances_ptr = distances.as_mut_ptr();
+        std::mem::forget(ids);
+        std::mem::forget(distances);
+
+        Box::into_raw(Box::new(CSearchResult {
+            ids: ids_ptr,
+            distances: distances_ptr,
+            num_results,
+            elapsed_ms: start.elapsed().as_secs_f32() * 1000.0,
+        }))
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn knowhere_free_snapshot_runtime(runtime: *mut std::ffi::c_void) {
+    if !runtime.is_null() {
+        unsafe {
+            let _ = Box::from_raw(runtime as *mut SnapshotRuntimeHandle);
         }
     }
 }
@@ -4558,6 +4779,7 @@ pub extern "C" fn knowhere_bitset_xor(
 #[allow(unused_unsafe, unused_variables)]
 mod tests {
     use super::*;
+    use crate::storage::{AnnSnapshot, IndexArtifactReader};
     use std::ffi::OsString;
     use std::sync::{Mutex, OnceLock};
 
@@ -5047,6 +5269,185 @@ mod tests {
 
         let plan_ptr = knowhere_snapshot_manifest_plan(manifest.as_ptr());
         assert!(plan_ptr.is_null());
+    }
+
+    struct TestSnapshotSections {
+        sections: std::collections::BTreeMap<String, Vec<u8>>,
+    }
+
+    extern "C" fn test_snapshot_section_len(
+        context: *mut std::ffi::c_void,
+        name: *const std::os::raw::c_char,
+        out_len: *mut u64,
+    ) -> i32 {
+        if context.is_null() || name.is_null() || out_len.is_null() {
+            return CError::InvalidArg as i32;
+        }
+        let sections = unsafe { &*(context as *const TestSnapshotSections) };
+        let name = unsafe { std::ffi::CStr::from_ptr(name) }.to_str().unwrap();
+        match sections.sections.get(name) {
+            Some(bytes) => {
+                unsafe {
+                    *out_len = bytes.len() as u64;
+                }
+                CError::Success as i32
+            }
+            None => CError::NotFound as i32,
+        }
+    }
+
+    extern "C" fn test_snapshot_read_range(
+        context: *mut std::ffi::c_void,
+        name: *const std::os::raw::c_char,
+        offset: u64,
+        len: usize,
+        out: *mut u8,
+    ) -> i32 {
+        if context.is_null() || name.is_null() || out.is_null() {
+            return CError::InvalidArg as i32;
+        }
+        let sections = unsafe { &*(context as *const TestSnapshotSections) };
+        let name = unsafe { std::ffi::CStr::from_ptr(name) }.to_str().unwrap();
+        let Some(bytes) = sections.sections.get(name) else {
+            return CError::NotFound as i32;
+        };
+        let offset = offset as usize;
+        let Some(end) = offset.checked_add(len) else {
+            return CError::InvalidArg as i32;
+        };
+        let Some(range) = bytes.get(offset..end) else {
+            return CError::InvalidArg as i32;
+        };
+        unsafe {
+            std::ptr::copy_nonoverlapping(range.as_ptr(), out, range.len());
+        }
+        CError::Success as i32
+    }
+
+    extern "C" fn test_snapshot_read_range_fails(
+        _context: *mut std::ffi::c_void,
+        _name: *const std::os::raw::c_char,
+        _offset: u64,
+        _len: usize,
+        _out: *mut u8,
+    ) -> i32 {
+        CError::Internal as i32
+    }
+
+    #[test]
+    fn test_ffi_loads_snapshot_runtime_from_callbacks() {
+        let dim = 4;
+        let mut cfg = IndexConfig::new(IndexType::Hnsw, MetricType::L2, dim);
+        cfg.params.m = Some(4);
+        cfg.params.ef_construction = Some(16);
+        cfg.params.ef_search = Some(16);
+        cfg.params.random_seed = Some(42);
+
+        let vectors = vec![
+            0.0, 0.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, //
+            0.0, 0.0, 1.0, 0.0,
+        ];
+        let ids = vec![10, 11, 12, 13];
+        let mut index = HnswIndex::new(&cfg).expect("hnsw index should build");
+        index.train(&vectors).expect("hnsw index should train");
+        index
+            .add(&vectors, Some(&ids))
+            .expect("hnsw vectors should add");
+
+        let snapshot =
+            crate::faiss::HnswSectionedSnapshot::from_index(&index).expect("snapshot should build");
+        let mut store = crate::storage::MemoryArtifactStore::default();
+        snapshot
+            .write_snapshot(&mut store)
+            .expect("snapshot should write");
+
+        let manifest = store.manifest().expect("manifest should exist").clone();
+        let mut sections = std::collections::BTreeMap::new();
+        for descriptor in &manifest.sections {
+            sections.insert(
+                descriptor.name.clone(),
+                store
+                    .read_section(&descriptor.name)
+                    .expect("section should read")
+                    .into_owned(),
+            );
+        }
+        let sections = TestSnapshotSections { sections };
+        let manifest_json = std::ffi::CString::new(serde_json::to_string(&manifest).unwrap())
+            .expect("manifest json should not contain nul");
+
+        let runtime = knowhere_load_snapshot_from_callbacks(
+            manifest_json.as_ptr(),
+            CSnapshotArtifactCallbacks {
+                context: &sections as *const _ as *mut std::ffi::c_void,
+                section_len: Some(test_snapshot_section_len),
+                read_range: Some(test_snapshot_read_range),
+            },
+            CSnapshotLoadMode::OwnedMemory,
+        );
+        assert!(!runtime.is_null());
+        assert_eq!(knowhere_snapshot_runtime_dim(runtime), dim);
+        assert_eq!(knowhere_snapshot_runtime_count(runtime), ids.len());
+
+        let query = [0.0, 0.0, 0.0, 0.0];
+        let result = knowhere_snapshot_runtime_search(runtime, query.as_ptr(), 1, 3, dim);
+        assert!(!result.is_null());
+
+        unsafe {
+            let result_ref = &*result;
+            assert_eq!(result_ref.num_results, 3);
+            let result_ids = std::slice::from_raw_parts(result_ref.ids, result_ref.num_results);
+            assert_eq!(result_ids[0], 10);
+        }
+
+        knowhere_free_result(result);
+        knowhere_free_snapshot_runtime(runtime);
+    }
+
+    #[test]
+    fn test_ffi_snapshot_callback_failure_rejects_runtime_load() {
+        let manifest = crate::storage::IndexManifest {
+            version: 1,
+            family: crate::kernel::IndexFamily::Hnsw,
+            variant: crate::faiss::HNSW_SECTIONS_SNAPSHOT_VARIANT.to_string(),
+            dim: 4,
+            metric: "l2".to_string(),
+            count: 1,
+            supported_load_modes: vec![crate::storage::LoadMode::OwnedMemory],
+            features: crate::storage::ManifestFeatures {
+                raw_vectors: true,
+                graph_payload: true,
+                quantized_payload: false,
+                compressed_vectors: false,
+            },
+            sections: vec![crate::storage::SectionDescriptor {
+                name: crate::faiss::hnsw_snapshot::HNSW_META_SECTION.to_string(),
+                len: 8,
+                checksum: None,
+            }],
+        };
+        let sections = TestSnapshotSections {
+            sections: std::collections::BTreeMap::from([(
+                crate::faiss::hnsw_snapshot::HNSW_META_SECTION.to_string(),
+                vec![0; 8],
+            )]),
+        };
+        let manifest_json = std::ffi::CString::new(serde_json::to_string(&manifest).unwrap())
+            .expect("manifest json should not contain nul");
+
+        let runtime = knowhere_load_snapshot_from_callbacks(
+            manifest_json.as_ptr(),
+            CSnapshotArtifactCallbacks {
+                context: &sections as *const _ as *mut std::ffi::c_void,
+                section_len: Some(test_snapshot_section_len),
+                read_range: Some(test_snapshot_read_range_fails),
+            },
+            CSnapshotLoadMode::OwnedMemory,
+        );
+
+        assert!(runtime.is_null());
     }
 
     #[test]
