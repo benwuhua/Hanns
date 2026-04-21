@@ -16,7 +16,12 @@
 extern "C" {
 #endif
 
-typedef struct CSearchResult CSearchResult;
+typedef struct CSearchResult {
+    int64_t* ids;
+    float* distances;
+    size_t num_results;
+    float elapsed_ms;
+} CSearchResult;
 
 typedef enum CSnapshotLoadMode {
     CSnapshotLoadMode_OwnedMemory = 0,
@@ -46,6 +51,8 @@ typedef struct CSnapshotArtifactCallbacks {
 char* knowhere_snapshot_manifest_plan(const char* manifest_json);
 
 void knowhere_free_cstring(char* ptr);
+
+void knowhere_free_result(CSearchResult* result);
 
 void* knowhere_load_snapshot_from_callbacks(
     const char* manifest_json,
