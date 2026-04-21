@@ -313,6 +313,38 @@ struct IndexMetaSummary<'a> {
     resource_contract: ResourceContractSummary<'a>,
 }
 
+#[derive(Serialize)]
+struct SnapshotManifestPlan<'a> {
+    schema_version: &'static str,
+    version: u32,
+    family: &'static str,
+    variant: &'a str,
+    dim: usize,
+    metric: &'a str,
+    count: usize,
+    manifest_load_modes: Vec<&'static str>,
+    loader_load_modes: Vec<&'static str>,
+    effective_load_modes: Vec<&'static str>,
+    features: SnapshotManifestFeaturePlan,
+    section_count: usize,
+    sections: Vec<SnapshotManifestSectionPlan<'a>>,
+}
+
+#[derive(Serialize)]
+struct SnapshotManifestFeaturePlan {
+    raw_vectors: bool,
+    graph_payload: bool,
+    quantized_payload: bool,
+    compressed_vectors: bool,
+}
+
+#[derive(Serialize)]
+struct SnapshotManifestSectionPlan<'a> {
+    name: &'a str,
+    len: u64,
+    checksum: Option<&'a str>,
+}
+
 /// 包装索引对象 - 支持 Flat, HNSW, ScaNN, HNSW-PRQ, IVF-RaBitQ, HNSW-SQ, HNSW-PQ, BinFlat, BinaryHnsw, IVF-SQ8, BinIvfFlat, SparseWand, SparseWandCC, MinHashLSH, DiskANN
 // IndexKind: single enum variant replaces 20 Option fields
 enum IndexKind {
@@ -2960,6 +2992,114 @@ pub extern "C" fn knowhere_get_index_meta(
     }
 }
 
+fn snapshot_manifest_plan_json(manifest_json: &str) -> Result<String, CError> {
+    let manifest: crate::storage::IndexManifest =
+        serde_json::from_str(manifest_json).map_err(|_| CError::InvalidArg)?;
+    let registry = crate::faiss::default_ann_snapshot_registry().map_err(|_| CError::Internal)?;
+    let loader_load_modes = registry
+        .supported_load_modes_for_variant(&manifest.variant)
+        .map_err(|_| CError::InvalidArg)?;
+    let effective_load_modes = manifest
+        .supported_load_modes
+        .iter()
+        .copied()
+        .filter(|mode| loader_load_modes.contains(mode))
+        .collect::<Vec<_>>();
+
+    let plan = SnapshotManifestPlan {
+        schema_version: "snapshot_manifest_plan.v1",
+        version: manifest.version,
+        family: snapshot_family_name(manifest.family),
+        variant: &manifest.variant,
+        dim: manifest.dim,
+        metric: &manifest.metric,
+        count: manifest.count,
+        manifest_load_modes: manifest
+            .supported_load_modes
+            .iter()
+            .copied()
+            .map(snapshot_load_mode_name)
+            .collect(),
+        loader_load_modes: loader_load_modes
+            .iter()
+            .copied()
+            .map(snapshot_load_mode_name)
+            .collect(),
+        effective_load_modes: effective_load_modes
+            .iter()
+            .copied()
+            .map(snapshot_load_mode_name)
+            .collect(),
+        features: SnapshotManifestFeaturePlan {
+            raw_vectors: manifest.features.raw_vectors,
+            graph_payload: manifest.features.graph_payload,
+            quantized_payload: manifest.features.quantized_payload,
+            compressed_vectors: manifest.features.compressed_vectors,
+        },
+        section_count: manifest.sections.len(),
+        sections: manifest
+            .sections
+            .iter()
+            .map(|section| SnapshotManifestSectionPlan {
+                name: &section.name,
+                len: section.len,
+                checksum: section.checksum.as_deref(),
+            })
+            .collect(),
+    };
+
+    serde_json::to_string(&plan).map_err(|_| CError::Internal)
+}
+
+fn snapshot_family_name(family: crate::kernel::IndexFamily) -> &'static str {
+    match family {
+        crate::kernel::IndexFamily::Flat => "flat",
+        crate::kernel::IndexFamily::Hnsw => "hnsw",
+        crate::kernel::IndexFamily::Ivf => "ivf",
+        crate::kernel::IndexFamily::Quantized => "quantized",
+        crate::kernel::IndexFamily::DiskAnn => "disk_ann",
+        crate::kernel::IndexFamily::Sparse => "sparse",
+    }
+}
+
+fn snapshot_load_mode_name(mode: crate::storage::LoadMode) -> &'static str {
+    match mode {
+        crate::storage::LoadMode::OwnedMemory => "owned_memory",
+        crate::storage::LoadMode::Mmap => "mmap",
+        crate::storage::LoadMode::PageCache => "page_cache",
+        crate::storage::LoadMode::Lazy => "lazy",
+    }
+}
+
+/// Plan storage/load compatibility for a Hanns sectioned snapshot manifest.
+///
+/// Accepts a UTF-8 JSON `IndexManifest` and returns a Rust-allocated JSON string.
+/// The caller must release the returned pointer with `knowhere_free_cstring`.
+#[no_mangle]
+pub extern "C" fn knowhere_snapshot_manifest_plan(
+    manifest_json: *const std::os::raw::c_char,
+) -> *mut std::os::raw::c_char {
+    if manifest_json.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    unsafe {
+        let cstr = std::ffi::CStr::from_ptr(manifest_json);
+        let manifest_json = match cstr.to_str() {
+            Ok(json) => json,
+            Err(_) => return std::ptr::null_mut(),
+        };
+
+        match snapshot_manifest_plan_json(manifest_json) {
+            Ok(json) => match std::ffi::CString::new(json) {
+                Ok(cstr) => cstr.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            },
+            Err(_) => std::ptr::null_mut(),
+        }
+    }
+}
+
 /// 释放由 FFI 返回的 C 字符串
 #[no_mangle]
 pub extern "C" fn knowhere_free_cstring(ptr: *mut std::os::raw::c_char) {
@@ -4838,6 +4978,75 @@ mod tests {
 
         knowhere_free_cstring(sparse_meta_ptr);
         knowhere_free_index(sparse);
+    }
+
+    #[test]
+    fn test_ffi_snapshot_manifest_plan_reports_effective_modes() {
+        let manifest = serde_json::json!({
+            "version": 1,
+            "family": "disk_ann",
+            "variant": "pqflash_sections_v1",
+            "dim": 128,
+            "metric": "l2",
+            "count": 1000,
+            "supported_load_modes": ["owned_memory", "mmap"],
+            "features": {
+                "raw_vectors": true,
+                "graph_payload": true,
+                "quantized_payload": true,
+                "compressed_vectors": true
+            },
+            "sections": [
+                {"name": "pqflash.meta.json", "len": 64},
+                {"name": "pqflash.node_pq_codes.u8", "len": 4096, "checksum": "sha256:test"}
+            ]
+        })
+        .to_string();
+        let manifest = std::ffi::CString::new(manifest).unwrap();
+
+        let plan_ptr = knowhere_snapshot_manifest_plan(manifest.as_ptr());
+        assert!(!plan_ptr.is_null());
+        let plan_str = unsafe { std::ffi::CStr::from_ptr(plan_ptr) }
+            .to_str()
+            .unwrap();
+        let plan: serde_json::Value = serde_json::from_str(plan_str).unwrap();
+
+        assert_eq!(plan["schema_version"], "snapshot_manifest_plan.v1");
+        assert_eq!(plan["family"], "disk_ann");
+        assert_eq!(plan["variant"], "pqflash_sections_v1");
+        assert_eq!(plan["manifest_load_modes"][0], "owned_memory");
+        assert_eq!(plan["manifest_load_modes"][1], "mmap");
+        assert_eq!(
+            plan["loader_load_modes"],
+            serde_json::json!(["owned_memory"])
+        );
+        assert_eq!(
+            plan["effective_load_modes"],
+            serde_json::json!(["owned_memory"])
+        );
+        assert_eq!(plan["features"]["compressed_vectors"], true);
+        assert_eq!(plan["section_count"], 2);
+        assert_eq!(plan["sections"][1]["checksum"], "sha256:test");
+
+        knowhere_free_cstring(plan_ptr);
+    }
+
+    #[test]
+    fn test_ffi_snapshot_manifest_plan_rejects_unknown_variant() {
+        let manifest = serde_json::json!({
+            "version": 1,
+            "family": "hnsw",
+            "variant": "unknown_sections_v1",
+            "dim": 16,
+            "metric": "l2",
+            "count": 4,
+            "sections": []
+        })
+        .to_string();
+        let manifest = std::ffi::CString::new(manifest).unwrap();
+
+        let plan_ptr = knowhere_snapshot_manifest_plan(manifest.as_ptr());
+        assert!(plan_ptr.is_null());
     }
 
     #[test]
