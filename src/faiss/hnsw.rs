@@ -7484,6 +7484,13 @@ impl HnswIndex {
         };
         let use_sequential_ids = ids.iter().enumerate().all(|(i, &id)| id >= 0 && id as usize == i);
 
+        // Build reverse lookup: id → idx for non-sequential IDs
+        let id_to_idx: std::collections::HashMap<i64, usize> = if use_sequential_ids {
+            std::collections::HashMap::new() // not needed
+        } else {
+            ids.iter().enumerate().map(|(idx, &id)| (id, idx)).collect()
+        };
+
         // === Node info: build flat_graph directly + minimal node_info ===
         let mut node_info: Vec<NodeInfo> = Vec::with_capacity(count);
         let mut layer0_flat_graph = Layer0FlatGraph::default();
@@ -7531,10 +7538,9 @@ impl HnswIndex {
                         let nbr_idx = if use_sequential_ids {
                             nbr_id as usize
                         } else {
-                            // Binary search in sorted ids for non-sequential case
-                            match ids.binary_search(&nbr_id) {
-                                Ok(idx) => idx,
-                                Err(_) => continue,
+                            match id_to_idx.get(&nbr_id) {
+                                Some(&idx) => idx,
+                                None => continue,
                             }
                         };
                         if nbr_idx < count {
