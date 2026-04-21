@@ -17,6 +17,7 @@ impl AnnSnapshot for DummySnapshot {
             dim: 4,
             metric: "l2".to_string(),
             count: 1,
+            supported_load_modes: vec![LoadMode::OwnedMemory],
             sections: vec![SectionDescriptor {
                 name: "payload".to_string(),
                 len: 4,

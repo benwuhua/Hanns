@@ -45,6 +45,7 @@ impl HnswSnapshot {
             dim: index.dim(),
             metric: metric_name(index.metric_type()).to_string(),
             count: index.ntotal(),
+            supported_load_modes: vec![LoadMode::OwnedMemory],
             sections: vec![SectionDescriptor {
                 name: HNSW_SNAPSHOT_SECTION.to_string(),
                 len: bytes.len() as u64,
@@ -188,6 +189,7 @@ impl HnswSectionedSnapshot {
             dim: export.dim,
             metric: metric_name(export.metric_type).to_string(),
             count: export.count,
+            supported_load_modes: vec![LoadMode::OwnedMemory],
             sections: sections
                 .iter()
                 .map(|(name, bytes)| SectionDescriptor {

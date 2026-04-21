@@ -292,6 +292,7 @@ fn registry_rejects_unregistered_variant() {
             dim: 4,
             metric: "l2".to_string(),
             count: 0,
+            supported_load_modes: vec![LoadMode::OwnedMemory],
             sections: vec![],
         })
         .expect("manifest write");

@@ -159,6 +159,7 @@ fn hnsw_snapshot_loader_errors_when_hnsw_bytes_section_is_missing() {
             dim: 4,
             metric: "unknown".to_string(),
             count: 0,
+            supported_load_modes: vec![LoadMode::OwnedMemory],
             sections: Vec::new(),
         })
         .expect("manifest should write");

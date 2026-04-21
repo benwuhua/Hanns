@@ -141,6 +141,7 @@ impl IvfUsqSectionedSnapshot {
             dim: export.dim,
             metric: metric_name(export.metric_type).to_string(),
             count: export.ntotal,
+            supported_load_modes: vec![LoadMode::OwnedMemory],
             sections: sections
                 .iter()
                 .map(|(name, bytes)| SectionDescriptor {

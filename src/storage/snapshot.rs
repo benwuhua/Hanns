@@ -5,7 +5,8 @@ use super::{IndexArtifactReader, IndexArtifactWriter};
 use std::collections::HashMap;
 
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LoadMode {
     OwnedMemory,
     Mmap,
@@ -87,12 +88,15 @@ impl AnnSnapshotRegistry {
         Ok(loader.supported_load_modes())
     }
 
-    pub fn supported_load_modes(
-        &self,
-        reader: &dyn IndexArtifactReader,
-    ) -> Result<&'static [LoadMode]> {
+    pub fn supported_load_modes(&self, reader: &dyn IndexArtifactReader) -> Result<Vec<LoadMode>> {
         let manifest = reader.manifest()?;
-        self.supported_load_modes_for_variant(&manifest.variant)
+        let loader_modes = self.supported_load_modes_for_variant(&manifest.variant)?;
+        Ok(manifest
+            .supported_load_modes
+            .iter()
+            .copied()
+            .filter(|mode| loader_modes.contains(mode))
+            .collect())
     }
 
     pub fn registered_variants(&self) -> Vec<&str> {

@@ -166,6 +166,7 @@ impl DiskAnnPcaUsqSectionedSnapshot {
             dim: export.d_in,
             metric: metric_name(export.metric_type).to_string(),
             count: export.n,
+            supported_load_modes: vec![LoadMode::OwnedMemory],
             sections: sections
                 .iter()
                 .map(|(name, bytes)| SectionDescriptor {

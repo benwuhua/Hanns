@@ -205,6 +205,7 @@ impl PqFlashSectionedSnapshot {
             dim: export.dim,
             metric: metric_name(export.metric_type).to_string(),
             count: export.count,
+            supported_load_modes: vec![LoadMode::OwnedMemory],
             sections: sections
                 .iter()
                 .map(|(name, bytes)| SectionDescriptor {
