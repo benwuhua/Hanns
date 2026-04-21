@@ -54,9 +54,13 @@ class SnapshotHeaderTests(unittest.TestCase):
                 CSnapshotSearchParams params = {
                     .top_k = 3,
                     .nprobe = 16,
+                    .has_radius = 1,
+                    .radius = 0.25f,
                 };
                 (void)params.top_k;
                 (void)params.nprobe;
+                (void)params.has_radius;
+                (void)params.radius;
                 (void)knowhere_snapshot_runtime_search_with_search_params;
                 CSearchResult result = {
                     .ids = 0,

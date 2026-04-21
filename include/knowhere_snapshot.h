@@ -51,6 +51,8 @@ typedef struct CSnapshotArtifactCallbacks {
 typedef struct CSnapshotSearchParams {
     size_t top_k;
     size_t nprobe;
+    uint8_t has_radius;
+    float radius;
 } CSnapshotSearchParams;
 
 char* knowhere_snapshot_manifest_plan(const char* manifest_json);

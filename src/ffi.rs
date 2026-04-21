@@ -273,6 +273,8 @@ pub struct CSnapshotArtifactCallbacks {
 pub struct CSnapshotSearchParams {
     pub top_k: usize,
     pub nprobe: usize,
+    pub has_radius: u8,
+    pub radius: f32,
 }
 
 struct SnapshotRuntimeHandle {
@@ -3126,6 +3128,20 @@ fn c_callback_section_name(name: &str) -> Result<std::ffi::CString, CError> {
     std::ffi::CString::new(name).map_err(|_| CError::InvalidArg)
 }
 
+fn snapshot_search_request_from_c_params(params: CSnapshotSearchParams) -> SearchRequest {
+    SearchRequest {
+        top_k: params.top_k,
+        nprobe: params.nprobe.max(1),
+        filter: None,
+        params: None,
+        radius: if params.has_radius != 0 {
+            Some(params.radius)
+        } else {
+            None
+        },
+    }
+}
+
 /// Plan storage/load compatibility for a Hanns sectioned snapshot manifest.
 ///
 /// Accepts a UTF-8 JSON `IndexManifest` and returns a Rust-allocated JSON string.
@@ -3272,7 +3288,30 @@ pub extern "C" fn knowhere_snapshot_runtime_search_with_params(
     dim: usize,
     nprobe: usize,
 ) -> *mut CSearchResult {
-    if runtime.is_null() || query.is_null() || count == 0 || top_k == 0 || dim == 0 {
+    knowhere_snapshot_runtime_search_with_search_params(
+        runtime,
+        query,
+        count,
+        dim,
+        CSnapshotSearchParams {
+            top_k,
+            nprobe,
+            has_radius: 0,
+            radius: 0.0,
+        },
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn knowhere_snapshot_runtime_search_with_search_params(
+    runtime: *const std::ffi::c_void,
+    query: *const f32,
+    count: usize,
+    dim: usize,
+    params: CSnapshotSearchParams,
+) -> *mut CSearchResult {
+    let req = snapshot_search_request_from_c_params(params);
+    if runtime.is_null() || query.is_null() || count == 0 || req.top_k == 0 || dim == 0 {
         return std::ptr::null_mut();
     }
 
@@ -3285,25 +3324,18 @@ pub extern "C" fn knowhere_snapshot_runtime_search_with_params(
         let Some(query_len) = count.checked_mul(dim) else {
             return std::ptr::null_mut();
         };
-        let Some(result_capacity) = count.checked_mul(top_k) else {
+        let Some(result_capacity) = count.checked_mul(req.top_k) else {
             return std::ptr::null_mut();
         };
 
         let query = std::slice::from_raw_parts(query, query_len);
-        let req = SearchRequest {
-            top_k,
-            nprobe: nprobe.max(1),
-            filter: None,
-            params: None,
-            radius: None,
-        };
         let start = std::time::Instant::now();
         let mut ids = Vec::with_capacity(result_capacity);
         let mut distances = Vec::with_capacity(result_capacity);
 
         for query in query.chunks_exact(dim) {
-            let mut query_ids = vec![-1_i64; top_k];
-            let mut query_distances = vec![f32::INFINITY; top_k];
+            let mut query_ids = vec![-1_i64; req.top_k];
+            let mut query_distances = vec![f32::INFINITY; req.top_k];
             let n =
                 match runtime
                     .runtime
@@ -3329,24 +3361,6 @@ pub extern "C" fn knowhere_snapshot_runtime_search_with_params(
             elapsed_ms: start.elapsed().as_secs_f32() * 1000.0,
         }))
     }
-}
-
-#[no_mangle]
-pub extern "C" fn knowhere_snapshot_runtime_search_with_search_params(
-    runtime: *const std::ffi::c_void,
-    query: *const f32,
-    count: usize,
-    dim: usize,
-    params: CSnapshotSearchParams,
-) -> *mut CSearchResult {
-    knowhere_snapshot_runtime_search_with_params(
-        runtime,
-        query,
-        count,
-        params.top_k,
-        dim,
-        params.nprobe,
-    )
 }
 
 #[no_mangle]
@@ -5454,6 +5468,8 @@ mod tests {
         let search_params = CSnapshotSearchParams {
             top_k: 3,
             nprobe: 16,
+            has_radius: 0,
+            radius: 0.0,
         };
         let params_result = knowhere_snapshot_runtime_search_with_search_params(
             runtime,
@@ -5466,6 +5482,20 @@ mod tests {
         knowhere_free_result(params_result);
 
         knowhere_free_snapshot_runtime(runtime);
+    }
+
+    #[test]
+    fn test_snapshot_search_params_map_radius() {
+        let req = snapshot_search_request_from_c_params(CSnapshotSearchParams {
+            top_k: 7,
+            nprobe: 3,
+            has_radius: 1,
+            radius: 0.5,
+        });
+
+        assert_eq!(req.top_k, 7);
+        assert_eq!(req.nprobe, 3);
+        assert_eq!(req.radius, Some(0.5));
     }
 
     #[test]
