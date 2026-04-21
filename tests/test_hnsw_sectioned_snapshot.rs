@@ -5,7 +5,10 @@ use hanns::faiss::hnsw_snapshot::{
     HNSW_LEVELS_SECTION, HNSW_META_SECTION, HNSW_NEIGHBOR_DISTS_SECTION, HNSW_NEIGHBOR_IDS_SECTION,
     HNSW_NEIGHBOR_OFFSETS_SECTION,
 };
-use hanns::faiss::{HnswIndex, HnswSectionedSnapshot, HnswSnapshotLoader};
+use hanns::faiss::{
+    load_hnsw_sectioned_snapshot, save_hnsw_sectioned_snapshot, HnswIndex, HnswRuntime,
+    HnswSectionedSnapshot, HnswSnapshotLoader,
+};
 use hanns::kernel::IndexFamily;
 use hanns::storage::{
     AnnSnapshot, AnnSnapshotLoader, FileArtifactStore, IndexArtifactReader, IndexArtifactWriter,
@@ -355,6 +358,18 @@ fn hnsw_sectioned_snapshot_roundtrips_through_file_store() {
         .expect("load");
 
     assert_search_matches(&index, runtime.as_ref());
+}
+
+#[test]
+fn hnsw_sectioned_file_helpers_roundtrip() {
+    let index = build_sequential_hnsw();
+    let dir = tempdir().expect("tempdir should build");
+
+    save_hnsw_sectioned_snapshot(&index, dir.path()).expect("save sectioned snapshot");
+    let loaded = load_hnsw_sectioned_snapshot(dir.path()).expect("load sectioned snapshot");
+    let runtime = HnswRuntime::new(loaded);
+
+    assert_search_matches(&index, &runtime);
 }
 
 #[test]

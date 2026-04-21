@@ -56,8 +56,8 @@ pub use hnsw_prq::{HnswPrqConfig, HnswPrqIndex};
 pub use hnsw_quantized::{HnswQuantizeConfig, HnswSqIndex};
 pub use hnsw_runtime::HnswRuntime;
 pub use hnsw_snapshot::{
-    HnswSectionedSnapshot, HnswSnapshot, HnswSnapshotLoader, HNSW_SECTIONS_SNAPSHOT_VARIANT,
-    HNSW_SNAPSHOT_SECTION,
+    load_hnsw_sectioned_snapshot, save_hnsw_sectioned_snapshot, HnswSectionedSnapshot,
+    HnswSnapshot, HnswSnapshotLoader, HNSW_SECTIONS_SNAPSHOT_VARIANT, HNSW_SNAPSHOT_SECTION,
 };
 pub use index::FaissIndex;
 #[allow(deprecated)]

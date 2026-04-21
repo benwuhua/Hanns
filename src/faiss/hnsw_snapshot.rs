@@ -1,9 +1,11 @@
+use std::path::Path;
+
 use crate::api::{KnowhereError, MetricType, Result, SqMode};
 use crate::index::Index;
 use crate::kernel::{AnnRuntime, IndexFamily};
 use crate::storage::{
-    AnnSnapshot, AnnSnapshotLoader, IndexArtifactReader, IndexArtifactWriter, IndexManifest,
-    LoadMode, SectionDescriptor,
+    AnnSnapshot, AnnSnapshotLoader, FileArtifactStore, IndexArtifactReader, IndexArtifactWriter,
+    IndexManifest, LoadMode, SectionDescriptor,
 };
 
 use serde::{Deserialize, Serialize};
@@ -209,6 +211,17 @@ impl AnnSnapshot for HnswSectionedSnapshot {
     }
 }
 
+pub fn save_hnsw_sectioned_snapshot(index: &HnswIndex, root: impl AsRef<Path>) -> Result<()> {
+    let mut store = FileArtifactStore::new(root)?;
+    let snapshot = HnswSectionedSnapshot::from_index(index)?;
+    snapshot.write_snapshot(&mut store)
+}
+
+pub fn load_hnsw_sectioned_snapshot(root: impl AsRef<Path>) -> Result<HnswIndex> {
+    let store = FileArtifactStore::new(root)?;
+    load_hnsw_index_from_artifact(&store)
+}
+
 pub struct HnswSnapshotLoader;
 
 impl AnnSnapshotLoader for HnswSnapshotLoader {
@@ -217,36 +230,37 @@ impl AnnSnapshotLoader for HnswSnapshotLoader {
         reader: &dyn IndexArtifactReader,
         mode: LoadMode,
     ) -> Result<Box<dyn AnnRuntime>> {
-        let manifest = reader.manifest()?;
-        if manifest.version != 1 || manifest.family != IndexFamily::Hnsw {
-            return Err(KnowhereError::Codec(format!(
-                "invalid HNSW snapshot manifest: expected version 1 family Hnsw, got version {} family {:?} variant {:?}",
-                manifest.version, manifest.family, manifest.variant
-            )));
-        }
-
         match mode {
             LoadMode::OwnedMemory => {}
             LoadMode::Mmap | LoadMode::PageCache | LoadMode::Lazy => {
-                // This compatibility bridge stores one serialized HNSW blob, so planned
-                // storage modes load through the same owned-memory path until the
-                // sectioned HNSW layout exists.
+                // Planned storage modes load through the same owned-memory path until
+                // HNSW gets mmap/page-cache specific runtime support.
             }
         }
 
-        let index = match manifest.variant.as_str() {
-            HNSW_SNAPSHOT_VARIANT => {
-                let bytes = reader.read_section(HNSW_SNAPSHOT_SECTION)?;
-                HnswIndex::deserialize_from_bytes(bytes.as_ref())?
-            }
-            HNSW_SECTIONS_SNAPSHOT_VARIANT => load_sectioned_hnsw(reader, manifest)?,
-            variant => {
-                return Err(KnowhereError::Codec(format!(
-                    "invalid HNSW snapshot manifest: expected variant {HNSW_SNAPSHOT_VARIANT} or {HNSW_SECTIONS_SNAPSHOT_VARIANT}, got {variant:?}"
-                )))
-            }
-        };
+        let index = load_hnsw_index_from_artifact(reader)?;
         Ok(Box::new(HnswRuntime::new(index)))
+    }
+}
+
+fn load_hnsw_index_from_artifact(reader: &dyn IndexArtifactReader) -> Result<HnswIndex> {
+    let manifest = reader.manifest()?;
+    if manifest.version != 1 || manifest.family != IndexFamily::Hnsw {
+        return Err(KnowhereError::Codec(format!(
+            "invalid HNSW snapshot manifest: expected version 1 family Hnsw, got version {} family {:?} variant {:?}",
+            manifest.version, manifest.family, manifest.variant
+        )));
+    }
+
+    match manifest.variant.as_str() {
+        HNSW_SNAPSHOT_VARIANT => {
+            let bytes = reader.read_section(HNSW_SNAPSHOT_SECTION)?;
+            HnswIndex::deserialize_from_bytes(bytes.as_ref())
+        }
+        HNSW_SECTIONS_SNAPSHOT_VARIANT => load_sectioned_hnsw(reader, manifest),
+        variant => Err(KnowhereError::Codec(format!(
+            "invalid HNSW snapshot manifest: expected variant {HNSW_SNAPSHOT_VARIANT} or {HNSW_SECTIONS_SNAPSHOT_VARIANT}, got {variant:?}"
+        ))),
     }
 }
 
