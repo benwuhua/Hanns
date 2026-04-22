@@ -6,9 +6,7 @@ pub mod binary;
 pub mod binary_hnsw;
 pub mod diskann_aisaq;
 pub mod diskann_pca_usq;
-pub mod diskann_pca_usq_snapshot;
 pub mod diskann_sq;
-pub mod diskann_sq_snapshot;
 pub mod hnsw;
 pub mod hnsw_hvq;
 pub mod hnsw_pca_sq;
@@ -16,30 +14,21 @@ pub mod hnsw_pca_usq;
 pub mod hnsw_pq;
 pub mod hnsw_prq;
 pub mod hnsw_quantized;
-pub mod hnsw_runtime;
-pub mod hnsw_snapshot;
 pub mod index;
 pub mod ivf;
 pub mod ivf_flat;
 pub mod ivf_flat_cc;
-pub mod ivf_flat_snapshot;
 pub mod ivf_opq;
-pub mod ivf_runtime;
 pub mod ivf_usq;
-pub mod ivf_usq_snapshot;
 
 pub mod ivf_sq8;
-pub mod ivf_sq8_snapshot;
 pub mod ivf_sq_cc;
 pub mod ivf_turboquant;
 pub mod ivfpq;
-pub mod ivfpq_snapshot;
 pub mod mem_index;
 pub mod pq_simd;
-pub mod pqflash_snapshot;
 pub mod rhtsdg;
 pub mod scann;
-pub mod snapshot_registry;
 pub mod sparse;
 pub mod sparse_inverted;
 pub mod sparse_inverted_cc;
@@ -55,25 +44,7 @@ pub use diskann_aisaq::{
     PQFlashIndex, PageCache, PageCacheStats,
 };
 pub use diskann_pca_usq::{DiskAnnPcaUsqConfig, DiskAnnPcaUsqIndex};
-pub use diskann_pca_usq_snapshot::{
-    load_diskann_pca_usq_index_from_artifact, load_diskann_pca_usq_sectioned_snapshot,
-    save_diskann_pca_usq_sectioned_snapshot, DiskAnnPcaUsqSectionedSnapshot,
-    DiskAnnPcaUsqSnapshotLoader, DISKANN_PCA_USQ_INNER_MANIFEST_SECTION,
-    DISKANN_PCA_USQ_INNER_PREFIX, DISKANN_PCA_USQ_META_SECTION, DISKANN_PCA_USQ_NORMS_SECTION,
-    DISKANN_PCA_USQ_NORMS_SQ_SECTION, DISKANN_PCA_USQ_PACKED_BITS_SECTION,
-    DISKANN_PCA_USQ_PCA_COMPONENTS_SECTION, DISKANN_PCA_USQ_PCA_MEAN_SECTION,
-    DISKANN_PCA_USQ_QUANTIZER_CENTROID_SECTION, DISKANN_PCA_USQ_QUANT_QUALITIES_SECTION,
-    DISKANN_PCA_USQ_SECTIONS_SNAPSHOT_VARIANT, DISKANN_PCA_USQ_SIGN_BITS_SECTION,
-    DISKANN_PCA_USQ_VMAXS_SECTION,
-};
 pub use diskann_sq::{DiskAnnSqConfig, DiskAnnSqIndex};
-pub use diskann_sq_snapshot::{
-    load_diskann_sq_index_from_artifact, load_diskann_sq_sectioned_snapshot,
-    save_diskann_sq_sectioned_snapshot, DiskAnnSqSectionedSnapshot, DiskAnnSqSnapshotLoader,
-    DISKANN_SQ_INNER_MANIFEST_SECTION, DISKANN_SQ_INNER_PREFIX, DISKANN_SQ_META_SECTION,
-    DISKANN_SQ_PCA_COMPONENTS_SECTION, DISKANN_SQ_PCA_MEAN_SECTION,
-    DISKANN_SQ_SECTIONS_SNAPSHOT_VARIANT, DISKANN_SQ_SQ_CODES_SECTION,
-};
 pub use hnsw::HnswIndex;
 pub use hnsw_hvq::{HnswHvqConfig, HnswHvqIndex};
 pub use hnsw_pca_sq::{HnswPcaSqConfig, HnswPcaSqIndex};
@@ -81,71 +52,22 @@ pub use hnsw_pca_usq::{HnswPcaUsqConfig, HnswPcaUsqIndex};
 pub use hnsw_pq::{HnswPqConfig, HnswPqIndex};
 pub use hnsw_prq::{HnswPrqConfig, HnswPrqIndex};
 pub use hnsw_quantized::{HnswQuantizeConfig, HnswSqIndex};
-pub use hnsw_runtime::HnswRuntime;
-pub use hnsw_snapshot::{
-    load_hnsw_sectioned_snapshot, save_hnsw_sectioned_snapshot, HnswSectionedSnapshot,
-    HnswSnapshot, HnswSnapshotLoader, HNSW_SECTIONS_SNAPSHOT_VARIANT, HNSW_SNAPSHOT_SECTION,
-    HNSW_SNAPSHOT_VARIANT,
-};
 pub use index::FaissIndex;
 #[allow(deprecated)]
 // Re-exported for compatibility with callers that still name the legacy IVF scaffold.
 pub use ivf::IvfIndex;
 pub use ivf_flat::IvfFlatIndex;
 pub use ivf_flat_cc::IvfFlatCcIndex;
-pub use ivf_flat_snapshot::{
-    load_ivf_flat_index_from_artifact, load_ivf_flat_sectioned_snapshot,
-    save_ivf_flat_sectioned_snapshot, IvfFlatSectionedSnapshot, IvfFlatSnapshotLoader,
-    IVF_FLAT_CENTROIDS_SECTION, IVF_FLAT_IDS_SECTION, IVF_FLAT_LIST_IDS_SECTION,
-    IVF_FLAT_LIST_OFFSETS_SECTION, IVF_FLAT_LIST_SIZES_SECTION, IVF_FLAT_LIST_VECTORS_SECTION,
-    IVF_FLAT_META_SECTION, IVF_FLAT_SECTIONS_SNAPSHOT_VARIANT, IVF_FLAT_VECTORS_SECTION,
-};
 pub use ivf_opq::{IvfOpqConfig, IvfOpqIndex, IvfOpqIndexWrapper};
-pub use ivf_runtime::IvfRuntime;
 pub use ivf_usq::{IvfUsqConfig, IvfUsqIndex};
-pub use ivf_usq_snapshot::{
-    load_ivf_usq_index_from_artifact, load_ivf_usq_sectioned_snapshot,
-    save_ivf_usq_sectioned_snapshot, IvfUsqSectionedSnapshot, IvfUsqSnapshotLoader,
-    IVF_USQ_CENTROIDS_SECTION, IVF_USQ_LIST_IDS_SECTION, IVF_USQ_LIST_OFFSETS_SECTION,
-    IVF_USQ_LIST_SIZES_SECTION, IVF_USQ_META_SECTION, IVF_USQ_NORMS_SECTION,
-    IVF_USQ_NORMS_SQ_SECTION, IVF_USQ_PACKED_BITS_SECTION, IVF_USQ_QUANTIZER_CENTROID_SECTION,
-    IVF_USQ_QUANT_QUALITIES_SECTION, IVF_USQ_SECTIONS_SNAPSHOT_VARIANT, IVF_USQ_SIGN_BITS_SECTION,
-    IVF_USQ_VMAXS_SECTION,
-};
 
 pub use ivf_sq8::IvfSq8Index;
-pub use ivf_sq8_snapshot::{
-    load_ivf_sq8_index_from_artifact, load_ivf_sq8_sectioned_snapshot,
-    save_ivf_sq8_sectioned_snapshot, IvfSq8SectionedSnapshot, IvfSq8SnapshotLoader,
-    IVF_SQ8_CENTROIDS_SECTION, IVF_SQ8_IDS_SECTION, IVF_SQ8_LIST_CODES_SECTION,
-    IVF_SQ8_LIST_IDS_SECTION, IVF_SQ8_LIST_OFFSETS_SECTION, IVF_SQ8_LIST_ROWS_SECTION,
-    IVF_SQ8_LIST_SIZES_SECTION, IVF_SQ8_META_SECTION, IVF_SQ8_SECTIONS_SNAPSHOT_VARIANT,
-    IVF_SQ8_VECTORS_SECTION,
-};
 pub use ivf_sq_cc::IvfSqCcIndex;
 pub use ivf_turboquant::{IvfTurboQuantConfig, IvfTurboQuantIndex};
 pub use ivfpq::IvfPqIndex;
-pub use ivfpq_snapshot::{
-    load_ivf_pq_index_from_artifact, load_ivf_pq_sectioned_snapshot,
-    save_ivf_pq_sectioned_snapshot, IvfPqSectionedSnapshot, IvfPqSnapshotLoader,
-    IVF_PQ_CENTROIDS_SECTION, IVF_PQ_IDS_SECTION, IVF_PQ_LIST_CODES_SECTION,
-    IVF_PQ_LIST_IDS_SECTION, IVF_PQ_LIST_OFFSETS_SECTION, IVF_PQ_LIST_SIZES_SECTION,
-    IVF_PQ_META_SECTION, IVF_PQ_PQ_CENTROIDS_SECTION, IVF_PQ_SECTIONS_SNAPSHOT_VARIANT,
-    IVF_PQ_VECTORS_SECTION,
-};
 pub use mem_index::MemIndex;
-pub use pqflash_snapshot::{
-    load_pqflash_index_from_artifact, load_pqflash_sectioned_snapshot,
-    save_pqflash_sectioned_snapshot, PqFlashSectionedSnapshot, PqFlashSnapshotLoader,
-    PQFLASH_DELETED_ROWS_SECTION, PQFLASH_HVQ_CODES_SECTION, PQFLASH_HVQ_META_SECTION,
-    PQFLASH_META_SECTION, PQFLASH_NEIGHBOR_COUNTS_SECTION, PQFLASH_NEIGHBOR_IDS_SECTION,
-    PQFLASH_NODE_IDS_SECTION, PQFLASH_NODE_PQ_CODES_SECTION, PQFLASH_PQ_CENTROIDS_SECTION,
-    PQFLASH_SECTIONS_SNAPSHOT_VARIANT, PQFLASH_SQ8_CODES_SECTION, PQFLASH_SQ8_META_SECTION,
-    PQFLASH_VECTORS_SECTION,
-};
 pub use rhtsdg::RhtsdgIndex;
 pub use scann::{ScaNNConfig, ScaNNIndex};
-pub use snapshot_registry::default_ann_snapshot_registry;
 pub use sparse::{SparseIndex, SparseVector};
 pub use sparse_inverted::{
     ApproxSearchParams, InvertedIndexAlgo, SparseInvertedIndex, SparseInvertedSearcher,
