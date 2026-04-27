@@ -1,0 +1,96 @@
+{
+  "artifact_type": "ivfpq_milestone_verdict",
+  "authority_surface": "HannsDB-x86",
+  "build_time_check": {
+    "add_s": 5.255485071,
+    "hanns_build_s": 7.2750792440000005,
+    "official_build_s": 8.96,
+    "passed": true,
+    "ratio_hanns_vs_official": 0.8119508084821428,
+    "train_s": 2.019594173
+  },
+  "comparison_contract": {
+    "build_time_metric": "total_train_plus_add_seconds",
+    "build_time_required": true,
+    "metric_of_record": "recall_at_100",
+    "optimization_scope": [
+      "Recall@100 normalized to official top_k=100",
+      "8-thread one-vector-per-query QPS/VPS",
+      "build_s total=train_s+add_s"
+    ],
+    "recall_band_formula": "floor(recall * 100) / 100",
+    "recall_tolerance": 0.001,
+    "thread_policy": "match_or_explicitly_normalized",
+    "throughput_metric": "vps",
+    "top_k": 100,
+    "vps_qps_mapping": "one_vector_per_query"
+  },
+  "evidence": {
+    "hanns_aligned_artifact": "docs/parity/hanns-knowhere-ivfpq-aligned-1777042175.json",
+    "hanns_remote_artifact": "/data/work/hanns-src/docs/parity/hanns-knowhere-ivfpq-aligned-1777042175.json",
+    "hanns_remote_log": "/data/work/hanns-logs/remote_background_20260424T144810Z_63360.log",
+    "local_validator": "python3 scripts/hanns_knowhere_benchmark.py validate-ivfpq-verdict docs/parity/hanns-knowhere-ivfpq-buildtime-verdict-20260424T144810Z.json",
+    "official_remote_log": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T132246Z_15129.log",
+    "official_remote_status": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T132246Z_15129.status",
+    "remote_buildtime_log": "/data/work/hanns-logs/remote_background_20260424T144810Z_63360.log"
+  },
+  "hanns_candidate": {
+    "add_s": 5.255485071,
+    "artifact_path": "/data/work/hanns-src/docs/parity/hanns-knowhere-ivfpq-aligned-1777042175.json",
+    "build_s": 7.2750792440000005,
+    "commit": "rsync-worktree-buildopt-25k",
+    "log_path": "/data/work/hanns-logs/remote_background_20260424T144810Z_63360.log",
+    "m": 32,
+    "nbits": 8,
+    "nlist": 1024,
+    "nprobe": 20,
+    "qps_or_vps": 8487.02370696712,
+    "recall_at_100": 0.9050569999999732,
+    "recall_band_floor": 0.9,
+    "ref": "current-worktree",
+    "refine": {
+      "candidate_pool": "min(scanned, top_k * 4)",
+      "enabled": true,
+      "exact_refine_multiplier": 4
+    },
+    "threads": 8,
+    "top_k": 100,
+    "train_s": 2.019594173
+  },
+  "official_target": {
+    "build_s": 8.96,
+    "build_time_note": "official benchmark total build seconds from Zilliz Knowhere native run block",
+    "commit": "868634bc5230a71a84371fea5f5b674b805643ea",
+    "excluded_rows": [
+      "terminal_zero_anomaly"
+    ],
+    "log_path": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T132246Z_15129.log",
+    "m": 32,
+    "nbits": 8,
+    "nlist": 1024,
+    "normalization_note": "Recall uses the highest valid sweep row (m=32,nprobe=256,R@100=0.7841); terminal R@=0.0000 row is excluded as anomaly, while the same runner block provides the 8-thread VPS table.",
+    "normalization_source": "sweep_row",
+    "nprobe": 256,
+    "qps_or_vps": 1398.803,
+    "recall_at_100": 0.7841,
+    "recall_band_floor": 0.78,
+    "ref": "HEAD",
+    "repo_url": "https://github.com/zilliztech/knowhere",
+    "threads": 8,
+    "top_k": 100,
+    "variant": "FP16"
+  },
+  "plan_approved_at": "2026-04-24T12:50:00Z",
+  "run_set_id": "ivfpq-buildtime-20260424T144810Z",
+  "status": "win",
+  "verdict_checks": {
+    "exact_recall_within_tolerance": true,
+    "hanns_build_s_lt_official": true,
+    "hanns_qps_vps_gt_official": true,
+    "official_normalized": true,
+    "same_or_higher_recall_band": true,
+    "same_top_k": true,
+    "thread_policy_satisfied": true,
+    "throughput_units_comparable": true
+  }
+}

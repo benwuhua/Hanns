@@ -351,6 +351,56 @@ impl IvfUsqIndex {
         Ok(SearchResult::new(ids, distances, 0.0))
     }
 
+    #[cfg(feature = "parallel")]
+    pub fn search_parallel(
+        &self,
+        query: &[f32],
+        req: &SearchRequest,
+        threads: usize,
+    ) -> Result<SearchResult> {
+        if !self.trained {
+            return Err(KnowhereError::InvalidArg("index not trained".to_string()));
+        }
+
+        let nq = query.len() / self.config.dim;
+        if nq == 0 || nq * self.config.dim != query.len() {
+            return Err(KnowhereError::InvalidArg(
+                "query dimension mismatch".to_string(),
+            ));
+        }
+
+        let top_k = req.top_k.max(1);
+        let nprobe = req.nprobe.max(1).min(self.config.nlist);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads.max(1))
+            .build()
+            .map_err(|e| KnowhereError::InternalError(format!("rayon pool error: {e}")))?;
+        let rows = pool.install(|| {
+            query
+                .par_chunks_exact(self.config.dim)
+                .map(|query_vec| {
+                    let mut batch = self.search_single(query_vec, top_k, nprobe);
+                    batch.truncate(top_k);
+                    while batch.len() < top_k {
+                        batch.push((-1, f32::INFINITY));
+                    }
+                    batch
+                })
+                .collect::<Vec<_>>()
+        });
+
+        let mut ids = Vec::with_capacity(nq * top_k);
+        let mut distances = Vec::with_capacity(nq * top_k);
+        for row in rows {
+            for (id, distance) in row {
+                ids.push(id);
+                distances.push(distance);
+            }
+        }
+
+        Ok(SearchResult::new(ids, distances, 0.0))
+    }
+
     pub fn save(&self, path: &Path) -> Result<()> {
         let pending = self.pending.read();
         let clusters: Vec<StoredCluster> = (0..self.config.nlist)

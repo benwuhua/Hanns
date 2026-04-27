@@ -1,0 +1,15 @@
+{
+  "artifact_type": "diskann_benchmark_gate",
+  "family": "DiskANN",
+  "comparability_status": "constrained",
+  "benchmark_gate_verdict": "no_go_for_native_comparable_benchmark",
+  "native_comparison_allowed": false,
+  "leadership_claim_allowed": false,
+  "authority_surface_required": "HannsDB-x86",
+  "reason": "Current Hanns PQFlashIndex is an in-memory/simplified AISAQ skeleton, not a native-comparable SSD DiskANN pipeline.",
+  "required_before_go": [
+    "Expose a native-comparable SSD DiskANN/AISAQ path or explicitly scoped equivalent.",
+    "Use top_k=100 / Recall@100 and search_list_size-aligned sweep rows.",
+    "Validate archived HannsDB-x86 evidence before any leadership claim."
+  ]
+}

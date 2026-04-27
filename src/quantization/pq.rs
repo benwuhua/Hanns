@@ -198,9 +198,9 @@ impl ProductQuantizer {
         // - n < 10K: 10 次迭代（快速训练）
         // - 10K <= n < 100K: 25 次迭代
         // - n >= 100K: 50 次迭代
-        let max_iter = if n < 10_000 {
+        let max_iter = if n < 50_000 {
             10
-        } else if n < 100_000 {
+        } else if n <= 100_000 {
             25
         } else {
             50

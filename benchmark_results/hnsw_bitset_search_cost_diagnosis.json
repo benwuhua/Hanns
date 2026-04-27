@@ -1,0 +1,68 @@
+{
+  "benchmark": "HNSW-SEARCH-FIRST-bitset-search-cost-diagnosis",
+  "dataset": "sift-128-euclidean",
+  "methodology": "rust_hdf5_ann_benchmark_bitset_search_cost",
+  "build_random_seed": 42,
+  "qps_repeat_count": 3,
+  "bitset_stride": 3,
+  "filtered_fraction": 0.33334,
+  "selected_recall_gate": 0.95,
+  "ef_sweep": [
+    {
+      "ef_search": 64,
+      "qps": 5015.741075769023,
+      "qps_runs": [
+        5072.548012846309,
+        5015.741075769023,
+        4969.626265468738
+      ],
+      "recall_at_10": 0.9941999999999992,
+      "average_visited_nodes": 1116.868,
+      "average_frontier_pushes": 376.184,
+      "average_frontier_pops": 268.33,
+      "average_distance_calls": 744.687
+    },
+    {
+      "ef_search": 96,
+      "qps": 5025.880141553915,
+      "qps_runs": [
+        5009.423978860231,
+        5049.695314008991,
+        5025.880141553915
+      ],
+      "recall_at_10": 0.9941999999999992,
+      "average_visited_nodes": 1506.28,
+      "average_frontier_pushes": 513.748,
+      "average_frontier_pops": 368.756,
+      "average_distance_calls": 1004.34
+    },
+    {
+      "ef_search": 128,
+      "qps": 5053.602934627224,
+      "qps_runs": [
+        5064.084931348378,
+        5053.602934627224,
+        5009.580823324608
+      ],
+      "recall_at_10": 0.9941999999999992,
+      "average_visited_nodes": 1871.027,
+      "average_frontier_pushes": 645.014,
+      "average_frontier_pops": 466.306,
+      "average_distance_calls": 1247.297
+    },
+    {
+      "ef_search": 160,
+      "qps": 5108.102335538299,
+      "qps_runs": [
+        5016.002100059631,
+        5108.102335538299,
+        5116.362061919493
+      ],
+      "recall_at_10": 0.9941999999999992,
+      "average_visited_nodes": 2212.686,
+      "average_frontier_pushes": 772.094,
+      "average_frontier_pops": 561.747,
+      "average_distance_calls": 1474.524
+    }
+  ]
+}

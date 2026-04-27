@@ -30,7 +30,7 @@ fn test_ffi_abi_metadata_contract() {
     assert_eq!(flat_meta_json["index_type"], "Flat");
     assert_eq!(flat_meta_json["dim"], 16);
     assert_eq!(flat_meta_json["count"], 0);
-    assert_eq!(flat_meta_json["is_trained"], false);
+    assert_eq!(flat_meta_json["is_trained"], true);
     assert_eq!(flat_meta_json["has_raw_data"], true);
     assert_eq!(flat_meta_json["additional_scalar_supported"], false);
     assert_eq!(

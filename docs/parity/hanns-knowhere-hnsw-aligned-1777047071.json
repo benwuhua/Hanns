@@ -1,0 +1,44 @@
+{
+  "artifact_type": "hnsw_aligned_hanns_rows",
+  "authority_surface": "HannsDB-x86",
+  "dataset": {
+    "base_count": 1000000,
+    "dim": 128,
+    "path": "/data/work/Hanns/data/sift",
+    "query_count_used": 10000
+  },
+  "hanns_commit": "rsync-worktree-hnsw-nq-parallel-m6efc40",
+  "rows": [
+    {
+      "add_s": 30.249435518,
+      "build_s": 30.249435605,
+      "ef": 700,
+      "ef_construction": 40,
+      "family": "HNSW",
+      "implementation": "hanns",
+      "m": 6,
+      "qps": 32027.747713242035,
+      "recall_at_10": 0.944279999999958,
+      "recall_at_100": 0.9148709999999617,
+      "threads": 8,
+      "top_k": 100,
+      "train_s": 8.7e-8
+    },
+    {
+      "add_s": 30.249435518,
+      "build_s": 30.249435605,
+      "ef": 800,
+      "ef_construction": 40,
+      "family": "HNSW",
+      "implementation": "hanns",
+      "m": 6,
+      "qps": 25928.208472545124,
+      "recall_at_10": 0.9479299999999597,
+      "recall_at_100": 0.9222359999999565,
+      "threads": 8,
+      "top_k": 100,
+      "train_s": 8.7e-8
+    }
+  ],
+  "run_set_id": "hnsw-aligned-1777047071"
+}

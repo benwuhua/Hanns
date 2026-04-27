@@ -1,0 +1,288 @@
+{
+  "artifact_type": "progress_summary",
+  "authority_surface": "HannsDB-x86",
+  "completed": {
+    "hanns": {
+      "DISKANN_1M": {
+        "log": "/data/work/hanns-logs/remote_background_20260424T080129Z_11335.log",
+        "note": "this harness explicitly states it is a constrained Rust AISAQ skeleton, not native-comparable SSD DiskANN pipeline",
+        "report": "/data/work/Hanns/BENCH-051_DISKANN_1M.md",
+        "rows": [
+          {
+            "build_s": 22.94,
+            "config": "R=32-B=4",
+            "qps": 3248,
+            "recall_at_10": 0.966
+          },
+          {
+            "build_s": 38.24,
+            "config": "R=48-B=8",
+            "qps": 1240,
+            "recall_at_10": 0.999
+          },
+          {
+            "build_s": 56.59,
+            "config": "R=64-B=16",
+            "qps": 452,
+            "recall_at_10": 0.999
+          }
+        ],
+        "status": "done"
+      },
+      "HNSW_quick": {
+        "build_params": {
+          "M": 32,
+          "ef_construction": 400
+        },
+        "graph_stats": {
+          "avg_neighbors_l0": 39.5,
+          "max_layer": 4
+        },
+        "log": "/data/work/hanns-logs/remote_background_20260424T082928Z_35102.log",
+        "note": "Quick SIFT1M recall verification only; not a throughput-comparable row against official QPS runner.",
+        "run_id": "20260424T082928Z_35102",
+        "search_results": {
+          "ef_400": {
+            "r1": 1.0,
+            "r10": 1.0,
+            "r100": 1.0
+          },
+          "ef_800": {
+            "r1": 1.0,
+            "r10": 1.0,
+            "r100": 1.0
+          }
+        },
+        "status": "done"
+      },
+      "sift_param_scan": {
+        "families": {
+          "HNSW": [
+            {
+              "build_ms": 1374896.88,
+              "ef_search": 64,
+              "qps": 1773,
+              "r10": 1.0
+            },
+            {
+              "build_ms": 1470908.57,
+              "ef_search": 128,
+              "qps": 1894,
+              "r10": 1.0
+            },
+            {
+              "build_ms": 1064607.59,
+              "ef_search": 256,
+              "qps": 1644,
+              "r10": 1.0
+            }
+          ],
+          "IVF-Flat": [
+            {
+              "build_ms": 61856.59,
+              "nprobe": 1,
+              "qps": 15398,
+              "r10": 0.355
+            },
+            {
+              "build_ms": 61074.31,
+              "nprobe": 5,
+              "qps": 6574,
+              "r10": 0.779
+            },
+            {
+              "build_ms": 62504.92,
+              "nprobe": 10,
+              "qps": 5234,
+              "r10": 0.916
+            },
+            {
+              "build_ms": 62048.65,
+              "nprobe": 50,
+              "qps": 2620,
+              "r10": 0.998
+            },
+            {
+              "build_ms": 62581.26,
+              "nprobe": 100,
+              "qps": 1749,
+              "r10": 1.0
+            }
+          ],
+          "IVF-PQ": [
+            {
+              "build_ms": 93809.68,
+              "nprobe": 1,
+              "qps": 26951,
+              "r10": 0.352
+            },
+            {
+              "build_ms": 93497.81,
+              "nprobe": 5,
+              "qps": 7674,
+              "r10": 0.537
+            },
+            {
+              "build_ms": 93255.32,
+              "nprobe": 10,
+              "qps": 4207,
+              "r10": 0.581
+            },
+            {
+              "build_ms": 92713.96,
+              "nprobe": 50,
+              "qps": 882,
+              "r10": 0.582
+            },
+            {
+              "build_ms": 93312.12,
+              "nprobe": 100,
+              "qps": 460,
+              "r10": 0.591
+            }
+          ],
+          "IVF-SQ8": [
+            {
+              "build_ms": 66800.91,
+              "nprobe": 1,
+              "qps": 10618,
+              "r10": 0.413
+            },
+            {
+              "build_ms": 67751.2,
+              "nprobe": 5,
+              "qps": 7761,
+              "r10": 0.788
+            },
+            {
+              "build_ms": 67931.14,
+              "nprobe": 10,
+              "qps": 5934,
+              "r10": 0.872
+            },
+            {
+              "build_ms": 67381.13,
+              "nprobe": 50,
+              "qps": 4048,
+              "r10": 0.976
+            },
+            {
+              "build_ms": 68103.08,
+              "nprobe": 100,
+              "qps": 2847,
+              "r10": 0.962
+            }
+          ]
+        },
+        "log": "/data/work/hanns-logs/remote_background_20260424T080512Z_64300.log",
+        "report": "/data/work/Hanns/BENCH-038_REPORT.md",
+        "run_id": "20260424T080512Z_64300",
+        "status": "done"
+      }
+    },
+    "official": {
+      "AISAQ_P": {
+        "log": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T035456Z_81931.log",
+        "near_080_recall": {
+          "recall_at_100": 0.9214,
+          "search_list_size": 100,
+          "vps_thread_8": 3328.575
+        },
+        "near_095_recall": {
+          "build_s": 214.674,
+          "recall_at_100": 0.9502,
+          "search_list_size": 108,
+          "vps_thread_8": 3117.801
+        },
+        "status": "done"
+      },
+      "AISAQ_S": {
+        "log": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T071745Z_77904.log",
+        "near_080_recall": {
+          "recall_at_100": 0.9192,
+          "search_list_size": 100,
+          "vps_thread_8": 557.301
+        },
+        "near_095_recall": {
+          "build_s": 159.796,
+          "recall_at_100": 0.9515,
+          "search_list_size": 109,
+          "vps_thread_8": 520.39
+        },
+        "status": "done"
+      },
+      "DISKANN": {
+        "log": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T032148Z_22562.log",
+        "near_080_recall": {
+          "recall_at_100": 0.9217,
+          "search_list_size": 100,
+          "vps_thread_8": 3847.82
+        },
+        "near_095_recall": {
+          "build_s": 232.375,
+          "recall_at_100": 0.9504,
+          "search_list_size": 108,
+          "vps_thread_8": 3153.907
+        },
+        "status": "done"
+      },
+      "HNSW": {
+        "log": "/data/work/knowhere-zilliz-official-main-logs/native_hnsw_qps_20260423T114856Z.log",
+        "near_095_recall": {
+          "bf16": {
+            "build_s": 38.142,
+            "ef": 139,
+            "recall_at_100": 0.9504,
+            "vps_thread_8": 15672.165
+          },
+          "fp16": {
+            "build_s": 38.275,
+            "ef": 139,
+            "recall_at_100": 0.9505,
+            "vps_thread_8": 15800.933
+          },
+          "fp32": {
+            "build_s": 38.275,
+            "ef": 138,
+            "recall_at_100": 0.9502,
+            "vps_thread_8": 14546.807
+          }
+        },
+        "status": "done"
+      },
+      "IVF-PQ": {
+        "log": "/data/work/knowhere-zilliz-official-main-logs/native_hnsw_qps_20260423T115626Z.log",
+        "note": "runner terminal row reports nprobe=257 R@=0.0000 while sweep rows plateau around recall≈0.7841; must not treat terminal row as clean final verdict without parser normalization",
+        "status": "done_but_needs_careful_interpretation"
+      },
+      "IVF-SQ": {
+        "log": "/data/work/knowhere-zilliz-official-main-logs/native_hnsw_qps_20260423T115343Z.log",
+        "near_095_recall": {
+          "bf16": {
+            "nprobe": 32,
+            "recall_at_100": 0.9519,
+            "vps_thread_8": 8179.41
+          },
+          "fp16": {
+            "nprobe": 32,
+            "recall_at_100": 0.9519,
+            "vps_thread_8": 8091.813
+          }
+        },
+        "status": "done"
+      }
+    }
+  },
+  "official_source": {
+    "commit": "868634bc5230a71a84371fea5f5b674b805643ea",
+    "ref": "main",
+    "repo_url": "https://github.com/zilliztech/knowhere"
+  },
+  "pending": [
+    "normalize official IVF-PQ terminal rows before using them in final comparison tables",
+    "wait for Hanns SIFT1M parameter scan to finish and extract HNSW/IVF-PQ/IVF-SQ8 results",
+    "build first direct comparison table for shared families"
+  ],
+  "running": {},
+  "scope": "hanns-vs-zilliz-knowhere-first-pass-progress"
+}

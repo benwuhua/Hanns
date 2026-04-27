@@ -1,0 +1,103 @@
+generated_at=2026-04-25T11:35:55Z
+cwd=/Users/ryan/Code/vectorDB/Hanns
+git_remote_origin=https://github.com/benwuhua/Hanns.git
+git_head=303ee2e805186d76485cf580a3c53634179b56cb
+git_branch=main
+git_dirty_status_begin
+ M .gitignore
+ M AGENTS.md
+ M scripts/remote/common.sh
+ M scripts/remote/native_benchmark_probe.sh
+ M scripts/remote/native_bootstrap.sh
+ M scripts/remote/remote.env.example
+ M src/faiss/hnsw.rs
+ M src/faiss/hnsw_pq.rs
+ M src/faiss/hnsw_quantized.rs
+ M src/faiss/ivf_sq8.rs
+ M src/faiss/ivf_usq.rs
+ M src/faiss/ivfpq.rs
+ M src/quantization/kmeans.rs
+ M src/quantization/pq.rs
+ M src/quantization/sq.rs
+?? benchmark_results/diskann_p3_004_benchmark_gate.json
+?? benchmark_results/diskann_p3_004_final_verdict.json
+?? docs/parity/hanns-knowhere-benchmark-matrix-v1.json
+?? docs/parity/hanns-knowhere-capability-probe-20260423T085829Z.json
+?? docs/parity/hanns-knowhere-capability-probe-20260423T085829Z.md
+?? docs/parity/hanns-knowhere-diskann-aisaq-constrained-verdict-20260425T041817Z.json
+?? docs/parity/hanns-knowhere-diskann-aisaq-constrained-verdict-20260425T041817Z.md
+?? docs/parity/hanns-knowhere-diskann-interim-20260424T081500Z.json
+?? docs/parity/hanns-knowhere-diskann-interim-20260424T081500Z.md
+?? docs/parity/hanns-knowhere-hnsw-aligned-1777046701.json
+?? docs/parity/hanns-knowhere-hnsw-aligned-1777046977.json
+?? docs/parity/hanns-knowhere-hnsw-aligned-1777047071.json
+?? docs/parity/hanns-knowhere-hnsw-aligned-1777047450.json
+?? docs/parity/hanns-knowhere-hnsw-aligned-1777047477.json
+?? docs/parity/hanns-knowhere-hnsw-aligned-1777047504.json
+?? docs/parity/hanns-knowhere-hnsw-aligned-1777047532.json
+?? docs/parity/hanns-knowhere-hnsw-aligned-1777047561.json
+?? docs/parity/hanns-knowhere-hnsw-aligned-1777082864.json
+?? docs/parity/hanns-knowhere-hnsw-near095-verdict-20260425T021000Z.json
+?? docs/parity/hanns-knowhere-hnsw-near095-verdict-20260425T021000Z.md
+?? docs/parity/hanns-knowhere-hnsw-pq-blocker-20260425T093300Z.json
+?? docs/parity/hanns-knowhere-hnsw-pq-blocker-20260425T093300Z.md
+?? docs/parity/hanns-knowhere-hnsw-pq-build-search-verdict-20260425T112200Z.json
+?? docs/parity/hanns-knowhere-hnsw-pq-build-search-verdict-20260425T112200Z.md
+?? docs/parity/hanns-knowhere-hnsw-pq-search-verdict-20260425T103900Z.json
+?? docs/parity/hanns-knowhere-hnsw-pq-search-verdict-20260425T103900Z.md
+?? docs/parity/hanns-knowhere-hnsw-sq-verdict-20260425T090100Z.json
+?? docs/parity/hanns-knowhere-hnsw-sq-verdict-20260425T090100Z.md
+?? docs/parity/hanns-knowhere-hnsw-verdict-20260424T162100Z.json
+?? docs/parity/hanns-knowhere-hnsw-verdict-20260424T162100Z.md
+?? docs/parity/hanns-knowhere-ivfpq-aligned-1777038974.json
+?? docs/parity/hanns-knowhere-ivfpq-aligned-1777042175.json
+?? docs/parity/hanns-knowhere-ivfpq-aligned-1777042811.json
+?? docs/parity/hanns-knowhere-ivfpq-aligned-1777043481.json
+?? docs/parity/hanns-knowhere-ivfpq-buildtime-verdict-20260424T144810Z.json
+?? docs/parity/hanns-knowhere-ivfpq-buildtime-verdict-20260424T144810Z.md
+?? docs/parity/hanns-knowhere-ivfpq-buildtime-verdict-20260424T150026Z.json
+?? docs/parity/hanns-knowhere-ivfpq-buildtime-verdict-20260424T150026Z.md
+?? docs/parity/hanns-knowhere-ivfpq-buildtime-verdict-20260424T151136Z.json
+?? docs/parity/hanns-knowhere-ivfpq-buildtime-verdict-20260424T151136Z.md
+?? docs/parity/hanns-knowhere-ivfpq-verdict-20260424T140226Z.json
+?? docs/parity/hanns-knowhere-ivfpq-verdict-20260424T140226Z.md
+?? docs/parity/hanns-knowhere-ivfsq8-near080-verdict-20260425T030700Z.json
+?? docs/parity/hanns-knowhere-ivfsq8-near095-verdict-20260425T030700Z.json
+?? docs/parity/hanns-knowhere-ivfsq8-verdict-20260425T030700Z.md
+?? docs/parity/hanns-knowhere-ivfusq-search-verdict-20260425T064738Z.json
+?? docs/parity/hanns-knowhere-ivfusq-search-verdict-20260425T064738Z.md
+?? docs/parity/hanns-knowhere-native-runner-probe-20260423T095200Z.json
+?? docs/parity/hanns-knowhere-native-runner-probe-20260423T095200Z.md
+?? docs/parity/hanns-knowhere-progress-20260424T080900Z.json
+?? docs/parity/hanns-knowhere-progress-20260424T080900Z.md
+?? docs/parity/hanns-knowhere-shared-families-interim-20260424T085600Z.json
+?? docs/parity/hanns-knowhere-shared-families-interim-20260424T085600Z.md
+?? docs/parity/hanns-vs-zilliz-knowhere-current-summary-20260424.md
+?? docs/parity/raw/
+?? scripts/hanns_knowhere_benchmark.py
+?? scripts/remote/native_benchmark_background.sh
+?? scripts/remote/native_bootstrap_inner.sh
+?? scripts/remote/official_knowhere_provenance.sh
+?? scripts/remote/remote_background.sh
+?? tests/bench_diskann_aisaq_aligned.rs
+?? tests/bench_hnsw_aligned.rs
+?? tests/bench_hnsw_pq_aligned.rs
+?? tests/bench_hnsw_sq_aligned.rs
+?? tests/bench_ivf_pq_aligned.rs
+?? tests/bench_ivf_pq_refine_oracle.rs
+?? tests/bench_ivf_sq8_aligned.rs
+?? tests/bench_ivf_usq_aligned.rs
+?? tests/test_hanns_knowhere_benchmark.py
+?? tests/test_native_benchmark_background.py
+?? tests/test_remote_background.py
+git_dirty_status_end
+scoped_source_sha256_begin
+03c6cd8ec6f75cb46bfce7fd8b025b08529c155076a75e616b2c5d98ebf0ca18  src/faiss/hnsw_pq.rs
+ba6c7da802f53f57292bd6ed6b6594afac545853fc50743baca07d3c4712272b  tests/bench_hnsw_pq_aligned.rs
+3af5f284de5e310b2c19835a6eb778cb5a0520e311139593906363f09d03e992  scripts/hanns_knowhere_benchmark.py
+2a6e7de337b06d6277dc0219fba81a59c3ccf9fe2090917cf29c2e12935408d3  tests/test_hanns_knowhere_benchmark.py
+scoped_source_sha256_end
+raw_artifact_sha256_begin
+c6f2e4b0eefe4ee0f571049bf977b447f4ae776fbe2678ae4243160676fc7347  docs/parity/raw/remote_background_20260425T111733Z_43762.log
+3d080af672b69a8b3337c91a965a6a8cad43c400c073707651aaf0ebd7c4e9bc  docs/parity/raw/hanns-knowhere-hnsw-pq-aligned-1777115931.json
+raw_artifact_sha256_end

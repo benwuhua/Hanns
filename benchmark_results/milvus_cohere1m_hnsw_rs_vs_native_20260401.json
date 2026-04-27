@@ -1,0 +1,39 @@
+{
+  "benchmark": "milvus-vectordbbench-cohere1m-hnsw-compare",
+  "authority_scope": "remote_x86_only",
+  "host": "hannsdb-x86",
+  "artifact_status": "shape_lock_fixture",
+  "params": {
+    "case_type": "Performance768D1M",
+    "db": "Milvus",
+    "index": "HNSW",
+    "metric_type": "COSINE",
+    "top_k": 100,
+    "m": 16,
+    "ef_construction": 128,
+    "ef_search": 128
+  },
+  "rows": [
+    {
+      "backend": "milvus-native-knowhere",
+      "qps": 1000.0,
+      "recall": 0.9,
+      "insert_duration": 100.0,
+      "load_duration": 10.0,
+      "source_result": "/data/work/VectorDBBench/vectordb_bench/results/Milvus/native-shape-lock.json"
+    },
+    {
+      "backend": "milvus-hanns",
+      "qps": 900.0,
+      "recall": 0.92,
+      "insert_duration": 80.0,
+      "load_duration": 12.0,
+      "source_result": "/data/work/VectorDBBench/vectordb_bench/results/Milvus/hanns-shape-lock.json"
+    }
+  ],
+  "ratios": {
+    "rs_over_native_qps": 0.9,
+    "rs_over_native_load_duration": 1.2,
+    "rs_over_native_insert_duration": 0.8
+  }
+}

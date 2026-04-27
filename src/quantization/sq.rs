@@ -245,9 +245,28 @@ impl ScalarQuantizer {
     /// Compute SQ8 asymmetric L2 distance using a precomputed integer-domain query.
     ///
     /// Returns distance in original float domain (L2^2).
-    pub fn sq_l2_precomputed(&self, q_i16: &[i16], db_code: &[u8]) -> f32 {
-        debug_assert_eq!(q_i16.len(), db_code.len());
+    #[inline(always)]
+    pub fn sq_l2_distance_scale(&self) -> f32 {
         let inv_scale = 1.0 / self.scale;
+        inv_scale * inv_scale
+    }
+
+    pub fn sq_l2_precomputed(&self, q_i16: &[i16], db_code: &[u8]) -> f32 {
+        self.sq_l2_precomputed_scaled(q_i16, db_code, self.sq_l2_distance_scale())
+    }
+
+    /// Compute SQ8 asymmetric L2 with a caller-supplied scale factor.
+    ///
+    /// Cluster scans call this once per candidate, so the `1 / scale` factor is
+    /// intentionally hoisted by the caller and reused across the whole scan.
+    #[inline(always)]
+    pub fn sq_l2_precomputed_scaled(
+        &self,
+        q_i16: &[i16],
+        db_code: &[u8],
+        distance_scale: f32,
+    ) -> f32 {
+        debug_assert_eq!(q_i16.len(), db_code.len());
         let acc: i64 = {
             #[cfg(target_arch = "x86_64")]
             {
@@ -280,7 +299,7 @@ impl ScalarQuantizer {
                     .sum()
             }
         };
-        acc as f32 * inv_scale * inv_scale
+        acc as f32 * distance_scale
     }
 }
 

@@ -59,11 +59,16 @@ pub struct HnswSqIndex {
 
 impl HnswSqIndex {
     pub fn new(dim: usize) -> Self {
+        Self::new_with_config(dim, HnswQuantizeConfig::default())
+    }
+
+    pub fn new_with_config(dim: usize, config: HnswQuantizeConfig) -> Self {
+        let sq_bit = config.sq_bit;
         Self {
             dim,
-            config: HnswQuantizeConfig::default(),
+            config,
             vectors: Vec::new(),
-            quantizer: ScalarQuantizer::new(dim, 8),
+            quantizer: ScalarQuantizer::new(dim, sq_bit),
             quantized_vectors: Vec::new(),
             graph: Vec::new(),
             ids: Vec::new(),
@@ -71,6 +76,10 @@ impl HnswSqIndex {
             centroids: Vec::new(),
             trained: false,
         }
+    }
+
+    pub fn ef_search(&self) -> usize {
+        self.config.ef_search
     }
 
     /// 训练量化器

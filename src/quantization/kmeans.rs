@@ -41,6 +41,8 @@ pub struct KMeans {
 }
 
 impl KMeans {
+    const FAST_MODE_SEED: u64 = 0x4b4d_4541_4e53_4654;
+
     pub fn new(k: usize, dim: usize) -> Self {
         Self {
             k,
@@ -66,7 +68,7 @@ impl KMeans {
             centroids: vec![0.0; k * dim],
             dim,
             metric: KMeansMetric::L2,
-            rng: StdRng::from_entropy(),
+            rng: StdRng::seed_from_u64(Self::FAST_MODE_SEED),
             #[cfg(feature = "parallel")]
             num_threads: rayon::current_num_threads(),
             fast_mode: true,
@@ -79,6 +81,7 @@ impl KMeans {
         if fast {
             self.max_iter = 5;
             self.tolerance = 1e-3;
+            self.rng = StdRng::seed_from_u64(Self::FAST_MODE_SEED);
         }
         self
     }
@@ -201,8 +204,13 @@ impl KMeans {
             return 0;
         }
 
-        // 简化初始化 (速度优先)
-        self.kmeanspp_init(vectors, n);
+        // 初始化：快速模式使用随机种子，避免大数据集上 k-means++
+        // `O(k * n * dim)` 初始化成本吞噬 IVF-PQ build time。
+        if self.fast_mode {
+            self.random_init(vectors, n);
+        } else {
+            self.kmeanspp_init(vectors, n);
+        }
 
         // 迭代优化
         let mut assignments = vec![0usize; n];
@@ -345,8 +353,13 @@ impl KMeans {
             return 0;
         }
 
-        // 简化初始化 (速度优先)
-        self.kmeanspp_init(vectors, n);
+        // 初始化：快速模式使用随机种子，避免大数据集上 k-means++
+        // `O(k * n * dim)` 初始化成本吞噬 IVF-PQ build time。
+        if self.fast_mode {
+            self.random_init(vectors, n);
+        } else {
+            self.kmeanspp_init(vectors, n);
+        }
 
         // 预分配迭代缓冲区，循环内复用（避免 25× 重复 malloc）
         let mut assignments = vec![0usize; n];
@@ -382,8 +395,7 @@ impl KMeans {
             new_centroids.fill(0.0);
             counts.fill(0);
 
-            for i in 0..n {
-                let c = assignments[i];
+            for (i, &c) in assignments.iter().enumerate().take(n) {
                 let base = c * self.dim;
                 let vec_start = i * self.dim;
                 for j in 0..self.dim {
@@ -400,8 +412,12 @@ impl KMeans {
 
                 if counts[c] > 0 {
                     let inv_count = 1.0 / counts[c] as f32;
-                    for j in centroid_start..centroid_end {
-                        new_centroids[j] *= inv_count;
+                    for value in new_centroids
+                        .iter_mut()
+                        .take(centroid_end)
+                        .skip(centroid_start)
+                    {
+                        *value *= inv_count;
                     }
 
                     // For IP metric: normalize centroids after averaging.
@@ -412,8 +428,12 @@ impl KMeans {
                             .sum::<f32>()
                             .sqrt();
                         if norm > 1e-12 {
-                            for j in centroid_start..centroid_end {
-                                new_centroids[j] /= norm;
+                            for value in new_centroids
+                                .iter_mut()
+                                .take(centroid_end)
+                                .skip(centroid_start)
+                            {
+                                *value /= norm;
                             }
                         }
                     }

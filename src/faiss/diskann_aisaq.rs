@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 const DEFAULT_PAGE_SIZE: usize = 4096;
 const DEFAULT_PQ_K: usize = 256;
 const PAGE_CACHE_SHARDS: usize = 256;
+const AISAQ_PQ_MAX_TRAINING_POINTS: usize = 65_536;
 
 /// AISAQ configuration parameters.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1186,10 +1187,17 @@ impl PQFlashIndex {
 
         if self.config.disk_pq_dims > 0 {
             let m = resolve_pq_chunks(self.dim, self.config.disk_pq_dims);
-            let k = resolve_pq_centroids(training_data.len() / self.dim);
+            // Disk PQ codebooks do not need to scan the full base set.  Keep the
+            // graph build on the full data, but bound PQ training to a
+            // deterministic prefix sample so SIFT-scale page-cache evidence does
+            // not spend most of its wall time in k-means.
+            let training_vectors = training_data.len() / self.dim;
+            let pq_train_n = training_vectors.min(AISAQ_PQ_MAX_TRAINING_POINTS);
+            let pq_training_data = &training_data[..pq_train_n * self.dim];
+            let k = resolve_pq_centroids(pq_train_n);
             let nbits = k.ilog2() as usize;
             let mut quantizer = ProductQuantizer::new(PQConfig::new(self.dim, m, nbits));
-            quantizer.train(training_data.len() / self.dim, training_data)?;
+            quantizer.train(pq_train_n, pq_training_data)?;
             self.pq_code_size = quantizer.code_size();
             self.pq_encoder = Some(quantizer);
             self.flash_layout.inline_pq_bytes = self.pq_code_size.max(self.config.inline_pq);
@@ -6580,6 +6588,11 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         index.save(&dir).unwrap();
         let loaded = PQFlashIndex::load(&dir).unwrap();
+        let audit = loaded.scope_audit();
+        assert!(
+            !audit.has_page_cache,
+            "NoPQ load should materialize to memory for the direct-vector fast path"
+        );
         let loaded_results = run_batch_search(&loaded, &queries, dim, k);
 
         assert_eq!(loaded_results.ids, original.ids);
@@ -6611,6 +6624,11 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         index.save(&dir).unwrap();
         let loaded = PQFlashIndex::load(&dir).unwrap();
+        let audit = loaded.scope_audit();
+        assert!(
+            audit.has_page_cache,
+            "PQ load must keep page-cache storage instead of materializing to memory"
+        );
         let loaded_results = run_batch_search(&loaded, &queries, dim, k);
 
         let gt = brute_force_topk_l2(&vectors, &queries, dim, k);

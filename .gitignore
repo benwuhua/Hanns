@@ -73,6 +73,7 @@ benchmark_results/*
 !benchmark_results/hnsw_search_cost_diagnosis.json
 !benchmark_results/ivfpq_p1_002_focused.json
 !benchmark_results/ivfpq_p3_003_final_verdict.json
+!benchmark_results/milvus_cohere1m_hnsw_rs_vs_native_20260401.json
 !benchmark_results/native_hnsw_sift128.full.json
 !benchmark_results/native_hnsw_sift128.remote.json
 !benchmark_results/recall_gated_baseline.json
@@ -97,3 +98,4 @@ __pycache__/
 benchmark_results/native_logs/
 benchmark_results/native_hnsw_qps_*.log
 wiki/.obsidian/
+.omx/

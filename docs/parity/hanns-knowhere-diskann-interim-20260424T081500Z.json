@@ -1,0 +1,108 @@
+{
+  "artifact_type": "interim_family_comparison",
+  "authority_surface": "HannsDB-x86",
+  "completed_sources": {
+    "hanns": {
+      "report": "/data/work/Hanns/BENCH-051_DISKANN_1M.md",
+      "rows": [
+        {
+          "build_s": 22.94,
+          "config": "R=32-B=4",
+          "log": "/data/work/hanns-logs/remote_background_20260424T080129Z_11335.log",
+          "qps": 3248,
+          "recall_at_10": 0.966,
+          "variant": "DiskANN/AISAQ skeleton"
+        },
+        {
+          "build_s": 38.24,
+          "config": "R=48-B=8",
+          "log": "/data/work/hanns-logs/remote_background_20260424T080129Z_11335.log",
+          "qps": 1240,
+          "recall_at_10": 0.999,
+          "variant": "DiskANN/AISAQ skeleton"
+        },
+        {
+          "build_s": 56.59,
+          "config": "R=64-B=16",
+          "log": "/data/work/hanns-logs/remote_background_20260424T080129Z_11335.log",
+          "qps": 452,
+          "recall_at_10": 0.999,
+          "variant": "DiskANN/AISAQ skeleton"
+        }
+      ]
+    },
+    "official_zilliz_knowhere": {
+      "commit": "868634bc5230a71a84371fea5f5b674b805643ea",
+      "repo_url": "https://github.com/zilliztech/knowhere",
+      "rows": [
+        {
+          "build_s": 232.375,
+          "log": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T032148Z_22562.log",
+          "recall": 0.9217,
+          "search_list_size": 100,
+          "target_recall": 0.8,
+          "variant": "DISKANN",
+          "vps_thread_8": 3847.82
+        },
+        {
+          "build_s": 232.375,
+          "log": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T032148Z_22562.log",
+          "recall": 0.9504,
+          "search_list_size": 108,
+          "target_recall": 0.95,
+          "variant": "DISKANN",
+          "vps_thread_8": 3153.907
+        },
+        {
+          "build_s": 214.674,
+          "log": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T035456Z_81931.log",
+          "recall": 0.9214,
+          "search_list_size": 100,
+          "target_recall": 0.8,
+          "variant": "AISAQ_P",
+          "vps_thread_8": 3328.575
+        },
+        {
+          "build_s": 214.674,
+          "log": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T035456Z_81931.log",
+          "recall": 0.9502,
+          "search_list_size": 108,
+          "target_recall": 0.95,
+          "variant": "AISAQ_P",
+          "vps_thread_8": 3117.801
+        },
+        {
+          "build_s": 159.796,
+          "log": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T071745Z_77904.log",
+          "recall": 0.9192,
+          "search_list_size": 100,
+          "target_recall": 0.8,
+          "variant": "AISAQ_S",
+          "vps_thread_8": 557.301
+        },
+        {
+          "build_s": 159.796,
+          "log": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T071745Z_77904.log",
+          "recall": 0.9515,
+          "search_list_size": 109,
+          "target_recall": 0.95,
+          "variant": "AISAQ_S",
+          "vps_thread_8": 520.39
+        }
+      ]
+    }
+  },
+  "date": "2026-04-24",
+  "family": "DiskANN/AISAQ",
+  "limitations": [
+    "Hanns side currently comes from BENCH-051 harness that explicitly states it is a constrained Rust AISAQ skeleton, not a native-comparable SSD DiskANN pipeline.",
+    "Official side uses search_list_size recall-target sweeps; Hanns side uses fixed R/B configs, so rows are not yet apples-to-apples.",
+    "This artifact is an interim progress comparison, not a final verdict artifact."
+  ],
+  "next_needed": [
+    "Wait for Hanns bench_sift1m_params to finish for HNSW / IVF-PQ / IVF-SQ8.",
+    "Decide whether Hanns DiskANN needs a search_list_size style sweep to align more closely with official DISKANN/AISAQ rows.",
+    "Normalize all final rows into one comparison table with explicit comparability labels."
+  ],
+  "status": "partial_comparison_only"
+}

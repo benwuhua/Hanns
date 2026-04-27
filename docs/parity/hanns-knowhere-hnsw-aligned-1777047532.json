@@ -1,0 +1,103 @@
+{
+  "artifact_type": "hnsw_aligned_hanns_rows",
+  "authority_surface": "HannsDB-x86",
+  "dataset": {
+    "base_count": 1000000,
+    "dim": 128,
+    "path": "/data/work/Hanns/data/sift",
+    "query_count_used": 10000
+  },
+  "hanns_commit": "rsync-worktree-hnsw-nq-parallel-m6efc42-build8",
+  "rows": [
+    {
+      "add_s": 26.266287826,
+      "build_s": 26.266288096,
+      "build_threads": 8,
+      "ef": 700,
+      "ef_construction": 42,
+      "family": "HNSW",
+      "implementation": "hanns",
+      "m": 6,
+      "qps": 32122.388252282402,
+      "query_threads": 8,
+      "recall_at_10": 0.9450899999999599,
+      "recall_at_100": 0.9163029999999631,
+      "threads": 8,
+      "top_k": 100,
+      "train_s": 2.7e-7
+    },
+    {
+      "add_s": 26.266287826,
+      "build_s": 26.266288096,
+      "build_threads": 8,
+      "ef": 750,
+      "ef_construction": 42,
+      "family": "HNSW",
+      "implementation": "hanns",
+      "m": 6,
+      "qps": 31444.08092501493,
+      "query_threads": 8,
+      "recall_at_10": 0.9469399999999603,
+      "recall_at_100": 0.9201239999999602,
+      "threads": 8,
+      "top_k": 100,
+      "train_s": 2.7e-7
+    },
+    {
+      "add_s": 26.266287826,
+      "build_s": 26.266288096,
+      "build_threads": 8,
+      "ef": 800,
+      "ef_construction": 42,
+      "family": "HNSW",
+      "implementation": "hanns",
+      "m": 6,
+      "qps": 30517.62040710347,
+      "query_threads": 8,
+      "recall_at_10": 0.9486699999999603,
+      "recall_at_100": 0.9235549999999563,
+      "threads": 8,
+      "top_k": 100,
+      "train_s": 2.7e-7
+    },
+    {
+      "add_s": 26.266287826,
+      "build_s": 26.266288096,
+      "build_threads": 8,
+      "ef": 850,
+      "ef_construction": 42,
+      "family": "HNSW",
+      "implementation": "hanns",
+      "m": 6,
+      "qps": 29684.931469560164,
+      "query_threads": 8,
+      "recall_at_10": 0.9501799999999608,
+      "recall_at_100": 0.926585999999955,
+      "threads": 8,
+      "top_k": 100,
+      "train_s": 2.7e-7
+    },
+    {
+      "add_s": 26.266287826,
+      "build_s": 26.266288096,
+      "build_threads": 8,
+      "ef": 900,
+      "ef_construction": 42,
+      "family": "HNSW",
+      "implementation": "hanns",
+      "m": 6,
+      "qps": 29483.451811208542,
+      "query_threads": 8,
+      "recall_at_10": 0.951679999999961,
+      "recall_at_100": 0.929343999999952,
+      "threads": 8,
+      "top_k": 100,
+      "train_s": 2.7e-7
+    }
+  ],
+  "run_set_id": "hnsw-aligned-1777047532",
+  "thread_contract": {
+    "build_threads": 8,
+    "query_threads": 8
+  }
+}

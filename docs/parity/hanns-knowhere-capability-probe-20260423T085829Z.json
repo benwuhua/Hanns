@@ -1,0 +1,172 @@
+{
+  "artifact_type": "capability_probe",
+  "authority": {
+    "eligible_for_verdict": true,
+    "is_authority": true,
+    "runtime_proof": {
+      "hostname": "ecs-knowledgebase-473c",
+      "lscpu_hash": "4edb3f78d221f240cad910dd0509686829ae52ff6b86fb9f23fc6b8d600fd78d",
+      "remote_log_path": "/data/work/knowhere-zilliz-official-main-logs/official_knowhere_provenance_20260423T085829Z.log",
+      "ssh_alias_or_host": "HannsDB-x86",
+      "uname": "Linux ecs-knowledgebase-473c 6.8.0-87-generic #88-Ubuntu SMP PREEMPT_DYNAMIC Sat Oct 11 09:28:41 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux",
+      "wrapper_script": "scripts/remote/official_knowhere_provenance.sh"
+    },
+    "surface": "HannsDB-x86"
+  },
+  "created_at": "2026-04-23T08:58:29Z",
+  "evidence": {
+    "hanns": [
+      "docs/FFI_CAPABILITY_MATRIX.md lists IVF-RaBitQ, HNSW-SQ, HNSW-PQ, IVF-SQ8",
+      "src/faiss/hnsw.rs and src/faiss/hnsw_pca_sq.rs expose HNSW-SQ paths",
+      "src/faiss/ivfpq.rs exposes IvfPqIndex",
+      "src/jni/mod.rs and src/python/mod.rs expose IvfUsqIndex",
+      "src/benchmark/recall_gated_baseline.rs and tests/bench_diskann_1m.rs use AisaqConfig/PQFlashIndex"
+    ],
+    "zilliz_knowhere": [
+      "HannsDB-x86 /data/work/knowhere-zilliz-official-main-src/include/knowhere/comp/index_param.h contains HNSW_SQ, HNSW_PQ, DISKANN, AISAQ, IVF_PQ, IVF_SQ8, IVF_RABITQ, IVF_RABITQ_FASTSCAN constants",
+      "HannsDB-x86 /data/work/knowhere-zilliz-official-main-src/include/knowhere/index/index_table.h registers VECTOR_FLOAT/FLOAT16/BFLOAT16 rows for the requested families where applicable",
+      "HannsDB-x86 /data/work/knowhere-zilliz-official-main-src/benchmark/hdf5/benchmark_float_qps.cpp includes TEST_IVF_SQ8, TEST_IVF_PQ, TEST_DISKANN, TEST_AISAQ_P, TEST_AISAQ_S, and IVF_RABITQ tests"
+    ]
+  },
+  "hanns_source": {
+    "commit": "not_pinned_in_this_probe",
+    "dirty": "workspace_has_unrelated_local_changes",
+    "repo_url": "local workspace synced/inspected for capability symbols"
+  },
+  "limitations": [
+    "This is a capability/source-symbol probe, not a performance benchmark.",
+    "All rows remain ineligible for QPS/recall/build/latency verdicts until fresh Stage 1 HannsDB-x86 benchmark rows pass schema validation.",
+    "DISKANN and USQ/RabitQ/AISAQ rows need semantic/parameter mapping before numeric comparison."
+  ],
+  "official_knowhere_source": {
+    "commit": "4489f689de32baa70dae28ee1d6784ef87c2c3c8",
+    "dirty": false,
+    "ref": "main",
+    "repo_url": "https://github.com/zilliztech/knowhere"
+  },
+  "plan_id": "hanns-knowhere-benchmark-v1",
+  "rows": [
+    {
+      "implementation": "hanns",
+      "implementation_name": "HnswIndex / IndexType::Hnsw",
+      "notes": "Direct CPU HNSW family present on both sides.",
+      "support_status": "supported",
+      "user_family": "HNSW"
+    },
+    {
+      "implementation": "zilliz_knowhere",
+      "implementation_name": "HNSW / INDEX_HNSW",
+      "notes": "Direct CPU HNSW family present on both sides.",
+      "support_status": "supported",
+      "user_family": "HNSW"
+    },
+    {
+      "implementation": "hanns",
+      "implementation_name": "IndexType::HnswSq / HnswSqIndex",
+      "notes": "SQ/refine parameters still need benchmark matrix mapping.",
+      "support_status": "supported",
+      "user_family": "HNSW-SQ"
+    },
+    {
+      "implementation": "zilliz_knowhere",
+      "implementation_name": "HNSW_SQ / INDEX_HNSW_SQ",
+      "notes": "SQ/refine parameters still need benchmark matrix mapping.",
+      "support_status": "supported",
+      "user_family": "HNSW-SQ"
+    },
+    {
+      "implementation": "hanns",
+      "implementation_name": "IndexType::HnswPq / HNSW-PQ path",
+      "notes": "Lossy/raw-data semantics must be reported; performance rows still require fresh benchmark.",
+      "support_status": "supported",
+      "user_family": "HNSW-PQ"
+    },
+    {
+      "implementation": "zilliz_knowhere",
+      "implementation_name": "HNSW_PQ / INDEX_HNSW_PQ",
+      "notes": "Lossy/raw-data semantics must be reported; performance rows still require fresh benchmark.",
+      "support_status": "supported",
+      "user_family": "HNSW-PQ"
+    },
+    {
+      "implementation": "hanns",
+      "implementation_name": "AISAQ/PQFlash/DiskANN family",
+      "notes": "Hanns implementation is constrained; final comparison must record storage/SSD semantics before verdict.",
+      "support_status": "supported",
+      "user_family": "DISKANN"
+    },
+    {
+      "implementation": "zilliz_knowhere",
+      "implementation_name": "DISKANN / INDEX_DISKANN",
+      "notes": "Hanns implementation is constrained; final comparison must record storage/SSD semantics before verdict.",
+      "support_status": "supported",
+      "user_family": "DISKANN"
+    },
+    {
+      "implementation": "hanns",
+      "implementation_name": "AISAQ/PQFlash quantized DiskANN family",
+      "notes": "Equivalent enough for capability admission, but final benchmark must document AISAQ/USQ/RabitQ semantic mapping.",
+      "support_status": "supported",
+      "user_family": "DISKANN-USQ/RabitQ"
+    },
+    {
+      "implementation": "zilliz_knowhere",
+      "implementation_name": "AISAQ / INDEX_AISAQ",
+      "notes": "Equivalent enough for capability admission, but final benchmark must document AISAQ/USQ/RabitQ semantic mapping.",
+      "support_status": "supported",
+      "user_family": "DISKANN-USQ/RabitQ"
+    },
+    {
+      "implementation": "hanns",
+      "implementation_name": "IvfPqIndex",
+      "notes": "Direct IVF-PQ family present on both sides.",
+      "support_status": "supported",
+      "user_family": "IVF-PQ"
+    },
+    {
+      "implementation": "zilliz_knowhere",
+      "implementation_name": "IVF_PQ / INDEX_FAISS_IVFPQ",
+      "notes": "Direct IVF-PQ family present on both sides.",
+      "support_status": "supported",
+      "user_family": "IVF-PQ"
+    },
+    {
+      "implementation": "hanns",
+      "implementation_name": "IvfSq8Index",
+      "notes": "Maps first pass to SQ8 unless later matrix adds other SQ modes.",
+      "support_status": "supported",
+      "user_family": "IVF-SQ"
+    },
+    {
+      "implementation": "zilliz_knowhere",
+      "implementation_name": "IVF_SQ8 / INDEX_FAISS_IVFSQ8",
+      "notes": "Maps first pass to SQ8 unless later matrix adds other SQ modes.",
+      "support_status": "supported",
+      "user_family": "IVF-SQ"
+    },
+    {
+      "implementation": "hanns",
+      "implementation_name": "IvfUsqIndex / ExRaBitQ path",
+      "notes": "USQ vs RabitQ semantics must be split or documented before numeric verdict.",
+      "support_status": "supported",
+      "user_family": "IVF-USQ/RabitQ"
+    },
+    {
+      "implementation": "zilliz_knowhere",
+      "implementation_name": "IVF_RABITQ and IVF_RABITQ_FASTSCAN",
+      "notes": "USQ vs RabitQ semantics must be split or documented before numeric verdict.",
+      "support_status": "supported",
+      "user_family": "IVF-USQ/RabitQ"
+    }
+  ],
+  "scope": [
+    "HNSW",
+    "HNSW-SQ",
+    "HNSW-PQ",
+    "DISKANN",
+    "DISKANN-USQ/RabitQ",
+    "IVF-PQ",
+    "IVF-SQ",
+    "IVF-USQ/RabitQ"
+  ]
+}

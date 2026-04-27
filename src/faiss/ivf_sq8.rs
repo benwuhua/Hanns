@@ -4,6 +4,7 @@
 //! 内存优化索引，适合大规模数据
 
 use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 use std::collections::HashMap;
 
 use crate::api::{IndexConfig, MetricType, Result, SearchRequest, SearchResult};
@@ -70,9 +71,11 @@ const EMPTY_HIT: SearchHit = SearchHit {
     dist: f32::INFINITY,
 };
 
+type IvfSq8ClusterBatch = (Vec<i64>, Vec<u8>, Vec<usize>);
+
 struct TopKAccumulator {
     inline_hits: [SearchHit; INLINE_TOPK_CAP],
-    heap_hits: Vec<SearchHit>,
+    heap_hits: BinaryHeap<SearchHit>,
     limit: usize,
     len: usize,
     visited: usize,
@@ -83,9 +86,9 @@ impl TopKAccumulator {
         Self {
             inline_hits: [EMPTY_HIT; INLINE_TOPK_CAP],
             heap_hits: if limit > INLINE_TOPK_CAP {
-                Vec::with_capacity(limit)
+                BinaryHeap::with_capacity(limit)
             } else {
-                Vec::new()
+                BinaryHeap::new()
             },
             limit,
             len: 0,
@@ -114,17 +117,14 @@ impl TopKAccumulator {
 
     fn merge(&mut self, other: Self) {
         self.visited += other.visited;
-        for hit in other.hits() {
-            self.push(hit.id, hit.dist);
-        }
-    }
-
-    #[inline]
-    fn hits(&self) -> &[SearchHit] {
-        if self.limit <= INLINE_TOPK_CAP {
-            &self.inline_hits[..self.len]
+        if other.limit <= INLINE_TOPK_CAP {
+            for hit in &other.inline_hits[..other.len] {
+                self.push(hit.id, hit.dist);
+            }
         } else {
-            &self.heap_hits
+            for hit in other.heap_hits {
+                self.push(hit.id, hit.dist);
+            }
         }
     }
 
@@ -133,7 +133,7 @@ impl TopKAccumulator {
         if self.limit <= INLINE_TOPK_CAP {
             self.inline_hits[..self.len].to_vec()
         } else {
-            self.heap_hits
+            self.heap_hits.into_sorted_vec()
         }
     }
 }
@@ -167,20 +167,16 @@ fn insert_sorted(storage: &mut [SearchHit], len: &mut usize, limit: usize, candi
 }
 
 #[inline]
-fn insert_sorted_vec(storage: &mut Vec<SearchHit>, limit: usize, candidate: SearchHit) {
-    if storage.len() == limit && !is_better(candidate, storage[storage.len() - 1]) {
+fn insert_sorted_vec(storage: &mut BinaryHeap<SearchHit>, limit: usize, candidate: SearchHit) {
+    if storage.len() < limit {
+        storage.push(candidate);
         return;
     }
 
-    let pos = storage
-        .binary_search_by(|hit| hit.cmp(&candidate))
-        .unwrap_or_else(|pos| pos);
-
-    if storage.len() < limit {
-        storage.insert(pos, candidate);
-    } else if pos < limit {
-        storage.insert(pos, candidate);
-        storage.truncate(limit);
+    if let Some(mut worst) = storage.peek_mut() {
+        if is_better(candidate, *worst) {
+            *worst = candidate;
+        }
     }
 }
 
@@ -238,6 +234,8 @@ pub struct IvfSq8Index {
 }
 
 impl IvfSq8Index {
+    const TRAIN_SAMPLE_LIMIT: usize = 100_000;
+
     pub fn new(config: &IndexConfig) -> Result<Self> {
         if config.dim == 0 {
             return Err(crate::api::KnowhereError::InvalidArg(
@@ -274,17 +272,20 @@ impl IvfSq8Index {
             ));
         }
 
+        let training_vectors = self.training_vectors(vectors, n);
+        let training_n = training_vectors.len() / self.dim;
+
         // Step 1: train IVF centroids first
-        self.train_ivf(vectors)?;
+        self.train_ivf(&training_vectors)?;
 
         // Step 2: build residual training set using nearest centroids
-        let mut residuals = Vec::with_capacity(n * self.dim);
-        for i in 0..n {
+        let mut residuals = Vec::with_capacity(training_vectors.len());
+        for i in 0..training_n {
             let start = i * self.dim;
-            let vector = &vectors[start..start + self.dim];
+            let vector = &training_vectors[start..start + self.dim];
             let cluster = self.find_nearest_centroid(vector);
-            let residual = self.compute_residual(vector, cluster);
-            residuals.extend_from_slice(&residual);
+            let centroid = &self.centroids[cluster * self.dim..(cluster + 1) * self.dim];
+            residuals.extend(vector.iter().zip(centroid.iter()).map(|(a, b)| a - b));
         }
 
         // Step 3: train scalar quantizer on residuals (not raw vectors)
@@ -294,12 +295,30 @@ impl IvfSq8Index {
         Ok(n)
     }
 
+    fn training_vectors<'a>(&self, vectors: &'a [f32], n: usize) -> std::borrow::Cow<'a, [f32]> {
+        if n <= Self::TRAIN_SAMPLE_LIMIT {
+            return std::borrow::Cow::Borrowed(vectors);
+        }
+
+        let mut sampled = Vec::with_capacity(Self::TRAIN_SAMPLE_LIMIT * self.dim);
+        for sample_idx in 0..Self::TRAIN_SAMPLE_LIMIT {
+            let source_idx = sample_idx * n / Self::TRAIN_SAMPLE_LIMIT;
+            let start = source_idx * self.dim;
+            sampled.extend_from_slice(&vectors[start..start + self.dim]);
+        }
+        std::borrow::Cow::Owned(sampled)
+    }
+
     /// Train IVF (clustering)
     fn train_ivf(&mut self, vectors: &[f32]) -> Result<()> {
         use crate::quantization::kmeans::KMeansMetric;
         use crate::quantization::KMeans;
 
-        let mut km = KMeans::new(self.nlist, self.dim);
+        let mut km = if vectors.len() / self.dim > Self::TRAIN_SAMPLE_LIMIT / 2 {
+            KMeans::fast(self.nlist, self.dim)
+        } else {
+            KMeans::new(self.nlist, self.dim)
+        };
         if matches!(self.metric_type, MetricType::Ip | MetricType::Cosine) {
             km = km.with_metric(KMeansMetric::InnerProduct);
         }
@@ -349,7 +368,7 @@ impl IvfSq8Index {
             entry.1.extend_from_slice(&quantized);
             self.inverted_list_rows
                 .entry(cluster)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(internal_row);
         }
 
@@ -388,7 +407,9 @@ impl IvfSq8Index {
         for q_idx in 0..n_queries {
             let q_start = q_idx * self.dim;
             let query_vec = &query[q_start..q_start + self.dim];
-            let clusters = self.search_clusters(query_vec, nprobe);
+            let mut clusters = Vec::with_capacity(nprobe);
+            let mut cluster_dists = Vec::with_capacity(nprobe);
+            self.search_clusters_into(query_vec, nprobe, &mut clusters, &mut cluster_dists);
 
             #[cfg(feature = "parallel")]
             let merged = {
@@ -450,6 +471,7 @@ impl IvfSq8Index {
         Ok(SearchResult::new(all_ids, all_dists, 0.0))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn scan_cluster_with_buf(
         &self,
         cluster_id: usize,
@@ -461,10 +483,33 @@ impl IvfSq8Index {
         cluster_rows: Option<&[usize]>,
     ) -> TopKAccumulator {
         let mut acc = TopKAccumulator::new(top_k);
+        self.scan_cluster_into_with_buf(
+            cluster_id,
+            query_vec,
+            &mut acc,
+            q_residual_buf,
+            q_precomputed_buf,
+            bitset,
+            cluster_rows,
+        );
+        acc
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn scan_cluster_into_with_buf(
+        &self,
+        cluster_id: usize,
+        query_vec: &[f32],
+        acc: &mut TopKAccumulator,
+        q_residual_buf: &mut Vec<f32>,
+        q_precomputed_buf: &mut Vec<i16>,
+        bitset: Option<&BitsetView>,
+        cluster_rows: Option<&[usize]>,
+    ) {
         if let Some((ids, codes)) = self.inverted_lists.get(&cluster_id) {
             let centroid_vec = &self.centroids[cluster_id * self.dim..(cluster_id + 1) * self.dim];
             let n = ids.len().min(codes.len() / self.dim);
-            acc.visited = n;
+            acc.visited += n;
 
             match self.metric_type {
                 MetricType::L2 | MetricType::Hamming => {
@@ -480,6 +525,7 @@ impl IvfSq8Index {
                     }
                     self.quantizer
                         .precompute_query_into(q_residual_buf, q_precomputed_buf.as_mut_slice());
+                    let distance_scale = self.quantizer.sq_l2_distance_scale();
 
                     for i in 0..n {
                         if !Self::row_allowed_by_bitset(
@@ -488,10 +534,13 @@ impl IvfSq8Index {
                         ) {
                             continue;
                         }
+                        prefetch_sq_code(codes, i, n, self.dim);
                         let code = &codes[i * self.dim..(i + 1) * self.dim];
-                        let dist = self
-                            .quantizer
-                            .sq_l2_precomputed(q_precomputed_buf.as_slice(), code);
+                        let dist = self.quantizer.sq_l2_precomputed_scaled(
+                            q_precomputed_buf.as_slice(),
+                            code,
+                            distance_scale,
+                        );
                         acc.push(ids[i], dist);
                     }
                 }
@@ -514,7 +563,6 @@ impl IvfSq8Index {
                 }
             }
         }
-        acc
     }
 
     #[allow(dead_code)]
@@ -586,25 +634,62 @@ impl IvfSq8Index {
 
     /// Search clusters
     fn search_clusters(&self, query: &[f32], nprobe: usize) -> Vec<usize> {
-        let mut distances: Vec<(usize, f32)> = (0..self.nlist)
-            .map(|i| {
-                let centroid = &self.centroids[i * self.dim..(i + 1) * self.dim];
-                let dist = match self.metric_type {
-                    MetricType::L2 | MetricType::Hamming => l2_distance(query, centroid),
-                    MetricType::Ip | MetricType::Cosine => -dot_product_f32(query, centroid),
-                };
-                (i, dist)
-            })
-            .collect();
+        let mut clusters = Vec::with_capacity(nprobe.min(self.nlist));
+        let mut distances = Vec::with_capacity(nprobe.min(self.nlist));
+        self.search_clusters_into(query, nprobe, &mut clusters, &mut distances);
+        clusters
+    }
 
-        if nprobe >= distances.len() {
-            distances.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
-            return distances.into_iter().map(|(i, _)| i).collect();
+    fn search_clusters_into(
+        &self,
+        query: &[f32],
+        nprobe: usize,
+        clusters: &mut Vec<usize>,
+        distances: &mut Vec<f32>,
+    ) {
+        clusters.clear();
+        distances.clear();
+
+        let nprobe = nprobe.min(self.nlist);
+        if nprobe == 0 {
+            return;
         }
 
-        distances.select_nth_unstable_by(nprobe, |a, b| a.1.total_cmp(&b.1));
-        distances[..nprobe].sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
-        distances[..nprobe].iter().map(|(i, _)| *i).collect()
+        let mut worst_pos = 0usize;
+        let mut worst_dist = f32::NEG_INFINITY;
+
+        for cluster_id in 0..self.nlist {
+            let centroid = &self.centroids[cluster_id * self.dim..(cluster_id + 1) * self.dim];
+            let dist = match self.metric_type {
+                MetricType::L2 | MetricType::Hamming => l2_distance(query, centroid),
+                MetricType::Ip | MetricType::Cosine => -dot_product_f32(query, centroid),
+            };
+
+            if clusters.len() < nprobe {
+                clusters.push(cluster_id);
+                distances.push(dist);
+                if dist > worst_dist || clusters.len() == 1 {
+                    worst_dist = dist;
+                    worst_pos = clusters.len() - 1;
+                }
+                continue;
+            }
+
+            if dist >= worst_dist {
+                continue;
+            }
+
+            clusters[worst_pos] = cluster_id;
+            distances[worst_pos] = dist;
+            worst_pos = 0;
+            worst_dist = distances[0];
+            for (idx, &candidate_dist) in distances.iter().enumerate().skip(1) {
+                if candidate_dist > worst_dist {
+                    worst_dist = candidate_dist;
+                    worst_pos = idx;
+                }
+            }
+        }
     }
 
     /// Compute residual
@@ -621,7 +706,7 @@ impl IvfSq8Index {
             let start = row * self.dim;
             let vector = &self.vectors[start..start + self.dim];
             let cluster = self.find_nearest_centroid(vector);
-            rows.entry(cluster).or_insert_with(Vec::new).push(row);
+            rows.entry(cluster).or_default().push(row);
         }
         rows
     }
@@ -713,7 +798,7 @@ impl IvfSq8Index {
             .collect();
 
         // Collect by cluster
-        let mut cluster_data: HashMap<usize, (Vec<i64>, Vec<u8>, Vec<usize>)> = HashMap::new();
+        let mut cluster_data: HashMap<usize, IvfSq8ClusterBatch> = HashMap::new();
         for (cluster, id, internal_row, quantized) in assignments {
             let entry = cluster_data
                 .entry(cluster)
@@ -733,7 +818,7 @@ impl IvfSq8Index {
             entry.1.append(&mut codes_buf);
             self.inverted_list_rows
                 .entry(cluster)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .append(&mut rows_buf);
         }
 
@@ -782,46 +867,40 @@ impl IvfSq8Index {
         let nprobe = req.nprobe.min(self.nlist);
         let dim = self.dim;
 
-        // Parallel search for each query
-        let results: Vec<Vec<(i64, f32)>> = (0..n_queries)
-            .into_par_iter()
-            .map(|q_idx| {
-                let q_start = q_idx * dim;
-                let query_vec = &query[q_start..q_start + dim];
-                let clusters = self.search_clusters(query_vec, nprobe);
+        let mut all_ids = vec![-1; n_queries * k];
+        let mut all_dists = vec![f32::MAX; n_queries * k];
+
+        // Parallel search for each query, writing directly into preallocated
+        // result slots to avoid one Vec allocation per query.
+        query
+            .par_chunks_exact(dim)
+            .zip(all_ids.par_chunks_mut(k))
+            .zip(all_dists.par_chunks_mut(k))
+            .for_each(|((query_vec, ids_out), dists_out)| {
+                let mut clusters = Vec::with_capacity(nprobe);
+                let mut cluster_dists = Vec::with_capacity(nprobe);
+                self.search_clusters_into(query_vec, nprobe, &mut clusters, &mut cluster_dists);
                 let mut q_residual_buf = vec![0.0f32; dim];
                 let mut q_precomputed_buf = vec![0i16; dim];
                 let mut acc = TopKAccumulator::new(k);
 
                 for cluster_id in clusters {
-                    acc.merge(self.scan_cluster_with_buf(
+                    self.scan_cluster_into_with_buf(
                         cluster_id,
                         query_vec,
-                        k,
+                        &mut acc,
                         &mut q_residual_buf,
                         &mut q_precomputed_buf,
                         None,
                         None,
-                    ));
+                    );
                 }
 
-                acc.into_hits()
-                    .into_iter()
-                    .map(|h| (h.id, h.dist))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-
-        let mut all_ids = vec![-1; n_queries * k];
-        let mut all_dists = vec![f32::MAX; n_queries * k];
-
-        for (q_idx, res) in results.into_iter().enumerate() {
-            let offset = q_idx * k;
-            for (i, item) in res.into_iter().enumerate().take(k) {
-                all_ids[offset + i] = item.0;
-                all_dists[offset + i] = item.1;
-            }
-        }
+                for (i, hit) in acc.into_hits().into_iter().enumerate().take(k) {
+                    ids_out[i] = hit.id;
+                    dists_out[i] = hit.dist;
+                }
+            });
 
         Ok(SearchResult::new(all_ids, all_dists, 0.0))
     }

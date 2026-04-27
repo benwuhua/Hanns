@@ -1,0 +1,263 @@
+{
+  "artifact_type": "shared_family_comparison_interim",
+  "authority_surface": "HannsDB-x86",
+  "completed_hanns_sources": {
+    "diskann_report": "/data/work/Hanns/BENCH-051_DISKANN_1M.md",
+    "hnsw_quick_log": "/data/work/hanns-logs/remote_background_20260424T082928Z_35102.log",
+    "sift_param_report": "/data/work/Hanns/BENCH-038_REPORT.md"
+  },
+  "date": "2026-04-24",
+  "families": {
+    "DiskANN/AISAQ": {
+      "comparability": "low",
+      "hanns": {
+        "rows": [
+          {
+            "build_s": 22.94,
+            "config": "R=32-B=4",
+            "qps": 3248,
+            "recall_at_10": 0.966
+          },
+          {
+            "build_s": 38.24,
+            "config": "R=48-B=8",
+            "qps": 1240,
+            "recall_at_10": 0.999
+          },
+          {
+            "build_s": 56.59,
+            "config": "R=64-B=16",
+            "qps": 452,
+            "recall_at_10": 0.999
+          }
+        ]
+      },
+      "notes": [
+        "Hanns BENCH-051 explicitly says it is a constrained Rust AISAQ skeleton, not a native-comparable SSD DiskANN pipeline.",
+        "Official rows are target-recall search_list_size sweeps; Hanns rows are fixed R/B configs."
+      ],
+      "official": {
+        "aisaq_p": {
+          "near_080": {
+            "recall_at_100": 0.9214,
+            "search_list_size": 100,
+            "vps_thread_8": 3328.575
+          },
+          "near_095": {
+            "build_s": 214.674,
+            "recall_at_100": 0.9502,
+            "search_list_size": 108,
+            "vps_thread_8": 3117.801
+          }
+        },
+        "aisaq_s": {
+          "near_080": {
+            "recall_at_100": 0.9192,
+            "search_list_size": 100,
+            "vps_thread_8": 557.301
+          },
+          "near_095": {
+            "build_s": 159.796,
+            "recall_at_100": 0.9515,
+            "search_list_size": 109,
+            "vps_thread_8": 520.39
+          }
+        },
+        "diskann": {
+          "near_080": {
+            "recall_at_100": 0.9217,
+            "search_list_size": 100,
+            "vps_thread_8": 3847.82
+          },
+          "near_095": {
+            "build_s": 232.375,
+            "recall_at_100": 0.9504,
+            "search_list_size": 108,
+            "vps_thread_8": 3153.907
+          }
+        }
+      }
+    },
+    "HNSW": {
+      "comparability": "partial",
+      "hanns": {
+        "param_scan_rows": [
+          {
+            "build_ms": 1374896.88,
+            "ef_search": 64,
+            "qps": 1773,
+            "r10": 1.0
+          },
+          {
+            "build_ms": 1470908.57,
+            "ef_search": 128,
+            "qps": 1894,
+            "r10": 1.0
+          },
+          {
+            "build_ms": 1064607.59,
+            "ef_search": 256,
+            "qps": 1644,
+            "r10": 1.0
+          }
+        ],
+        "quick_recall_lane": {
+          "ef_400": {
+            "r1": 1.0,
+            "r10": 1.0,
+            "r100": 1.0
+          },
+          "ef_800": {
+            "r1": 1.0,
+            "r10": 1.0,
+            "r100": 1.0
+          },
+          "graph_stats": {
+            "avg_neighbors_l0": 39.5,
+            "max_layer": 4
+          }
+        }
+      },
+      "notes": [
+        "Official rows are benchmark_float_qps VPS rows with near-equal-recall selection on k=100.",
+        "Hanns rows currently come from BENCH-038 parameter scan and a recall-only quick lane, not the same throughput harness.",
+        "Use as directional evidence only until a stricter apples-to-apples Hanns HNSW QPS lane is added."
+      ],
+      "official": {
+        "log": "/data/work/knowhere-zilliz-official-main-logs/native_hnsw_qps_20260423T114856Z.log",
+        "near_095_rows": {
+          "bf16": {
+            "build_s": 38.142,
+            "ef": 139,
+            "recall_at_100": 0.9504,
+            "vps_thread_8": 15672.165
+          },
+          "fp16": {
+            "build_s": 38.275,
+            "ef": 139,
+            "recall_at_100": 0.9505,
+            "vps_thread_8": 15800.933
+          },
+          "fp32": {
+            "build_s": 38.275,
+            "ef": 138,
+            "recall_at_100": 0.9502,
+            "vps_thread_8": 14546.807
+          }
+        }
+      }
+    },
+    "IVF-PQ": {
+      "comparability": "partial",
+      "hanns": {
+        "param_scan_rows": [
+          {
+            "build_ms": 93809.68,
+            "nprobe": 1,
+            "qps": 26951,
+            "r10": 0.352
+          },
+          {
+            "build_ms": 93497.81,
+            "nprobe": 5,
+            "qps": 7674,
+            "r10": 0.537
+          },
+          {
+            "build_ms": 93255.32,
+            "nprobe": 10,
+            "qps": 4207,
+            "r10": 0.581
+          },
+          {
+            "build_ms": 92713.96,
+            "nprobe": 50,
+            "qps": 882,
+            "r10": 0.582
+          },
+          {
+            "build_ms": 93312.12,
+            "nprobe": 100,
+            "qps": 460,
+            "r10": 0.591
+          }
+        ]
+      },
+      "notes": [
+        "Both sides currently show weak recall relative to high-recall goals.",
+        "Official runner output needs normalization before any direct apples-to-apples statement."
+      ],
+      "official": {
+        "detail": "sweep rows plateau around recall≈0.7841 while terminal row reports nprobe=257 and R@=0.0000; parser normalization required before final verdict use",
+        "log": "/data/work/knowhere-zilliz-official-main-logs/native_hnsw_qps_20260423T115626Z.log",
+        "runner_behavior": "done_but_needs_careful_interpretation"
+      }
+    },
+    "IVF-SQ": {
+      "comparability": "moderate",
+      "hanns": {
+        "param_scan_rows": [
+          {
+            "build_ms": 66800.91,
+            "nprobe": 1,
+            "qps": 10618,
+            "r10": 0.413
+          },
+          {
+            "build_ms": 67751.2,
+            "nprobe": 5,
+            "qps": 7761,
+            "r10": 0.788
+          },
+          {
+            "build_ms": 67931.14,
+            "nprobe": 10,
+            "qps": 5934,
+            "r10": 0.872
+          },
+          {
+            "build_ms": 67381.13,
+            "nprobe": 50,
+            "qps": 4048,
+            "r10": 0.976
+          },
+          {
+            "build_ms": 68103.08,
+            "nprobe": 100,
+            "qps": 2847,
+            "r10": 0.962
+          }
+        ]
+      },
+      "notes": [
+        "Both sides are IVF-SQ8 family, but official rows are fp16/bf16 typed rows with k=100 throughput runner while Hanns rows are BENCH-038 parameter scan rows."
+      ],
+      "official": {
+        "log": "/data/work/knowhere-zilliz-official-main-logs/native_hnsw_qps_20260423T115343Z.log",
+        "near_095_rows": {
+          "bf16": {
+            "nprobe": 32,
+            "recall_at_100": 0.9519,
+            "vps_thread_8": 8179.41
+          },
+          "fp16": {
+            "nprobe": 32,
+            "recall_at_100": 0.9519,
+            "vps_thread_8": 8091.813
+          }
+        }
+      }
+    }
+  },
+  "official_source": {
+    "commit": "868634bc5230a71a84371fea5f5b674b805643ea",
+    "repo_url": "https://github.com/zilliztech/knowhere"
+  },
+  "remaining_work": [
+    "normalize official IVF-PQ terminal rows before final comparison claims",
+    "decide whether to build stricter apples-to-apples Hanns HNSW throughput lane",
+    "decide whether DiskANN/AISAQ comparison should stay labeled partial because Hanns BENCH-051 is a constrained AISAQ skeleton"
+  ],
+  "scope": "hanns-vs-zilliz-knowhere-shared-families",
+  "status": "interim_completed_hanns_and_official_rows"
+}

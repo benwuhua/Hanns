@@ -76,6 +76,12 @@ pub struct IvfPqHotPathAudit {
 }
 
 impl IvfPqIndex {
+    const EXACT_REFINE_MULTIPLIER: usize = 4;
+    // Deterministic SIFT-scale training sample: large enough to preserve IVF-PQ
+    // recall in the aligned verdict lane, small enough to keep build time below
+    // the official Knowhere native benchmark target.
+    const TRAIN_SAMPLE_LIMIT: usize = 25_000;
+
     #[inline]
     fn compare_cluster_score(a: &(usize, f32), b: &(usize, f32)) -> std::cmp::Ordering {
         a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0))
@@ -280,8 +286,11 @@ impl IvfPqIndex {
             ));
         }
 
+        let training_vectors = self.training_vectors(vectors, n);
+        let training_n = training_vectors.len() / self.dim;
+
         // Step 1: Train coarse quantizer (parallel KMeans)
-        self.train_ivf_centroids(vectors, n)?;
+        self.train_ivf_centroids(&training_vectors, training_n)?;
 
         // Clear inverted lists (already initialized in new())
         for i in 0..self.nlist {
@@ -289,11 +298,11 @@ impl IvfPqIndex {
             self.invlist_codes[i].clear();
         }
 
-        // Step 2: Compute residuals for all training vectors
-        let mut residuals = Vec::with_capacity(vectors.len());
-        for i in 0..n {
+        // Step 2: Compute residuals for sampled training vectors.
+        let mut residuals = Vec::with_capacity(training_vectors.len());
+        for i in 0..training_n {
             let start = i * self.dim;
-            let vector = &vectors[start..start + self.dim];
+            let vector = &training_vectors[start..start + self.dim];
 
             // Find nearest centroid
             let cluster = self.find_nearest_centroid(vector);
@@ -305,7 +314,7 @@ impl IvfPqIndex {
         }
 
         // Step 3: Train fine quantizer on residuals
-        self.train_fine_quantizer(n, &residuals)?;
+        self.train_fine_quantizer(training_n, &residuals)?;
 
         self.trained = true;
         tracing::info!(
@@ -405,13 +414,31 @@ impl IvfPqIndex {
     }
 
     fn train_ivf_centroids(&mut self, vectors: &[f32], _n: usize) -> Result<()> {
-        let mut km = KMeans::new(self.nlist, self.dim);
+        let mut km = if vectors.len() / self.dim > Self::TRAIN_SAMPLE_LIMIT / 2 {
+            KMeans::fast(self.nlist, self.dim)
+        } else {
+            KMeans::new(self.nlist, self.dim)
+        };
         if matches!(self.config.metric_type, MetricType::Ip | MetricType::Cosine) {
             km = km.with_metric(KMeansMetric::InnerProduct);
         }
         km.train(vectors);
         self.centroids = km.centroids().to_vec();
         Ok(())
+    }
+
+    fn training_vectors<'a>(&self, vectors: &'a [f32], n: usize) -> std::borrow::Cow<'a, [f32]> {
+        if n <= Self::TRAIN_SAMPLE_LIMIT {
+            return std::borrow::Cow::Borrowed(vectors);
+        }
+
+        let mut sampled = Vec::with_capacity(Self::TRAIN_SAMPLE_LIMIT * self.dim);
+        for sample_idx in 0..Self::TRAIN_SAMPLE_LIMIT {
+            let source_idx = sample_idx * n / Self::TRAIN_SAMPLE_LIMIT;
+            let start = source_idx * self.dim;
+            sampled.extend_from_slice(&vectors[start..start + self.dim]);
+        }
+        std::borrow::Cow::Owned(sampled)
     }
 
     /// Add vectors to index
@@ -430,7 +457,7 @@ impl IvfPqIndex {
 
         #[cfg(feature = "parallel")]
         {
-            return self.add_parallel(vectors, ids, rayon::current_num_threads());
+            self.add_parallel(vectors, ids, rayon::current_num_threads())
         }
 
         #[cfg(not(feature = "parallel"))]
@@ -468,7 +495,7 @@ impl IvfPqIndex {
 
             self.rebuild_compact_invlists();
             tracing::debug!("Added {} vectors to IVF-PQ", n);
-            return Ok(n);
+            Ok(n)
         }
     }
 
@@ -585,6 +612,74 @@ impl IvfPqIndex {
             .collect()
     }
 
+    /// Return raw ADC candidate ids for IVF-PQ diagnostics before exact-refine reranking.
+    ///
+    /// This is a diagnostic hook used by benchmark/oracle harnesses; production
+    /// verdicts still use `search`.
+    pub fn diagnostic_adc_candidate_ids(
+        &self,
+        query: &[f32],
+        nprobe: usize,
+        candidate_pool: usize,
+    ) -> Result<Vec<i64>> {
+        if self.ids.is_empty() {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "index is empty".to_string(),
+            ));
+        }
+        if query.len() != self.dim {
+            return Err(crate::api::KnowhereError::InvalidArg(
+                "query dimension mismatch".to_string(),
+            ));
+        }
+
+        let nprobe = nprobe.max(1).min(self.nlist);
+        let code_size = self.active_code_size();
+        let opq_enabled = self.opq_enabled();
+        let is_ip = matches!(self.config.metric_type, MetricType::Ip | MetricType::Cosine);
+        let cluster_dists = self.score_all_centroids(query);
+        let cluster_dists = Self::select_top_clusters(cluster_dists, nprobe);
+        let mut candidates = Vec::new();
+        let mut query_residual = vec![0.0f32; self.dim];
+        let shared_table = if !opq_enabled && is_ip {
+            Some(self.precompute_distance_table_flat(query))
+        } else {
+            None
+        };
+
+        for (cluster, _) in cluster_dists.iter().copied() {
+            let (ids, codes) = self.cluster_scan_slice(cluster);
+            if ids.is_empty() {
+                continue;
+            }
+            let centroid = &self.centroids[cluster * self.dim..(cluster + 1) * self.dim];
+            let coarse_bias = self.coarse_distance_bias(query, centroid);
+
+            if opq_enabled {
+                self.fill_query_residual(query, centroid, &mut query_residual);
+                let opq = self.opq.as_ref().unwrap();
+                let rotated_adc_query = self.rotated_adc_query(opq, query, &query_residual);
+                let table = self.precompute_distance_table_opq_flat(opq, &rotated_adc_query);
+                for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
+                    candidates.push((*id, self.adc_distance_flat(&table, code) + coarse_bias));
+                }
+            } else if let Some(ref table) = shared_table {
+                for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
+                    candidates.push((*id, self.adc_distance_flat(table, code) + coarse_bias));
+                }
+            } else {
+                self.fill_query_residual(query, centroid, &mut query_residual);
+                let table = self.precompute_distance_table_flat(&query_residual);
+                for (id, code) in ids.iter().zip(codes.chunks(code_size)) {
+                    candidates.push((*id, self.adc_distance_flat(&table, code) + coarse_bias));
+                }
+            }
+        }
+
+        Self::truncate_top_candidates(&mut candidates, candidate_pool);
+        Ok(candidates.into_iter().map(|(id, _)| id).collect())
+    }
+
     fn select_top_clusters(mut scored: Vec<(usize, f32)>, limit: usize) -> Vec<(usize, f32)> {
         if scored.is_empty() || limit == 0 {
             return Vec::new();
@@ -615,6 +710,65 @@ impl IvfPqIndex {
         candidates.select_nth_unstable_by(nth, Self::compare_candidate_score);
         candidates.truncate(limit);
         candidates.sort_by(Self::compare_candidate_score);
+    }
+
+    #[inline]
+    fn exact_refine_limit(k: usize, candidate_count: usize) -> usize {
+        if k == 0 {
+            return 0;
+        }
+        candidate_count.min(k.saturating_mul(Self::EXACT_REFINE_MULTIPLIER).max(k))
+    }
+
+    #[inline]
+    fn can_exact_refine(&self) -> bool {
+        self.vectors.len() == self.ids.len() * self.dim && !self.vectors.is_empty()
+    }
+
+    #[inline]
+    fn stored_vector_for_id(&self, id: i64) -> Option<&[f32]> {
+        if id < 0 || !self.can_exact_refine() {
+            return None;
+        }
+        let direct_pos = id as usize;
+        let pos = if self.ids.get(direct_pos).copied() == Some(id) {
+            direct_pos
+        } else {
+            self.ids.iter().position(|&stored| stored == id)?
+        };
+        let start = pos * self.dim;
+        Some(&self.vectors[start..start + self.dim])
+    }
+
+    #[inline]
+    fn exact_score(&self, query: &[f32], vector: &[f32]) -> f32 {
+        match self.config.metric_type {
+            MetricType::L2 | MetricType::Hamming => l2_distance_sq(query, vector),
+            MetricType::Ip | MetricType::Cosine => -dot_product_f32(query, vector),
+        }
+    }
+
+    fn exact_refine_candidates(&self, query: &[f32], candidates: &mut [(i64, f32)]) {
+        if !self.can_exact_refine() {
+            return;
+        }
+        for (id, dist) in candidates.iter_mut() {
+            if let Some(vector) = self.stored_vector_for_id(*id) {
+                *dist = self.exact_score(query, vector);
+            }
+        }
+    }
+
+    fn truncate_with_exact_refine(
+        &self,
+        query: &[f32],
+        candidates: &mut Vec<(i64, f32)>,
+        k: usize,
+    ) {
+        let refine_limit = Self::exact_refine_limit(k, candidates.len());
+        Self::truncate_top_candidates(candidates, refine_limit);
+        self.exact_refine_candidates(query, candidates);
+        Self::truncate_top_candidates(candidates, k);
     }
 
     #[inline]
@@ -904,7 +1058,7 @@ impl IvfPqIndex {
                 }
             }
 
-            Self::truncate_top_candidates(&mut candidates, k);
+            self.truncate_with_exact_refine(query_vec, &mut candidates, k);
             for i in 0..k {
                 if i < candidates.len() {
                     all_ids.push(candidates[i].0);
@@ -996,7 +1150,7 @@ impl IvfPqIndex {
                 }
             }
 
-            Self::truncate_top_candidates(&mut candidates, k);
+            self.truncate_with_exact_refine(query_vec, &mut candidates, k);
             for i in 0..k {
                 if i < candidates.len() {
                     all_ids.push(candidates[i].0);
@@ -1140,7 +1294,7 @@ impl IvfPqIndex {
                     }
                 }
 
-                Self::truncate_top_candidates(&mut candidates, k);
+                self.truncate_with_exact_refine(query_vec, &mut candidates, k);
                 let mut ids = Vec::with_capacity(k);
                 let mut dists = Vec::with_capacity(k);
                 for i in 0..k {
@@ -2056,6 +2210,41 @@ mod tests {
         assert_eq!(
             result.ids[0], 0,
             "IP search must include the coarse centroid contribution when comparing candidates across clusters"
+        );
+    }
+
+    #[test]
+    fn test_ivfpq_exact_refine_reranks_adc_candidates_without_losing_pool() {
+        let config = IndexConfig {
+            index_type: IndexType::IvfPq,
+            metric_type: MetricType::L2,
+            dim: 2,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                nlist: Some(1),
+                nprobe: Some(1),
+                m: Some(1),
+                nbits_per_idx: Some(1),
+                ..Default::default()
+            },
+        };
+        let mut index = IvfPqIndex::new(&config).unwrap();
+        index.ids = vec![0, 1, 2];
+        index.vectors = vec![
+            10.0, 0.0, // id 0, far
+            0.0, 0.0, // id 1, exact nearest
+            1.0, 0.0, // id 2
+        ];
+        index.trained = true;
+
+        let query = [0.0, 0.0];
+        let mut candidates = vec![(0, 0.0), (2, 0.1), (1, 10.0)];
+        index.truncate_with_exact_refine(&query, &mut candidates, 1);
+
+        assert_eq!(
+            candidates,
+            vec![(1, 0.0)],
+            "exact refine should rerank the retained ADC candidate pool by original vectors"
         );
     }
 

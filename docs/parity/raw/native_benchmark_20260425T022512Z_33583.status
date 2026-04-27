@@ -1,0 +1,6 @@
+status=ok
+run_id=20260425T022512Z_33583
+exit_code=0
+finished_at=2026-04-25T02:27:12Z
+log=/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260425T022512Z_33583.log
+filter=Benchmark_float_qps.TEST_IVF_SQ8

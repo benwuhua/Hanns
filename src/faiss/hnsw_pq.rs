@@ -6,10 +6,13 @@
 use rand::Rng;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::Path;
 
-use crate::api::{MetricType, Result as ApiResult};
+use super::hnsw::HnswIndex;
+use crate::api::{
+    DataType, IndexConfig, IndexParams, IndexType, MetricType, Result as ApiResult, SearchRequest,
+};
 use crate::bitset::BitsetView;
 use crate::dataset::Dataset;
 use crate::index::{Index, IndexError, SearchResult};
@@ -17,8 +20,9 @@ use crate::quantization::{PQConfig, ProductQuantizer};
 
 /// Maximum number of layers in the HNSW graph
 const MAX_LAYERS: usize = 16;
-const HNSW_PQ_GET_VECTOR_BY_IDS_UNSUPPORTED_MSG: &str =
-    "get_vector_by_ids not supported for HNSW-PQ (lossy PQ storage)";
+const HNSW_PQ_MAX_TRAINING_POINTS: usize = 65_536;
+const HNSW_PQ_RAW_MAGIC: &[u8; 4] = b"RAWV";
+const HNSW_PQ_RAW_DATA_UNAVAILABLE_MSG: &str = "raw vectors not available for this HNSW-PQ index";
 
 /// HNSW-PQ configuration
 #[derive(Clone, Debug)]
@@ -39,6 +43,8 @@ pub struct HnswPqConfig {
     pub pq_k: usize,
     /// Metric type (L2, IP, COSINE)
     pub metric_type: MetricType,
+    /// Number of build threads for the raw-vector HNSW candidate graph.
+    pub num_threads: Option<usize>,
 }
 
 impl Default for HnswPqConfig {
@@ -52,6 +58,7 @@ impl Default for HnswPqConfig {
             pq_m: 8,
             pq_k: 256,
             metric_type: MetricType::L2,
+            num_threads: None,
         }
     }
 }
@@ -88,6 +95,11 @@ impl HnswPqConfig {
 
     pub fn with_metric_type(mut self, metric: MetricType) -> Self {
         self.metric_type = metric;
+        self
+    }
+
+    pub fn with_num_threads(mut self, num_threads: usize) -> Self {
+        self.num_threads = Some(num_threads.max(1));
         self
     }
 }
@@ -150,6 +162,8 @@ pub struct HnswPqIndex {
     node_info: Vec<NodeInfo>,
     /// Vector IDs
     ids: Vec<i64>,
+    /// Original vectors retained for FLAT refine and get_vector_by_ids parity.
+    raw_vectors: Vec<f32>,
     /// ID to index mapping
     id_to_idx: HashMap<i64, usize>,
     /// Next ID to assign
@@ -160,6 +174,8 @@ pub struct HnswPqIndex {
     level_multiplier: f32,
     /// PQ encoder
     pq: ProductQuantizer,
+    /// Raw-vector HNSW graph for Knowhere-compatible HNSW_PQ candidate generation.
+    graph: Option<Box<HnswIndex>>,
 }
 
 impl HnswPqIndex {
@@ -188,6 +204,20 @@ impl HnswPqIndex {
 
         // Calculate level multiplier: m_l = 1 / ln(M)
         let level_multiplier = 1.0 / (config.m as f32).ln().max(1.0);
+        let graph_config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            dim: config.dim,
+            metric_type: config.metric_type,
+            data_type: DataType::Float,
+            params: IndexParams {
+                m: Some(config.m),
+                ef_construction: Some(config.ef_construction),
+                ef_search: Some(config.ef_search),
+                num_threads: config.num_threads,
+                ..Default::default()
+            },
+        };
+        let graph = HnswIndex::new(&graph_config)?;
 
         Ok(Self {
             config,
@@ -195,11 +225,13 @@ impl HnswPqIndex {
             max_level: 0,
             node_info: Vec::new(),
             ids: Vec::new(),
+            raw_vectors: Vec::new(),
             id_to_idx: HashMap::new(),
             next_id: 0,
             trained: false,
             level_multiplier,
             pq,
+            graph: Some(Box::new(graph)),
         })
     }
 
@@ -271,6 +303,24 @@ impl HnswPqIndex {
         self.pq.compute_distance_with_table(table, code)
     }
 
+    #[inline]
+    fn raw_vector_by_index(&self, idx: usize) -> Option<&[f32]> {
+        if self.raw_vectors.len() < (idx + 1) * self.config.dim {
+            return None;
+        }
+        let start = idx * self.config.dim;
+        self.raw_vectors.get(start..start + self.config.dim)
+    }
+
+    #[inline]
+    fn distance_to_node(&self, query: &[f32], table: &[f32], idx: usize) -> f32 {
+        self.raw_vector_by_index(idx)
+            .map(|vector| self.compute_distance(query, vector))
+            .unwrap_or_else(|| {
+                self.compute_distance_to_code_with_table(table, &self.node_info[idx].code)
+            })
+    }
+
     /// Train the PQ encoder
     pub fn train(&mut self, vectors: &[f32]) -> Result<(), IndexError> {
         let n = vectors.len() / self.config.dim;
@@ -278,11 +328,19 @@ impl HnswPqIndex {
             return Err(IndexError::Unsupported("no training vectors".into()));
         }
 
-        // Train PQ encoder
-        let n = vectors.len() / self.config.dim;
+        // Train PQ encoder on a bounded prefix sample, matching the common
+        // ANN practice of sampling codebook training instead of scanning all
+        // base vectors. The raw HNSW graph remains trained on the full set.
+        let pq_train_n = n.min(HNSW_PQ_MAX_TRAINING_POINTS);
+        let pq_train_vectors = &vectors[..pq_train_n * self.config.dim];
         self.pq
-            .train(n, vectors)
+            .train(pq_train_n, pq_train_vectors)
             .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        if let Some(graph) = &mut self.graph {
+            graph
+                .train(vectors)
+                .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        }
         self.trained = true;
         Ok(())
     }
@@ -297,12 +355,23 @@ impl HnswPqIndex {
         if n == 0 {
             return Ok(0);
         }
+        let graph_handles_search = self.graph.is_some();
+        if let Some(graph) = &mut self.graph {
+            graph
+                .add_parallel(vectors, ids, Some(true))
+                .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+        }
 
         let base_count = self.ids.len();
         self.node_info.reserve(n);
         self.ids.reserve(n);
+        self.raw_vectors.reserve(n * self.config.dim);
 
         let code_size = self.pq.code_size();
+        let encoded_codes = self
+            .pq
+            .encode_batch(n, vectors)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
 
         for i in 0..n {
             let start = i * self.config.dim;
@@ -311,28 +380,35 @@ impl HnswPqIndex {
             let id = ids.map(|ids| ids[i]).unwrap_or(self.next_id);
             self.next_id += 1;
 
-            // Generate random level
-            let node_level = self.random_level();
-
-            // Encode vector with PQ
-            let code = self
-                .pq
-                .encode(vec)
-                .map_err(|e| IndexError::Unsupported(e.to_string()))?;
-
-            // Create node info
-            let node_info = NodeInfo::new(node_level, self.config.m, code_size);
+            let code_start = i * code_size;
+            let code = encoded_codes[code_start..code_start + code_size].to_vec();
 
             // Store metadata
             let idx = self.ids.len();
             self.ids.push(id);
             self.id_to_idx.insert(id, idx);
+            self.raw_vectors.extend_from_slice(vec);
 
-            // We need to store the original vector temporarily for graph construction
-            let vec_clone = vec.to_vec();
+            if graph_handles_search {
+                self.node_info.push(NodeInfo {
+                    max_layer: 0,
+                    layer_neighbors: Vec::new(),
+                    code,
+                });
+                if base_count == 0 && i == 0 {
+                    self.entry_point = Some(id);
+                }
+                continue;
+            }
 
+            // Generate random level for the legacy in-file graph.
+            let node_level = self.random_level();
+            let node_info = NodeInfo::new(node_level, self.config.m, code_size);
             self.node_info.push(node_info);
             self.node_info[idx].code = code;
+
+            // We need to store the original vector temporarily for graph construction.
+            let vec_clone = vec.to_vec();
 
             // If first node, set as entry point
             if base_count == 0 && i == 0 {
@@ -341,8 +417,12 @@ impl HnswPqIndex {
                 continue;
             }
 
-            // Insert into graph
-            self.insert_node(idx, &vec_clone, node_level);
+            if !graph_handles_search {
+                // Insert into the legacy in-file graph only when the optimized
+                // raw-vector graph is unavailable (for example after loading an
+                // older serialized HNSW-PQ file).
+                self.insert_node(idx, &vec_clone, node_level);
+            }
 
             // Update max level
             if node_level > self.max_level {
@@ -361,8 +441,8 @@ impl HnswPqIndex {
 
         // Search for entry point at each level from max_level down to node_level + 1
         for layer in (node_level + 1..=self.max_level).rev() {
-            let _ef = 1; // Greedy search at upper levels
-            let candidates = self.search_at_layer(vector, entry_point_idx, layer);
+            // Greedy search at upper levels
+            let candidates = self.search_layer_ef(vector, entry_point_idx, layer, 1);
 
             if let Some(&(best_idx, _)) = candidates.first() {
                 entry_point_idx = best_idx;
@@ -372,13 +452,13 @@ impl HnswPqIndex {
 
         // Connect at layers 0 to node_level
         for layer in 0..=node_level {
-            let _ef = if layer == 0 {
+            let ef = if layer == 0 {
                 self.config.ef_construction
             } else {
                 1
             };
 
-            let candidates = self.search_at_layer(vector, entry_point_idx, layer);
+            let candidates = self.search_layer_ef(vector, entry_point_idx, layer, ef);
 
             // Select neighbors using heuristics
             let neighbors = self.select_neighbors(candidates, layer);
@@ -421,6 +501,7 @@ impl HnswPqIndex {
     }
 
     /// Search at a specific layer
+    #[allow(dead_code)]
     fn search_at_layer(
         &self,
         query: &[f32],
@@ -460,8 +541,7 @@ impl HnswPqIndex {
         let table = self.build_distance_table(query);
 
         // Initialize with entry point
-        let entry_dist =
-            self.compute_distance_to_code_with_table(&table, &self.node_info[entry_point_idx].code);
+        let entry_dist = self.distance_to_node(query, &table, entry_point_idx);
         candidates.push((OrderedDist(entry_dist), entry_point_idx));
         visited.insert(entry_point_idx);
 
@@ -476,10 +556,7 @@ impl HnswPqIndex {
                     if let Some(&neighbor_idx) = self.id_to_idx.get(&neighbor_id) {
                         if !visited.contains(&neighbor_idx) {
                             visited.insert(neighbor_idx);
-                            let neighbor_dist = self.compute_distance_to_code_with_table(
-                                &table,
-                                &self.node_info[neighbor_idx].code,
-                            );
+                            let neighbor_dist = self.distance_to_node(query, &table, neighbor_idx);
                             candidates.push((OrderedDist(neighbor_dist), neighbor_idx));
                         }
                     }
@@ -515,6 +592,10 @@ impl HnswPqIndex {
             return Err(IndexError::DimMismatch);
         }
 
+        if let Some(graph) = &self.graph {
+            return self.graph_search(graph, query, top_k, bitset);
+        }
+
         let entry_point = match self.entry_point {
             Some(id) => self.id_to_idx[&id],
             None => return Ok(SearchResult::new(Vec::new(), Vec::new(), 0.0)),
@@ -524,7 +605,7 @@ impl HnswPqIndex {
         let mut current_idx = entry_point;
 
         for layer in (1..=self.max_level).rev() {
-            let candidates = self.search_at_layer(query, current_idx, layer);
+            let candidates = self.search_layer_ef(query, current_idx, layer, 1);
             if let Some(&(idx, _)) = candidates.first() {
                 current_idx = idx;
             }
@@ -555,6 +636,109 @@ impl HnswPqIndex {
         let ids: Vec<i64> = results.iter().map(|(id, _)| *id).collect();
         let distances: Vec<f32> = results.iter().map(|(_, d)| *d).collect();
 
+        Ok(SearchResult::new(ids, distances, 0.0))
+    }
+
+    #[inline]
+    fn has_complete_raw_vectors(&self) -> bool {
+        self.raw_vectors.len() == self.ids.len() * self.config.dim && !self.raw_vectors.is_empty()
+    }
+
+    #[inline]
+    fn raw_vector_by_id(&self, id: i64) -> Option<&[f32]> {
+        if !self.has_complete_raw_vectors() {
+            return None;
+        }
+        let idx = *self.id_to_idx.get(&id)?;
+        let start = idx * self.config.dim;
+        self.raw_vectors.get(start..start + self.config.dim)
+    }
+
+    #[inline]
+    fn exact_score(&self, query: &[f32], vector: &[f32]) -> f32 {
+        self.compute_distance(query, vector)
+    }
+
+    fn graph_search(
+        &self,
+        graph: &HnswIndex,
+        query: &[f32],
+        top_k: usize,
+        bitset: Option<&BitsetView>,
+    ) -> Result<SearchResult, IndexError> {
+        let graph_top_k = top_k
+            .saturating_add(bitset.map(BitsetView::count).unwrap_or(0))
+            .min(self.ids.len())
+            .max(top_k);
+        let req = SearchRequest {
+            top_k: graph_top_k,
+            nprobe: self.config.ef_search.max(graph_top_k),
+            ..Default::default()
+        };
+        let result = graph
+            .search(query, &req)
+            .map_err(|e| IndexError::Unsupported(e.to_string()))?;
+
+        let mut ids = Vec::with_capacity(top_k);
+        let mut distances = Vec::with_capacity(top_k);
+        for (id, distance) in result.ids.into_iter().zip(result.distances) {
+            if let Some(bs) = bitset {
+                if let Some(&idx) = self.id_to_idx.get(&id) {
+                    if idx < bs.len() && bs.get(idx) {
+                        continue;
+                    }
+                }
+            }
+            ids.push(id);
+            distances.push(distance);
+            if ids.len() == top_k {
+                break;
+            }
+        }
+        Ok(SearchResult::new(ids, distances, result.elapsed_ms))
+    }
+
+    /// Search with an exact raw-vector rerank pass over the coarse PQ candidate pool.
+    ///
+    /// `refine_k` follows Knowhere's HNSW_PQ row shape: the coarse pool is
+    /// `top_k * refine_k`, then the final `top_k` is ranked by original vectors.
+    pub fn search_refined(
+        &self,
+        query: &[f32],
+        top_k: usize,
+        refine_k: usize,
+        bitset: Option<&BitsetView>,
+    ) -> Result<SearchResult, IndexError> {
+        if !self.has_complete_raw_vectors() {
+            return Err(IndexError::Unsupported(
+                HNSW_PQ_RAW_DATA_UNAVAILABLE_MSG.into(),
+            ));
+        }
+
+        let candidate_k = top_k.saturating_mul(refine_k.max(1)).max(top_k);
+        let coarse = if let Some(graph) = &self.graph {
+            self.graph_search(graph, query, candidate_k, bitset)?
+        } else {
+            self.search(query, candidate_k, bitset)?
+        };
+        let mut refined = coarse
+            .ids
+            .into_iter()
+            .zip(coarse.distances)
+            .filter_map(|(id, dist)| {
+                let exact = self
+                    .raw_vector_by_id(id)
+                    .map(|vector| self.exact_score(query, vector))
+                    .unwrap_or(dist);
+                Some((id, exact))
+            })
+            .collect::<Vec<_>>();
+
+        refined.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        refined.truncate(top_k);
+
+        let ids = refined.iter().map(|(id, _)| *id).collect();
+        let distances = refined.iter().map(|(_, dist)| *dist).collect();
         Ok(SearchResult::new(ids, distances, 0.0))
     }
 
@@ -599,8 +783,7 @@ impl HnswPqIndex {
         let table = self.build_distance_table(query);
 
         // Initialize with entry point
-        let entry_dist =
-            self.compute_distance_to_code_with_table(&table, &self.node_info[entry_point_idx].code);
+        let entry_dist = self.distance_to_node(query, &table, entry_point_idx);
         candidates.push((OrderedDist(entry_dist), entry_point_idx));
         results.push((OrderedDist(entry_dist), entry_point_idx));
         visited.insert(entry_point_idx);
@@ -622,10 +805,7 @@ impl HnswPqIndex {
                     if let Some(&neighbor_idx) = self.id_to_idx.get(&neighbor_id) {
                         if !visited.contains(&neighbor_idx) {
                             visited.insert(neighbor_idx);
-                            let neighbor_dist = self.compute_distance_to_code_with_table(
-                                &table,
-                                &self.node_info[neighbor_idx].code,
-                            );
+                            let neighbor_dist = self.distance_to_node(query, &table, neighbor_idx);
 
                             if results.len() < ef {
                                 results.push((OrderedDist(neighbor_dist), neighbor_idx));
@@ -672,13 +852,19 @@ impl HnswPqIndex {
 
         // Approximate PQ size
         let pq_size = self.pq.centroids().len() * std::mem::size_of::<f32>();
+        let raw_vectors_size = self.raw_vectors.len() * std::mem::size_of::<f32>();
 
-        node_info_size + ids_size + id_to_idx_size + pq_size
+        node_info_size + ids_size + id_to_idx_size + pq_size + raw_vectors_size
     }
 
     /// Check if trained
     pub fn is_trained(&self) -> bool {
         self.trained
+    }
+
+    /// Update efSearch without rebuilding the graph.
+    pub fn set_ef_search(&mut self, ef: usize) {
+        self.config.ef_search = ef;
     }
 
     /// Save index to disk
@@ -720,6 +906,12 @@ impl HnswPqIndex {
         file.write_all(&(self.ids.len() as u64).to_le_bytes())?;
         for &id in &self.ids {
             file.write_all(&id.to_le_bytes())?;
+        }
+
+        file.write_all(HNSW_PQ_RAW_MAGIC)?;
+        file.write_all(&(self.raw_vectors.len() as u64).to_le_bytes())?;
+        for &value in &self.raw_vectors {
+            file.write_all(&value.to_le_bytes())?;
         }
 
         Ok(())
@@ -822,6 +1014,28 @@ impl HnswPqIndex {
             *id = i64::from_le_bytes(ibuf);
         }
 
+        let mut raw_vectors = Vec::new();
+        let mut raw_magic = [0u8; 4];
+        match file.read_exact(&mut raw_magic) {
+            Ok(()) => {
+                if &raw_magic != HNSW_PQ_RAW_MAGIC {
+                    return Err(crate::api::KnowhereError::Codec(
+                        "invalid HNSWPQ raw-vector section magic".to_string(),
+                    ));
+                }
+                file.read_exact(&mut u64_buf)?;
+                let raw_len = u64::from_le_bytes(u64_buf) as usize;
+                raw_vectors = vec![0.0f32; raw_len];
+                for value in &mut raw_vectors {
+                    let mut buf = [0u8; 4];
+                    file.read_exact(&mut buf)?;
+                    *value = f32::from_le_bytes(buf);
+                }
+            }
+            Err(err) if err.kind() == ErrorKind::UnexpectedEof => {}
+            Err(err) => return Err(err.into()),
+        }
+
         let id_to_idx = ids
             .iter()
             .enumerate()
@@ -837,11 +1051,33 @@ impl HnswPqIndex {
             pq_m,
             pq_k,
             metric_type: MetricType::L2,
+            num_threads: None,
         };
 
         let mut pq = ProductQuantizer::new(PQConfig::new(dim, pq_m, pq_k.ilog2() as usize));
         pq.set_centroids(codebooks)
             .map_err(|e| crate::api::KnowhereError::Codec(e.to_string()))?;
+        let graph = if raw_vectors.len() == ids.len() * dim && !raw_vectors.is_empty() {
+            let graph_config = IndexConfig {
+                index_type: IndexType::Hnsw,
+                dim,
+                metric_type: MetricType::L2,
+                data_type: DataType::Float,
+                params: IndexParams {
+                    m: Some(m),
+                    ef_construction: Some(ef_construction),
+                    ef_search: Some(HnswPqConfig::default().ef_search),
+                    num_threads: config.num_threads,
+                    ..Default::default()
+                },
+            };
+            let mut graph = HnswIndex::new(&graph_config)?;
+            graph.train(&raw_vectors)?;
+            graph.add_parallel(&raw_vectors, Some(&ids), Some(true))?;
+            Some(Box::new(graph))
+        } else {
+            None
+        };
 
         let _ = trained_flag;
         Ok(Self {
@@ -850,11 +1086,13 @@ impl HnswPqIndex {
             max_level,
             node_info,
             ids,
+            raw_vectors,
             id_to_idx,
             next_id,
             trained: true,
             level_multiplier,
             pq,
+            graph,
         })
     }
 }
@@ -921,14 +1159,26 @@ impl Index for HnswPqIndex {
     }
 
     fn has_raw_data(&self) -> bool {
-        // PQ is lossy compression, original data is not preserved
-        false
+        self.has_complete_raw_vectors()
     }
 
-    fn get_vector_by_ids(&self, _ids: &[i64]) -> Result<Vec<f32>, IndexError> {
-        Err(IndexError::Unsupported(
-            HNSW_PQ_GET_VECTOR_BY_IDS_UNSUPPORTED_MSG.into(),
-        ))
+    fn get_vector_by_ids(&self, ids: &[i64]) -> Result<Vec<f32>, IndexError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        if !self.has_complete_raw_vectors() {
+            return Err(IndexError::Unsupported(
+                HNSW_PQ_RAW_DATA_UNAVAILABLE_MSG.into(),
+            ));
+        }
+        let mut out = Vec::with_capacity(ids.len() * self.config.dim);
+        for &id in ids {
+            let Some(vector) = self.raw_vector_by_id(id) else {
+                return Err(IndexError::Unsupported(format!("id {id} not found")));
+            };
+            out.extend_from_slice(vector);
+        }
+        Ok(out)
     }
 
     /// Create ANN iterator for streaming search results (PARITY-P1-000)
@@ -941,7 +1191,7 @@ impl Index for HnswPqIndex {
         if vectors.is_empty() {
             return Err(IndexError::Empty);
         }
-        let top_k = self.ids.len().max(1000);
+        let top_k = self.ids.len();
         let results = self.search(&vectors[0..self.config.dim], top_k, bitset)?;
 
         // Convert to iterator format: Vec<(id, distance)>
@@ -1092,22 +1342,53 @@ mod tests {
     }
 
     #[test]
-    fn test_hnsw_pq_has_raw_data_is_false() {
+    fn test_hnsw_pq_has_raw_data_after_add() {
         let index = build_trained_hnsw_pq_index(16, 4, 16, 128);
-        assert!(!Index::has_raw_data(&index));
+        assert!(Index::has_raw_data(&index));
     }
 
     #[test]
-    fn test_hnsw_pq_get_vector_by_ids_returns_stable_unsupported() {
-        let index = build_trained_hnsw_pq_index(16, 4, 16, 128);
+    fn test_hnsw_pq_get_vector_by_ids_returns_original_vectors() {
+        let config = HnswPqConfig::new(16)
+            .with_m(8)
+            .with_ef_construction(100)
+            .with_ef_search(32)
+            .with_pq_params(4, 16);
+        let mut index = HnswPqIndex::new(config).unwrap();
+        let data = (0..128 * 16)
+            .map(|value| value as f32 * 0.001)
+            .collect::<Vec<_>>();
+        let ids = (1000..1128).collect::<Vec<_>>();
+        index.train(&data).unwrap();
+        index.add(&data, Some(&ids)).unwrap();
 
-        let err = Index::get_vector_by_ids(&index, &[0]).unwrap_err();
-        match err {
-            IndexError::Unsupported(msg) => {
-                assert_eq!(msg, HNSW_PQ_GET_VECTOR_BY_IDS_UNSUPPORTED_MSG);
+        let got = Index::get_vector_by_ids(&index, &[1003, 1001]).unwrap();
+        assert_eq!(&got[..16], &data[3 * 16..4 * 16]);
+        assert_eq!(&got[16..], &data[16..2 * 16]);
+    }
+
+    #[test]
+    fn test_hnsw_pq_search_refined_reranks_by_raw_vectors() {
+        let config = HnswPqConfig::new(16)
+            .with_m(8)
+            .with_ef_construction(100)
+            .with_ef_search(32)
+            .with_pq_params(4, 16);
+        let mut index = HnswPqIndex::new(config).unwrap();
+        let mut data = vec![0.0f32; 256 * 16];
+        for i in 0..256 {
+            for j in 0..16 {
+                data[i * 16 + j] = (i as f32 * 0.01) + (j as f32 * 0.001);
             }
-            other => panic!("expected Unsupported, got {other:?}"),
         }
+        index.train(&data).unwrap();
+        index.graph = None;
+        index.add(&data, None).unwrap();
+
+        let query = &data[7 * 16..8 * 16];
+        let result = index.search_refined(query, 1, 256, None).unwrap();
+        assert_eq!(result.ids, vec![7]);
+        assert!(result.distances[0] <= 1e-6);
     }
 
     #[test]
@@ -1159,5 +1440,10 @@ mod tests {
         let result = loaded.search(query, 10, None).unwrap();
         assert_eq!(result.ids.len(), 10);
         assert_eq!(result.distances.len(), 10);
+        assert!(Index::has_raw_data(&loaded));
+        assert_eq!(
+            Index::get_vector_by_ids(&loaded, &[0]).unwrap(),
+            vectors[..dim].to_vec()
+        );
     }
 }

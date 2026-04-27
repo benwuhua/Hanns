@@ -52,7 +52,10 @@ load_remote_config() {
     DEFAULT_BUILD_TYPE="${HANNS_DEFAULT_BUILD_TYPE:-Release}"
     REMOTE_REPO_URL="${HANNS_REMOTE_REPO_URL:-$(git -C "${REPO_ROOT}" remote get-url origin 2>/dev/null || true)}"
     REMOTE_NATIVE_REPO_URL="${HANNS_REMOTE_NATIVE_REPO_URL:-https://github.com/zilliztech/knowhere.git}"
-    REMOTE_NATIVE_DEFAULT_BRANCH="${HANNS_REMOTE_NATIVE_DEFAULT_BRANCH:-${DEFAULT_BRANCH:-main}}"
+    # Official Knowhere must be pinned independently of the Hanns branch.  Do not
+    # silently inherit DEFAULT_BRANCH: a Hanns feature branch may not exist in
+    # zilliztech/knowhere and would make benchmark provenance ambiguous.
+    REMOTE_NATIVE_DEFAULT_BRANCH="${HANNS_OFFICIAL_KNOWHERE_REF:-${HANNS_REMOTE_NATIVE_DEFAULT_BRANCH:-}}"
     REMOTE_CARGO_ENV_FILE="${HANNS_REMOTE_CARGO_ENV_FILE:-${REMOTE_CARGO_ENV_FILE:-\$HOME/.cargo/env}}"
     REMOTE_RUSTUP_TOOLCHAIN="${HANNS_REMOTE_RUSTUP_TOOLCHAIN:-${REMOTE_RUSTUP_TOOLCHAIN:-}}"
     SSH_IDENTITY_FILE="$(expand_path "${HANNS_SSH_IDENTITY_FILE:-${SSH_IDENTITY_FILE:-}}")"
@@ -62,6 +65,14 @@ load_remote_config() {
         echo "invalid remote native repo url: native baseline must use official knowhere, not hanns" >&2
         exit 1
     fi
+    case "${REMOTE_NATIVE_REPO_URL}" in
+        https://github.com/zilliztech/knowhere|https://github.com/zilliztech/knowhere.git|git@github.com:zilliztech/knowhere.git)
+            ;;
+        *)
+            echo "invalid remote native repo url: official baseline must use zilliztech/knowhere" >&2
+            exit 1
+            ;;
+    esac
 }
 
 require_remote_config() {
@@ -84,7 +95,12 @@ remote_target() {
 }
 
 ssh_base_args() {
-    SSH_BASE_ARGS=(-o StrictHostKeyChecking=accept-new -p "${REMOTE_PORT}")
+    SSH_BASE_ARGS=(
+        -o StrictHostKeyChecking=accept-new
+        -o ServerAliveInterval=10
+        -o ServerAliveCountMax=6
+        -p "${REMOTE_PORT}"
+    )
     if [[ -n "${SSH_IDENTITY_FILE}" ]]; then
         SSH_BASE_ARGS+=(-i "${SSH_IDENTITY_FILE}" -o IdentitiesOnly=yes)
     fi

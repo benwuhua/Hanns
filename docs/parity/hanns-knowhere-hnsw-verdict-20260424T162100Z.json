@@ -1,0 +1,85 @@
+{
+  "artifact_type": "hnsw_milestone_verdict",
+  "authority_surface": "HannsDB-x86",
+  "comparison_contract": {
+    "archived_evidence_required": true,
+    "build_thread_contract": "official and Hanns both use 8 build threads; Hanns harness records build_threads and query_threads separately",
+    "build_time_required": true,
+    "dataset": "sift-128-euclidean",
+    "metric_of_record": "recall_at_100",
+    "query_count": 10000,
+    "recall_tolerance": 0.0,
+    "thread_policy": "match_or_explicitly_normalized",
+    "throughput_metric": "vps",
+    "top_k": 100,
+    "vps_qps_mapping": "one_vector_per_query"
+  },
+  "evidence": {
+    "archived_hanns_log": "docs/parity/raw/remote_background_20260424T161705Z_52013.log",
+    "archived_hanns_status": "docs/parity/raw/remote_background_20260424T161705Z_52013.status",
+    "archived_official_log": "docs/parity/raw/native_benchmark_20260424T155636Z_41648.log",
+    "archived_official_status": "docs/parity/raw/native_benchmark_20260424T155636Z_41648.status",
+    "hanns_aligned_artifact": "docs/parity/hanns-knowhere-hnsw-aligned-1777047450.json",
+    "remote_hanns_log": "/data/work/hanns-logs/remote_background_20260424T161705Z_52013.log",
+    "remote_official_log": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T155636Z_41648.log"
+  },
+  "generated_at": "2026-04-24T16:21:00Z",
+  "hanns_candidate": {
+    "add_s": 23.878436126,
+    "build_s": 23.878436327,
+    "build_threads": 8,
+    "commit": "rsync-worktree-hnsw-nq-parallel-m6efc34-build8",
+    "ef": 850,
+    "ef_construction": 34,
+    "log_path": "/data/work/hanns-logs/remote_background_20260424T161705Z_52013.log",
+    "m": 6,
+    "qps_or_vps": 30972.455631508205,
+    "recall_at_10": 0.9468799999999598,
+    "recall_at_100": 0.9198099999999582,
+    "ref": "local-rsync-worktree",
+    "threads": 8,
+    "top_k": 100,
+    "train_s": 2.01e-07
+  },
+  "headline": "HNSW near-0.80 official best lane is now a three-axis win: Hanns has higher Recall@100, higher 8-thread QPS/VPS, and lower build_s than official Zilliz Knowhere FP16.",
+  "margins": {
+    "build_s_delta": -5.460563672999999,
+    "build_s_ratio": 0.8138803751661611,
+    "qps_or_vps_delta": 958.4726315082044,
+    "qps_or_vps_ratio": 1.0319342031848358,
+    "recall_at_100_delta": 0.002009999999958212
+  },
+  "non_goal_observations": {
+    "broader_family_matrix": "IVF-PQ has a separate completed verdict; other families are not covered by this HNSW verdict",
+    "near_0.95": "not claimed by this verdict; additional M/ef grid search was started separately"
+  },
+  "official_target": {
+    "build_s": 29.339,
+    "build_threads": 8,
+    "commit": "868634bc5230a71a84371fea5f5b674b805643ea",
+    "ef": 100,
+    "ef_construction": 100,
+    "log_path": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T155636Z_41648.log",
+    "m": 16,
+    "qps_or_vps": 30013.983,
+    "recall_at_100": 0.9178,
+    "recall_goal": "near_0.80",
+    "ref": "main@868634bc5230a71a84371fea5f5b674b805643ea",
+    "repo_url": "https://github.com/zilliztech/knowhere",
+    "threads": 8,
+    "top_k": 100,
+    "variant": "FP16"
+  },
+  "plan_approved_at": "2026-04-24T15:49:57Z",
+  "run_set_id": "hnsw-near080-20260424T161705Z",
+  "scope_note": "This verdict covers the official HNSW near-0.80 lane. The near-0.95 HNSW lane and other index families remain separate acceptance targets.",
+  "status": "win",
+  "verdict_checks": {
+    "hanns_build_s_lt_official": true,
+    "hanns_qps_vps_gt_official": true,
+    "same_or_higher_recall": true,
+    "same_top_k": true,
+    "thread_policy_satisfied": true,
+    "throughput_units_comparable": true
+  }
+}

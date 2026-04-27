@@ -1,0 +1,56 @@
+{
+  "artifact_type": "hnsw_pq_blocker_verdict",
+  "status": "blocked_no_comparable_hanns_refine",
+  "authority_surface": "HannsDB-x86",
+  "run_set_id": "hnsw-pq-blocker-20260425T093300Z",
+  "plan_approved_at": "2026-04-23T10:20:00Z",
+  "evidence_required": true,
+  "scope": "HNSW-PQ comparability blocker: official emits FP32 refined rows then fails; Hanns HnswPqIndex lacks raw vectors for FLAT refine parity.",
+  "official_target": {
+    "repo_url": "https://github.com/zilliztech/knowhere",
+    "commit": "868634bc5230a71a84371fea5f5b674b805643ea",
+    "ref": "main@868634bc5230a71a84371fea5f5b674b805643ea",
+    "runner": "benchmark_float",
+    "gtest_filter": "Benchmark_float.TEST_HNSW_PQ",
+    "variant": "FP32",
+    "full_test_status": "failed_after_fp32_rows",
+    "top_k": 100,
+    "m": 16,
+    "ef_construction": 200,
+    "ef": 128,
+    "refine_k": 16,
+    "nq": 10000,
+    "elapsed_s": 1.98,
+    "recall_at_100": 0.9576,
+    "build_s": 84.542,
+    "qps_or_vps": 5050.50505050505
+  },
+  "hanns_capability": {
+    "implementation": "HnswPqIndex",
+    "source_path": "src/faiss/hnsw_pq.rs",
+    "has_raw_data": false,
+    "get_vector_by_ids": "unsupported",
+    "comparability_reason": "official HNSW_PQ FP32 rows use FLAT refine; Hanns HnswPqIndex stores lossy PQ codes and cannot provide FLAT refine raw vectors"
+  },
+  "verdict_checks": {
+    "official_fp32_rows_available": true,
+    "official_full_test_failed_after_fp32": true,
+    "official_qps_runner_missing": true,
+    "hanns_raw_refine_unavailable": true,
+    "leadership_claim_blocked": true
+  },
+  "evidence": {
+    "archived_official_log": "docs/parity/raw/remote_background_20260425T061341Z_98575.log",
+    "archived_official_status": "docs/parity/raw/remote_background_20260425T061341Z_98575.status",
+    "archived_qps_gtest_list": "docs/parity/raw/official_qps_gtest_list_20260425T065500Z.log",
+    "archived_hanns_capability_log": "docs/parity/raw/remote_background_20260425T093142Z_84447.log",
+    "archived_hanns_capability_status": "docs/parity/raw/remote_background_20260425T093142Z_84447.status",
+    "official_source_inspection": "docs/parity/raw/remote_background_20260425T091234Z_11524.log",
+    "official_source_status": "docs/parity/raw/remote_background_20260425T091234Z_11524.status"
+  },
+  "claim": "No HNSW-PQ leadership claim is allowed yet because the current Hanns HNSW-PQ implementation cannot provide the raw-vector FLAT refine surface used by the official emitted FP32 rows.",
+  "non_claims": [
+    "Not a Hanns HNSW-PQ win.",
+    "Not an all-family / \u5168\u9762\u9886\u5148 verdict."
+  ]
+}

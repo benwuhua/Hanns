@@ -1,0 +1,66 @@
+{
+  "artifact_type": "ivfsq8_milestone_verdict",
+  "authority_surface": "HannsDB-x86",
+  "comparison_contract": {
+    "archived_evidence_required": true,
+    "build_time_required": true,
+    "metric_of_record": "recall_at_100",
+    "recall_tolerance": 0.0,
+    "thread_policy": "match_or_explicitly_normalized",
+    "throughput_metric": "vps",
+    "top_k": 100,
+    "vps_qps_mapping": "one_vector_per_query"
+  },
+  "evidence": {
+    "archived_hanns_log": "docs/parity/raw/remote_background_20260425T031420Z_78049.log",
+    "archived_hanns_status": "docs/parity/raw/remote_background_20260425T031420Z_78049.status",
+    "archived_official_log": "docs/parity/raw/native_benchmark_20260425T022512Z_33583.log",
+    "archived_official_status": "docs/parity/raw/native_benchmark_20260425T022512Z_33583.status",
+    "hanns_aligned_artifact": "docs/parity/raw/hanns-knowhere-ivfsq8-aligned-1777086937.json"
+  },
+  "hanns_candidate": {
+    "add_s": 1.578531045,
+    "build_s": 3.112879551,
+    "commit": "303ee2e805186d76485cf580a3c53634179b56cb",
+    "log_path": "/data/work/hanns-logs/remote_background_20260425T031420Z_78049.log",
+    "nlist": 1024,
+    "nprobe": 36,
+    "qps_or_vps": 15689.750447882361,
+    "recall_at_100": 0.9532219999999052,
+    "ref": "main",
+    "threads": 8,
+    "top_k": 100,
+    "train_s": 1.534348506
+  },
+  "notes": [
+    "Official source is zilliztech/knowhere, not benwuhua.",
+    "VPS and QPS are compared as one-vector-per-query throughput with top_k=100 and 8 query threads.",
+    "This is a scoped IVF-SQ8 SIFT1M verdict, not a full-family/global claim."
+  ],
+  "official_target": {
+    "build_s": 6.875,
+    "commit": "868634bc5230a71a84371fea5f5b674b805643ea",
+    "log_path": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260425T022512Z_33583.log",
+    "nlist": 1024,
+    "nprobe": 32,
+    "qps_or_vps": 13056.415,
+    "recall_at_100": 0.9519,
+    "recall_goal": "near_0.95",
+    "ref": "868634bc5230a71a84371fea5f5b674b805643ea",
+    "repo_url": "https://github.com/zilliztech/knowhere",
+    "threads": 8,
+    "top_k": 100,
+    "variant": "BF16"
+  },
+  "plan_approved_at": "2026-04-25T02:25:42Z",
+  "run_set_id": "ivfsq8-final-sample100k-clusterbuf-scaled-prefetch-20260425T031420Z",
+  "status": "win",
+  "verdict_checks": {
+    "hanns_build_s_lt_official": true,
+    "hanns_qps_vps_gt_official": true,
+    "same_or_higher_recall": true,
+    "same_top_k": true,
+    "thread_policy_satisfied": true,
+    "throughput_units_comparable": true
+  }
+}

@@ -1,0 +1,5 @@
+status=failed
+run_id=20260425T061341Z_98575
+exit_code=1
+finished_at=2026-04-25T06:21:26Z
+log=/data/work/knowhere-zilliz-official-main-logs/remote_background_20260425T061341Z_98575.log

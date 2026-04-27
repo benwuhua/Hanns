@@ -1,0 +1,178 @@
+{
+  "authority_surface": "HannsDB-x86",
+  "families": [
+    {
+      "capability_probe": "docs/parity/hanns-knowhere-capability-probe-20260423T085829Z.json",
+      "hanns": {
+        "implementation": "hanns",
+        "implementation_name": null,
+        "mapping_notes": "to be discovered on HannsDB-x86"
+      },
+      "matrix_status": "capability_probed",
+      "runner_status": "qps_runner_available",
+      "user_family": "HNSW",
+      "zilliz_knowhere": {
+        "benchmark_float_qps_filter": "benchmark_float_qps.TEST_HNSW",
+        "implementation": "zilliz_knowhere",
+        "implementation_name": null,
+        "mapping_notes": "to be discovered from zilliztech/knowhere on HannsDB-x86"
+      }
+    },
+    {
+      "capability_probe": "docs/parity/hanns-knowhere-capability-probe-20260423T085829Z.json",
+      "hanns": {
+        "implementation": "hanns",
+        "implementation_name": null,
+        "mapping_notes": "to be discovered on HannsDB-x86"
+      },
+      "matrix_status": "capability_probed",
+      "runner_status": "source_supported_but_qps_runner_missing",
+      "user_family": "HNSW-SQ",
+      "zilliz_knowhere": {
+        "benchmark_float_qps_filter": null,
+        "implementation": "zilliz_knowhere",
+        "implementation_name": null,
+        "mapping_notes": "to be discovered from zilliztech/knowhere on HannsDB-x86"
+      }
+    },
+    {
+      "capability_probe": "docs/parity/hanns-knowhere-capability-probe-20260423T085829Z.json",
+      "hanns": {
+        "implementation": "hanns",
+        "implementation_name": null,
+        "mapping_notes": "to be discovered on HannsDB-x86"
+      },
+      "matrix_status": "capability_probed",
+      "runner_status": "source_supported_but_qps_runner_missing",
+      "user_family": "HNSW-PQ",
+      "zilliz_knowhere": {
+        "benchmark_float_qps_filter": null,
+        "implementation": "zilliz_knowhere",
+        "implementation_name": null,
+        "mapping_notes": "to be discovered from zilliztech/knowhere on HannsDB-x86"
+      }
+    },
+    {
+      "capability_probe": "docs/parity/hanns-knowhere-capability-probe-20260423T085829Z.json",
+      "hanns": {
+        "implementation": "hanns",
+        "implementation_name": null,
+        "mapping_notes": "to be discovered on HannsDB-x86"
+      },
+      "matrix_status": "capability_probed",
+      "runner_status": "qps_runner_available",
+      "user_family": "DISKANN",
+      "zilliz_knowhere": {
+        "benchmark_float_qps_filter": "benchmark_float_qps.TEST_DISKANN",
+        "implementation": "zilliz_knowhere",
+        "implementation_name": null,
+        "mapping_notes": "to be discovered from zilliztech/knowhere on HannsDB-x86"
+      }
+    },
+    {
+      "capability_probe": "docs/parity/hanns-knowhere-capability-probe-20260423T085829Z.json",
+      "hanns": {
+        "implementation": "hanns",
+        "implementation_name": null,
+        "mapping_notes": "to be discovered on HannsDB-x86"
+      },
+      "matrix_status": "capability_probed",
+      "runner_status": "qps_runner_available",
+      "user_family": "DISKANN-USQ/RabitQ",
+      "zilliz_knowhere": {
+        "benchmark_float_qps_filter": "benchmark_float_qps.TEST_AISAQ_P / TEST_AISAQ_S",
+        "implementation": "zilliz_knowhere",
+        "implementation_name": null,
+        "mapping_notes": "to be discovered from zilliztech/knowhere on HannsDB-x86"
+      }
+    },
+    {
+      "capability_probe": "docs/parity/hanns-knowhere-capability-probe-20260423T085829Z.json",
+      "hanns": {
+        "implementation": "hanns",
+        "implementation_name": null,
+        "mapping_notes": "to be discovered on HannsDB-x86"
+      },
+      "matrix_status": "capability_probed",
+      "runner_status": "qps_runner_available",
+      "user_family": "IVF-PQ",
+      "zilliz_knowhere": {
+        "benchmark_float_qps_filter": "benchmark_float_qps.TEST_IVF_PQ",
+        "implementation": "zilliz_knowhere",
+        "implementation_name": null,
+        "mapping_notes": "to be discovered from zilliztech/knowhere on HannsDB-x86"
+      }
+    },
+    {
+      "capability_probe": "docs/parity/hanns-knowhere-capability-probe-20260423T085829Z.json",
+      "hanns": {
+        "implementation": "hanns",
+        "implementation_name": null,
+        "mapping_notes": "to be discovered on HannsDB-x86"
+      },
+      "matrix_status": "capability_probed",
+      "runner_status": "qps_runner_available",
+      "user_family": "IVF-SQ",
+      "zilliz_knowhere": {
+        "benchmark_float_qps_filter": "benchmark_float_qps.TEST_IVF_SQ8",
+        "implementation": "zilliz_knowhere",
+        "implementation_name": null,
+        "mapping_notes": "to be discovered from zilliztech/knowhere on HannsDB-x86"
+      }
+    },
+    {
+      "capability_probe": "docs/parity/hanns-knowhere-capability-probe-20260423T085829Z.json",
+      "hanns": {
+        "implementation": "hanns",
+        "implementation_name": null,
+        "mapping_notes": "to be discovered on HannsDB-x86"
+      },
+      "matrix_status": "capability_probed",
+      "runner_status": "source_supported_but_qps_runner_missing",
+      "user_family": "IVF-USQ/RabitQ",
+      "zilliz_knowhere": {
+        "benchmark_float_qps_filter": null,
+        "implementation": "zilliz_knowhere",
+        "implementation_name": null,
+        "mapping_notes": "to be discovered from zilliztech/knowhere on HannsDB-x86"
+      }
+    }
+  ],
+  "implementations": [
+    "hanns",
+    "zilliz_knowhere"
+  ],
+  "latest_capability_probe": "docs/parity/hanns-knowhere-capability-probe-20260423T085829Z.json",
+  "latest_native_runner_probe": "docs/parity/hanns-knowhere-native-runner-probe-20260423T095200Z.json",
+  "metrics": [
+    "qps",
+    "recall_at_k",
+    "build_seconds",
+    "latency_ms"
+  ],
+  "official_knowhere_url": "https://github.com/zilliztech/knowhere",
+  "plan_id": "hanns-knowhere-benchmark-v1",
+  "required_families": [
+    "HNSW",
+    "HNSW-SQ",
+    "HNSW-PQ",
+    "DISKANN",
+    "DISKANN-USQ/RabitQ",
+    "IVF-PQ",
+    "IVF-SQ",
+    "IVF-USQ/RabitQ"
+  ],
+  "stages": [
+    {
+      "name": "capability_smoke",
+      "stage": 0,
+      "verdict_eligible": false
+    },
+    {
+      "dataset": "sift-128-euclidean",
+      "name": "sift1m_final_matrix",
+      "stage": 1,
+      "verdict_eligible": true
+    }
+  ]
+}

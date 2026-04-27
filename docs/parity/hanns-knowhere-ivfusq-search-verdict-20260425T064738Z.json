@@ -1,0 +1,71 @@
+{
+  "artifact_type": "ivfusq_search_milestone_verdict",
+  "authority_surface": "HannsDB-x86",
+  "comparison_contract": {
+    "archived_evidence_required": true,
+    "build_time_required": false,
+    "metric_of_record": "recall_at_100",
+    "official_qps_runner_available": false,
+    "official_runner": "benchmark_float",
+    "qps_runner_unavailability_evidence": "archived_qps_gtest_list",
+    "recall_tolerance": 0.001,
+    "throughput_metric": "vps",
+    "top_k": 100,
+    "vps_qps_mapping": "one_vector_per_query"
+  },
+  "evidence": {
+    "archived_hanns_log": "docs/parity/raw/remote_background_20260425T064447Z_78700.log",
+    "archived_hanns_status": "docs/parity/raw/remote_background_20260425T064447Z_78700.status",
+    "archived_official_log": "docs/parity/raw/remote_background_20260425T062718Z_21446.log",
+    "archived_official_status": "docs/parity/raw/remote_background_20260425T062718Z_21446.status",
+    "archived_qps_gtest_list": "docs/parity/raw/official_qps_gtest_list_20260425T065500Z.log",
+    "hanns_aligned_artifact": "docs/parity/raw/hanns-knowhere-ivfusq-aligned-1777099565.json"
+  },
+  "generated_at": "2026-04-25T06:47:38Z",
+  "hanns_candidate": {
+    "add_s": 7.921576988,
+    "bits_per_dim": 8,
+    "build_s": 85.76249965699999,
+    "commit": "local",
+    "log_path": "/data/work/hanns-logs/remote_background_20260425T064447Z_78700.log",
+    "nlist": 1024,
+    "nprobe": 4,
+    "qps_or_vps": 19661.755671305622,
+    "recall_at_100": 0.6144239999999928,
+    "ref": "ivfusq-parallel-search",
+    "threads": 8,
+    "top_k": 100,
+    "train_s": 77.840922669
+  },
+  "observations": {
+    "hanns_build_s_gt_official_clean_build_observed_elsewhere": true,
+    "hanns_search_qps_div_official": 2.5442311838669474,
+    "official_hnsw_sq_hnsw_pq_runner_status": "benchmark_float tests currently fail with bad optional access; not part of this IVF-USQ verdict."
+  },
+  "official_target": {
+    "commit": "868634bc5230a71a84371fea5f5b674b805643ea",
+    "elapsed_s": 1.294,
+    "log_path": "/data/work/knowhere-zilliz-official-main-logs/remote_background_20260425T062718Z_21446.log",
+    "nlist": 1024,
+    "nprobe": 64,
+    "nq": 10000,
+    "qps_or_vps": 7727.975270479134,
+    "recall_at_100": 0.6146,
+    "ref": "main",
+    "repo_url": "https://github.com/zilliztech/knowhere",
+    "runner": "benchmark_float",
+    "top_k": 100,
+    "variant": "FP32"
+  },
+  "plan_approved_at": "2026-04-23T02:20:00Z",
+  "run_set_id": "ivfusq-aligned-1777099565",
+  "scope": "IVF-USQ/RabitQ search-throughput at official IVF_RABITQ recall ceiling; build-time is reported but not claimed as a win.",
+  "status": "search_win",
+  "verdict_checks": {
+    "hanns_qps_gt_official": true,
+    "official_runner_non_qps": true,
+    "same_or_higher_recall_with_tolerance": true,
+    "same_top_k": true,
+    "throughput_units_comparable": true
+  }
+}

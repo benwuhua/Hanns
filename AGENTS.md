@@ -12,7 +12,7 @@
 - The existing remote x86 machine is the only authoritative execution surface for long-task production acceptance and benchmark/verdict claims.
 - Local `cargo` commands are for quick iteration and smoke checks only.
 - Narrow performance ideas should start in a local `screen` phase and only become tracked work after `screen_result=promote`.
-- Before marking a feature `passing`, run `bash init.sh` and the feature's recorded remote verification steps.
+- Before making production benchmark/verdict claims, run the relevant remote x86 verification via `scripts/remote/` helpers and archive the resulting evidence.
 
 ## Reasoning Principles
 - Default to first-principles reasoning: reduce each problem to irreducible facts, explicit constraints, and the actual acceptance target before choosing an approach.
@@ -28,8 +28,8 @@
 - `cargo clippy --all-targets --all-features -- -D warnings`: lint gate used by CI.
 - `cargo fmt --all -- --check`: formatting gate used by CI.
 - `cargo test --release --test perf_test -- --nocapture --test-threads=1`: optional perf smoke test used on main branch CI.
-- `./build.sh release`: project wrapper for release build.
-- `bash init.sh`: sync the current workspace to the remote x86 authority machine and print the resolved config.
+- `bash scripts/build.sh release`: project wrapper for release build plus tests.
+- `bash scripts/remote/sync.sh --mode rsync`: sync the current workspace to the remote x86 authority machine when remote verification is needed.
 - `bash scripts/remote/test.sh --command "<cargo command>"`: authoritative remote test execution wrapper.
 - `bash scripts/remote/build.sh --no-all-targets`: authoritative remote build smoke when the feature only needs the production build lane.
 
@@ -40,21 +40,13 @@
 
 ## Testing Guidelines
 - Put fast unit tests next to code with `#[cfg(test)] mod tests`.
-- Put cross-module behavior tests in `tests/` and name files by feature, e.g. `test_diskann_aisaq.rs`.
+- Put cross-module behavior tests in `tests/` and name files by feature, e.g. `tests/bench_diskann_1m.rs`.
 - For benchmarks, use `benches/*.rs` with Criterion (`cargo bench`).
 - Run at least `fmt`, `clippy`, `cargo test --lib`, and `cargo test --tests` before opening a PR.
-- For long-task production features, treat those local commands as prefilters only; the remote-x86 verification steps in `feature-list.json` are the acceptance gate.
+- For production benchmark/verdict work, treat local commands as prefilters only; archived remote-x86 evidence is the acceptance gate.
 
 ## Commit & Pull Request Guidelines
 - Follow Conventional Commit style seen in history: `feat(scope): ...`, `fix(scope): ...`, or `feat: ...`.
 - Keep commits focused by subsystem (example: `feat(idx-24): SPARSE_WAND ...`).
 - PRs should include: purpose, key changes, test commands/results, and linked task/issue IDs (`IDX-*`, `BENCH-*`, `FFI-*`) when applicable.
 - If changes affect performance or FFI behavior, attach benchmark notes and compatibility impact in the PR description.
-
-
-<!-- long-task-codex -->
-## Long Task for Codex
-This project uses a multi-session Codex workflow.
-At the start of every session, read `long-task-guide.md`, then `task-progress.md`, `feature-list.json`, and recent git history before making changes.
-For narrow performance hypotheses, start with the `screen -> authority -> durable closure` model from `long-task-guide.md` instead of immediately reopening `feature-list.json`.
-<!-- /long-task-codex -->

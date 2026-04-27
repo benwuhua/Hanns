@@ -1,0 +1,51 @@
+{
+  "artifact_type": "diskann_aisaq_aligned_hanns_rows",
+  "authority_surface": "HannsDB-x86",
+  "comparability_status": "constrained",
+  "dataset": {
+    "base_count": 1000000,
+    "dim": 128,
+    "path": "/data/work/Hanns/data/sift",
+    "query_count_used": 10000
+  },
+  "hanns_commit": "local-rsync",
+  "leadership_claim_allowed": false,
+  "native_comparable": false,
+  "rows": [
+    {
+      "beamwidth": 8,
+      "build_s": 162.430351281,
+      "comparability_reason": "PQFlashIndex exposes a real flash-layout/page-cache AISAQ skeleton, but graph construction and IO remain simplified rather than native-comparable DiskANN",
+      "comparability_status": "constrained",
+      "config_name": "R48-L108-B8-EP1",
+      "family": "DISKANN/AISAQ",
+      "implementation": "hanns",
+      "load_s": 0.000051246,
+      "max_degree": 48,
+      "native_comparable": false,
+      "num_entry_points": 1,
+      "persist_s": 0.869316379,
+      "qps": 3287.4197605762984,
+      "recall_at_10": 0.9923299999999899,
+      "recall_at_100": 0.9624369999999195,
+      "scope_audit": {
+        "comparability_reason": "PQFlashIndex exposes a real flash-layout/page-cache AISAQ skeleton, but graph construction and IO remain simplified rather than native-comparable DiskANN",
+        "dim": 128,
+        "entry_point_count": 1,
+        "has_page_cache": false,
+        "native_comparable": false,
+        "node_count": 1000000,
+        "uses_beam_search_io": true,
+        "uses_flash_layout": true,
+        "uses_mmap_backed_pages": true
+      },
+      "search_list_size": 108,
+      "search_s": 3.04189934,
+      "search_surface": "mmap",
+      "threads": 8,
+      "top_k": 100
+    }
+  ],
+  "run_set_id": "diskann-aisaq-aligned-1777123158",
+  "search_surface": "mmap"
+}

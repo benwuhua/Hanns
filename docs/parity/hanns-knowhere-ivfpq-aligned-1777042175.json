@@ -1,0 +1,62 @@
+{
+  "artifact_type": "ivfpq_aligned_hanns_rows",
+  "authority_surface": "HannsDB-x86",
+  "dataset": {
+    "base_count": 1000000,
+    "dim": 128,
+    "path": "/data/work/Hanns/data/sift",
+    "query_count_used": 10000
+  },
+  "hanns_commit": "rsync-worktree-buildopt-25k",
+  "rows": [
+    {
+      "add_s": 5.255485071,
+      "build_s": 7.2750792440000005,
+      "family": "IVF-PQ",
+      "implementation": "hanns",
+      "m": 32,
+      "nbits": 8,
+      "nlist": 1024,
+      "nprobe": 20,
+      "qps": 8487.02370696712,
+      "recall_at_10": 0.9448299999999744,
+      "recall_at_100": 0.9050569999999732,
+      "threads": 8,
+      "top_k": 100,
+      "train_s": 2.019594173
+    },
+    {
+      "add_s": 5.255485071,
+      "build_s": 7.2750792440000005,
+      "family": "IVF-PQ",
+      "implementation": "hanns",
+      "m": 32,
+      "nbits": 8,
+      "nlist": 1024,
+      "nprobe": 50,
+      "qps": 3734.118692380103,
+      "recall_at_10": 0.9906599999999877,
+      "recall_at_100": 0.9787689999999477,
+      "threads": 8,
+      "top_k": 100,
+      "train_s": 2.019594173
+    },
+    {
+      "add_s": 5.255485071,
+      "build_s": 7.2750792440000005,
+      "family": "IVF-PQ",
+      "implementation": "hanns",
+      "m": 32,
+      "nbits": 8,
+      "nlist": 1024,
+      "nprobe": 100,
+      "qps": 1893.0095433494062,
+      "recall_at_10": 0.9983099999999968,
+      "recall_at_100": 0.9943139999999545,
+      "threads": 8,
+      "top_k": 100,
+      "train_s": 2.019594173
+    }
+  ],
+  "run_set_id": "ivfpq-aligned-1777042175"
+}

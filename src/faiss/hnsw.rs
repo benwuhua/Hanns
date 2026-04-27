@@ -4266,16 +4266,37 @@ impl HnswIndex {
         let mut all_ids = vec![-1; n_queries * k];
         let mut all_dists = vec![f32::MAX; n_queries * k];
 
-        for q_idx in 0..n_queries {
-            let q_start = q_idx * self.dim;
-            let query_vec = &query[q_start..q_start + self.dim];
+        if n_queries >= NQ_PARALLEL_THRESHOLD {
+            // Batch-submit unfiltered/plain searches without serializing every
+            // query on one caller thread.  Use chunked parallel iterators rather
+            // than one scoped task per query; the iterator splits the 10k-query
+            // benchmark batch into coarser work units while preserving disjoint
+            // output slots.
+            HNSW_NQ_POOL.install(|| {
+                query
+                    .par_chunks_exact(self.dim)
+                    .zip(all_ids.par_chunks_mut(k))
+                    .zip(all_dists.par_chunks_mut(k))
+                    .for_each(|((query_vec, ids_slice), dists_slice)| {
+                        let results = self.search_single(query_vec, ef, k, &filter);
+                        for (i, (id, dist)) in results.into_iter().take(k).enumerate() {
+                            ids_slice[i] = id;
+                            dists_slice[i] = dist;
+                        }
+                    });
+            });
+        } else {
+            for q_idx in 0..n_queries {
+                let q_start = q_idx * self.dim;
+                let query_vec = &query[q_start..q_start + self.dim];
 
-            let results = self.search_single(query_vec, ef, k, &filter);
+                let results = self.search_single(query_vec, ef, k, &filter);
 
-            let offset = q_idx * k;
-            for (i, item) in results.into_iter().enumerate().take(k) {
-                all_ids[offset + i] = item.0;
-                all_dists[offset + i] = item.1;
+                let offset = q_idx * k;
+                for (i, item) in results.into_iter().enumerate().take(k) {
+                    all_ids[offset + i] = item.0;
+                    all_dists[offset + i] = item.1;
+                }
             }
         }
 
@@ -11433,12 +11454,12 @@ mod tests {
         assert_eq!(result.distances.len(), 24);
 
         // Each query's top-1 result must be its nearest neighbor
-        for q in 0..8 {
+        for (q, expected_id) in expected_nearest.iter().enumerate().take(8) {
             let top1_id = result.ids[q * 3];
             assert_eq!(
-                top1_id, expected_nearest[q],
+                top1_id, *expected_id,
                 "query {q}: expected nearest={}, got {} (parallel nq path correctness check)",
-                expected_nearest[q], top1_id
+                expected_id, top1_id
             );
         }
 
@@ -11447,6 +11468,52 @@ mod tests {
             let d0 = result.distances[q * 3];
             let d1 = result.distances[q * 3 + 1];
             assert!(d0 <= d1, "query {q}: distances not ordered: {d0} > {d1}");
+        }
+    }
+
+    #[test]
+    fn test_hnsw_search_multi_query_uses_plain_parallel_slots() {
+        let config = IndexConfig {
+            index_type: IndexType::Hnsw,
+            metric_type: MetricType::L2,
+            dim: 4,
+            data_type: crate::api::DataType::Float,
+            params: crate::api::IndexParams {
+                random_seed: Some(42),
+                ..Default::default()
+            },
+        };
+
+        let mut index = HnswIndex::new(&config).unwrap();
+        let mut vectors: Vec<f32> = vec![1_000_000.0, 0.0, 0.0, 0.0];
+        let mut ids: Vec<i64> = vec![9999];
+        for i in 1..200usize {
+            vectors.extend_from_slice(&[i as f32 * 10.0, 0.0, 0.0, 0.0]);
+            ids.push(i as i64 * 10);
+        }
+        index.train(&vectors).unwrap();
+        index.add(&vectors, Some(&ids)).unwrap();
+
+        let req = SearchRequest {
+            top_k: 3,
+            nprobe: 10,
+            filter: None,
+            params: None,
+            radius: None,
+        };
+
+        let mut query_batch: Vec<f32> = Vec::new();
+        let expected_nearest: Vec<i64> = (1..=8).map(|i| i as i64 * 10).collect();
+        for q in 0..8usize {
+            query_batch.extend_from_slice(&[(q + 1) as f32 * 10.0 + 0.1, 0.0, 0.0, 0.0]);
+        }
+
+        let result = index.search(&query_batch, &req).unwrap();
+        assert_eq!(result.ids.len(), 24, "expected 8×3=24 ids");
+        assert_eq!(result.distances.len(), 24);
+        for (q, expected_id) in expected_nearest.iter().enumerate().take(8) {
+            assert_eq!(result.ids[q * 3], *expected_id);
+            assert!(result.distances[q * 3] <= result.distances[q * 3 + 1]);
         }
     }
 
@@ -11540,6 +11607,7 @@ mod tests {
             data_type: crate::api::DataType::Float,
             params: crate::api::IndexParams {
                 m: Some(16),
+                random_seed: Some(42),
                 ..Default::default()
             },
         };
@@ -11548,18 +11616,25 @@ mod tests {
 
         // Test that random levels follow expected distribution
         let mut level_counts = [0usize; 10];
-        for _ in 0..1000 {
+        for _ in 0..10_000 {
             let level = index.random_level();
             if level < 10 {
                 level_counts[level] += 1;
             }
         }
 
-        // Level 0 should have most nodes (~50% for M=16)
-        assert!(level_counts[0] > 400, "Level 0 should have ~50% of nodes");
+        // For M=16 the HNSW exponential sampler puts most nodes on layer 0
+        // (P(level=0) ~= 15/16). Use a seeded, larger sample to avoid tail
+        // noise making this regression test flaky.
+        assert!(level_counts[0] > 9_000, "Level 0 should dominate nodes");
 
-        // Higher levels should have fewer nodes
+        // Higher levels should trend downward while the previous bucket has
+        // enough samples to make a strict comparison meaningful. The far tail
+        // can legitimately contain 0/1-count inversions in finite samples.
         for i in 1..level_counts.len() {
+            if level_counts[i - 1] < 10 {
+                break;
+            }
             assert!(
                 level_counts[i] <= level_counts[i - 1],
                 "Level {} should have fewer nodes than level {}",

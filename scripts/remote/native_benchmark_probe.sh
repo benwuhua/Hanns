@@ -5,11 +5,30 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
+WITH_DISKANN="${HANNS_NATIVE_WITH_DISKANN:-ON}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --with-diskann)
+      WITH_DISKANN="ON"
+      shift
+      ;;
+    --without-diskann)
+      WITH_DISKANN="OFF"
+      shift
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
 ensure_local_command ssh
 load_remote_config
-require_remote_config REMOTE_HOST REMOTE_USER REMOTE_REPO_DIR REMOTE_NATIVE_REPO_DIR REMOTE_NATIVE_BUILD_DIR REMOTE_NATIVE_LOG_DIR
+require_remote_config REMOTE_HOST REMOTE_USER REMOTE_REPO_DIR REMOTE_NATIVE_REPO_DIR REMOTE_NATIVE_BUILD_DIR REMOTE_NATIVE_LOG_DIR REMOTE_NATIVE_REPO_URL REMOTE_NATIVE_DEFAULT_BRANCH
 
-run_remote_script "${REMOTE_REPO_DIR}" "${REMOTE_NATIVE_REPO_DIR}" "${REMOTE_NATIVE_BUILD_DIR}" "${REMOTE_NATIVE_LOG_DIR}" "${REMOTE_NATIVE_REPO_URL}" "${REMOTE_NATIVE_DEFAULT_BRANCH}" <<'EOF'
+run_remote_script "${REMOTE_REPO_DIR}" "${REMOTE_NATIVE_REPO_DIR}" "${REMOTE_NATIVE_BUILD_DIR}" "${REMOTE_NATIVE_LOG_DIR}" "${REMOTE_NATIVE_REPO_URL}" "${REMOTE_NATIVE_DEFAULT_BRANCH}" "${WITH_DISKANN}" <<'EOF'
 set -euo pipefail
 
 repo_root="$1"
@@ -18,6 +37,7 @@ build="$3"
 log_dir="$4"
 repo_url="$5"
 repo_branch="$6"
+with_diskann="$7"
 base="${src}/build/Release"
 gtest_build=/tmp/gtest-build
 ngtest_install=/tmp/gtest-install
@@ -28,7 +48,11 @@ bootstrap_venv="${HOME}/.local/share/knowhere-native-bootstrap/conan-venv"
 if [[ -x "${bootstrap_venv}/bin/conan" ]]; then
   export PATH="${bootstrap_venv}/bin:${PATH}"
 fi
-conan_toolchain="$(find "${base}" -path '*/generators/conan_toolchain.cmake' -print -quit)"
+if [[ -d "${base}" ]]; then
+  conan_toolchain="$(find "${base}" -path '*/generators/conan_toolchain.cmake' -print -quit)"
+else
+  conan_toolchain=""
+fi
 if [[ -z "${conan_toolchain}" ]]; then
   conan_toolchain="${base}/generators/conan_toolchain.cmake"
 fi
@@ -43,11 +67,44 @@ if [[ ! -d "${src}/.git" ]]; then
   fi
   rm -rf "${src}"
   mkdir -p "$(dirname "${src}")"
-  git clone --depth=1 --branch "${repo_branch}" "${repo_url}" "${src}" \
+  git clone "${repo_url}" "${src}" \
     > "${log_dir}/native-clone.log" 2>&1
 fi
 
-if [[ ! -f "${gtest_config}" ]]; then
+origin="$(git -C "${src}" remote get-url origin)"
+case "${origin}" in
+  https://github.com/zilliztech/knowhere|https://github.com/zilliztech/knowhere.git|git@github.com:zilliztech/knowhere.git)
+    ;;
+  *)
+    echo "non-Zilliz Knowhere origin is not allowed for official baseline: ${origin}" >&2
+    exit 2
+    ;;
+esac
+
+if [[ -z "${repo_branch}" ]]; then
+  echo "missing explicit official Knowhere ref; set HANNS_OFFICIAL_KNOWHERE_REF" >&2
+  exit 2
+fi
+
+dirty_before="$(git -C "${src}" status --porcelain)"
+if [[ -n "${dirty_before}" ]]; then
+  echo "official Knowhere source is dirty; refusing to benchmark stale/mutated source" >&2
+  git -C "${src}" status --short >&2
+  exit 2
+fi
+
+git -C "${src}" fetch origin "${repo_branch}" > "${log_dir}/native-fetch.log" 2>&1
+git -C "${src}" checkout --detach FETCH_HEAD > "${log_dir}/native-checkout.log" 2>&1
+git -C "${src}" reset --hard HEAD >> "${log_dir}/native-checkout.log" 2>&1
+
+dirty_after="$(git -C "${src}" status --porcelain)"
+if [[ -n "${dirty_after}" ]]; then
+  echo "official Knowhere source is dirty after checkout" >&2
+  git -C "${src}" status --short >&2
+  exit 2
+fi
+
+if [[ ! -f "${gtest_config}" || ! -f "${gtest_lib_dir}/libgtest.a" || ! -f "${gtest_lib_dir}/libgmock.a" ]]; then
   rm -rf "${gtest_build}" "${ngtest_install}"
   if [[ -d /usr/src/googletest ]]; then
     gtest_source=/usr/src/googletest
@@ -70,6 +127,11 @@ fi
 {
   echo "[preflight] src=${src}"
   echo "[preflight] build=${build}"
+  echo "[preflight] official_repo_url=https://github.com/zilliztech/knowhere"
+  echo "[preflight] official_ref=${repo_branch}"
+  echo "[preflight] official_commit=$(git -C "${src}" rev-parse HEAD)"
+  echo "[preflight] official_dirty=false"
+  echo "[preflight] with_diskann=${with_diskann}"
   echo "[preflight] conan_toolchain=${conan_toolchain}"
   echo "[preflight] gtest_config=${gtest_config}"
 } > "${preflight_log}"
@@ -107,7 +169,7 @@ cmake -S "${src}" -B "${build}" \
   -DGTEST_INCLUDE_DIR="${ngtest_install}/include" \
   -DWITH_BENCHMARK=ON \
   -DWITH_UT=OFF \
-  -DWITH_DISKANN=OFF \
+  -DWITH_DISKANN="${with_diskann}" \
   > "${log_dir}/configure.log" 2>&1
 
 set +e

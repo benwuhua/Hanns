@@ -16,6 +16,38 @@ Built from scratch. No C++ dependencies. Benchmarked head-to-head against FAISS,
 
 ## Performance at a Glance
 
+
+### Fresh HannsDB-x86 vs official Zilliz Knowhere (SIFT-1M, top_k=100)
+
+The table below summarizes the fresh authority runs against **official
+[`zilliztech/knowhere`](https://github.com/zilliztech/knowhere)**.  All rows were
+run on the remote **HannsDB-x86** authority machine and validated from archived
+logs/status files under `docs/parity/`.
+
+> **Claim boundary:** these are scoped verdicts, not a blanket "Hanns beats
+> Knowhere everywhere" claim.  In particular, DiskANN/AISAQ remains
+> `native_comparable=false`, so it is reported as a constrained numeric
+> observation rather than a family leadership verdict.
+
+| Family / lane | Hanns result | Official target | Conclusion | Evidence |
+|---|---:|---:|---|---|
+| HNSW near-0.80 | R@100 `0.9198`, QPS `30,972`, build `23.88s` | R@100 `0.9178`, VPS `30,014`, build `29.34s` | Scoped win | `docs/parity/hanns-knowhere-hnsw-verdict-20260424T162100Z.json` |
+| HNSW near-0.95 | R@100 `0.9506`, QPS `27,220`, build `28.88s` | R@100 `0.9500`, VPS `23,370`, build `29.34s` | Scoped win | `docs/parity/hanns-knowhere-hnsw-near095-verdict-20260425T021000Z.json` |
+| HNSW-SQ emitted FP32 row | R@100 `0.9595`, QPS `38,562`, build `59.49s` | R@100 `0.9531`, VPS `30,960`, build `66.28s` | Scoped win | `docs/parity/hanns-knowhere-hnsw-sq-verdict-20260425T090100Z.json` |
+| HNSW-PQ raw-candidate/raw-refine fair-8 | R@100 `0.9758`, QPS `9,451`, build `78.94s` | R@100 `0.9576`, VPS `5,051`, build `84.54s` | Custom-variant win; not same-semantics family leadership | `docs/parity/hanns-knowhere-hnsw-pq-raw-refine-fair8-verdict-20260425T114300Z.json` |
+| IVF-PQ | R@100 `0.9050`, QPS `7,520`, build `6.43s` | R@100 `0.7841`, VPS `1,399`, build `8.96s` | Scoped win | `docs/parity/hanns-knowhere-ivfpq-buildtime-verdict-20260424T151136Z.json` |
+| IVF-SQ8 near-0.80 | R@100 `0.8104`, QPS `39,521`, build `3.11s` | R@100 `0.8009`, VPS `28,374`, build `6.88s` | Scoped win | `docs/parity/hanns-knowhere-ivfsq8-near080-verdict-20260425T030700Z.json` |
+| IVF-SQ8 near-0.95 | R@100 `0.9532`, QPS `15,690`, build `3.11s` | R@100 `0.9519`, VPS `13,056`, build `6.88s` | Scoped win | `docs/parity/hanns-knowhere-ivfsq8-near095-verdict-20260425T030700Z.json` |
+| IVF-USQ / RabitQ search | R@100 `0.6144`, QPS `19,662` | R@100 `0.6146`, VPS `7,728` | Scoped search-throughput win at matched recall band | `docs/parity/hanns-knowhere-ivfusq-search-verdict-20260425T064738Z.json` |
+| DiskANN/AISAQ page-cache expanded | R@100 `0.9937`, QPS `624.9`, build `124.19s`, persist `62.22s` | AISAQ_S near-0.95: R@100 `0.9515`, VPS `520.39`, build `159.80s` | Numeric observation only; `native_comparable=false` | `docs/parity/hanns-knowhere-diskann-aisaq-page-cache-expanded-verdict-20260426T024300Z.json` |
+
+DiskANN/AISAQ details: the best constrained row uses `search_surface=page_cache`,
+`disk_pq_dims=32`, `pq_candidate_expand_pct=400`, and
+`rerank_expand_pct=400`, with `scope_audit.has_page_cache=true`.  Because the
+implementation is still a constrained `PQFlashIndex` skeleton rather than a
+proven native-comparable SSD DiskANN/AISAQ pipeline, the validator keeps
+`leadership_claim_allowed=false`.
+
 ### vs KnowWhere C++ inside Milvus (Cohere Wikipedia-1M, 768-dim IP, x86)
 
 | Metric | KnowWhere C++ | Hanns | vs Native |

@@ -1,0 +1,10 @@
+{
+  "artifact_type": "diskann_family_final_verdict",
+  "family": "DiskANN",
+  "classification": "constrained",
+  "leadership_verdict": "no_go_for_native_comparable_benchmark",
+  "leadership_claim_allowed": false,
+  "native_comparable": false,
+  "comparability_status": "constrained",
+  "reason": "Current Hanns DiskANN/AISAQ evidence is constrained and must stay out of final native-comparable compare lanes until the implementation and benchmark surface match official SSD DiskANN/AISAQ semantics."
+}

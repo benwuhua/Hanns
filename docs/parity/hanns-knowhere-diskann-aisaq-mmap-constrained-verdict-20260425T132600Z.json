@@ -1,0 +1,183 @@
+{
+  "artifact_type": "diskann_aisaq_constrained_verdict",
+  "authority_surface": "HannsDB-x86",
+  "comparison_contract": {
+    "archived_evidence_required": true,
+    "metric_of_record": "recall_at_100",
+    "thread_policy": "Hanns RAYON_NUM_THREADS=8; official thread_num=8 rows used",
+    "throughput_metric": "vps",
+    "top_k": 100,
+    "vps_qps_mapping": "one_vector_per_query",
+    "search_surface": "mmap-backed PQFlashIndex load_with_mmap search surface"
+  },
+  "evidence": {
+    "archived_hanns_log": "docs/parity/raw/remote_background_20260425T131910Z_81536.log",
+    "archived_hanns_status": "docs/parity/raw/remote_background_20260425T131910Z_81536.status",
+    "archived_official_logs": [
+      "docs/parity/raw/native_benchmark_20260424T032148Z_22562.log",
+      "docs/parity/raw/native_benchmark_20260424T035456Z_81931.log",
+      "docs/parity/raw/native_benchmark_20260424T071745Z_77904.log"
+    ],
+    "archived_official_statuses": [
+      "docs/parity/raw/native_benchmark_20260424T032148Z_22562.status",
+      "docs/parity/raw/native_benchmark_20260424T035456Z_81931.status",
+      "docs/parity/raw/native_benchmark_20260424T071745Z_77904.status"
+    ],
+    "hanns_aligned_artifact": "docs/parity/raw/hanns-knowhere-diskann-aisaq-aligned-1777123158.json",
+    "remote_hanns_artifact": "/data/work/hanns-src/docs/parity/raw/hanns-knowhere-diskann-aisaq-aligned-1777123158.json"
+  },
+  "family": "DiskANN/AISAQ",
+  "generated_at": "2026-04-25T13:26:00Z",
+  "hanns_candidate": {
+    "archived_log": "docs/parity/raw/remote_background_20260425T131910Z_81536.log",
+    "beamwidth": 8,
+    "build_s": 162.430351281,
+    "commit": "local-rsync",
+    "comparability_reason": "PQFlashIndex exposes a real flash-layout/page-cache AISAQ skeleton, but graph construction and IO remain simplified rather than native-comparable DiskANN",
+    "config_name": "R48-L108-B8-EP1",
+    "log_path": "/data/work/hanns-logs/remote_background_20260425T131910Z_81536.log",
+    "max_degree": 48,
+    "native_comparable": false,
+    "num_entry_points": 1,
+    "qps_or_vps": 3287.4197605762984,
+    "recall_at_100": 0.9624369999999195,
+    "ref": "diskann-aisaq-mmap-constrained-evidence",
+    "search_list_size": 108,
+    "threads": 8,
+    "top_k": 100,
+    "search_surface": "mmap",
+    "persist_s": 0.869316379,
+    "load_s": 5.1246e-05,
+    "uses_mmap_backed_pages": true,
+    "has_page_cache": false
+  },
+  "hanns_rows_summary": [
+    {
+      "config_name": "R48-L108-B8-EP1",
+      "search_surface": "mmap",
+      "search_list_size": 108,
+      "recall_at_100": 0.9624369999999195,
+      "qps": 3287.4197605762984,
+      "build_s": 162.430351281,
+      "persist_s": 0.869316379,
+      "load_s": 5.1246e-05,
+      "native_comparable": false,
+      "uses_mmap_backed_pages": true
+    }
+  ],
+  "leadership_claim_allowed": false,
+  "native_comparable": false,
+  "numeric_observation_not_a_verdict": {
+    "candidate_row": "R48-L108-B8-EP1",
+    "candidate_search_surface": "mmap",
+    "beats_official_diskann_near095_recall_and_qps": true,
+    "beats_official_aisaq_p_near095_recall_and_qps": true,
+    "beats_official_aisaq_s_near095_recall_and_qps": true,
+    "build_s_lt_diskann_near095": true,
+    "build_s_lt_aisaq_p_near095": true,
+    "build_s_lt_aisaq_s_near095": false,
+    "reason_not_claimed": "Hanns scope_audit.native_comparable=false; graph construction/IO are still not proven native-comparable to official SSD DiskANN/AISAQ."
+  },
+  "official_targets": [
+    {
+      "archived_log": "docs/parity/raw/native_benchmark_20260424T032148Z_22562.log",
+      "build_s": 232.375,
+      "commit": "868634bc5230a71a84371fea5f5b674b805643ea",
+      "log_path": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T032148Z_22562.log",
+      "qps_or_vps": 3847.82,
+      "recall_at_100": 0.9217,
+      "recall_goal": "near_0.80",
+      "ref": "main",
+      "repo_url": "https://github.com/zilliztech/knowhere",
+      "search_list_size": 100,
+      "threads": 8,
+      "top_k": 100,
+      "variant": "DISKANN"
+    },
+    {
+      "archived_log": "docs/parity/raw/native_benchmark_20260424T032148Z_22562.log",
+      "build_s": 232.375,
+      "commit": "868634bc5230a71a84371fea5f5b674b805643ea",
+      "log_path": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T032148Z_22562.log",
+      "qps_or_vps": 3153.907,
+      "recall_at_100": 0.9504,
+      "recall_goal": "near_0.95",
+      "ref": "main",
+      "repo_url": "https://github.com/zilliztech/knowhere",
+      "search_list_size": 108,
+      "threads": 8,
+      "top_k": 100,
+      "variant": "DISKANN"
+    },
+    {
+      "archived_log": "docs/parity/raw/native_benchmark_20260424T035456Z_81931.log",
+      "build_s": 214.674,
+      "commit": "868634bc5230a71a84371fea5f5b674b805643ea",
+      "log_path": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T035456Z_81931.log",
+      "qps_or_vps": 3328.575,
+      "recall_at_100": 0.9214,
+      "recall_goal": "near_0.80",
+      "ref": "main",
+      "repo_url": "https://github.com/zilliztech/knowhere",
+      "search_list_size": 100,
+      "threads": 8,
+      "top_k": 100,
+      "variant": "AISAQ_P"
+    },
+    {
+      "archived_log": "docs/parity/raw/native_benchmark_20260424T035456Z_81931.log",
+      "build_s": 214.674,
+      "commit": "868634bc5230a71a84371fea5f5b674b805643ea",
+      "log_path": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T035456Z_81931.log",
+      "qps_or_vps": 3117.801,
+      "recall_at_100": 0.9502,
+      "recall_goal": "near_0.95",
+      "ref": "main",
+      "repo_url": "https://github.com/zilliztech/knowhere",
+      "search_list_size": 108,
+      "threads": 8,
+      "top_k": 100,
+      "variant": "AISAQ_P"
+    },
+    {
+      "archived_log": "docs/parity/raw/native_benchmark_20260424T071745Z_77904.log",
+      "build_s": 159.796,
+      "commit": "868634bc5230a71a84371fea5f5b674b805643ea",
+      "log_path": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T071745Z_77904.log",
+      "qps_or_vps": 557.301,
+      "recall_at_100": 0.9192,
+      "recall_goal": "near_0.80",
+      "ref": "main",
+      "repo_url": "https://github.com/zilliztech/knowhere",
+      "search_list_size": 100,
+      "threads": 8,
+      "top_k": 100,
+      "variant": "AISAQ_S"
+    },
+    {
+      "archived_log": "docs/parity/raw/native_benchmark_20260424T071745Z_77904.log",
+      "build_s": 159.796,
+      "commit": "868634bc5230a71a84371fea5f5b674b805643ea",
+      "log_path": "/data/work/knowhere-zilliz-official-main-logs/native_benchmark_20260424T071745Z_77904.log",
+      "qps_or_vps": 520.39,
+      "recall_at_100": 0.9515,
+      "recall_goal": "near_0.95",
+      "ref": "main",
+      "repo_url": "https://github.com/zilliztech/knowhere",
+      "search_list_size": 109,
+      "threads": 8,
+      "top_k": 100,
+      "variant": "AISAQ_S"
+    }
+  ],
+  "plan_approved_at": "2026-04-23T02:20:00Z",
+  "run_set_id": "diskann-aisaq-aligned-1777123158",
+  "status": "non_comparable",
+  "summary": "Hanns mmap-backed constrained AISAQ top_k=100 row is numerically strong and now exercises mmap-backed pages, but PQFlashIndex scope_audit remains native_comparable=false, so official DiskANN/AISAQ leadership claims remain blocked.",
+  "verdict_checks": {
+    "aligned_metric_available": true,
+    "leadership_claim_blocked": true,
+    "native_comparable": false,
+    "same_top_k": true
+  }
+}
